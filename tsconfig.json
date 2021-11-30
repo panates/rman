@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "lib": ["ES2020"],
+    "module": "ESNext",
+    "target": "ES2021",
+    "types": ["node"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "moduleResolution": "node",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "noImplicitAny": false,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "sourceMap": true,
+    "noUnusedLocals": false,
+    "removeComments": false,
+    "noLib": false,
+    "experimentalDecorators": false,
+    "emitDecoratorMetadata": false,
+    "strict": true,
+    "strictNullChecks": true,
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "test", "bin"]
+}
