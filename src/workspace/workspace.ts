@@ -16,10 +16,17 @@ const providers: IWorkspaceProvider[] = [
 export class Workspace {
 
     private _options: IWorkspaceOptions;
+    private _packages: Package[];
 
-    constructor(readonly root: string, readonly packages: Package[], options?: IWorkspaceOptions) {
+    protected constructor(readonly root: string, packages: Package[], options?: IWorkspaceOptions) {
         this._options = {...options};
+        this._packages = packages;
         this._determineDependencies();
+        this._sortPackages();
+    }
+
+    get packages(): Package[] {
+        return this._packages;
     }
 
     getPackage(name: string): Package | undefined {
@@ -43,7 +50,7 @@ export class Workspace {
         const overallProgress = progressBars && progressBars.create(0, 0);
 
         let totalCommands = 0;
-        for (const p of this._getSortedPackages()) {
+        for (const p of this.packages) {
             const commands = p.getScriptCommands(script);
             const progress = progressBars && progressBars.create(commands.length, 0)
             packages[p.name] = {
@@ -141,6 +148,39 @@ export class Workspace {
         });
     }
 
+    static create(root?: string, options?: { deep?: number }): Workspace {
+        root = root || process.cwd();
+        let deep = options?.deep || 0;
+        while (deep-- >= 0 && fs.existsSync(root)) {
+            for (let i = providers.length - 1; i >= 0; i--) {
+                const provider = providers[i];
+                const inf = provider.parse(root);
+                if (!inf)
+                    continue
+                const pkgJson = getPackageJson(inf.root);
+                if (!pkgJson)
+                    continue;
+                const packages: Package[] = [];
+                for (const pattern of inf.packages) {
+                    const dirs = glob.sync(pattern, {
+                        cwd: inf.root,
+                        absolute: true,
+                        deep: 0,
+                        onlyDirectories: true
+                    });
+                    for (const dir of dirs) {
+                        const p = detectPackage(dir);
+                        if (p && !packages.find(x => x.name === p.name))
+                            packages.push(p);
+                    }
+                }
+                return new Workspace(inf.root, packages, pkgJson.rman);
+            }
+            root = path.resolve(root, '..');
+        }
+        throw new Error('No project workspace detected');
+    }
+
     private _determineDependencies() {
         const deps = {};
         for (const pkg of this.packages) {
@@ -182,7 +222,7 @@ export class Workspace {
         }
     }
 
-    private _getSortedPackages(): Package[] {
+    private _sortPackages() {
         const packages = [...this.packages];
         const packageOrder = this._options.packageOrder;
         packages.sort((a, b) => {
@@ -199,47 +239,13 @@ export class Workspace {
                 return 1;
             return 0;
         })
-        return packages;
-    }
-
-    static async resolve(root?: string, options?: { deep?: number }): Promise<Workspace> {
-        root = root || process.cwd();
-        let deep = options?.deep || 0;
-        while (deep-- >= 0 && fs.existsSync(root)) {
-            for (let i = providers.length - 1; i >= 0; i--) {
-                const provider = providers[i];
-                const inf = await provider.parse(root);
-                if (!inf)
-                    continue
-                const pkgJson = getPackageJson(inf.root);
-                if (!pkgJson)
-                    continue;
-                const packages: Package[] = [];
-                for (const pattern of inf.packages) {
-                    const dirs = await glob(pattern, {
-                        cwd: inf.root,
-                        absolute: true,
-                        deep: 0,
-                        onlyDirectories: true
-                    });
-                    for (const dir of dirs) {
-                        const p = await detectPackage(dir);
-                        if (p && !packages.find(x => x.name === p.name))
-                            packages.push(p);
-                    }
-                }
-                return new Workspace(inf.root, packages, pkgJson.rman);
-
-            }
-            root = path.resolve(root, '..');
-        }
-        throw new Error('No project workspace detected');
+        this._packages = packages;
     }
 
 }
 
 
-async function detectPackage(dirname: string): Promise<Package | undefined> {
+function detectPackage(dirname: string): Package | undefined {
     const pkgJson = getPackageJson(dirname);
     if (pkgJson && pkgJson.name) {
         return new Package(dirname, pkgJson);

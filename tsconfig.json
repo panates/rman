@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
-    "lib": ["ES2020"],
-    "module": "ESNext",
-    "target": "ES2021",
+    "lib": ["ES2015"],
+    "module": "CommonJS",
+    "target": "ES2015",
     "types": ["node"],
     "outDir": "dist",
     "rootDir": "src",

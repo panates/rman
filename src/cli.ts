@@ -5,7 +5,7 @@ import {program} from "commander"
 import {Workspace} from './workspace/workspace.js';
 
 export async function run(argv: string[] = process.argv) {
-    const pkgJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf-8'));
+    const pkgJson = JSON.parse(await fs.readFile(new URL('../package.json', __dirname), 'utf-8'));
 
     program.version(pkgJson.version || '');
 
@@ -35,7 +35,7 @@ export async function run(argv: string[] = process.argv) {
 }
 
 async function runScript(script: string): Promise<void> {
-    const workspace = await Workspace.resolve();
+    const workspace = Workspace.create();
     const result = await workspace.runScript(script, {
         gauge: true
     });

@@ -1,11 +1,9 @@
 export interface IWorkspaceOptions {
     packageOrder?: string[];
-    scripts?: Record<string, {
-    }>;
 }
 
 export interface IWorkspaceProvider {
-    parse: (root: string) => Promise<IParsedWorkspaceInfo | undefined>;
+    parse: (root: string) => IParsedWorkspaceInfo | undefined;
 }
 
 export interface IParsedWorkspaceInfo {
