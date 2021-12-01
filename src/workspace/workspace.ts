@@ -2,12 +2,12 @@ import fs from 'fs';
 import glob from 'fast-glob';
 import path from 'path';
 import chalk from 'chalk';
-import {MultiBar, Presets} from 'cli-progress';
-import {getPackageJson, setFind} from './utils.js';
-import {executeCommand, IRunScriptOptions} from './executor.js';
-import {CommandResult, Package, RunScriptResult} from './package.js';
-import {IWorkspaceOptions, IWorkspaceProvider} from './types.js';
-import {NpmProvider} from './providers/npm-provider.js';
+import {MultiBar, Presets, SingleBar} from 'cli-progress';
+import {getPackageJson, setFind} from './utils';
+import {executeCommand, IRunScriptOptions} from './executor';
+import {CommandResult, Package, RunScriptResult} from './package';
+import {IWorkspaceOptions, IWorkspaceProvider} from './types';
+import {NpmProvider} from './providers/npm-provider';
 
 const providers: IWorkspaceProvider[] = [
     new NpmProvider()
@@ -41,33 +41,40 @@ export class Workspace {
             commands: []
         };
         options.gauge = options.gauge == null ? true : options.gauge;
+        let totalCommands = 0;
+        for (const p of this.packages) {
+            const commands = p.getScriptCommands(script);
+            totalCommands += commands.length;
+            packages[p.name] = {
+                package: p,
+                commands: [...commands]
+            }
+        }
+        if (!totalCommands)
+            return result;
+
+        let overallProgress: SingleBar | undefined;
         const progressBars = options.gauge && new MultiBar({
             format: '[' + chalk.cyan('{bar}') + '] {percentage}% | {value}/{total} | ' +
                 chalk.yellowBright('{package}') + ' | ' + chalk.yellow('{command}'),
             barsize: 30,
-            hideCursor: true
+            hideCursor: true,
+            barCompleteChar: '\u2588',
+            barIncompleteChar: '\u2591',
         }, Presets.rect);
-        const overallProgress = progressBars && progressBars.create(0, 0);
 
-        let totalCommands = 0;
-        for (const p of this.packages) {
-            const commands = p.getScriptCommands(script);
-            const progress = progressBars && progressBars.create(commands.length, 0)
-            packages[p.name] = {
-                package: p,
-                commands: [...commands],
-                progress
-
+        if (progressBars) {
+            overallProgress = progressBars.create(totalCommands, 0);
+            overallProgress.start(totalCommands, 0, {package: '=== OVERALL ===', command: ''});
+            for (const p of Object.values(packages)) {
+                if (p.commands.length) {
+                    p.progress = progressBars.create(p.commands.length, 0);
+                    p.progress.start(p.commands.length, 0,{
+                        package: p.name,
+                        command: 'Waiting'
+                    });
+                }
             }
-            totalCommands += commands.length;
-            if (progress)
-                progress.start(commands.length, 0, {
-                    package: p.name,
-                    command: 'Waiting'
-                });
-        }
-        if (overallProgress) {
-            overallProgress.start(totalCommands, 0, {package: 'Overall', command: ''});
         }
 
         const t = Date.now();

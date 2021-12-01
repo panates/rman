@@ -1,5 +1,5 @@
 import {IParsedWorkspaceInfo, IWorkspaceProvider} from '../types';
-import {getPackageJson} from '../utils.js';
+import {getPackageJson} from '../utils';
 
 export class NpmProvider implements IWorkspaceProvider {
 

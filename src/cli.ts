@@ -1,11 +1,18 @@
+import path from 'path';
 import fs from 'fs/promises';
-import {URL} from 'url';
 import chalk from 'chalk';
 import {program} from "commander"
-import {Workspace} from './workspace/workspace.js';
+import {Workspace} from './workspace/workspace';
+import {URL} from 'url';
+
 
 export async function run(argv: string[] = process.argv) {
-    const pkgJson = JSON.parse(await fs.readFile(new URL('../package.json', __dirname), 'utf-8'));
+    const pkgJson = JSON.parse(
+        global.__dirname
+            ? await fs.readFile(path.resolve(__dirname, '../package.json'), 'utf-8')
+            // @ts-ignore
+            : await fs.readFile(new URL('../package.json', import.meta.url), 'utf-8')
+    )
 
     program.version(pkgJson.version || '');
 
@@ -39,6 +46,12 @@ async function runScript(script: string): Promise<void> {
     const result = await workspace.runScript(script, {
         gauge: true
     });
+
+    if (!result.commands.length) {
+        console.warn(chalk.cyanBright('There is nothing to do for "') +
+            chalk.yellowBright(script) + chalk.cyanBright('" script.'));
+        return;
+    }
 
     if (result.errorCount) {
         console.error('\n' + chalk.yellow(result.errorCount) + chalk.white(' error(s)'));

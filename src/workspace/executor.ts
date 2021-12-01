@@ -1,7 +1,7 @@
 import {ChildProcess, spawn, SpawnOptions} from 'child_process';
 import npmRubPath from 'npm-run-path';
 import chalk from 'chalk';
-import {onProcessExit} from './utils.js';
+import {onProcessExit} from './utils';
 
 export interface IExecutorOptions {
     stdio?: 'inherit' | 'pipe';
