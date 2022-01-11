@@ -1,71 +1,117 @@
 import path from 'path';
 import fs from 'fs/promises';
-import chalk from 'chalk';
-import {program} from "commander"
-import {Workspace} from './workspace/workspace';
-import {URL} from 'url';
+import yargs, {Options} from "yargs"
 
+import {getDirname} from './utils';
+import {Workspace} from './core/workspace';
+import {ListCommand} from './commands/list.command';
+import {InfoCommand} from './commands/info.command';
+import {RunCommand} from './commands/run.command';
+import {ExecuteCommand} from './commands/execute.command';
+import {ChangedCommand} from './commands/changed.command';
 
-export async function run(argv: string[] = process.argv) {
-    const pkgJson = JSON.parse(
-        global.__dirname
-            ? await fs.readFile(path.resolve(__dirname, '../package.json'), 'utf-8')
-            // @ts-ignore
-            : await fs.readFile(new URL('../package.json', import.meta.url), 'utf-8')
-    )
+export async function runCli(argv: string[] = process.argv.slice(2)) {
+    const s = path.resolve(getDirname(), '../package.json');
+    const pkgJson = JSON.parse(await fs.readFile(s, 'utf-8'));
+    const workspace = Workspace.create();
 
-    program.version(pkgJson.version || '');
+    const program = yargs(argv)
+        .scriptName('rman')
+        .version(pkgJson.version || '').alias('version', 'v')
+        .usage('$0 <cmd> [options...]')
+        .help('help').alias('help', 'h')
+        .showHelpOnFail(false, 'Run with --help for available options')
 
-    program
-        .command('run <script>')
-        .description('Executes given script for every package in repository')
-        .action(async (script) => runScript(script))
-        .allowUnknownOption();
+    setGlobalOptions(program);
+    ListCommand.initCli(workspace, program);
+    InfoCommand.initCli(workspace, program);
+    ExecuteCommand.initCli(workspace, program);
+    RunCommand.initCli(workspace, program);
+    ChangedCommand.initCli(workspace, program);
+
+    await program.parseAsync();
+
+    /* .option('-j, --json')
+    .option('-p, --parseable')
+    .option('-t, --toposort')
+    .option('-g --graph');
+
+program
+    .command('info')
+    .description('Prints local environment information')
+    .action(async (options) => runCliCommand(
+        new InfoCommand(workspace, {...options, logger: console.log})))
+    .option('-j, --json');
+
+program
+    .command('run <script> [args...]')
+    .description('Executes given script for every package in repository')
+    .action(async (script: string, args, options) =>
+        runCliCommand(new RunCommand(workspace, script, {
+            ...options,
+            logger: !options.gui ? console.log : undefined,
+            argv: args
+        })))
+    .option('--json', 'Stream output as json')
+    .option('--serial', 'Disables concurrency and executes every step one by one')
+    .option('--parallel', 'Disregards concurrency and topological sorting and runs script for every package at same time.')
+    .option('--no-gui', 'Disable gui components and logs events into console.')
+    .option('--no-bail', 'Runs script for all packages even one fails.');
+
+program
+    .command('version <newversion>')
+    .option('-u --uniform', 'Sets all versions same in repository')
+    .description('Updated versions of packages')
+    .action(async (version, options) => {
+        await cliVersion(version, {uniform: options.uniform});
+    })
+    .allowUnknownOption()
+
+/*
+
     program
         .command('build')
         .description('Executes "build" script for every package in repository')
-        .action(async () => runScript('build'))
+        .action(async () => cliRunScript('build'))
         .allowUnknownOption()
     program
         .command('lint')
         .description('Executes "lint" script for every package in repository')
-        .action(async () => runScript('lint'))
+        .action(async () => cliRunScript('lint'))
         .allowUnknownOption()
     program
         .command('test')
         .description('Executes "test" script for every package in repository')
-        .action(async () => runScript('lint'))
+        .action(async () => cliRunScript('lint'))
         .allowUnknownOption()
 
-    program.parse(argv);
-
+*/
 }
 
-async function runScript(script: string): Promise<void> {
-    const workspace = Workspace.create();
-    const result = await workspace.runScript(script, {
-        gauge: true
-    });
+export function setGlobalOptions(program: yargs.Argv): yargs.Argv {
 
-    if (!result.commands.length) {
-        console.warn(chalk.cyanBright('There is nothing to do for "') +
-            chalk.yellowBright(script) + chalk.cyanBright('" script.'));
-        return;
-    }
-
-    if (result.errorCount) {
-        console.error('\n' + chalk.yellow(result.errorCount) + chalk.white(' error(s)'));
-        let s = ''
-        for (let i = 0; i < result.commands.length; i++) {
-            const cmd = result.commands[i];
-            if (cmd.error) {
-                s += '\n' + (i + 1) + ') ' +
-                    chalk.cyanBright(cmd.package) + '\n' +
-                    chalk.white(cmd.command) + '\n' +
-                    chalk.red('Error: ' + cmd.error.message) + '\n' +
-                    chalk.red(cmd.stderr) + '\n';
-            }
+    const globalOptions: Record<string, Options> = {
+        'log-level': {
+            defaultDescription: "info",
+            describe: "Set log level",
+            choices: ['trace', 'info', 'warn', 'error', 'fatal'],
+            requiresArg: true,
+            hidden: true
+        },
+        'no-progress': {
+            describe: "Disable progress bars",
+            type: 'boolean',
         }
-        console.error(s);
     }
+
+    // group options under "Global Options:" header
+    const globalKeys = Object.keys(globalOptions).concat(["help", "version"]);
+
+    return program.options(globalOptions)
+        .group(globalKeys, "Global Options:")
+        .option('ci', {
+            hidden: true,
+            type: "boolean",
+        });
+
 }

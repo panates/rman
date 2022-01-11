@@ -1,7 +1,7 @@
 import {ChildProcess, spawn, SpawnOptions} from 'child_process';
-import npmRubPath from 'npm-run-path';
 import chalk from 'chalk';
-import {onProcessExit} from './utils';
+import {onProcessExit} from '../../utils';
+import {npmRunPathEnv} from '../npm-run-path';
 
 export interface IExecutorOptions {
     stdio?: 'inherit' | 'pipe';
@@ -15,10 +15,6 @@ export interface IExecutorOptions {
     onData?: (data: string, stdio: 'stderr' | 'stdout') => void;
 }
 
-export interface IRunScriptOptions {
-    gauge?: boolean;
-}
-
 export interface ExecuteCommandResult {
     code?: number;
     error?: any;
@@ -28,12 +24,12 @@ export interface ExecuteCommandResult {
 
 const runningChildren = new Map<number, ChildProcess>();
 
-export async function executeCommand(command: string, options?: IExecutorOptions): Promise<ExecuteCommandResult> {
+export async function execute(command: string, options?: IExecutorOptions): Promise<ExecuteCommandResult> {
     const opts = {
         ...options
     }
     opts.env = {
-        ...npmRubPath.env({cwd: options?.cwd}),
+        ...npmRunPathEnv({cwd: options?.cwd}),
 //        FORCE_COLOR: `${chalk.level}`,
         ...opts.env
     }
