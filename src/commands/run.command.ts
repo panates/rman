@@ -1,23 +1,23 @@
+import yargs from 'yargs';
 import splitString from 'split-string';
 import parseNpmScript from '@netlify/parse-npm-script';
-import {Workspace} from '../core/workspace';
+import {Repository} from '../core/repository';
 import {ExecuteCommand} from './execute.command';
-import yargs from 'yargs';
 
 export class RunCommand extends ExecuteCommand {
 
-    constructor(readonly workspace: Workspace,
+    constructor(readonly repository: Repository,
                 public options: RunCommand.Options) {
-        super(workspace, options);
+        super(repository, options);
     }
 
     protected _prepareTasks(): void {
-        const packages = this.workspace.getPackages({toposort: true});
+        const packages = this.repository.getPackages({toposort: true});
         this.totalSteps = 0;
         for (const p of packages) {
             let scriptInfo: any;
             try {
-                scriptInfo = parseNpmScript(p.def, 'npm run ' + this.options.cmd);
+                scriptInfo = parseNpmScript(p.json, 'npm run ' + this.options.cmd);
             } catch {
                 continue;
             }
@@ -51,7 +51,7 @@ export namespace RunCommand {
     export interface Options extends ExecuteCommand.Options {
     }
 
-    export function initCli(workspace: Workspace, program: yargs.Argv) {
+    export function initCli(workspace: Repository, program: yargs.Argv) {
         program.command({
             command: 'run <script> [...args]',
             describe: 'Execute an arbitrary command in each package',

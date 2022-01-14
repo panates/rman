@@ -1,7 +1,7 @@
 import {AsyncEventEmitter, TypedEventEmitterClass} from 'strict-typed-events';
 import chalk from 'chalk';
 import stripColor from 'strip-color';
-import type {Workspace} from './workspace';
+import type {Repository} from './repository';
 
 export interface CommandEvents {
     start: () => void | Promise<void>;
@@ -18,7 +18,7 @@ export abstract class Command extends TypedEventEmitterClass<CommandEvents>(Asyn
     protected _started = false;
     protected _finished = false;
 
-    protected constructor(readonly workspace: Workspace, public options: CommandOptions = {}) {
+    protected constructor(readonly repository: Repository, public options: CommandOptions = {}) {
         super();
     }
 

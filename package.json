@@ -35,6 +35,7 @@
     "@netlify/parse-npm-script": "^0.1.2",
     "chalk": "^5.0.0",
     "cli-progress": "^3.9.1",
+    "easy-table": "^1.2.0",
     "envinfo": "^7.8.1",
     "fast-glob": "^3.2.7",
     "js-yaml": "^4.1.0",

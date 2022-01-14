@@ -2,19 +2,19 @@ import os from 'os';
 import chalk from 'chalk';
 import {MultiBar, Presets, SingleBar} from 'cli-progress';
 import yargs, {Options} from 'yargs';
-import {Workspace} from '../core/workspace';
+import {Repository} from '../core/repository';
 import {Package} from '../core/package';
 import {Command, CommandOptions} from '../core/command';
-import {execute} from '../core/utils/execute';
+import {execute} from '../utils/execute';
 
 export class ExecuteCommand extends Command {
     protected _tasks: ExecuteCommand.Task[] = [];
     protected _multiBar?: MultiBar;
     protected _overallProgress?: SingleBar;
 
-    constructor(readonly workspace: Workspace,
+    constructor(readonly repository: Repository,
                 public options: ExecuteCommand.Options) {
-        super(workspace, options);
+        super(repository, options);
         if (options.progress !== false) {
             this._multiBar = new MultiBar({
                 format: '[' + chalk.cyan('{bar}') + '] {percentage}% | {value}/{total} | ' +
@@ -173,7 +173,7 @@ export class ExecuteCommand extends Command {
     }
 
     protected _prepareTasks(): void {
-        const packages = this.workspace.getPackages({toposort: !this.options.parallel});
+        const packages = this.repository.getPackages({toposort: !this.options.parallel});
         for (const p of packages) {
             const task = new ExecuteCommand.Task();
             task.package = p;
@@ -274,7 +274,7 @@ export namespace ExecuteCommand {
         }
     };
 
-    export function initCli(workspace: Workspace, program: yargs.Argv) {
+    export function initCli(repository: Repository, program: yargs.Argv) {
         program.command({
             command: 'exec <cmd> [...args]',
             describe: 'Execute an arbitrary command in each package',
@@ -298,7 +298,7 @@ export namespace ExecuteCommand {
             handler: async (options) => {
                 const cmd: string = '' + options.cmd;
                 const argv: string[] = (options['--'] as string[]) || [];
-                await new ExecuteCommand(workspace, {
+                await new ExecuteCommand(repository, {
                     ...options,
                     cmd,
                     argv,

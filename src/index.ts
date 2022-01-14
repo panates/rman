@@ -1,1 +1,1 @@
-export * from './core/workspace';
+export * from './core/repository';

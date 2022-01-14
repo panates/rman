@@ -3,20 +3,17 @@ import envinfo from 'envinfo';
 import semver from 'semver';
 import yargs from 'yargs';
 import {Command, CommandOptions} from '../core/command';
-import {Workspace} from '../core/workspace';
+import {Repository} from '../core/repository';
 
 export class InfoCommand extends Command {
 
-    constructor(readonly workspace: Workspace, public options: InfoCommand.Options = {}) {
-        super(workspace, options);
+    constructor(readonly repository: Repository, public options: InfoCommand.Options = {}) {
+        super(repository, options);
     }
 
     protected async _execute(): Promise<any> {
-        const {workspace, options} = this;
-
-        this.log(chalk.whiteBright('Workspace: ') + chalk.cyanBright(workspace.dirname));
-        this.log(chalk.whiteBright('Environment info: '));
-
+        const {options} = this;
+        this.log(chalk.whiteBright('# Environment info: '));
         const systemInfo = JSON.parse(
             await envinfo.run({
                 System: ['OS', 'CPU', 'Memory', 'Shell'],
@@ -61,7 +58,7 @@ export namespace InfoCommand {
         json?: boolean;
     }
 
-    export function initCli(workspace: Workspace, program: yargs.Argv) {
+    export function initCli(workspace: Repository, program: yargs.Argv) {
         program.command({
             command: 'info [options...]',
             describe: 'Prints local environment information',

@@ -1,7 +1,7 @@
 import {ChildProcess, spawn, SpawnOptions} from 'child_process';
 import chalk from 'chalk';
-import {onProcessExit} from '../../utils';
-import {npmRunPathEnv} from '../npm-run-path';
+import {onProcessExit} from '../utils';
+import {npmRunPathEnv} from './npm-run-path';
 
 export interface IExecutorOptions {
     stdio?: 'inherit' | 'pipe';
@@ -13,6 +13,7 @@ export interface IExecutorOptions {
     onSpawn?: (childProcess: ChildProcess) => void;
     onLine?: (line: string, stdio: 'stderr' | 'stdout') => void;
     onData?: (data: string, stdio: 'stderr' | 'stdout') => void;
+    throwOnError?: boolean;
 }
 
 export interface ExecuteCommandResult {
@@ -91,7 +92,7 @@ export async function execute(command: string, options?: IExecutorOptions): Prom
         processLines('stderr');
     });
 
-    return new Promise(resolve => {
+    return new Promise((resolve, reject) => {
         let resolved;
         child.on('error', (err: any) => {
             if (child.pid)
@@ -100,6 +101,7 @@ export async function execute(command: string, options?: IExecutorOptions): Prom
             processLines('stderr', true);
             if (resolved)
                 return;
+            resolved = true;
             result.code = err.code || 1;
             result.error = err;
             if (!result.error) {
@@ -107,8 +109,9 @@ export async function execute(command: string, options?: IExecutorOptions): Prom
                 result.error =
                     new Error((opts.color ? chalk.red(text) : text) + '\n  ' +
                     opts.color ? chalk.white(err.message) : err.message);
+                if (options?.throwOnError)
+                    return reject(result.error);
             }
-            resolved = true;
             resolve(result);
         });
         child.on('close', (code?: number) => {
