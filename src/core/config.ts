@@ -3,52 +3,35 @@ import fs from 'fs';
 import yaml from 'js-yaml';
 import {getPackageJson} from '../utils';
 
-export interface ICommand {
-    exec: IConfigScriptItem[];
-    description?: string;
-    options?: IConfigScriptOption[];
-}
+export namespace Config {
 
-export interface IConfigScriptItem {
-    shell?: string;
-    script?: string;
-    scope?: string;
-}
-
-export interface IConfigScriptOption {
-    flags: string;
-    description?: string;
-    defaultValue?: string | boolean;
+    export interface ScriptOptions {
+        parallel?: boolean;
+        concurrency?: number;
+        noBail?: boolean;
+        noProgress?: boolean;
+    }
 }
 
 export class Config {
-
-    readonly commands: Record<string, ICommand> = {};
+    readonly commands: Record<string, any> = {};
+    readonly scripts: Record<string, Config.ScriptOptions> = {};
 
     update(obj: any): void {
         if (obj.commands) {
             for (const [k, o] of Object.entries<any>(obj.commands)) {
-                if (!o.exec)
-                    continue;
-                const exec: IConfigScriptItem[] = [];
-                const script = {...o, exec};
-                const _execute = (Array.isArray(o.exec) ? o.exec : [o.exec]);
-                for (const r of _execute) {
-                    if (typeof r === 'string') {
-                        exec.push({shell: r});
-                    } else if (typeof r === 'object') {
-                        exec.push(
-                            Object.keys(r)
-                                .reduce<IConfigScriptItem>((x, l) => {
-                                    if (['shell', 'script', 'scope'].includes(l))
-                                        x[l] = r[l];
-                                    return x;
-                                }, {})
-                        );
-                    }
+                this.commands[k] = o
+            }
+        }
+        if (obj.scripts) {
+            for (const [k, o] of Object.entries<any>(obj.scripts)) {
+                this.scripts[k] = {
+                    parallel: !!o.parallel,
+                    noBail: !!o.noBail,
+                    noProgress: !!o.noProgress,
+                    concurrency: o.concurrency != null ?
+                        parseInt(o.concurrency, 10) || undefined : undefined
                 }
-
-                this.commands[k] = script;
             }
         }
     }

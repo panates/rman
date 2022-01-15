@@ -2,18 +2,20 @@ import chalk from 'chalk';
 import envinfo from 'envinfo';
 import semver from 'semver';
 import yargs from 'yargs';
-import {Command, CommandOptions} from '../core/command';
+import {Command} from '../core/command';
 import {Repository} from '../core/repository';
+import logger from '../core/logger';
 
 export class InfoCommand extends Command {
+    commandName = 'info';
 
     constructor(readonly repository: Repository, public options: InfoCommand.Options = {}) {
-        super(repository, options);
+        super(repository);
     }
 
     protected async _execute(): Promise<any> {
         const {options} = this;
-        this.log(chalk.whiteBright('# Environment info: '));
+        logger.info(chalk.whiteBright('# Environment info: '));
         const systemInfo = JSON.parse(
             await envinfo.run({
                 System: ['OS', 'CPU', 'Memory', 'Shell'],
@@ -23,38 +25,37 @@ export class InfoCommand extends Command {
                 npmGlobalPackages: ['typescript']
             }, {json: true}));
         if (options?.json) {
-            this.log(systemInfo);
+            logger.info(systemInfo);
             return;
         }
         const maxName = Object.keys(systemInfo).reduce((l, p) =>
                 Object.keys(systemInfo[p]).reduce((i, x) => l = Math.max(i, x.length), l)
             , 0);
         for (const [categoryName, category] of Object.entries<object>(systemInfo)) {
-            this.log(' ', chalk.whiteBright(categoryName) + ':');
+            logger.info(' ', chalk.whiteBright(categoryName) + ':');
             for (const [n, v] of Object.entries(category)) {
                 const label = '    ' + chalk.reset(n) +
                     ' '.repeat(maxName - n.length) + ' :';
                 if (typeof v === 'string') {
-                    this.log(label, chalk.yellowBright(v))
+                    logger.info(label, chalk.yellowBright(v))
                     continue;
                 }
                 if (v.version)
-                    this.log(label, chalk.yellowBright(v.version),
+                    logger.info(label, chalk.yellowBright(v.version),
                         (v.path ? ' ' + chalk.yellow(v.path) : ''));
                 if (v.installed) {
                     if (v.wanted === 'latest' || semver.intersects(v.installed, v.wanted))
-                        this.log(label, chalk.yellowBright(v.installed));
-                    else this.log(label, chalk.red(v.installed), ' => ', chalk.yellowBright(v.wanted));
+                        logger.info(label, chalk.yellowBright(v.installed));
+                    else logger.info(label, chalk.red(v.installed), ' => ', chalk.yellowBright(v.wanted));
                 }
             }
         }
-
     }
 
 }
 
 export namespace InfoCommand {
-    export interface Options extends CommandOptions {
+    export interface Options {
         json?: boolean;
     }
 
@@ -74,7 +75,7 @@ export namespace InfoCommand {
                     });
             },
             handler: async (options) => {
-                await new InfoCommand(workspace, {...options, logger: console.log})
+                await new InfoCommand(workspace, options as Options)
                     .execute();
             }
         })

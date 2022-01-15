@@ -1,7 +1,7 @@
 import {AsyncEventEmitter, TypedEventEmitterClass} from 'strict-typed-events';
 import chalk from 'chalk';
-import stripColor from 'strip-color';
 import type {Repository} from './repository';
+import logger from './logger';
 
 export interface CommandEvents {
     start: () => void | Promise<void>;
@@ -9,17 +9,21 @@ export interface CommandEvents {
     error: (e: unknown) => void | Promise<void>;
 }
 
-export interface CommandOptions {
-    logger?: (message?: any, ...optionalParams: any[]) => void;
-    color?: boolean;
-}
-
 export abstract class Command extends TypedEventEmitterClass<CommandEvents>(AsyncEventEmitter) {
     protected _started = false;
     protected _finished = false;
+    abstract commandName: string;
 
-    protected constructor(readonly repository: Repository, public options: CommandOptions = {}) {
+    protected constructor(readonly repository: Repository) {
         super();
+    }
+
+    getOption(name: string): any {
+        if (this.options[name] != null)
+            return this.options[name];
+        const o = this.repository.config.commands[this.commandName];
+        if (o && typeof o === 'object')
+            return o[name];
     }
 
     async execute(): Promise<any> {
@@ -46,7 +50,7 @@ export abstract class Command extends TypedEventEmitterClass<CommandEvents>(Asyn
                 .catch(async e => {
                     this._finished = true;
                     try {
-                        this.log(chalk.red(e));
+                        logger.error(chalk.red(e));
                         if (this.listenerCount('error'))
                             await this.emitAsync('error', e);
                     } catch {
@@ -55,19 +59,6 @@ export abstract class Command extends TypedEventEmitterClass<CommandEvents>(Asyn
                     reject(e);
                 });
         });
-    }
-
-    log(message?: any, ...optionalParams: any[]): void {
-        if (this.options.logger) {
-            if (this.options.color === false) {
-                if (typeof message === 'string')
-                    message = stripColor(message);
-                optionalParams = optionalParams.map(v =>
-                    typeof v === 'string' ? stripColor(v) : v
-                )
-            }
-            this.options.logger(message, ...optionalParams);
-        }
     }
 
     protected abstract _execute(): Promise<any>;

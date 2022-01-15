@@ -2,14 +2,26 @@ import yargs from 'yargs';
 import splitString from 'split-string';
 import parseNpmScript from '@netlify/parse-npm-script';
 import {Repository} from '../core/repository';
-import {ExecuteCommand} from './execute.command';
+import {BaseExecuteCommand} from './base-execute.command';
 
-export class RunCommand extends ExecuteCommand {
+export class RunCommand extends BaseExecuteCommand {
+
+    commandName = 'run';
 
     constructor(readonly repository: Repository,
                 public options: RunCommand.Options) {
         super(repository, options);
     }
+
+    getOption(name: string): any {
+        const v = super.getOption(name);
+        if (v == null) {
+            const o = this.repository.config.scripts[this.options.script];
+            if (o && typeof o === 'object')
+                return o[name];
+        }
+    }
+
 
     protected _prepareTasks(): void {
         const packages = this.repository.getPackages({toposort: true});
@@ -17,70 +29,62 @@ export class RunCommand extends ExecuteCommand {
         for (const p of packages) {
             let scriptInfo: any;
             try {
-                scriptInfo = parseNpmScript(p.json, 'npm run ' + this.options.cmd);
+                scriptInfo = parseNpmScript(p.json, 'npm run ' + this.options.script);
             } catch {
                 continue;
             }
             if (!(scriptInfo && scriptInfo.raw))
                 continue;
-            const steps: ExecuteCommand.TaskStep[] = [];
+            const task = new RunCommand.Task();
+            task.package = p;
+            task.steps = [];
             for (const s of scriptInfo.steps) {
                 const parsed = Array.isArray(s.parsed) ? s.parsed : [s.parsed];
                 for (const cwd of parsed) {
-                    steps.push({
+                    task.steps.push({
                         name: s.name,
-                        cwd,
+                        cmd: cwd,
                         commandName: splitString(cwd, {quotes: true, separator: ' '})[0],
                         waitDependencies: !(s.name.startsWith('pre') || s.name.startsWith('post'))
                     })
                 }
             }
-
-            const task = new ExecuteCommand.Task();
-            task.package = p;
-            task.steps = steps;
             task.progress = this._multiBar &&
-                this._multiBar.create(steps.length, 0, {task: p.name, details: ''});
+                this._multiBar.create(task.steps.length, 0, {task: p.name, details: ''});
             this._tasks.push(task);
-            this.totalSteps += steps.length;
+            this.totalSteps += task.steps.length;
         }
     }
 }
 
 export namespace RunCommand {
-    export interface Options extends ExecuteCommand.Options {
+    export interface Options extends BaseExecuteCommand.Options {
+        script: string;
     }
+
+    export class Task extends BaseExecuteCommand.Task {
+    }
+
+    export const cliCommandOptions: Record<string, yargs.Options> = {
+        ...BaseExecuteCommand.cliCommandOptions
+    };
 
     export function initCli(workspace: Repository, program: yargs.Argv) {
         program.command({
-            command: 'run <script> [...args]',
+            command: 'run <script>',
             describe: 'Execute an arbitrary command in each package',
             builder: (cmd) => {
                 return cmd
                     .example("$0 run build", '')
-                    .example('$0 run test -- -b', '')
-                    .parserConfiguration({
-                        "populate--": true,
-                    })
                     .positional("script", {
                         describe: "# The script to execute. Any command flags must be passed after --",
                         type: "string",
                     })
-                    .positional("args", {
-                        describe: "# Positional arguments to send to command",
-                        type: "string",
-                    })
-                    .option(ExecuteCommand.cliCommandOptions);
+                    .option(RunCommand.cliCommandOptions);
             },
             handler: async (options) => {
                 const script: string = '' + options.script;
-                const argv: string[] = (options['--'] as string[]) || [];
-                await new RunCommand(workspace, {
-                    ...options,
-                    cmd: script,
-                    argv,
-                    logger: options.progress === false ? console.log : undefined
-                }).execute();
+                await new RunCommand(workspace, {...options, script}).execute();
             }
         })
     }

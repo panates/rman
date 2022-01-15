@@ -11,11 +11,18 @@ import {ExecuteCommand} from './commands/execute.command';
 import {ChangedCommand} from './commands/changed.command';
 import {VersionCommand} from './commands/version.command';
 import chalk from 'chalk';
+import logger from './core/logger';
+
+// import {PublishCommand} from './commands/publish.command';
 
 export async function runCli(options?: { argv?: string[], cwd?: string }) {
     const s = path.resolve(getDirname(), '../package.json');
     const pkgJson = JSON.parse(await fs.readFile(s, 'utf-8'));
     const repository = Repository.create(options?.cwd);
+
+    logger.setHandler((level, message, ...optionalParams) => {
+        console.log(message, ...optionalParams);
+    });
 
     const program = yargs(options?.argv || process.argv.slice(2))
         .scriptName('rman')
@@ -26,7 +33,7 @@ export async function runCli(options?: { argv?: string[], cwd?: string }) {
         .middleware(() => {
             console.log(chalk.whiteBright('# Project root: ') + chalk.magenta(repository.dirname));
         })
-        .fail((() => process.exit(1)));
+        .fail(() => setTimeout(() => process.exit(1), 100));
 
     setGlobalOptions(program);
     ListCommand.initCli(repository, program);
@@ -35,9 +42,9 @@ export async function runCli(options?: { argv?: string[], cwd?: string }) {
     RunCommand.initCli(repository, program);
     ChangedCommand.initCli(repository, program);
     VersionCommand.initCli(repository, program);
+    // PublishCommand.initCli(repository, program);
 
-    await program.parseAsync()
-        .catch(() => process.exit(1));
+    await program.parseAsync().catch(() => 0);
 }
 
 export function setGlobalOptions(program: yargs.Argv): yargs.Argv {

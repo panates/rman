@@ -1,23 +1,30 @@
+import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
 import yargs from 'yargs';
 import semver from 'semver';
 import EasyTable from 'easy-table';
-import {Command, CommandOptions} from '../core/command';
+import {Command} from '../core/command';
 import {Repository} from '../core/repository';
 import {GitHelper} from '../utils/git-utils';
 import stripColor from 'strip-color';
-import fs from 'fs';
 
 export class VersionCommand extends Command {
 
+    commandName = 'version';
+
     constructor(readonly repository: Repository, public options: VersionCommand.Options) {
-        super(repository, options);
+        super(repository);
     }
 
     protected async _execute(): Promise<any> {
-        const {repository, options} = this;
+        const {repository} = this;
         const git = new GitHelper({cwd: repository.dirname});
+        const noDirty = this.getOption('noDirty');
+        const forceDirty = this.getOption('forceDirty');
+        const listAll = this.getOption('all');
+        const listUnified = this.getOption('unified');
+        const printJson = this.getOption('json');
 
         const dirtyFiles = await git.listDirtyFiles();
         const committedFiles = await git.listCommittedFiles();
@@ -34,12 +41,12 @@ export class VersionCommand extends Command {
             const relDir = path.relative(repository.dirname, p.dirname);
             const isDirty = dirtyFiles.find(f => !path.relative(relDir, f).startsWith('..'));
             if (isDirty) {
-                if (options.noDirty) {
+                if (noDirty) {
                     row.status = chalk.yellow('ignored');
                     row.desc = chalk.magenta('Git directory is not clean')
                     continue;
                 }
-                if (!options.forceDirty) {
+                if (!forceDirty) {
                     error = true;
                     row.status = chalk.red('error');
                     row.desc = chalk.yellow('Git directory is not clean')
@@ -48,8 +55,8 @@ export class VersionCommand extends Command {
             }
 
             const isChanged = committedFiles.find(f => !path.relative(relDir, f).startsWith('..'));
-            if (isChanged || options.all || options.unified) {
-                const newVer = semver.inc(p.version, options.bump as semver.ReleaseType);
+            if (isChanged || listAll || listUnified) {
+                const newVer = semver.inc(p.version, this.options.bump as semver.ReleaseType);
                 row.status = chalk.greenBright('updated');
                 row.newVersion = newVer;
             } else {
@@ -57,7 +64,7 @@ export class VersionCommand extends Command {
                 row.desc = chalk.yellow('No change detected')
             }
         }
-        if (options.unified) {
+        if (listUnified) {
             const maxVer = rows.reduce((v, row) => {
                 if (!row.newVersion)
                     return v;
@@ -69,7 +76,7 @@ export class VersionCommand extends Command {
             });
         }
 
-        if (options.json) {
+        if (printJson) {
             const output: any[] = [];
             for (const row of rows) {
                 const p = row.package;
@@ -110,7 +117,7 @@ export class VersionCommand extends Command {
 }
 
 export namespace VersionCommand {
-    export interface Options extends CommandOptions {
+    export interface Options {
         bump: string;
         json?: boolean;
         unified?: boolean;
@@ -160,10 +167,8 @@ export namespace VersionCommand {
                 await new VersionCommand(workspace, {
                     ...options,
                     bump,
-                    noDirty: !options.dirty,
-                    logger: console.log
-                })
-                    .execute();
+                    noDirty: !options.dirty
+                }).execute();
             }
         })
     }

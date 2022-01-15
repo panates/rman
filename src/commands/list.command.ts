@@ -2,29 +2,37 @@ import path from 'path';
 import chalk from 'chalk';
 import yargs from 'yargs';
 import EasyTable from 'easy-table';
-import {Command, CommandOptions} from '../core/command';
+import {Command} from '../core/command';
 import {Repository} from '../core/repository';
 import {Package} from '../core/package';
 import {GitHelper} from '../utils/git-utils';
-import PrintRowData = ListCommand.PackageOutput;
+import logger from '../core/logger';
 
 export class ListCommand extends Command {
+    commandName = 'list';
 
-    onPrepare?(pkg: Package, data: PrintRowData): PrintRowData;
+    onPrepare?(pkg: Package, data: ListCommand.PackageOutput): ListCommand.PackageOutput;
 
-    onPrintTable?(pkg: Package, data: PrintRowData, table: EasyTable): PrintRowData;
+    onPrintTable?(pkg: Package, data: ListCommand.PackageOutput, table: EasyTable): ListCommand.PackageOutput;
 
     constructor(readonly repository: Repository, public options: ListCommand.Options = {}) {
-        super(repository, options);
+        super(repository);
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     protected _filter(pkg: Package, inf: { isDirty?: boolean, isCommitted?: boolean }): boolean {
         return !this.options?.filter || this.options.filter(pkg);
     }
 
     protected async _execute(): Promise<any> {
-        const {repository, options} = this;
-        const packages = repository.getPackages({toposort: options.toposort});
+        const {repository} = this;
+        const toposort = this.getOption('toposort');
+        const graph = this.getOption('graph');
+        const printJson = this.getOption('json');
+        const parseable = this.getOption('parseable');
+        const longFormat = this.getOption('long');
+
+        const packages = repository.getPackages({toposort});
 
         const git = new GitHelper({cwd: repository.dirname});
         const dirtyFiles = await git.listDirtyFiles({absolute: true});
@@ -38,12 +46,12 @@ export class ListCommand extends Command {
             const isCommitted = !!committedFiles.find(f => !path.relative(p.dirname, f).startsWith('..'));
             if (!this._filter(p, {isDirty, isCommitted}))
                 continue;
-            if (options.graph) {
+            if (graph) {
                 obj[p.name] = [...p.dependencies];
                 continue;
             }
             const location = path.relative(repository.dirname, p.dirname);
-            let o: PrintRowData = {
+            let o: ListCommand.PackageOutput = {
                 name: p.name,
                 version: p.version,
                 location,
@@ -56,14 +64,14 @@ export class ListCommand extends Command {
                 continue;
 
             arr.push(o);
-            if (!options.json) {
-                if (options.parseable) {
+            if (!printJson) {
+                if (parseable) {
                     const a: string[] = [location, p.name, p.version,
                         (p.isPrivate ? 'PRIVATE' : ''),
                         (isDirty ? 'DIRTY' : (isCommitted ? ':COMMITTED' : ''))
                     ];
-                    this.log(a.join('::'));
-                } else if (options.long) {
+                    logger.info(a.join('::'));
+                } else if (longFormat) {
                     if (this.onPrintTable)
                         this.onPrintTable(p, o, table);
                     else {
@@ -76,16 +84,16 @@ export class ListCommand extends Command {
                         table.newRow();
                     }
                 } else
-                    this.log(p.name);
+                    logger.info(p.name);
             }
         }
-        if (options.graph) {
-            this.log(obj);
+        if (graph) {
+            logger.info(obj);
             return obj;
-        } else if (options.json) {
-            this.log(arr);
-        } else if (options?.long)
-            this.log(table.toString());
+        } else if (printJson) {
+            logger.info(arr);
+        } else if (longFormat)
+            logger.info(table.toString());
         return arr;
     }
 
@@ -94,7 +102,7 @@ export class ListCommand extends Command {
 
 export namespace ListCommand {
 
-    export interface Options extends CommandOptions {
+    export interface Options {
         json?: boolean;
         parseable?: boolean;
         long?: boolean;
@@ -150,7 +158,7 @@ export namespace ListCommand {
                     .option(cliCommandOptions);
             },
             handler: async (options) => {
-                await new ListCommand(workspace, {...options, logger: console.log})
+                await new ListCommand(workspace, options as Options)
                     .execute();
             }
         })

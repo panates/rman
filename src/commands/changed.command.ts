@@ -5,6 +5,8 @@ import {Package} from '../core/package';
 
 export class ChangedCommand extends ListCommand {
 
+    commandName = 'changed';
+
     constructor(readonly repository: Repository, public options: ChangedCommand.Options = {}) {
         super(repository, {...options});
     }
@@ -33,7 +35,7 @@ export namespace ChangedCommand {
                     .option(ListCommand.cliCommandOptions);
             },
             handler: async (options) => {
-                await new ChangedCommand(repository, {...options, logger: console.log})
+                await new ChangedCommand(repository, options as Options)
                     .execute();
             }
         })
