@@ -1,14 +1,13 @@
 import yargs from 'yargs';
 import {Repository} from '../core/repository';
-import {ListCommand} from './list.command';
+import {ListCommand} from './list-command';
 import {Package} from '../core/package';
 
 export class ChangedCommand extends ListCommand {
+    static commandName = 'changed';
 
-    commandName = 'changed';
-
-    constructor(readonly repository: Repository, public options: ChangedCommand.Options = {}) {
-        super(repository, {...options});
+    constructor(readonly repository: Repository, options?: ListCommand.Options) {
+        super(repository, options);
     }
 
     protected _filter(pkg: Package, inf: { isDirty?: boolean; isCommitted?: boolean }): boolean {
@@ -21,9 +20,6 @@ export class ChangedCommand extends ListCommand {
 
 export namespace ChangedCommand {
 
-    export interface Options extends Omit<ListCommand.Options, 'filter'> {
-    }
-
     export function initCli(repository: Repository, program: yargs.Argv) {
         program.command({
             command: 'changed [options...]',
@@ -35,7 +31,7 @@ export namespace ChangedCommand {
                     .option(ListCommand.cliCommandOptions);
             },
             handler: async (options) => {
-                await new ChangedCommand(repository, options as Options)
+                await new ChangedCommand(repository, options as ListCommand.Options)
                     .execute();
             }
         })

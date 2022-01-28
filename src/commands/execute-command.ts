@@ -1,13 +1,16 @@
+import path from 'path';
 import yargs from 'yargs';
 import {Repository} from '../core/repository';
-import {BaseExecuteCommand} from './base-execute.command';
+import {MultiTaskCommand} from './multi-task-command';
 
-export class ExecuteCommand extends BaseExecuteCommand {
+export class ExecuteCommand extends MultiTaskCommand<ExecuteCommand.Options> {
 
-    commandName = 'exec';
+    static commandName = 'exec';
 
     constructor(readonly repository: Repository,
-                public options: ExecuteCommand.Options) {
+                public cmd: string,
+                public argv?: string[],
+                options?: ExecuteCommand.Options) {
         super(repository, options);
     }
 
@@ -18,14 +21,13 @@ export class ExecuteCommand extends BaseExecuteCommand {
             task.package = p;
             task.steps = [];
             task.steps.push({
-                name: this.options.cmd,
-                cmd: this.options.cmd,
-                argv: this.options.argv,
-                commandName: this.options.cmd,
+                name: path.basename(this.cmd),
+                subName: '',
+                cmd: this.cmd,
+                cwd: p.dirname,
+                argv: this.argv,
                 waitDependencies: !this.options.parallel
             })
-            task.progress = this._multiBar &&
-                this._multiBar.create(task.steps.length, 0, {task: p.name, details: ''});
             this._tasks.push(task);
         }
     }
@@ -33,21 +35,19 @@ export class ExecuteCommand extends BaseExecuteCommand {
 
 export namespace ExecuteCommand {
 
-    export interface Options extends BaseExecuteCommand.Options {
-        cmd: string;
-        argv?: string[];
+    export interface Options extends MultiTaskCommand.Options {
     }
 
-    export class Task extends BaseExecuteCommand.Task {
+    export class Task extends MultiTaskCommand.Task {
     }
 
     export const cliCommandOptions: Record<string, yargs.Options> = {
-        ...BaseExecuteCommand.cliCommandOptions
+        ...MultiTaskCommand.cliCommandOptions
     };
 
     export function initCli(repository: Repository, program: yargs.Argv) {
         program.command({
-            command: 'exec <cmd> [...args]',
+            command: 'exec [cmd] [args..]',
             describe: 'Execute an arbitrary command in each package',
             builder: (cmd) => {
                 return cmd
@@ -67,13 +67,9 @@ export namespace ExecuteCommand {
                     .option(cliCommandOptions);
             },
             handler: async (options) => {
-                const cmd: string = '' + options.cmd;
                 const argv: string[] = (options['--'] as string[]) || [];
-                await new ExecuteCommand(repository, {
-                    ...options,
-                    cmd,
-                    argv
-                }).execute();
+                await new ExecuteCommand(repository,
+                    '' + argv.shift(), argv, options as Options).execute();
             }
         })
     }

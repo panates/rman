@@ -1,72 +1,19 @@
-import stripColor from 'strip-color';
+import logger from 'npmlog';
 
-export type LogHandler = (level: string, message: any, ...optionalParams: any[]) => void;
+logger.addLevel("success", 1500, {fg: "green", bold: true});
+logger.addLevel('output', 3300, {}, '');
 
-export type LogBufferItem = [level: string, message: any, ...optionalParams: any[]];
+declare module 'npmlog' {
+    interface Logger {
+        output(prefix: string, message: string, ...args: any[]): void;
 
-export class Logger {
-    private _handler?: LogHandler;
-    private _buffer: LogBufferItem[] = [];
-    private _retain = false;
-    colors = true;
+        success(prefix: string, message: string, ...args: any[]): void;
 
-    log(level: 'info' | 'warn' | 'error' | 'debug' | 'trace' , message: any, ...optionalParams: any[]): void {
-        if (!this.colors) {
-            if (typeof message === 'string')
-                message = stripColor(message);
-            optionalParams = optionalParams.map(v =>
-                typeof v === 'string' ? stripColor(v) : v
-            )
-        }
-        if (this._retain) {
-            this._buffer.push([level, message, ...optionalParams]);
-            return;
-        }
-        if (this._handler)
-            this._handler(level, message, ...optionalParams);
-    }
+        disp: Record<string, string>;
 
-    info(message: any, ...optionalParams: any[]): void {
-        this.log('info', message, ...optionalParams);
-    }
+        showProgress();
 
-    warn(message: any, ...optionalParams: any[]): void {
-        this.log('warn', message, ...optionalParams);
-    }
-
-    error(message: any, ...optionalParams: any[]): void {
-        this.log('error', message, ...optionalParams);
-    }
-
-    debug(message: any, ...optionalParams: any[]): void {
-        this.log('debug', message, ...optionalParams);
-    }
-
-    trace(message: any, ...optionalParams: any[]): void {
-        this.log('trace', message, ...optionalParams);
-    }
-
-    setHandler(handler: LogHandler): void {
-        this._handler = handler;
-    }
-
-    retain(): void {
-        this._retain = true;
-    }
-
-    release(): void {
-        this._retain = false;
-        const buffer = this._buffer;
-        this._buffer = [];
-        if (this._handler) {
-            for (const buf of buffer) {
-                this._handler(...buf);
-            }
-        }
+        hideProgress();
     }
 
 }
-
-const logger = new Logger();
-
-export default logger;

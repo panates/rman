@@ -2,37 +2,36 @@ import path from 'path';
 import chalk from 'chalk';
 import yargs from 'yargs';
 import EasyTable from 'easy-table';
+import logger from 'npmlog';
 import {Command} from '../core/command';
 import {Repository} from '../core/repository';
 import {Package} from '../core/package';
 import {GitHelper} from '../utils/git-utils';
-import logger from '../core/logger';
 
-export class ListCommand extends Command {
-    commandName = 'list';
+export class ListCommand<TOptions extends ListCommand.Options = ListCommand.Options> extends Command<TOptions> {
+    static commandName = 'list';
 
     onPrepare?(pkg: Package, data: ListCommand.PackageOutput): ListCommand.PackageOutput;
 
     onPrintTable?(pkg: Package, data: ListCommand.PackageOutput, table: EasyTable): ListCommand.PackageOutput;
 
-    constructor(readonly repository: Repository, public options: ListCommand.Options = {}) {
-        super(repository);
+    constructor(readonly repository: Repository, options?: TOptions) {
+        super(repository, options);
+    }
+
+    protected _readOptions(keys: string[], options?: any) {
+        super._readOptions([...keys,
+            'parseable', 'short', 'toposort', 'graph', 'changed', 'filter'], options);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     protected _filter(pkg: Package, inf: { isDirty?: boolean, isCommitted?: boolean }): boolean {
-        return !this.options?.filter || this.options.filter(pkg);
+        return true;
     }
 
     protected async _execute(): Promise<any> {
         const {repository} = this;
-        const toposort = this.getOption('toposort');
-        const graph = this.getOption('graph');
-        const printJson = this.getOption('json');
-        const parseable = this.getOption('parseable');
-        const longFormat = this.getOption('long');
-
-        const packages = repository.getPackages({toposort});
+        const packages = repository.getPackages({toposort: this.options.toposort});
 
         const git = new GitHelper({cwd: repository.dirname});
         const dirtyFiles = await git.listDirtyFiles({absolute: true});
@@ -41,12 +40,14 @@ export class ListCommand extends Command {
         const table = new EasyTable();
         const arr: any[] = [];
         const obj: any = {};
+        let count = 0;
         for (const p of packages) {
             const isDirty = !!dirtyFiles.find(f => !path.relative(p.dirname, f).startsWith('..'));
             const isCommitted = !!committedFiles.find(f => !path.relative(p.dirname, f).startsWith('..'));
             if (!this._filter(p, {isDirty, isCommitted}))
                 continue;
-            if (graph) {
+            if (this.options.graph) {
+                count++;
                 obj[p.name] = [...p.dependencies];
                 continue;
             }
@@ -64,14 +65,17 @@ export class ListCommand extends Command {
                 continue;
 
             arr.push(o);
-            if (!printJson) {
-                if (parseable) {
+            count++;
+            if (!this.options.json) {
+                if (this.options.parseable) {
                     const a: string[] = [location, p.name, p.version,
                         (p.isPrivate ? 'PRIVATE' : ''),
                         (isDirty ? 'DIRTY' : (isCommitted ? ':COMMITTED' : ''))
                     ];
-                    logger.info(a.join('::'));
-                } else if (longFormat) {
+                    logger.output('', a.join('::'));
+                } else if (this.options.short) {
+                    logger.output('', p.name);
+                } else {
                     if (this.onPrintTable)
                         this.onPrintTable(p, o, table);
                     else {
@@ -83,20 +87,25 @@ export class ListCommand extends Command {
                         table.cell('Path', path.relative(repository.dirname, p.dirname));
                         table.newRow();
                     }
-                } else
-                    logger.info(p.name);
+                }
+
             }
         }
-        if (graph) {
-            logger.info(obj);
+
+        if (this.options.graph) {
+            logger.output('', '%j', obj);
             return obj;
-        } else if (printJson) {
-            logger.info(arr);
-        } else if (longFormat)
-            logger.info(table.toString());
+        } else if (this.options.json) {
+            logger.output('', '%j', arr);
+            return arr;
+        } else if ((table as any).rows.length) {
+            logger.output('', '%s', table.toString().trim());
+            console.log('');
+            logger.info('list', '%i Package(s) found', count);
+            return arr;
+        }
         return arr;
     }
-
 
 }
 
@@ -105,11 +114,11 @@ export namespace ListCommand {
     export interface Options {
         json?: boolean;
         parseable?: boolean;
-        long?: boolean;
+        short?: boolean;
         toposort?: boolean;
         graph?: boolean;
         changed?: boolean;
-        filter?: (pkg: Package) => boolean;
+        filter?: string | ((pkg: Package) => boolean);
     }
 
     export interface PackageOutput {
@@ -122,24 +131,20 @@ export namespace ListCommand {
     }
 
     export const cliCommandOptions: Record<string, yargs.Options> = {
-        'j': {
-            alias: 'json',
-            describe: '# Stream output as json'
+        'short': {
+            alias: 's',
+            describe: '# Do not show extended information'
         },
-        'l': {
-            alias: 'long',
-            describe: '# Show extended information'
-        },
-        'p': {
-            alias: 'parseable',
+        'parseable': {
+            alias: 'p',
             describe: '# Show parseable output'
         },
-        't': {
-            alias: 'toposort',
+        'toposort': {
+            alias: 't',
             describe: '# Sort packages in topological order (dependencies before dependents) instead of lexical by directory'
         },
-        'g': {
-            alias: 'graph',
+        'graph': {
+            alias: 'g',
             describe: '# Show dependency graph as a JSON-formatted adjacency list'
         }
     }
@@ -154,7 +159,7 @@ export namespace ListCommand {
                     .example("$0 list", "# List all packages")
                     .example('$0 list --json', '# List all packages in JSON format')
                     .conflicts('graph', ['parseable', 'json'])
-                    .conflicts('long', ['parseable', 'json'])
+                    .conflicts('short', ['parseable', 'json'])
                     .option(cliCommandOptions);
             },
             handler: async (options) => {

@@ -23,12 +23,10 @@ export class GitHelper {
     async listDirtyFileStatus(options?: { absolute?: boolean }): Promise<GitHelper.FileStatus[]> {
         const x = await execute('git', {
             cwd: this.cwd,
-            argv: ['status', '--porcelain'],
-            shell: true,
-            throwOnError: true
+            argv: ['status', '--porcelain']
         });
         const result: GitHelper.FileStatus[] = [];
-        const files = x.stdout.trim().split(/\s*\n\s*/);
+        const files = x.stdout ? x.stdout.trim().split(/\s*\n\s*/) : [];
         for (const f of files) {
             const m = f.match(/^(\w+) (.+)$/);
             if (m) {
@@ -48,11 +46,9 @@ export class GitHelper {
     async listCommitSha(): Promise<string[]> {
         const x = await execute('git', {
             cwd: this.cwd,
-            argv: ['cherry'],
-            shell: true,
-            throwOnError: true
+            argv: ['cherry']
         });
-        const matches = x.stdout.matchAll(/([a-f0-9]+)/gi);
+        const matches = x.stdout ? x.stdout.matchAll(/([a-f0-9]+)/gi) : [];
         const result: string[] = []
         for (const m of matches) {
             result.push(m[1]);
@@ -71,11 +67,9 @@ export class GitHelper {
         for (const s of shaArr) {
             const x = await execute('git', {
                 cwd: this.cwd,
-                argv: ['show', s, '--name-only', '--pretty="format:"'],
-                shell: true,
-                throwOnError: true
+                argv: ['show', s, '--name-only', '--pretty="format:"']
             });
-            result.push(...x.stdout.trim().split(/\s*\n\s*/));
+            result.push(...(x.stdout ? x.stdout.trim().split(/\s*\n\s*/) : []));
         }
         if (options?.absolute)
             result = result.map(f => path.join(this.cwd, f));
@@ -85,11 +79,9 @@ export class GitHelper {
     async readFileLastPublished(filePath: string, commitSha?: string): Promise<string> {
         const x = await execute('git', {
             cwd: this.cwd,
-            argv: ['show', (commitSha || 'HEAD') + ':"' + filePath + '"'],
-            shell: true,
-            throwOnError: true
+            argv: ['show', (commitSha || 'HEAD') + ':"' + filePath + '"']
         });
-        return x.stdout;
+        return x.stdout || '';
     }
 
 }

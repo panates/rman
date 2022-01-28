@@ -1,6 +1,5 @@
 import {ChildProcess, spawn, SpawnOptions} from 'child_process';
-import chalk from 'chalk';
-import {onProcessExit} from '../utils';
+import onExit from 'signal-exit';
 import {npmRunPathEnv} from './npm-run-path';
 
 export interface IExecutorOptions {
@@ -9,7 +8,6 @@ export interface IExecutorOptions {
     argv?: string[];
     env?: Record<string, string | undefined>;
     shell?: boolean;
-    color?: boolean;
     onSpawn?: (childProcess: ChildProcess) => void;
     onLine?: (line: string, stdio: 'stderr' | 'stdout') => void;
     onData?: (data: string, stdio: 'stderr' | 'stdout') => void;
@@ -19,29 +17,29 @@ export interface IExecutorOptions {
 export interface ExecuteCommandResult {
     code?: number;
     error?: any;
-    stderr: string;
-    stdout: string;
+    stderr?: string;
+    stdout?: string;
 }
 
 const runningChildren = new Map<number, ChildProcess>();
 
 export async function execute(command: string, options?: IExecutorOptions): Promise<ExecuteCommandResult> {
     const opts = {
-        ...options
+        shell: true,
+        throwOnError: true,
+        ...options,
     }
     opts.env = {
-        ...npmRunPathEnv({cwd: options?.cwd}),
-//        FORCE_COLOR: `${chalk.level}`,
+        ...npmRunPathEnv({cwd: opts.cwd}),
         ...opts.env
     }
     opts.cwd = opts.cwd || process.cwd();
-    opts.color = opts.color == null ? true : opts.color;
 
     const spawnOptions: SpawnOptions = {
         stdio: opts.stdio || 'pipe',
         env: opts.env,
         cwd: opts.cwd,
-        shell: options?.shell,
+        shell: opts.shell,
         windowsHide: true
     }
 
@@ -101,17 +99,15 @@ export async function execute(command: string, options?: IExecutorOptions): Prom
             processLines('stderr', true);
             if (resolved)
                 return;
-            resolved = true;
             result.code = err.code || 1;
-            result.error = err;
-            if (!result.error) {
-                const text = `Command failed (${result.code})`;
-                result.error =
-                    new Error((opts.color ? chalk.red(text) : text) + '\n  ' +
-                    opts.color ? chalk.white(err.message) : err.message);
-                if (options?.throwOnError)
-                    return reject(result.error);
+            if (!err) {
+                const text = result.stderr || `Command failed (${result.code})`;
+                err = new Error(text);
             }
+            result.error = err;
+            resolved = true;
+            if (opts.throwOnError)
+                return reject(result.error);
             resolve(result);
         });
         child.on('close', (code?: number) => {
@@ -124,15 +120,15 @@ export async function execute(command: string, options?: IExecutorOptions): Prom
             result.code = code;
             resolved = true;
             if (code) {
-                const text = `Command failed (${result.code})`;
-                result.error = new Error((opts.color ? chalk.red(text) : text));
+                const text = result.stderr || `Command failed (${result.code})`;
+                result.error = new Error(text);
             }
             return resolve(result);
         });
     });
 }
 
-onProcessExit(() => {
+onExit(() => {
     runningChildren.forEach((child) => {
         child.kill();
     })
