@@ -43,7 +43,7 @@
     "npmlog": "^6.0.0",
     "package-json": "^7.0.0",
     "path-key": "^4.0.0",
-    "power-tasks": "^0.0.1",
+    "power-tasks": "^0.0.2",
     "putil-merge": "^3.7.0",
     "putil-varhelpers": "^1.6.3",
     "semver": "^7.3.5",
