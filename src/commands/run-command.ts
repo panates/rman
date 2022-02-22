@@ -81,17 +81,32 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
         );
         const t = Date.now();
         const r = await exec(command, options);
-        logger.log((r.error ? 'error' : 'info'),
-            this.commandName,
-            chalk.gray(figures.lineVerticalDashed0),
-            pkg.name,
-            chalk.gray(figures.lineVerticalDashed0),
-            (r.error ? chalk.red.bold('failed') : chalk.green.bold('success')),
-            chalk.gray(figures.lineVerticalDashed0),
-            command,
-            chalk.gray(figures.lineVerticalDashed0),
-            'Completed in ' + chalk.yellow('' + (Date.now() - t) + ' ms')
-        );
+        if (r.error) {
+            logger.error(
+                this.commandName,
+                chalk.gray(figures.lineVerticalDashed0),
+                pkg.name,
+                chalk.gray(figures.lineVerticalDashed0),
+                chalk.red.bold('failed'),
+                chalk.gray(figures.lineVerticalDashed0),
+                command,
+                chalk.gray(figures.lineVerticalDashed0),
+                r.error.message.trim()
+            );
+        } else
+            logger.info(
+                this.commandName,
+                chalk.gray(figures.lineVerticalDashed0),
+                pkg.name,
+                chalk.gray(figures.lineVerticalDashed0),
+                chalk.green.bold('success'),
+                chalk.gray(figures.lineVerticalDashed0),
+                command,
+                chalk.gray(figures.lineVerticalDashed0),
+                'Completed in ' + chalk.yellow('' + (Date.now() - t) + ' ms')
+            );
+        if (r.error)
+            throw r.error;
         return r;
     }
 }

@@ -38,7 +38,7 @@ export abstract class MultiTaskCommand<TOptions extends MultiTaskCommand.Options
             bail: this.options.bail,
 
         })
-        await this._task;
+        await this._task.catch(() => void (0));
     }
 
     protected abstract _prepareTasks(): Task[] | Promise<Task[]> | void;
