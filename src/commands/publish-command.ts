@@ -1,9 +1,13 @@
-import path from 'path';
 import yargs from 'yargs';
+import {Task} from 'power-tasks';
+import chalk from 'chalk';
+import fetchPackageInfo from 'package-json';
+import logger from 'npmlog';
+import figures from 'figures';
 import {Repository} from '../core/repository';
+import {Command} from '../core/command';
+import {Package} from '../core/package';
 import {RunCommand} from './run-command';
-import {MultiTaskCommand} from './multi-task-command';
-import {ExecuteCommandResult} from '../utils/execute';
 
 export class PublishCommand extends RunCommand<PublishCommand.Options> {
 
@@ -14,42 +18,39 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
         super(repository, 'publish', options);
     }
 
-    protected _prepareTasks(): void {
-        const packages = this.repository.getPackages({toposort: true});
+    protected async _prepareTasks(): Promise<Task[]> {
+        const {repository} = this;
+        const packages = repository.getPackages({toposort: true});
+        const newVersions: Record<string, string> = {};
+        const selectedPackages: Package[] = [];
         for (const p of packages) {
-            const j = {...p.json};
-            j.scripts.publish = j.scripts.publish || 'npm publish';
-            this._prepareTasksFromScripts(p, j);
+            const logPkgName = chalk.yellow(p.name);
+            const r = await fetchPackageInfo(p.json.name);
+            if (r.version === p.version) {
+                logger.info(
+                    this.commandName,
+                    logPkgName,
+                    chalk.gray(figures.lineVerticalDashed0),
+                    `Ignored. Same version (${p.version}) in repository`);
+                continue;
+            }
+            selectedPackages.push(p);
         }
-        const contents = this.getOption('contents');
-        if (contents) {
-            for (const task of this._tasks) {
-                const basename = path.basename(task.package.dirname);
-                const cwd = path.resolve(this.repository.dirname, contents, basename);
-                for (const step of task.steps) {
-                    if (step.name === 'publish')
-                        step.cwd = cwd;
-                }
+
+        const tasks: Task[] = [];
+        for (const p of selectedPackages) {
+            const json = {...p.json};
+            json.scripts = json.scripts || {};
+            json.scripts.publish = json.scripts.publish || 'npm publish';
+            const _p = {json};
+            Object.setPrototypeOf(_p, p);
+
+            const childTask = this._preparePackageTask(_p as Package, {newVersions});
+            if (childTask) {
+                tasks.push(childTask);
             }
         }
-    }
-
-    protected async _executeStep(task: MultiTaskCommand.Task, step: MultiTaskCommand.TaskStep): Promise<ExecuteCommandResult> {
-        console.log(step.cmd, step.cwd);
-        return {code: 0}
-    }
-
-    protected _onStepResult(task: MultiTaskCommand.Task,
-                            step: MultiTaskCommand.TaskStep,
-                            stepResult: MultiTaskCommand.TaskStepResult
-    ): MultiTaskCommand.TaskStepResult {
-        if (step.name === 'publish' && stepResult.error) {
-            if (stepResult.error.message.includes('403 Forbidden') &&
-                stepResult.error.message.includes('previously published')) {
-                stepResult.error = new Error('Previously published');
-            }
-        }
-        return super._onStepResult(task, step, stepResult);
+        return tasks;
     }
 
 }
@@ -57,9 +58,6 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
 export namespace PublishCommand {
     export interface Options extends RunCommand.Options {
         contents?: string;
-    }
-
-    export class Task extends RunCommand.Task {
     }
 
     export const cliCommandOptions: Record<string, yargs.Options> = {
@@ -70,7 +68,7 @@ export namespace PublishCommand {
         }
     };
 
-    export function initCli(workspace: Repository, program: yargs.Argv) {
+    export function initCli(repository: Repository, program: yargs.Argv) {
         program.command({
             command: 'publish [...options]',
             describe: 'Publish packages in the current project',
@@ -80,8 +78,9 @@ export namespace PublishCommand {
                     .example("$0 publish --contents dist", '# publish package from built directory')
                     .option(PublishCommand.cliCommandOptions);
             },
-            handler: async (options) => {
-                await new PublishCommand(workspace, {...options, script: 'publish'} as Options).execute();
+            handler: async (args) => {
+                const options = Command.composeOptions(PublishCommand.commandName, args, repository.config);
+                await new PublishCommand(repository, options).execute();
             }
         })
     }

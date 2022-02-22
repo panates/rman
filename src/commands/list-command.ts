@@ -16,12 +16,7 @@ export class ListCommand<TOptions extends ListCommand.Options = ListCommand.Opti
     onPrintTable?(pkg: Package, data: ListCommand.PackageOutput, table: EasyTable): ListCommand.PackageOutput;
 
     constructor(readonly repository: Repository, options?: TOptions) {
-        super(repository, options);
-    }
-
-    protected _readOptions(keys: string[], options?: any) {
-        super._readOptions([...keys,
-            'parseable', 'short', 'toposort', 'graph', 'changed', 'filter'], options);
+        super(options);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -149,7 +144,7 @@ export namespace ListCommand {
         }
     }
 
-    export function initCli(workspace: Repository, program: yargs.Argv) {
+    export function initCli(repository: Repository, program: yargs.Argv) {
         program.command({
             command: 'list [options...]',
             describe: 'Lists packages in repository',
@@ -162,8 +157,9 @@ export namespace ListCommand {
                     .conflicts('short', ['parseable', 'json'])
                     .option(cliCommandOptions);
             },
-            handler: async (options) => {
-                await new ListCommand(workspace, options as Options)
+            handler: async (args) => {
+                const options = Command.composeOptions(ListCommand.commandName, args, repository.config);
+                await new ListCommand(repository, options)
                     .execute();
             }
         })

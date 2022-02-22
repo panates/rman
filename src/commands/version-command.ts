@@ -6,12 +6,13 @@ import semver from 'semver';
 import logger from 'npmlog';
 import stripColor from 'strip-color';
 import figures from 'figures';
+import {Task} from 'power-tasks';
 import {Repository} from '../core/repository';
 import {RunCommand} from './run-command';
-import {MultiTaskCommand} from './multi-task-command';
-import {ExecuteCommandResult} from '../utils/execute';
 import {GitHelper} from '../utils/git-utils';
 import {Package} from '../core/package';
+import {Command} from '../core/command';
+import {ExecuteCommandResult, IExecutorOptions} from '../utils/exec';
 
 export class VersionCommand extends RunCommand<VersionCommand.Options> {
 
@@ -23,12 +24,7 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
         super(repository, 'version', options);
     }
 
-    protected _readOptions(keys: string[], options?: any) {
-        super._readOptions([...keys,
-            'unified', 'all', 'ignoreDirty', 'forceDirty'], options);
-    }
-
-    protected async _prepareTasks(): Promise<void> {
+    protected async _prepareTasks(): Promise<Task[]> {
         const {repository} = this;
         const git = new GitHelper({cwd: repository.dirname});
 
@@ -95,12 +91,6 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
         if (errorCount)
             throw new Error('Unable to bump version due to error(s)');
 
-        for (const p of selectedPackages) {
-            const j = {...p.json};
-            j.scripts.version = j.scripts.version || '#version';
-            this._prepareTasksFromScripts(p, j);
-        }
-
         if (this.options.unified) {
             const maxVer = Object.values(newVersions).reduce((m, v) => {
                 return semver.gt(m, v) ? m : v;
@@ -108,32 +98,43 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
             Object.keys(newVersions).forEach(k => newVersions[k] = maxVer);
         }
 
-        for (const task of this._tasks) {
-            for (const step of task.steps) {
-                if (step.cmd === '#version') {
-                    step.waitDependencies = false;
-                    step.subName = 'bumpVersion';
-                    step.cmd = async (atask: MultiTaskCommand.Task): Promise<ExecuteCommandResult> => {
-                        const oldVer = atask.package.version;
-                        const newVer = newVersions[atask.package.name];
+        const tasks: Task[] = [];
+        for (const p of selectedPackages) {
+            const json = {...p.json};
+            json.scripts = json.scripts || {};
+            json.scripts.version = json.scripts.version || '#version';
+            const _p = {json};
+            Object.setPrototypeOf(_p, p);
 
-                        const p = atask.package;
-                        p.json.version = newVer;
-                        const f = path.join(p.dirname, 'package.json');
-                        const data = JSON.stringify(p.json, undefined, -2);
-                        fs.writeFileSync(f, data, 'utf-8');
-                        step.resultMessage = 'Version changed from ' +
-                            chalk.cyan(oldVer) + ' to ' + chalk.cyan(newVer);
-                        return {code: 0};
-                    }
-                }
+            const childTask = this._preparePackageTask(_p as Package, {newVersions});
+            if (childTask) {
+                tasks.push(childTask);
             }
         }
+        return tasks;
     }
 
-    protected _taskStatusChange(task: MultiTaskCommand.Task) {
-        super._taskStatusChange(task);
+    protected async _exec(pkg: Package, command: string, options: IExecutorOptions, ctx: any): Promise<ExecuteCommandResult> {
+        if (command === '#version') {
+            const {newVersions} = ctx;
+            const oldVer = pkg.version;
+            const newVer = newVersions[pkg.name];
+            pkg.json.version = newVer;
+            const f = path.join(pkg.dirname, 'package.json');
+            const data = JSON.stringify(pkg.json, undefined, -2);
+            fs.writeFileSync(f, data, 'utf-8');
+            logger.info(
+                this.commandName,
+                chalk.gray(figures.lineVerticalDashed0),
+                pkg.name,
+                chalk.gray(figures.lineVerticalDashed0),
+                'Version changed from ' + chalk.cyan(oldVer) + ' to ' + chalk.cyan(newVer)
+            );
+            return {code: 0};
+        }
+        return super._exec(pkg, command, options);
     }
+
 }
 
 export namespace VersionCommand {
@@ -167,7 +168,7 @@ export namespace VersionCommand {
         }
     }
 
-    export function initCli(workspace: Repository, program: yargs.Argv) {
+    export function initCli(repository: Repository, program: yargs.Argv) {
         program.command({
             command: 'version [bump] [...options]',
             describe: 'Bump version of packages',
@@ -178,9 +179,10 @@ export namespace VersionCommand {
                     .conflicts('ignore-dirty', ['force-dirty', 'unified'])
                     .option(cliCommandOptions);
             },
-            handler: async (options) => {
-                const bump = options.bump as string;
-                await new VersionCommand(workspace, bump, options as Options).execute();
+            handler: async (args) => {
+                const bump = args.bump as string;
+                const options = Command.composeOptions(VersionCommand.commandName, args, repository.config);
+                await new VersionCommand(repository, bump, options).execute();
             }
         })
     }

@@ -1,4 +1,4 @@
-import {execute} from './execute';
+import {exec} from './exec';
 import path from 'path';
 
 export namespace GitHelper {
@@ -21,7 +21,7 @@ export class GitHelper {
     }
 
     async listDirtyFileStatus(options?: { absolute?: boolean }): Promise<GitHelper.FileStatus[]> {
-        const x = await execute('git', {
+        const x = await exec('git', {
             cwd: this.cwd,
             argv: ['status', '--porcelain']
         });
@@ -44,7 +44,7 @@ export class GitHelper {
     }
 
     async listCommitSha(): Promise<string[]> {
-        const x = await execute('git', {
+        const x = await exec('git', {
             cwd: this.cwd,
             argv: ['cherry']
         });
@@ -65,7 +65,7 @@ export class GitHelper {
             : await this.listCommitSha();
         let result: string[] = [];
         for (const s of shaArr) {
-            const x = await execute('git', {
+            const x = await exec('git', {
                 cwd: this.cwd,
                 argv: ['show', s, '--name-only', '--pretty="format:"']
             });
@@ -77,7 +77,7 @@ export class GitHelper {
     }
 
     async readFileLastPublished(filePath: string, commitSha?: string): Promise<string> {
-        const x = await execute('git', {
+        const x = await exec('git', {
             cwd: this.cwd,
             argv: ['show', (commitSha || 'HEAD') + ':"' + filePath + '"']
         });

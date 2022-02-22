@@ -2,6 +2,7 @@ import yargs from 'yargs';
 import {Repository} from '../core/repository';
 import {ListCommand} from './list-command';
 import {Package} from '../core/package';
+import {Command} from '../core/command';
 
 export class ChangedCommand extends ListCommand {
     static commandName = 'changed';
@@ -30,8 +31,9 @@ export namespace ChangedCommand {
                     .example('$0 changed --json', '# List changed packages in JSON format')
                     .option(ListCommand.cliCommandOptions);
             },
-            handler: async (options) => {
-                await new ChangedCommand(repository, options as ListCommand.Options)
+            handler: async (args) => {
+                const options = Command.composeOptions(ChangedCommand.commandName, args, repository.config);
+                await new ChangedCommand(repository, options)
                     .execute();
             }
         })

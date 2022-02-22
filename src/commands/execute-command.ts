@@ -1,7 +1,12 @@
-import path from 'path';
 import yargs from 'yargs';
+import logger from 'npmlog';
+import chalk from 'chalk';
+import figures from 'figures';
 import {Repository} from '../core/repository';
 import {MultiTaskCommand} from './multi-task-command';
+import {Task} from 'power-tasks';
+import {exec} from '../utils/exec';
+import {Command} from '../core/command';
 
 export class ExecuteCommand extends MultiTaskCommand<ExecuteCommand.Options> {
 
@@ -14,31 +19,47 @@ export class ExecuteCommand extends MultiTaskCommand<ExecuteCommand.Options> {
         super(repository, options);
     }
 
-    protected _prepareTasks(): void {
+    protected _prepareTasks(): Task[] {
         const packages = this.repository.getPackages({toposort: !this.options.parallel});
+        const tasks: Task[] = [];
         for (const p of packages) {
-            const task = new ExecuteCommand.Task();
-            task.package = p;
-            task.steps = [];
-            task.steps.push({
-                name: path.basename(this.cmd),
-                subName: '',
-                cmd: this.cmd,
-                cwd: p.dirname,
-                argv: this.argv,
-                waitDependencies: !this.options.parallel
-            })
-            this._tasks.push(task);
+            const task = new Task(async () => {
+                const t = Date.now();
+                logger.verbose(this.commandName,
+                    p.name,
+                    chalk.gray(figures.lineVerticalDashed0),
+                    chalk.cyanBright.bold('executing'),
+                    chalk.gray(figures.lineVerticalDashed0),
+                    this.cmd + ' ' + (this.argv?.join(' ') || ''),
+                );
+                const r = await exec(this.cmd, {
+                    cwd: p.dirname,
+                    argv: this.argv
+                });
+                logger.log((r.error ? 'error' : 'verbose'),
+                    this.commandName,
+                    chalk.gray(figures.lineVerticalDashed0),
+                    p.name,
+                    chalk.gray(figures.lineVerticalDashed0),
+                    (r.error ? chalk.red.bold('failed') : chalk.green.bold('success')),
+                    chalk.gray(figures.lineVerticalDashed0),
+                    'Completed in ' + chalk.yellow('' + (Date.now() - t) + ' ms')
+                );
+            }, {
+                name: p.name,
+                dependencies: this.options.parallel ? undefined : p.dependencies,
+                bail: this.options.bail,
+                concurrency: this.options.concurrency
+            });
+            tasks.push(task);
         }
+        return tasks;
     }
 }
 
 export namespace ExecuteCommand {
 
     export interface Options extends MultiTaskCommand.Options {
-    }
-
-    export class Task extends MultiTaskCommand.Task {
     }
 
     export const cliCommandOptions: Record<string, yargs.Options> = {
@@ -66,10 +87,14 @@ export namespace ExecuteCommand {
                     })
                     .option(cliCommandOptions);
             },
-            handler: async (options) => {
-                const argv: string[] = (options['--'] as string[]) || [];
+            handler: async (args) => {
+                const argv: string[] = (args['--'] as string[]) || [];
+                const options = Command.composeOptions(ExecuteCommand.commandName, args, repository.config);
                 await new ExecuteCommand(repository,
-                    '' + argv.shift(), argv, options as Options).execute();
+                    '' + argv.shift(),
+                    argv,
+                    options
+                ).execute();
             }
         })
     }

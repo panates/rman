@@ -1,10 +1,11 @@
 import path from 'path';
 import fs from 'fs/promises';
-import yargs, {Options} from "yargs"
+import yargs from "yargs"
 import chalk from 'chalk';
 import {getDirname} from './utils';
 import {Repository} from './core/repository';
 import {InfoCommand} from './commands/info-command';
+import {Command} from './core/command';
 import {ListCommand} from './commands/list-command';
 import {ChangedCommand} from './commands/changed-command';
 import {ExecuteCommand} from './commands/execute-command';
@@ -18,8 +19,10 @@ export async function runCli(options?: { argv?: string[], cwd?: string }) {
     const repository = Repository.create(options?.cwd);
     const _argv = options?.argv || process.argv.slice(2);
 
+    const globalKeys = Object.keys(Command.globalOptions).concat(["help", "version"]);
+
     const program = yargs(_argv)
-        .scriptName('rman')
+        // .scriptName('rman')
         .strict()
         .version(pkgJson.version || '').alias('version', 'v')
         .usage('$0 <cmd> [options...]')
@@ -31,9 +34,11 @@ export async function runCli(options?: { argv?: string[], cwd?: string }) {
                 : (err ? err.message : ''));
             console.log('\n' + chalk.red(text));
             throw msg;
-        });
+        })
+        // group options under "Global Options:" header
+        .options(Command.globalOptions)
+        .group(globalKeys, "Global Options:");
 
-    setGlobalOptions(program);
     InfoCommand.initCli(repository, program);
     ListCommand.initCli(repository, program);
     ChangedCommand.initCli(repository, program);
@@ -46,40 +51,5 @@ export async function runCli(options?: { argv?: string[], cwd?: string }) {
         program.showHelp();
     else
         await program.parseAsync()
-            .catch();
-}
-
-export function setGlobalOptions(program: yargs.Argv): yargs.Argv {
-
-    const globalOptions: Record<string, Options> = {
-        'log-level': {
-            defaultDescription: "info",
-            describe: "Set log level",
-            choices: ['silly', 'verbose', 'info', 'output', 'notice', 'success', 'warn', 'error', 'silent'],
-            requiresArg: true,
-            hidden: true
-        },
-        'no-progress': {
-            describe: "Disable progress bars",
-            type: 'boolean',
-        },
-        'progress': {
-            hidden: true,
-            type: 'boolean'
-        },
-        'json': {
-            alias: 'j',
-            describe: '# Stream output as json'
-        },
-        'ci': {
-            hidden: true,
-            type: "boolean"
-        }
-    }
-
-    // group options under "Global Options:" header
-    const globalKeys = Object.keys(globalOptions).concat(["help", "version"]);
-    return program.options(globalOptions)
-        .group(globalKeys, "Global Options:");
-
+            .catch(() => false);
 }

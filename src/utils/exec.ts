@@ -16,14 +16,14 @@ export interface IExecutorOptions {
 
 export interface ExecuteCommandResult {
     code?: number;
-    error?: any;
+    error?: Error;
     stderr?: string;
     stdout?: string;
 }
 
 const runningChildren = new Map<number, ChildProcess>();
 
-export async function execute(command: string, options?: IExecutorOptions): Promise<ExecuteCommandResult> {
+export async function exec(command: string, options?: IExecutorOptions): Promise<ExecuteCommandResult> {
     const opts = {
         shell: true,
         throwOnError: true,
@@ -101,9 +101,11 @@ export async function execute(command: string, options?: IExecutorOptions): Prom
                 return;
             result.code = err.code || 1;
             if (!err) {
-                const text = result.stderr || `Command failed (${result.code})`;
+                const text = `Command failed (${result.code})`;
                 err = new Error(text);
             }
+            if (typeof err === 'string')
+                err = new Error(err);
             result.error = err;
             resolved = true;
             if (opts.throwOnError)
@@ -120,7 +122,7 @@ export async function execute(command: string, options?: IExecutorOptions): Prom
             result.code = code;
             resolved = true;
             if (code) {
-                const text = result.stderr || `Command failed (${result.code})`;
+                const text = `Command failed (${result.code})`;
                 result.error = new Error(text);
             }
             return resolve(result);

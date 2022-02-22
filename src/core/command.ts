@@ -1,10 +1,12 @@
 import {AsyncEventEmitter, TypedEventEmitterClass} from 'strict-typed-events';
-import logger from 'npmlog';
-import logUpdate from 'log-update';
+import npmlog from 'npmlog';
 import isCi from 'is-ci';
+import yargs from 'yargs';
+import merge from 'putil-merge';
 import './logger';
-import type {Repository} from './repository';
 import {isTTY} from '../utils/constants';
+
+const noOp = () => void (0);
 
 export interface CommandEvents {
     start: () => void | Promise<void>;
@@ -12,29 +14,20 @@ export interface CommandEvents {
     error: (e: unknown) => void | Promise<void>;
 }
 
-export interface CommandOptions {
-    json?: boolean;
-    logLevel?: string;
-    ci?: boolean;
-    progress?: boolean;
-}
-
-export abstract class Command<TOptions extends CommandOptions = CommandOptions> extends TypedEventEmitterClass<CommandEvents>(AsyncEventEmitter) {
+export abstract class Command<TOptions extends Command.GlobalOptions = Command.GlobalOptions>
+    extends TypedEventEmitterClass<CommandEvents>(AsyncEventEmitter) {
     protected _started = false;
     protected _finished = false;
     protected _options!: TOptions;
-    protected _progressTimer?: NodeJS.Timer;
+    public logger: npmlog.Logger = npmlog;
+
     static commandName: string;
 
-    protected constructor(readonly repository: Repository, options?: TOptions) {
+    constructor(options?: TOptions) {
         super();
-        this._readOptions(['json', 'logLevel', 'ci', 'progress'], options);
-        if (this.options.progress == null)
-            this.options.progress = true;
+        this._options = options || {} as TOptions;
         if (isCi)
             this.options.ci = true;
-        if (this.options.ci || !isTTY)
-            this.options.progress = false;
     }
 
     get options(): TOptions {
@@ -43,20 +36,6 @@ export abstract class Command<TOptions extends CommandOptions = CommandOptions> 
 
     get commandName(): string {
         return Object.getPrototypeOf(this).constructor.commandName;
-    }
-
-    protected _readOptions(keys: string[], options?: any): void {
-        this._options = {} as TOptions;
-        const cfg = this.repository.config.data;
-        const cmdConfig = this.repository.config.getObject('command.' + this.commandName);
-        for (const k of keys) {
-            if (options[k] != null)
-                this._options[k] = options[k];
-            if (cfg && cfg[k] != null)
-                this._options[k] = cfg[k];
-            if (cmdConfig && cmdConfig[k] != null)
-                this._options[k] = cmdConfig[k];
-        }
     }
 
     async execute(): Promise<any> {
@@ -70,58 +49,44 @@ export abstract class Command<TOptions extends CommandOptions = CommandOptions> 
         }
         this._started = true;
         try {
-            logger.level = this.options.logLevel ||
+            this.logger.level = this.options.logLevel ||
                 (this.options.ci ? 'error' : 'info');
             if (this.options.ci || !isTTY) {
-                logger.disableColor();
-                logger.disableUnicode();
+                this.logger.disableColor();
+                this.logger.disableUnicode();
             } else {
-                logger.enableColor();
-                logger.enableUnicode();
+                this.logger.enableColor();
+                this.logger.enableUnicode();
             }
 
-            logger.info('project', this.repository.dirname);
             if (this._preExecute)
                 await this._preExecute();
             const v = await this._execute();
             if (this._postExecute)
                 await this._postExecute();
-            await this.emitAsync('finish', undefined, v).catch();
+            await this.emitAsync('finish', undefined, v).catch(noOp);
             this.disableProgress();
-            logger.resume();
-            logger.success('', 'Command completed')
+            this.logger.resume();
+            this.logger.success('', 'Command completed')
             return v;
         } catch (e: any) {
             this.disableProgress();
-            await this.emitAsync('finish', e).catch();
+            await this.emitAsync('finish', e).catch(noOp);
             if (this.listenerCount('error'))
-                await this.emitAsync('error', e).catch();
-            logger.resume();
+                await this.emitAsync('error', e).catch(noOp);
+            this.logger.resume();
             throw e;
         } finally {
             this._finished = true;
         }
     }
 
-    protected enableProgress() {
-        if (!this.options.progress || this.options.ci || !isTTY)
+    protected async enableProgress() {
+        if (this.options.ci || !isTTY || (this._screen && this._screen.visible))
             return;
-        this._progressTimer = setInterval(() =>
-                logUpdate(this._drawProgress()),
-            80);
-        this._progressTimer.unref();
     }
 
     protected disableProgress() {
-        if (this._progressTimer) {
-            clearInterval(this._progressTimer);
-            this._progressTimer = undefined;
-            logUpdate('');
-        }
-    }
-
-    protected _drawProgress(): string {
-        return '';
     }
 
     protected abstract _execute(): Promise<any>;
@@ -130,4 +95,43 @@ export abstract class Command<TOptions extends CommandOptions = CommandOptions> 
 
     protected async _postExecute?(): Promise<void>;
 
+}
+
+export namespace Command {
+
+    export interface GlobalOptions {
+        logLevel?: string;
+        json?: boolean;
+        ci?: boolean;
+    }
+
+    export const globalOptions: Record<string, yargs.Options> = {
+        'log-level': {
+            defaultDescription: "info",
+            describe: "Set log level",
+            choices: ['silly', 'verbose', 'info', 'output', 'notice', 'success', 'warn', 'error', 'silent'],
+            requiresArg: true
+        },
+        'json': {
+            alias: 'j',
+            describe: '# Stream log as json',
+            type: 'boolean'
+        },
+        'ci': {
+            hidden: true,
+            type: "boolean"
+        }
+    }
+
+    export function composeOptions<TOptions extends GlobalOptions = GlobalOptions>(
+        commandName: string, yargArgs: any, config: any
+    ): Partial<TOptions> {
+        const result = merge({}, yargArgs) as TOptions;
+        merge(result, config, {filter: (_, key) => key !== 'command'})
+        const cfgCmd = config.commans && typeof config.command === 'object' ?
+            config.command : undefined;
+        if (cfgCmd && typeof cfgCmd === 'object')
+            merge(result, cfgCmd);
+        return result;
+    }
 }
