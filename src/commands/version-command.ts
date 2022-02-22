@@ -121,7 +121,7 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
             const newVer = newVersions[pkg.name];
             pkg.json.version = newVer;
             const f = path.join(pkg.dirname, 'package.json');
-            const data = JSON.stringify(pkg.json, undefined, -2);
+            const data = JSON.stringify(pkg.json, undefined, 2);
             fs.writeFileSync(f, data, 'utf-8');
             logger.info(
                 this.commandName,
