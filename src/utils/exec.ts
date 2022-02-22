@@ -55,8 +55,8 @@ export async function exec(command: string, options?: IExecutorOptions): Promise
     };
 
     const processData = (data: string, stdio: 'stderr' | 'stdout') => {
-        buffer[stdio] += data;
-        result[stdio] += data;
+        buffer[stdio] += '' + data;
+        result[stdio] += '' + data;
         if (opts.onData)
             opts.onData(data, stdio);
     }
