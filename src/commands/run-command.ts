@@ -93,6 +93,8 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
                 chalk.gray(figures.lineVerticalDashed0),
                 r.error.message.trim()
             );
+            logger.verbose(this.commandName,
+                chalk.gray(figures.lineVerticalDashed0), r.stderr || r.stdout);
         } else
             logger.info(
                 this.commandName,
