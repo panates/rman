@@ -47,7 +47,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
         } catch {
             return;
         }
-        const tasks: Task[] = [];
+        const children: Task[] = [];
         for (const s of scriptInfo.steps) {
             const parsed = Array.isArray(s.parsed) ? s.parsed : [s.parsed];
             for (const cmd of parsed) {
@@ -56,17 +56,21 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
                         cwd: p.dirname,
                         argv: this.argv
                     }, ctx);
+                }, {
+                    name: p.name + ':' + s.name,
+                    dependencies: s.name.startsWith('pre') || s.name.startsWith('post') ?
+                        undefined : p.dependencies
                 });
-                tasks.push(task);
+                children.push(task);
             }
         }
-        if (tasks.length)
-            return new Task(tasks, {
+        if (children.length) {
+            return new Task(children, {
                 name: p.name,
-                dependencies: this.options.parallel ? undefined : p.dependencies,
-                bail: this.options.bail,
-                concurrency: this.options.concurrency
-            })
+                bail: true,
+                serial: true,
+            });
+        }
     }
 
     protected async _exec(pkg: Package, command: string,
@@ -77,7 +81,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
             chalk.gray(figures.lineVerticalDashed0),
             chalk.cyanBright.bold('executing'),
             chalk.gray(figures.lineVerticalDashed0),
-            command,
+            command
         );
         const t = Date.now();
         const r = await exec(command, options);
