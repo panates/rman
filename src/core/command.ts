@@ -5,6 +5,8 @@ import yargs from 'yargs';
 import merge from 'putil-merge';
 import './logger';
 import {isTTY} from '../utils/constants';
+import chalk from 'chalk';
+import figures from 'figures';
 
 const noOp = () => void (0);
 
@@ -28,6 +30,7 @@ export abstract class Command<TOptions extends Command.GlobalOptions = Command.G
         this._options = options || {} as TOptions;
         if (isCi)
             this.options.ci = true;
+        this.logger.separator = chalk.gray(figures.lineVerticalDashed0);
     }
 
     get options(): TOptions {
@@ -67,7 +70,7 @@ export abstract class Command<TOptions extends Command.GlobalOptions = Command.G
             await this.emitAsync('finish', undefined, v).catch(noOp);
             this.disableProgress();
             this.logger.resume();
-            this.logger.success('', 'Command completed')
+            this.logger.info('', 'Command completed')
             return v;
         } catch (e: any) {
             this.disableProgress();

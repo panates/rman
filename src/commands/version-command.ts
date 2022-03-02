@@ -5,14 +5,13 @@ import chalk from 'chalk';
 import semver from 'semver';
 import logger from 'npmlog';
 import stripColor from 'strip-color';
-import figures from 'figures';
 import {Task} from 'power-tasks';
 import {Repository} from '../core/repository';
 import {RunCommand} from './run-command';
 import {GitHelper} from '../utils/git-utils';
 import {Package} from '../core/package';
 import {Command} from '../core/command';
-import {ExecuteCommandResult, IExecutorOptions} from '../utils/exec';
+import {ExecuteCommandResult} from '../utils/exec';
 
 export class VersionCommand extends RunCommand<VersionCommand.Options> {
 
@@ -24,14 +23,13 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
         super(repository, 'version', options);
     }
 
-    protected async _prepareTasks(): Promise<Task[]> {
+    protected async _prepareTasks(packages: Package[]): Promise<Task[]> {
         const {repository} = this;
         const git = new GitHelper({cwd: repository.dirname});
 
         const dirtyFiles = await git.listDirtyFiles();
         const committedFiles = await git.listCommittedFiles();
 
-        const packages = repository.getPackages({toposort: true});
         const newVersions: Record<string, string> = {};
         let errorCount = 0;
         const selectedPackages: Package[] = [];
@@ -77,11 +75,9 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
                 else logger.log(this.options.ignoreDirty ? 'info' : 'error',
                     this.commandName,
                     logPkgName,
-                    chalk.gray(figures.lineVerticalDashed0),
                     chalk.whiteBright(p.version),
-                    chalk.gray(figures.lineVerticalDashed0),
                     status,
-                    chalk.gray(figures.lineVerticalDashed0),
+                    logger.separator,
                     message);
                 continue;
             }
@@ -98,44 +94,37 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
             Object.keys(newVersions).forEach(k => newVersions[k] = maxVer);
         }
 
-        const tasks: Task[] = [];
-        for (const p of selectedPackages) {
-            const json = {...p.json};
-            json.scripts = json.scripts || {};
-            json.scripts.version = json.scripts.version || '#version';
-            const _p = {json};
-            Object.setPrototypeOf(_p, p);
-
-            const childTask = this._preparePackageTask(_p as Package, {newVersions});
-            if (childTask) {
-                tasks.push(childTask);
-            }
-        }
-        return tasks;
+        return super._prepareTasks(selectedPackages, {newVersions});
     }
 
-    protected async _exec(pkg: Package, command: string, options: IExecutorOptions, ctx: any): Promise<ExecuteCommandResult> {
-        if (command === '#version') {
+    protected async _exec(args: {
+        name: string;
+        json: any;
+        dirname: string;
+        dependencies?: string[];
+        command: string;
+    }, ctx?: any): Promise<ExecuteCommandResult> {
+        if (args.name === 'root')
+            return {code: 0};
+        if (args.command === '#') {
             const {newVersions} = ctx;
-            const oldVer = pkg.version;
-            const newVer = newVersions[pkg.name];
-            pkg.json.version = newVer;
-            delete pkg.json.scripts.version;
-            const f = path.join(pkg.dirname, 'package.json');
-            const data = JSON.stringify(pkg.json, undefined, 2);
+            const oldVer = args.json.version;
+            const newVer = newVersions[args.name];
+            args.json.version = newVer;
+            delete args.json.scripts.version;
+            const f = path.join(args.dirname, 'package.json');
+            const data = JSON.stringify(args.json, undefined, 2);
             fs.writeFileSync(f, data, 'utf-8');
             logger.info(
                 this.commandName,
-                chalk.gray(figures.lineVerticalDashed0),
-                pkg.name,
-                chalk.gray(figures.lineVerticalDashed0),
+                args.name,
+                logger.separator,
                 'Version changed from ' + chalk.cyan(oldVer) + ' to ' + chalk.cyan(newVer)
             );
             return {code: 0};
         }
-        return super._exec(pkg, command, options);
+        return super._exec(args, ctx);
     }
-
 }
 
 export namespace VersionCommand {

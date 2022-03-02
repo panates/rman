@@ -3,11 +3,11 @@ import {Task} from 'power-tasks';
 import chalk from 'chalk';
 import fetchPackageInfo from 'package-json';
 import logger from 'npmlog';
-import figures from 'figures';
 import {Repository} from '../core/repository';
 import {Command} from '../core/command';
 import {Package} from '../core/package';
 import {RunCommand} from './run-command';
+import {ExecuteCommandResult} from '../utils/exec';
 
 export class PublishCommand extends RunCommand<PublishCommand.Options> {
 
@@ -18,9 +18,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
         super(repository, 'publish', options);
     }
 
-    protected async _prepareTasks(): Promise<Task[]> {
-        const {repository} = this;
-        const packages = repository.getPackages({toposort: true});
+    protected async _prepareTasks(packages: Package[]): Promise<Task[]> {
         const newVersions: Record<string, string> = {};
         const selectedPackages: Package[] = [];
         for (const p of packages) {
@@ -30,27 +28,28 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                 logger.info(
                     this.commandName,
                     logPkgName,
-                    chalk.gray(figures.lineVerticalDashed0),
+                    logger.separator,
                     `Ignored. Same version (${p.version}) in repository`);
                 continue;
             }
             selectedPackages.push(p);
         }
 
-        const tasks: Task[] = [];
-        for (const p of selectedPackages) {
-            const json = {...p.json};
-            json.scripts = json.scripts || {};
-            json.scripts.publish = json.scripts.publish || 'npm publish';
-            const _p = {json};
-            Object.setPrototypeOf(_p, p);
+        return super._prepareTasks(selectedPackages, {newVersions});
+    }
 
-            const childTask = this._preparePackageTask(_p as Package, {newVersions});
-            if (childTask) {
-                tasks.push(childTask);
-            }
-        }
-        return tasks;
+    protected async _exec(args: {
+        name: string;
+        json: any;
+        dirname: string;
+        dependencies?: string[];
+        command: string;
+    }, ctx?: any): Promise<ExecuteCommandResult> {
+        if (args.name === 'root')
+            return {code: 0};
+        if (args.command === '#')
+            return super._exec({...args, command: 'npm publish'}, ctx);
+        return super._exec(args, ctx);
     }
 
 }

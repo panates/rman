@@ -1,6 +1,5 @@
 import logger from 'npmlog';
 
-logger.addLevel("success", 1500, {fg: "green", bold: true});
 logger.addLevel('output', 3300, {}, '');
 
 declare module 'npmlog' {
@@ -14,6 +13,9 @@ declare module 'npmlog' {
         showProgress();
 
         hideProgress();
+
+        separator: string;
     }
 
 }
+

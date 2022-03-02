@@ -7,6 +7,7 @@ import {MultiTaskCommand} from './multi-task-command';
 import {Task} from 'power-tasks';
 import {exec} from '../utils/exec';
 import {Command} from '../core/command';
+import {Package} from '../core/package';
 
 export class ExecuteCommand extends MultiTaskCommand<ExecuteCommand.Options> {
 
@@ -19,31 +20,28 @@ export class ExecuteCommand extends MultiTaskCommand<ExecuteCommand.Options> {
         super(repository, options);
     }
 
-    protected _prepareTasks(): Task[] {
-        const packages = this.repository.getPackages({toposort: !this.options.parallel});
+    protected _prepareTasks(packages: Package[]): Task[] {
         const tasks: Task[] = [];
         for (const p of packages) {
             const task = new Task(async () => {
                 const t = Date.now();
                 logger.verbose(this.commandName,
                     p.name,
-                    chalk.gray(figures.lineVerticalDashed0),
                     chalk.cyanBright.bold('executing'),
-                    chalk.gray(figures.lineVerticalDashed0),
+                    logger.separator,
                     this.cmd + ' ' + (this.argv?.join(' ') || ''),
                 );
                 const r = await exec(this.cmd, {
                     cwd: p.dirname,
                     argv: this.argv
                 });
-                logger.log((r.error ? 'error' : 'verbose'),
+                logger.log((r.error ? 'error' : 'info'),
                     this.commandName,
-                    chalk.gray(figures.lineVerticalDashed0),
                     p.name,
-                    chalk.gray(figures.lineVerticalDashed0),
                     (r.error ? chalk.red.bold('failed') : chalk.green.bold('success')),
-                    chalk.gray(figures.lineVerticalDashed0),
-                    'Completed in ' + chalk.yellow('' + (Date.now() - t) + ' ms')
+                    logger.separator,
+                    this.cmd,
+                    ' (' + chalk.yellow('' + (Date.now() - t) + ' ms)')
                 );
             }, {
                 name: p.name,

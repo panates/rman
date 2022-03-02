@@ -2,13 +2,11 @@ import os from 'os';
 import chalk from 'chalk';
 import yargs from 'yargs';
 import logger from 'npmlog';
-import figures from 'figures';
 import {Task} from 'power-tasks';
 import {Repository} from '../core/repository';
 import {Command} from '../core/command';
 import {isTTY} from '../utils/constants';
-
-const logSeparator = chalk.gray(figures.lineVerticalDashed0);
+import {Package} from '../core/package';
 
 export abstract class MultiTaskCommand<TOptions extends MultiTaskCommand.Options = MultiTaskCommand.Options>
     extends Command<TOptions> {
@@ -27,9 +25,10 @@ export abstract class MultiTaskCommand<TOptions extends MultiTaskCommand.Options
     }
 
     protected async _execute(): Promise<any> {
-        const childTasks = await this._prepareTasks();
+        const packages = await this._getPackages();
+        const childTasks = await this._prepareTasks(packages);
         if (!(childTasks && childTasks.length)) {
-            logger.info(this.commandName, logSeparator, 'There is no task to process');
+            logger.info(this.commandName, '', 'There is no task to process');
             return;
         }
         // this.enableProgress();
@@ -41,7 +40,11 @@ export abstract class MultiTaskCommand<TOptions extends MultiTaskCommand.Options
         await this._task.toPromise().catch(() => void (0));
     }
 
-    protected abstract _prepareTasks(): Task[] | Promise<Task[]> | void;
+    protected async _getPackages(): Promise<Package[]> {
+        return this.repository.getPackages({toposort: !this.options.parallel});
+    }
+
+    protected abstract _prepareTasks(packages: Package[]): Task[] | Promise<Task[]> | void;
 
 }
 
