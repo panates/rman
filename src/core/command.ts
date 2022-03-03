@@ -7,6 +7,7 @@ import './logger';
 import {isTTY} from '../utils/constants';
 import chalk from 'chalk';
 import figures from 'figures';
+import logger from 'npmlog';
 
 const noOp = () => void (0);
 
@@ -31,6 +32,11 @@ export abstract class Command<TOptions extends Command.GlobalOptions = Command.G
         if (isCi)
             this.options.ci = true;
         this.logger.separator = chalk.gray(figures.lineVerticalDashed0);
+        Object.defineProperty(this.logger, 'levelIndex', {
+            get(): any {
+                return logger.levels[logger.level] || 0;
+            }
+        })
     }
 
     get options(): TOptions {
@@ -89,12 +95,15 @@ export abstract class Command<TOptions extends Command.GlobalOptions = Command.G
             return;
     }
 
-    protected disableProgress() {
+    protected disableProgress(): void {
+        //
     }
 
     protected abstract _execute(): Promise<any>;
 
-    protected async _preExecute?(): Promise<void>;
+    protected async _preExecute(): Promise<void> {
+        logger.info('run', `Executing "${this.commandName}" command`);
+    }
 
     protected async _postExecute?(): Promise<void>;
 

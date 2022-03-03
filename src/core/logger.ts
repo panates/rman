@@ -15,6 +15,8 @@ declare module 'npmlog' {
         hideProgress();
 
         separator: string;
+
+        levelIndex: number;
     }
 
 }

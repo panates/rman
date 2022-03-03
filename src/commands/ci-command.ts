@@ -1,0 +1,98 @@
+import yargs from 'yargs';
+import {Task} from 'power-tasks';
+import chalk from 'chalk';
+import logger from 'npmlog';
+import {Repository} from '../core/repository';
+import {Command} from '../core/command';
+import {Package} from '../core/package';
+import {RunCommand} from './run-command';
+import {ExecuteCommandResult} from '../utils/exec';
+import {fsDelete, fsExists} from '../utils/file-utils';
+import path from 'path';
+
+export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options> {
+
+    static commandName = 'ci';
+
+    constructor(readonly repository: Repository,
+                options?: CleanInstallCommand.Options) {
+        super(repository, 'clean_', options);
+    }
+
+    protected async _prepareTasks(packages: Package[]): Promise<Task[]> {
+        const tasks = await super._prepareTasks(packages);
+        const client = this.repository.config.client || 'npm';
+        if (!(client === 'npm' || client === 'yargs'))
+            throw new Error(`Invalid npm client "${client}"`);
+        tasks.push(new Task(async () => {
+                const dirname = this.repository.dirname;
+                await this._fsDelete(path.join(dirname, 'node_modules'));
+                await this._fsDelete(path.join(dirname, 'package-lock.json'));
+                await this._fsDelete(path.join(dirname, 'yarn-lock.json'));
+                logger.info(this.commandName, chalk.yellow('installing'),
+                    'Running ' + client + ' install');
+                return super._exec({
+                    name: 'root',
+                    dirname: this.repository.dirname,
+                    json: {...this.repository.json},
+                    command: client + ' install',
+                    stdio: 'inherit'
+                });
+            }, {exclusive: true})
+        );
+        return tasks;
+    }
+
+    protected async _exec(args: {
+        name: string;
+        json: any;
+        dirname: string;
+        dependencies?: string[];
+        command: string;
+    }, ctx?: any): Promise<ExecuteCommandResult> {
+        if (args.command === '#') {
+            if (args.name === 'root')
+                return {code: 0};
+            const {dirname} = args;
+            await this._fsDelete(path.join(dirname, 'node_modules'));
+            await this._fsDelete(path.join(dirname, 'package-lock.json'));
+            await this._fsDelete(path.join(dirname, 'yarn-lock.json'));
+            return {code: 0};
+        }
+        return super._exec(args, ctx);
+    }
+
+    protected async _fsDelete(fileOrDir: string): Promise<void> {
+        if (await fsExists(fileOrDir)) {
+            logger.info(this.commandName, chalk.yellow('clean'),
+                'Deleting ' + fileOrDir);
+            await fsDelete(fileOrDir);
+        }
+    }
+
+}
+
+export namespace CleanInstallCommand {
+    export interface Options extends RunCommand.Options {
+    }
+
+    export const cliCommandOptions: Record<string, yargs.Options> = {
+        ...RunCommand.cliCommandOptions
+    };
+
+    export function initCli(repository: Repository, program: yargs.Argv) {
+        program.command({
+            command: 'ci [...options]',
+            describe: 'Deletes all dependency modules and re-installs',
+            builder: (cmd) => {
+                return cmd
+                    .example("$0 ci", '')
+                    .option(CleanInstallCommand.cliCommandOptions);
+            },
+            handler: async (args) => {
+                const options = Command.composeOptions(CleanInstallCommand.commandName, args, repository.config);
+                await new CleanInstallCommand(repository, options).execute();
+            }
+        })
+    }
+}

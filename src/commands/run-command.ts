@@ -19,11 +19,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
         super(repository, options);
     }
 
-    protected async _preExecute(): Promise<void> {
-        logger.info('run', `Executing script "${this.script}" for packages`);
-    }
-
-    protected _prepareTasks(packages: Package[], ctx?: any): Task[] | Promise<Task[]> {
+    protected _prepareTasks(packages: Package[], options?: any): Task[] | Promise<Task[]> {
         const packageTasks: Task[] = [];
         for (const p of packages) {
             if (p.json.scripts) {
@@ -32,7 +28,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
                     dirname: p.dirname,
                     json: p.json,
                     dependencies: p.dependencies
-                }, ctx);
+                }, options);
                 if (childTask) {
                     packageTasks.push(childTask);
                 }
@@ -43,14 +39,13 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
             dirname: this.repository.dirname,
             json: this.repository.json
         });
-        if (!packageTasks.length || !mainTask?.children)
+        if (!mainTask?.children)
             return packageTasks;
         const tasks: Task[] = [];
         const pre = mainTask.children.filter((t => t.name.endsWith(':pre' + this.script)));
         const post = mainTask.children.filter((t => t.name.endsWith(':post' + this.script)));
-        const dependencies = packageTasks.map(t => t.name);
         pre.forEach(t => t.options.exclusive = true);
-        post.forEach(t => t.options.dependencies = dependencies);
+        post.forEach(t => t.options.exclusive = true);
         tasks.push(...pre);
         tasks.push(...packageTasks);
         tasks.push(...post);
@@ -80,7 +75,11 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
             const parsed = Array.isArray(s.parsed) ? s.parsed : [s.parsed];
             for (const cmd of parsed) {
                 const task = new Task(async () => {
-                    return await this._exec({...args, command: cmd}, ctx);
+                    return await this._exec({
+                        ...args,
+                        command: cmd,
+                        stdio: logger.levelIndex <= 1000 ? 'inherit' : 'pipe'
+                    }, ctx);
                 }, {
                     name: args.name + ':' + s.name,
                     dependencies: s.name.startsWith('pre') || s.name.startsWith('post') ?
@@ -104,7 +103,8 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
         dirname: string;
         dependencies?: string[];
         command: string;
-    }, ctx?: any): Promise<ExecuteCommandResult> {
+        stdio?: 'inherit' | 'pipe';
+    }, options?: any): Promise<ExecuteCommandResult> {
         logger.verbose(this.commandName,
             chalk.cyan(args.name),
             chalk.cyanBright.bold('executing'),
@@ -112,7 +112,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
             args.command
         );
         const t = Date.now();
-        const r = await exec(args.command, {cwd: args.dirname});
+        const r = await exec(args.command, {cwd: args.dirname, stdio: args.stdio});
         if (r.error) {
             logger.error(
                 this.commandName,
@@ -128,10 +128,10 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
             logger.info(
                 this.commandName,
                 chalk.cyan(args.name),
-                chalk.green.bold('success'),
+                chalk.green.bold('executed'),
                 logger.separator,
                 args.command,
-                '  (' + chalk.yellow('' + (Date.now() - t) + ' ms)')
+                chalk.yellow(' (' + (Date.now() - t) + ' ms)')
             );
         if (r.error)
             throw r.error;

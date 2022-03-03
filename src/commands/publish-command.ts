@@ -44,12 +44,13 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
         dirname: string;
         dependencies?: string[];
         command: string;
-    }, ctx?: any): Promise<ExecuteCommandResult> {
-        if (args.name === 'root')
-            return {code: 0};
-        if (args.command === '#')
-            return super._exec({...args, command: 'npm publish'}, ctx);
-        return super._exec(args, ctx);
+    }, options?: any): Promise<ExecuteCommandResult> {
+        if (args.command === '#') {
+            if (args.name === 'root')
+                return {code: 0};
+            return super._exec({...args, command: 'npm publish'}, {...options, stdio: 'inherit'});
+        }
+        return super._exec(args, options);
     }
 
 }

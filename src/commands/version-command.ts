@@ -103,11 +103,11 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
         dirname: string;
         dependencies?: string[];
         command: string;
-    }, ctx?: any): Promise<ExecuteCommandResult> {
+    }, options?: any): Promise<ExecuteCommandResult> {
         if (args.name === 'root')
             return {code: 0};
         if (args.command === '#') {
-            const {newVersions} = ctx;
+            const {newVersions} = options;
             const oldVer = args.json.version;
             const newVer = newVersions[args.name];
             args.json.version = newVer;
@@ -123,7 +123,7 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
             );
             return {code: 0};
         }
-        return super._exec(args, ctx);
+        return super._exec(args, options);
     }
 }
 
