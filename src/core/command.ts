@@ -102,7 +102,7 @@ export abstract class Command<TOptions extends Command.GlobalOptions = Command.G
     protected abstract _execute(): Promise<any>;
 
     protected async _preExecute(): Promise<void> {
-        logger.info('run', `Executing "${this.commandName}" command`);
+        logger.info('rman', `Executing "${this.commandName}" command`);
     }
 
     protected async _postExecute?(): Promise<void>;
@@ -140,8 +140,8 @@ export namespace Command {
     ): Partial<TOptions> {
         const result = merge({}, yargArgs) as TOptions;
         merge(result, config, {filter: (_, key) => key !== 'command'})
-        const cfgCmd = config.commans && typeof config.command === 'object' ?
-            config.command : undefined;
+        const cfgCmd = config.command && typeof config.command === 'object' ?
+            config.command[commandName] : undefined;
         if (cfgCmd && typeof cfgCmd === 'object')
             merge(result, cfgCmd);
         return result;
