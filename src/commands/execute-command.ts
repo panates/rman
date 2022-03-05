@@ -34,7 +34,7 @@ export class ExecuteCommand extends MultiTaskCommand<ExecuteCommand.Options> {
                 const r = await exec(this.cmd, {
                     cwd: p.dirname,
                     argv: this.argv,
-                    stdio: logger.levelIndex <= 1000 ? 'inherit' : 'pipe'
+                    stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe'
                 });
                 logger.log((r.error ? 'error' : 'info'),
                     this.commandName,

@@ -103,7 +103,7 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
                         name: 'rman',
                         command: 'git tag -a "v' + maxVer + '" -m "version ' + maxVer + '"',
                         cwd: this.repository.dirname,
-                        stdio: logger.levelIndex <= 1000 ? 'inherit' : 'pipe',
+                        stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe',
                         logLevel: 'silly'
                     });
                 } catch {
@@ -137,7 +137,7 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
                     name: args.name,
                     command: 'git commit -m "' + newVer + '" package.json',
                     cwd: args.cwd,
-                    stdio: logger.levelIndex <= 1000 ? 'inherit' : 'pipe',
+                    stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe',
                     logLevel: 'silly'
                 });
             }

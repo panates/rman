@@ -78,7 +78,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
                     return await this._exec({
                         ...args,
                         command: cmd,
-                        stdio: logger.levelIndex <= 1000 ? 'inherit' : 'pipe'
+                        stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe'
                     }, ctx);
                 }, {
                     name: args.name + ':' + s.name,

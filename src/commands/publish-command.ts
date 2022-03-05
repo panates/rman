@@ -8,6 +8,7 @@ import {Command} from '../core/command';
 import {Package} from '../core/package';
 import {RunCommand} from './run-command';
 import {ExecuteCommandResult} from '../utils/exec';
+import path from 'path';
 
 export class PublishCommand extends RunCommand<PublishCommand.Options> {
 
@@ -23,6 +24,12 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
         const selectedPackages: Package[] = [];
         for (const p of packages) {
             const logPkgName = chalk.yellow(p.name);
+            logger.verbose(
+                this.commandName,
+                logPkgName,
+                logger.separator,
+                `Fetching package information from repository`);
+            /*
             const r = await fetchPackageInfo(p.json.name);
             if (r.version === p.version) {
                 logger.info(
@@ -31,7 +38,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                     logger.separator,
                     `Ignored. Same version (${p.version}) in repository`);
                 continue;
-            }
+            }*/
             selectedPackages.push(p);
         }
 
@@ -48,11 +55,17 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
         if (args.command === '#') {
             if (args.name === 'root')
                 return {code: 0};
-            return super._exec({...args, command: 'npm publish'}, {...options, stdio: 'inherit'});
+            const cwd = this.options.contents
+                ? path.resolve(this.repository.dirname, path.join(this.options.contents, path.basename(args.cwd)))
+                : args.cwd;
+            return super._exec({
+                ...args,
+                cwd,
+                command: 'npm publish'
+            }, {...options, stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe'});
         }
         return super._exec(args, options);
     }
-
 }
 
 export namespace PublishCommand {
