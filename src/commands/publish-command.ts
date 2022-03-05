@@ -29,7 +29,6 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                 logPkgName,
                 logger.separator,
                 `Fetching package information from repository`);
-            /*
             const r = await fetchPackageInfo(p.json.name);
             if (r.version === p.version) {
                 logger.info(
@@ -38,7 +37,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                     logger.separator,
                     `Ignored. Same version (${p.version}) in repository`);
                 continue;
-            }*/
+            }
             selectedPackages.push(p);
         }
 
