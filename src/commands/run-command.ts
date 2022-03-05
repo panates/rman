@@ -25,7 +25,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
             if (p.json.scripts) {
                 const childTask = this._prepareScriptTask({
                     name: p.name,
-                    dirname: p.dirname,
+                    cwd: p.dirname,
                     json: p.json,
                     dependencies: p.dependencies
                 }, options);
@@ -36,7 +36,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
         }
         const mainTask = this._prepareScriptTask({
             name: 'root',
-            dirname: this.repository.dirname,
+            cwd: this.repository.dirname,
             json: this.repository.json
         });
         if (!mainTask?.children)
@@ -55,7 +55,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
     protected _prepareScriptTask(args: {
         name: string;
         json: any;
-        dirname: string;
+        cwd: string;
         dependencies?: string[];
     }, ctx?: any): Task | undefined {
         const json = {...args.json};
@@ -99,41 +99,46 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
 
     protected async _exec(args: {
         name: string;
-        json: any;
-        dirname: string;
+        cwd: string;
         dependencies?: string[];
         command: string;
         stdio?: 'inherit' | 'pipe';
+        json?: any;
+        logLevel?: string;
+        noThrow?: boolean;
     }, options?: any): Promise<ExecuteCommandResult> {
-        logger.verbose(this.commandName,
-            chalk.cyan(args.name),
-            chalk.cyanBright.bold('executing'),
-            logger.separator,
-            args.command
-        );
+        const logLevel = args.logLevel == null ? 'info' : args.logLevel;
+        if (logLevel)
+            logger.log(logLevel, this.commandName,
+                chalk.cyan(args.name),
+                chalk.cyanBright.bold('executing'),
+                logger.separator,
+                args.command
+            );
         const t = Date.now();
-        const r = await exec(args.command, {cwd: args.dirname, stdio: args.stdio});
-        if (r.error) {
-            logger.error(
-                this.commandName,
-                chalk.cyan(args.name),
-                chalk.red.bold('failed'),
-                logger.separator,
-                args.command,
-                logger.separator,
-                r.error.message.trim()
-            );
-            logger.verbose(this.commandName, '', r.stderr || r.stdout);
-        } else
-            logger.info(
-                this.commandName,
-                chalk.cyan(args.name),
-                chalk.green.bold('executed'),
-                logger.separator,
-                args.command,
-                chalk.yellow(' (' + (Date.now() - t) + ' ms)')
-            );
-        if (r.error)
+        const r = await exec(args.command, {cwd: args.cwd, stdio: args.stdio});
+        if (logLevel)
+            if (r.error) {
+                logger.error(
+                    this.commandName,
+                    chalk.cyan(args.name),
+                    chalk.red.bold('failed'),
+                    logger.separator,
+                    args.command,
+                    logger.separator,
+                    r.error.message.trim()
+                );
+                logger.verbose(this.commandName, '', r.stderr || r.stdout);
+            } else
+                logger.log(logLevel,
+                    this.commandName,
+                    chalk.cyan(args.name),
+                    chalk.green.bold('executed'),
+                    logger.separator,
+                    args.command,
+                    chalk.yellow(' (' + (Date.now() - t) + ' ms)')
+                );
+        if (r.error && !args.noThrow)
             throw r.error;
         return r;
     }

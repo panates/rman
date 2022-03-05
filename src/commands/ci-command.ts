@@ -33,7 +33,7 @@ export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options>
                     'Running ' + client + ' install');
                 return super._exec({
                     name: 'root',
-                    dirname: this.repository.dirname,
+                    cwd: this.repository.dirname,
                     json: {...this.repository.json},
                     command: client + ' install',
                     stdio: 'inherit'
@@ -46,17 +46,17 @@ export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options>
     protected async _exec(args: {
         name: string;
         json: any;
-        dirname: string;
+        cwd: string;
         dependencies?: string[];
         command: string;
     }, ctx?: any): Promise<ExecuteCommandResult> {
         if (args.command === '#') {
             if (args.name === 'root')
                 return {code: 0};
-            const {dirname} = args;
-            await this._fsDelete(path.join(dirname, 'node_modules'));
-            await this._fsDelete(path.join(dirname, 'package-lock.json'));
-            await this._fsDelete(path.join(dirname, 'yarn-lock.json'));
+            const {cwd} = args;
+            await this._fsDelete(path.join(cwd, 'node_modules'));
+            await this._fsDelete(path.join(cwd, 'package-lock.json'));
+            await this._fsDelete(path.join(cwd, 'yarn-lock.json'));
             return {code: 0};
         }
         return super._exec(args, ctx);

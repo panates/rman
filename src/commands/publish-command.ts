@@ -41,7 +41,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
     protected async _exec(args: {
         name: string;
         json: any;
-        dirname: string;
+        cwd: string;
         dependencies?: string[];
         command: string;
     }, options?: any): Promise<ExecuteCommandResult> {

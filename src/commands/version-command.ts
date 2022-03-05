@@ -1,5 +1,4 @@
 import path from 'path';
-import fs from 'fs';
 import yargs from 'yargs';
 import chalk from 'chalk';
 import semver from 'semver';
@@ -12,6 +11,7 @@ import {GitHelper} from '../utils/git-utils';
 import {Package} from '../core/package';
 import {Command} from '../core/command';
 import {ExecuteCommandResult} from '../utils/exec';
+import fs from 'fs/promises';
 
 export class VersionCommand extends RunCommand<VersionCommand.Options> {
 
@@ -40,7 +40,7 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
             let newVer: any = '';
             const logPkgName = chalk.yellow(p.name);
 
-            if (!this.options.forceDirty) {
+            if (!this.options.noTag) {
                 const isDirty = dirtyFiles.find(f => !path.relative(relDir, f).startsWith('..'));
                 if (isDirty) {
                     if (!this.options.ignoreDirty)
@@ -87,20 +87,36 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
         if (errorCount)
             throw new Error('Unable to bump version due to error(s)');
 
+        const maxVer = Object.values(newVersions).reduce((m, v) => {
+            return semver.gt(m, v) ? m : v;
+        }, '0.0.0');
         if (this.options.unified) {
-            const maxVer = Object.values(newVersions).reduce((m, v) => {
-                return semver.gt(m, v) ? m : v;
-            }, '0.0.0');
             Object.keys(newVersions).forEach(k => newVersions[k] = maxVer);
         }
 
-        return super._prepareTasks(selectedPackages, {newVersions});
+        const tasks = await super._prepareTasks(selectedPackages, {newVersions});
+        tasks.forEach(t => t.options.exclusive = true);
+        if (this.options.unified)
+            tasks.push(new Task(async () => {
+                try {
+                    await super._exec({
+                        name: 'rman',
+                        command: 'git tag -a "v' + maxVer + '" -m "version ' + maxVer + '"',
+                        cwd: this.repository.dirname,
+                        stdio: logger.levelIndex <= 1000 ? 'inherit' : 'pipe',
+                        logLevel: 'silly'
+                    });
+                } catch {
+                    //
+                }
+            }, {exclusive: true}));
+        return tasks;
     }
 
     protected async _exec(args: {
         name: string;
         json: any;
-        dirname: string;
+        cwd: string;
         dependencies?: string[];
         command: string;
     }, options?: any): Promise<ExecuteCommandResult> {
@@ -112,9 +128,19 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
             const newVer = newVersions[args.name];
             args.json.version = newVer;
             delete args.json.scripts.version;
-            const f = path.join(args.dirname, 'package.json');
+            const f = path.join(args.cwd, 'package.json');
             const data = JSON.stringify(args.json, undefined, 2);
-            fs.writeFileSync(f, data, 'utf-8');
+            await fs.writeFile(f, data, 'utf-8');
+
+            if (!this.options.noTag) {
+                await super._exec({
+                    name: args.name,
+                    command: 'git commit -m "' + newVer + '" package.json',
+                    cwd: args.cwd,
+                    stdio: logger.levelIndex <= 1000 ? 'inherit' : 'pipe',
+                    logLevel: 'silly'
+                });
+            }
             logger.info(
                 this.commandName,
                 args.name,
@@ -132,7 +158,7 @@ export namespace VersionCommand {
         unified?: boolean;
         all?: boolean;
         ignoreDirty?: boolean;
-        forceDirty?: boolean;
+        noTag?: boolean;
     }
 
     export const cliCommandOptions: Record<string, yargs.Options> = {
@@ -148,12 +174,12 @@ export namespace VersionCommand {
         },
         'ignore-dirty': {
             alias: 'i',
-            describe: '# Ignore dirty packages',
+            describe: '# Do not bump version for dirty packages',
             type: 'boolean'
         },
-        'force-dirty': {
-            alias: 'f',
-            describe: '# Force bump version for dirty packages',
+        'no-tag': {
+            alias: 'n',
+            describe: '# Do not crate git version tag. (Ignores dirty check)',
             type: 'boolean'
         }
     }
