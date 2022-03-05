@@ -109,7 +109,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
     }, options?: any): Promise<ExecuteCommandResult> {
         const logLevel = args.logLevel == null ? 'info' : args.logLevel;
         if (logLevel)
-            logger.log(logLevel, this.commandName,
+            logger.verbose(this.commandName,
                 chalk.cyan(args.name),
                 chalk.cyanBright.bold('executing'),
                 logger.separator,
