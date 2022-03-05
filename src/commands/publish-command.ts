@@ -24,7 +24,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
         const selectedPackages: Package[] = [];
         for (const p of packages) {
             const logPkgName = chalk.yellow(p.name);
-            logger.verbose(
+            logger.info(
                 this.commandName,
                 logPkgName,
                 logger.separator,

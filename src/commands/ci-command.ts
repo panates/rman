@@ -65,7 +65,7 @@ export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options>
     protected async _fsDelete(fileOrDir: string): Promise<void> {
         if (await fsExists(fileOrDir)) {
             logger.info(this.commandName, chalk.yellow('clean'),
-                'Deleting ' + fileOrDir);
+                'Deleting ' + path.relative(this.repository.dirname, fileOrDir));
             await fsDelete(fileOrDir);
         }
     }
