@@ -1,8 +1,8 @@
 import os from 'os';
-import chalk from 'chalk';
 import yargs from 'yargs';
 import logger from 'npmlog';
 import {Task} from 'power-tasks';
+import {toNumber} from 'putil-varhelpers'
 import {Repository} from '../core/repository';
 import {Command} from '../core/command';
 import {isTTY} from '../utils/constants';
@@ -12,14 +12,12 @@ export abstract class MultiTaskCommand<TOptions extends MultiTaskCommand.Options
     extends Command<TOptions> {
     protected _task?: Task;
 
-    protected constructor(readonly repository: Repository,
-                          options?: TOptions) {
+    protected constructor(readonly repository: Repository, options?: TOptions) {
         super(options);
         if (this.options.ci || !isTTY)
             this.options.progress = false;
         // noinspection SuspiciousTypeOfGuard
-        this.options.concurrency = typeof options?.concurrency === 'string' ?
-            parseInt(options.concurrency, 10) : undefined;
+        this.options.concurrency = toNumber(options?.concurrency);
         if (this.options.bail == null)
             this.options.bail = true;
     }
@@ -33,9 +31,9 @@ export abstract class MultiTaskCommand<TOptions extends MultiTaskCommand.Options
         }
         // this.enableProgress();
         this._task = new Task(childTasks, {
+            name: '$project-root',
             concurrency: this.options.concurrency || os.cpus().length,
             bail: this.options.bail,
-
         })
         await this._task.toPromise().catch(() => void (0));
     }

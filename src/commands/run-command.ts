@@ -34,16 +34,16 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
                 }
             }
         }
-        const mainTask = this._prepareScriptTask({
+        const rootTask = this._prepareScriptTask({
             name: 'root',
             cwd: this.repository.dirname,
             json: this.repository.json
         });
-        if (!mainTask?.children)
+        if (!rootTask?.children)
             return packageTasks;
         const tasks: Task[] = [];
-        const pre = mainTask.children.filter((t => t.name.endsWith(':pre' + this.script)));
-        const post = mainTask.children.filter((t => t.name.endsWith(':post' + this.script)));
+        const pre = rootTask.children.filter((t => t.name?.endsWith(':pre' + this.script)));
+        const post = rootTask.children.filter((t => t.name?.endsWith(':post' + this.script)));
         pre.forEach(t => t.options.exclusive = true);
         post.forEach(t => t.options.exclusive = true);
         tasks.push(...pre);
@@ -82,8 +82,9 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
                     }, ctx);
                 }, {
                     name: args.name + ':' + s.name,
-                    dependencies: s.name.startsWith('pre') || s.name.startsWith('post') ?
-                        undefined : args.dependencies
+                    dependencies:
+                        (this.options.parallel || s.name.startsWith('pre') || s.name.startsWith('post')) ?
+                            undefined : args.dependencies
                 });
                 children.push(task);
             }
@@ -126,9 +127,8 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
                     logger.separator,
                     args.command,
                     logger.separator,
-                    r.error.message.trim()
+                    r.error.message.trim() + ('\n' + r.stdout).trim()
                 );
-                logger.verbose(this.commandName, '', r.stderr || r.stdout);
             } else
                 logger.log(logLevel,
                     this.commandName,
@@ -166,6 +166,16 @@ export namespace RunCommand {
                     .option(RunCommand.cliCommandOptions);
             },
             handler: async (args) => {
+                const runCfg = repository.config?.command?.run;
+                if (args.script && runCfg && typeof runCfg === 'object') {
+                    ['parallel', 'bail', 'progress'].forEach(n => {
+                        if (typeof runCfg[n] === 'string') {
+                            if (runCfg[n].split(/\s*,\s*/).includes(args.script)) {
+                                args[n] = true;
+                            }
+                        }
+                    })
+                }
                 const options = Command.composeOptions(RunCommand.commandName, args, repository.config);
                 const script: string = '' + args.script;
                 await new RunCommand(repository, script, options).execute();

@@ -17,7 +17,6 @@ export interface IExecutorOptions {
 export interface ExecuteCommandResult {
     code?: number;
     error?: Error;
-    stderr?: string;
     stdout?: string;
 }
 
@@ -45,24 +44,20 @@ export async function exec(command: string, options?: IExecutorOptions): Promise
 
     const result: ExecuteCommandResult = {
         code: undefined,
-        stderr: '',
         stdout: ''
     }
 
-    const buffer = {
-        stdout: '',
-        stderr: ''
-    };
+    let buffer = '';
 
     const processData = (data: string, stdio: 'stderr' | 'stdout') => {
-        buffer[stdio] += '' + data;
-        result[stdio] += '' + data;
+        buffer += '' + data;
+        result.stdout += '' + data;
         if (opts.onData)
             opts.onData(data, stdio);
     }
 
     const processLines = (stdio: 'stderr' | 'stdout', flush?: boolean) => {
-        let chunk = buffer[stdio];
+        let chunk = buffer;
         let i: number;
         if (flush && !chunk.endsWith('\n'))
             chunk += '\n';
@@ -72,7 +67,7 @@ export async function exec(command: string, options?: IExecutorOptions): Promise
             if (opts.onLine)
                 opts.onLine(line, stdio);
         }
-        buffer[stdio] = chunk;
+        buffer = chunk;
     }
 
     const child = spawn(command, opts.argv || [], spawnOptions);
