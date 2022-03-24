@@ -170,9 +170,7 @@ export namespace RunCommand {
                 if (args.script && runCfg && typeof runCfg === 'object') {
                     ['parallel', 'bail', 'progress'].forEach(n => {
                         if (typeof runCfg[n] === 'string') {
-                            if (runCfg[n].split(/\s*,\s*/).includes(args.script)) {
-                                args[n] = true;
-                            }
+                            runCfg[n] = runCfg[n].split(/\s*,\s*/).includes(args.script);
                         }
                     })
                 }
