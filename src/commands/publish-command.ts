@@ -24,6 +24,14 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
         const selectedPackages: Package[] = [];
         for (const p of packages) {
             const logPkgName = chalk.yellow(p.name);
+            if (p.json.private) {
+                logger.info(
+                    this.commandName,
+                    logPkgName,
+                    logger.separator,
+                    `Ignored. Package is set to "private"`);
+                continue;
+            }
             logger.info(
                 this.commandName,
                 logPkgName,
