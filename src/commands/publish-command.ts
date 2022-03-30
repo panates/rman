@@ -37,14 +37,19 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                 logPkgName,
                 logger.separator,
                 `Fetching package information from repository`);
-            const r = await fetchPackageInfo(p.json.name);
-            if (r.version === p.version) {
-                logger.info(
-                    this.commandName,
-                    logPkgName,
-                    logger.separator,
-                    `Ignored. Same version (${p.version}) in repository`);
-                continue;
+            try {
+                const r = await fetchPackageInfo(p.json.name);
+                if (r.version === p.version) {
+                    logger.info(
+                        this.commandName,
+                        logPkgName,
+                        logger.separator,
+                        `Ignored. Same version (${p.version}) in repository`);
+                    continue;
+                }
+            } catch (e: any) {
+                if (e.name !== 'PackageNotFoundError')
+                    throw e;
             }
             selectedPackages.push(p);
         }
