@@ -25,8 +25,8 @@ export class NpmHelper {
             cwd: this.cwd,
             argv: ['view', packageName, '--json']
         });
-        if (x.stdout) {
-            if (x.stdout.includes('404'))
+        if (x && x.stdout) {
+            if (x.code && x.stdout.includes('404'))
                 return new PackageNotFoundError('Package ' + packageName + ' not found in repository');
             const b = x.stdout.indexOf('{');
             const e = x.stdout.lastIndexOf('}');

@@ -77,8 +77,11 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
             return super._exec({
                 ...args,
                 cwd,
-                command: 'npm publish'
-            }, {...options, stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe'});
+                command: 'npm publish' + (this.options.access ? ' --access=' + this.options.access : '')
+            }, {
+                ...options,
+                stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe'
+            });
         }
         return super._exec(args, options);
     }
@@ -87,6 +90,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
 export namespace PublishCommand {
     export interface Options extends RunCommand.Options {
         contents?: string;
+        access?: string;
     }
 
     export const cliCommandOptions: Record<string, yargs.Options> = {
@@ -94,6 +98,13 @@ export namespace PublishCommand {
         'contents': {
             describe: '# Subdirectory to publish',
             type: 'string'
+        },
+        'access': {
+            describe: '#  Tells the registry whether this package should be published as public or restricted. ' +
+                'Only applies to scoped packages, which default to restricted. If you don\'t have a paid account, ' +
+                'you must publish with --access public to publish scoped packages.',
+            type: 'string',
+            choices: ['public', 'restricted']
         }
     };
 
