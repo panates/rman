@@ -4,7 +4,7 @@ import {Command} from '../core/command';
 import {RunCommand} from './run-command';
 
 export class BuildCommand extends RunCommand<any> {
-    static commandName = 'changed';
+    static commandName = 'build';
 
     constructor(readonly repository: Repository, options?: RunCommand.Options) {
         super(repository, 'build', options);
