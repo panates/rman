@@ -1,14 +1,15 @@
 import yargs from 'yargs';
 import {Task} from 'power-tasks';
 import chalk from 'chalk';
-import fetchPackageInfo from 'package-json';
 import logger from 'npmlog';
+import ini from 'ini';
 import {Repository} from '../core/repository';
 import {Command} from '../core/command';
 import {Package} from '../core/package';
 import {RunCommand} from './run-command';
 import {ExecuteCommandResult} from '../utils/exec';
 import path from 'path';
+import {NpmHelper} from '../utils/npm-utils';
 
 export class PublishCommand extends RunCommand<PublishCommand.Options> {
 
@@ -22,6 +23,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
     protected async _prepareTasks(packages: Package[]): Promise<Task[]> {
         const newVersions: Record<string, string> = {};
         const selectedPackages: Package[] = [];
+
         for (const p of packages) {
             const logPkgName = chalk.yellow(p.name);
             if (p.json.private) {
@@ -32,14 +34,16 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                     `Ignored. Package is set to "private"`);
                 continue;
             }
+
             logger.info(
                 this.commandName,
                 logPkgName,
                 logger.separator,
                 `Fetching package information from repository`);
             try {
-                const r = await fetchPackageInfo(p.json.name);
-                if (r.version === p.version) {
+                const npmHelper = new NpmHelper({cwd: p.dirname});
+                const r = await npmHelper.getPackageInfo(p.json.name);
+                if (r && r.version === p.version) {
                     logger.info(
                         this.commandName,
                         logPkgName,

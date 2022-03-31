@@ -10,6 +10,8 @@ export async function tryStat(s): Promise<Stats | undefined> {
     return fsa.lstat(s).catch(() => undefined);
 }
 
+export const fsReadFile = fsa.readFile;
+
 export async function fsDelete(fileOrDir: string): Promise<boolean> {
     const stat = await tryStat(fileOrDir);
     if (stat) {
