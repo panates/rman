@@ -155,7 +155,7 @@ export namespace RunCommand {
     export function initCli(repository: Repository, program: yargs.Argv) {
         program.command({
             command: 'run <script>',
-            describe: 'Execute an arbitrary command in each package',
+            describe: 'Execute an arbitrary script in each package',
             builder: (cmd) => {
                 return cmd
                     .example("$0 run build", '')

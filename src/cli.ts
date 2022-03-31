@@ -13,6 +13,7 @@ import {RunCommand} from './commands/run-command';
 import {VersionCommand} from './commands/version-command';
 import {PublishCommand} from './commands/publish-command';
 import {CleanInstallCommand} from './commands/ci-command';
+import {BuildCommand} from './commands/build-command';
 
 export async function runCli(options?: { argv?: string[], cwd?: string }) {
     const s = path.resolve(getDirname(), '../package.json');
@@ -48,6 +49,7 @@ export async function runCli(options?: { argv?: string[], cwd?: string }) {
     VersionCommand.initCli(repository, program);
     PublishCommand.initCli(repository, program);
     CleanInstallCommand.initCli(repository, program);
+    BuildCommand.initCli(repository, program);
 
     if (!_argv.length)
         program.showHelp();
