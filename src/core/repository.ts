@@ -4,7 +4,7 @@ import glob from 'fast-glob';
 import merge from 'putil-merge';
 import yaml from 'js-yaml';
 import {Package} from './package';
-import {getPackageJson} from '../utils';
+import {getPackageJson} from '../utils/get-dirname';
 
 export class Repository extends Package {
 

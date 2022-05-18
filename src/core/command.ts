@@ -4,10 +4,9 @@ import isCi from 'is-ci';
 import yargs from 'yargs';
 import merge from 'putil-merge';
 import './logger';
-import {isTTY} from '../utils/constants';
+import {isTTY} from './constants';
 import chalk from 'chalk';
 import figures from 'figures';
-import logger from 'npmlog';
 
 const noOp = () => void (0);
 
@@ -34,7 +33,7 @@ export abstract class Command<TOptions extends Command.GlobalOptions = Command.G
         this.logger.separator = chalk.gray(figures.lineVerticalDashed0);
         Object.defineProperty(this.logger, 'levelIndex', {
             get(): any {
-                return logger.levels[logger.level] || 0;
+                return npmlog.levels[npmlog.level] || 0;
             }
         })
     }
@@ -102,7 +101,7 @@ export abstract class Command<TOptions extends Command.GlobalOptions = Command.G
     protected abstract _execute(): Promise<any>;
 
     protected async _preExecute(): Promise<void> {
-        logger.info('rman', `Executing "${this.commandName}" command`);
+        npmlog.info('rman', `Executing "${this.commandName}" command`);
     }
 
     protected async _postExecute?(): Promise<void>;

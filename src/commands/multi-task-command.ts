@@ -5,7 +5,7 @@ import {Task} from 'power-tasks';
 import {toNumber} from 'putil-varhelpers'
 import {Repository} from '../core/repository';
 import {Command} from '../core/command';
-import {isTTY} from '../utils/constants';
+import {isTTY} from '../core/constants';
 import {Package} from '../core/package';
 
 export abstract class MultiTaskCommand<TOptions extends MultiTaskCommand.Options = MultiTaskCommand.Options>
