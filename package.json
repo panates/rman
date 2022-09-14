@@ -1,7 +1,7 @@
 {
   "name": "rman",
   "description": "Monorepo repository manager",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "author": "Panates",
   "license": "MIT",
   "contributors": [
