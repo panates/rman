@@ -20,7 +20,7 @@
     "lerna"
   ],
   "bin": {
-    "rman": "bin/rman.js"
+    "rman": "bin/rman.mjs"
   },
   "type": "module",
   "main": "cjs/index.js",
