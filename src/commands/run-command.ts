@@ -62,14 +62,10 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
     json.scripts = json.scripts || {};
     json.scripts[this.script] = json.scripts[this.script] || '#';
 
-    let scriptInfo: any;
-    try {
-      scriptInfo = parseNpmScript(json, 'npm run ' + this.script);
-      if (!(scriptInfo && scriptInfo.raw))
-        return;
-    } catch {
+    const scriptInfo = parseNpmScript(json, 'npm run ' + this.script);
+    if (!(scriptInfo && scriptInfo.raw))
       return;
-    }
+
     const children: Task[] = [];
     for (const s of scriptInfo.steps) {
       const parsed = Array.isArray(s.parsed) ? s.parsed : [s.parsed];
