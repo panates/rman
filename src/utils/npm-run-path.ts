@@ -2,9 +2,9 @@
 /**
  * Inspired from [npm-run-path](https://github.com/sindresorhus/npm-run-path)
  */
-import process from 'process';
 import path from 'path';
 import pathKey from 'path-key';
+import process from 'process';
 
 export interface RunPathOptions {
   /**

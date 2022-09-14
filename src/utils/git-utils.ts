@@ -1,5 +1,5 @@
-import { exec } from './exec';
 import path from 'path';
+import { exec } from './exec.js';
 
 export namespace GitHelper {
 

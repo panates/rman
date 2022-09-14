@@ -1,13 +1,13 @@
-import yargs from 'yargs';
+import chalk from 'chalk';
 import logger from 'npmlog';
 import { Task } from 'power-tasks';
-import chalk from 'chalk';
+import yargs from 'yargs';
 import parseNpmScript from '@netlify/parse-npm-script';
-import { Repository } from '../core/repository';
-import { MultiTaskCommand } from './multi-task-command';
-import { Command } from '../core/command';
-import { exec, ExecuteCommandResult } from '../utils/exec';
-import { Package } from '../core/package';
+import { Command } from '../core/command.js';
+import { Package } from '../core/package.js';
+import { Repository } from '../core/repository.js';
+import { exec, ExecuteCommandResult } from '../utils/exec.js';
+import { MultiTaskCommand } from './multi-task-command.js';
 
 export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCommand<TOptions> {
 

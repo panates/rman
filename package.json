@@ -24,12 +24,12 @@
   },
   "type": "module",
   "main": "cjs/index.js",
-  "module": "esm/index.mjs",
+  "module": "esm/index.js",
   "types": "esm/index.d.ts",
   "exports": {
     ".": "./cjs/index.js",
     "./cjs": "./cjs/index.js",
-    "./esm": "./esm/index.mjs"
+    "./esm": "./esm/index.js"
   },
   "dependencies": {
     "@netlify/parse-npm-script": "^0.1.2",
@@ -96,7 +96,7 @@
   ],
   "scripts": {
     "compile": "tsc -b tsconfig.json",
-    "lint": "eslint --no-error-on-unmatched-pattern",
+    "lint": "eslint .",
     "clean": "npm run clean:src && npm run clean:dist",
     "clean:dist": "rimraf cjs esm coverage",
     "clean:src": "ts-cleanup -s src --all | ts-cleanup -s test",

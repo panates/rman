@@ -1,20 +1,20 @@
-import path from 'path';
-import fs from 'fs/promises';
-import yargs from "yargs"
 import chalk from 'chalk';
+import fs from 'fs/promises';
 import logger from 'npmlog';
+import path from 'path';
+import yargs from "yargs"
+import { BuildCommand } from './commands/build-command.js';
+import { ChangedCommand } from './commands/changed-command.js';
+import { CleanInstallCommand } from './commands/ci-command.js';
+import { ExecuteCommand } from './commands/execute-command.js';
+import { InfoCommand } from './commands/info-command.js';
+import { ListCommand } from './commands/list-command.js';
+import { PublishCommand } from './commands/publish-command.js';
+import { RunCommand } from './commands/run-command.js';
+import { VersionCommand } from './commands/version-command.js';
+import { Command } from './core/command.js';
+import { Repository } from './core/repository.js';
 import { getDirname } from './utils/get-dirname.js';
-import { Repository } from './core/repository';
-import { InfoCommand } from './commands/info-command';
-import { Command } from './core/command';
-import { ListCommand } from './commands/list-command';
-import { ChangedCommand } from './commands/changed-command';
-import { ExecuteCommand } from './commands/execute-command';
-import { RunCommand } from './commands/run-command';
-import { VersionCommand } from './commands/version-command';
-import { PublishCommand } from './commands/publish-command';
-import { CleanInstallCommand } from './commands/ci-command';
-import { BuildCommand } from './commands/build-command';
 
 export async function runCli(options?: { argv?: string[], cwd?: string }) {
   try {
@@ -36,6 +36,7 @@ export async function runCli(options?: { argv?: string[], cwd?: string }) {
           const text = (msg
               ? msg + '\n\n' + chalk.whiteBright('Run with --help for available options')
               : (err ? err.message : ''));
+          // eslint-disable-next-line no-console
           console.log('\n' + chalk.red(text));
           throw msg;
         })

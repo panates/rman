@@ -1,7 +1,7 @@
 import yargs from 'yargs';
-import { Repository } from '../core/repository';
-import { Command } from '../core/command';
-import { RunCommand } from './run-command';
+import { Command } from '../core/command.js';
+import { Repository } from '../core/repository.js';
+import { RunCommand } from './run-command.js';
 
 export class BuildCommand extends RunCommand<any> {
   static commandName = 'build';

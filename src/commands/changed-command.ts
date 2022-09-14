@@ -1,8 +1,8 @@
 import yargs from 'yargs';
-import { Repository } from '../core/repository';
-import { ListCommand } from './list-command';
-import { Package } from '../core/package';
-import { Command } from '../core/command';
+import { Command } from '../core/command.js';
+import { Package } from '../core/package.js';
+import { Repository } from '../core/repository.js';
+import { ListCommand } from './list-command.js';
 
 export class ChangedCommand extends ListCommand {
   static commandName = 'changed';

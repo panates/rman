@@ -2,8 +2,8 @@ import chalk from 'chalk';
 import envinfo from 'envinfo';
 import semver from 'semver';
 import yargs from 'yargs';
-import { Command } from '../core/command';
-import { Repository } from '../core/repository';
+import { Command } from '../core/command.js';
+import { Repository } from '../core/repository.js';
 
 export class InfoCommand extends Command {
   static commandName = 'info';

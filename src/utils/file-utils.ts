@@ -1,6 +1,6 @@
 import fsa from 'fs/promises';
-import path from 'path';
 import { Stats } from 'node:fs';
+import path from 'path';
 
 export async function fsExists(s: string): Promise<boolean> {
   return fsa.lstat(s).then(() => true).catch(() => false);

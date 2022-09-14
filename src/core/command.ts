@@ -1,12 +1,12 @@
-import { AsyncEventEmitter, TypedEventEmitterClass } from 'strict-typed-events';
-import npmlog from 'npmlog';
-import isCi from 'is-ci';
-import yargs from 'yargs';
-import merge from 'putil-merge';
-import './logger';
-import { isTTY } from './constants';
+import './logger.js';
 import chalk from 'chalk';
 import figures from 'figures';
+import isCi from 'is-ci';
+import npmlog from 'npmlog';
+import merge from 'putil-merge';
+import { AsyncEventEmitter, TypedEventEmitterClass } from 'strict-typed-events';
+import yargs from 'yargs';
+import { isTTY } from './constants.js';
 
 const noOp = () => void (0);
 

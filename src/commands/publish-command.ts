@@ -1,14 +1,14 @@
-import yargs from 'yargs';
-import { Task } from 'power-tasks';
 import chalk from 'chalk';
 import logger from 'npmlog';
-import { Repository } from '../core/repository';
-import { Command } from '../core/command';
-import { Package } from '../core/package';
-import { RunCommand } from './run-command';
-import { ExecuteCommandResult } from '../utils/exec';
 import path from 'path';
-import { NpmHelper } from '../utils/npm-utils';
+import { Task } from 'power-tasks';
+import yargs from 'yargs';
+import { Command } from '../core/command.js';
+import { Package } from '../core/package.js';
+import { Repository } from '../core/repository.js';
+import { ExecuteCommandResult } from '../utils/exec.js';
+import { NpmHelper } from '../utils/npm-utils.js';
+import { RunCommand } from './run-command.js';
 
 export class PublishCommand extends RunCommand<PublishCommand.Options> {
 

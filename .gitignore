@@ -9,7 +9,7 @@
 .development.env
 
 # Debug
-src/debug.ts
+test/debug.ts
 
 # Logs
 *.log

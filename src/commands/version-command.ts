@@ -1,17 +1,17 @@
-import path from 'path';
-import yargs from 'yargs';
 import chalk from 'chalk';
-import semver from 'semver';
-import logger from 'npmlog';
-import stripColor from 'strip-color';
-import { Task } from 'power-tasks';
-import { Repository } from '../core/repository';
-import { RunCommand } from './run-command';
-import { GitHelper } from '../utils/git-utils';
-import { Package } from '../core/package';
-import { Command } from '../core/command';
-import { ExecuteCommandResult } from '../utils/exec';
 import fs from 'fs/promises';
+import logger from 'npmlog';
+import path from 'path';
+import { Task } from 'power-tasks';
+import semver from 'semver';
+import stripColor from 'strip-color';
+import yargs from 'yargs';
+import { Command } from '../core/command.js';
+import { Package } from '../core/package.js';
+import { Repository } from '../core/repository.js';
+import { ExecuteCommandResult } from '../utils/exec.js';
+import { GitHelper } from '../utils/git-utils.js';
+import { RunCommand } from './run-command.js';
 
 export class VersionCommand extends RunCommand<VersionCommand.Options> {
 

@@ -1,6 +1,6 @@
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import onExit from 'signal-exit';
-import { npmRunPathEnv } from './npm-run-path';
+import { npmRunPathEnv } from './npm-run-path.js';
 
 export interface IExecutorOptions {
   stdio?: 'inherit' | 'pipe';

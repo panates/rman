@@ -1,10 +1,10 @@
-import fs from 'fs';
-import path from 'path';
 import glob from 'fast-glob';
-import merge from 'putil-merge';
+import fs from 'fs';
 import yaml from 'js-yaml';
-import { Package } from './package';
-import { getPackageJson } from '../utils/get-dirname';
+import path from 'path';
+import merge from 'putil-merge';
+import { getPackageJson } from '../utils/get-dirname.js';
+import { Package } from './package.js';
 
 export class Repository extends Package {
 

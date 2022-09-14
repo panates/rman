@@ -1,12 +1,12 @@
-import path from 'path';
 import chalk from 'chalk';
-import yargs from 'yargs';
 import EasyTable from 'easy-table';
 import logger from 'npmlog';
-import { Command } from '../core/command';
-import { Repository } from '../core/repository';
-import { Package } from '../core/package';
-import { GitHelper } from '../utils/git-utils';
+import path from 'path';
+import yargs from 'yargs';
+import { Command } from '../core/command.js';
+import { Package } from '../core/package.js';
+import { Repository } from '../core/repository.js';
+import { GitHelper } from '../utils/git-utils.js';
 
 export class ListCommand<TOptions extends ListCommand.Options = ListCommand.Options> extends Command<TOptions> {
   static commandName = 'list';
@@ -95,6 +95,7 @@ export class ListCommand<TOptions extends ListCommand.Options = ListCommand.Opti
       return arr;
     } else if ((table as any).rows.length) {
       logger.output('', '%s', table.toString().trim());
+      // eslint-disable-next-line no-console
       console.log('');
       logger.info('list', '%i Package(s) found', count);
       return arr;

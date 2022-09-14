@@ -1,7 +1,5 @@
-// noinspection ES6UnusedImports
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import path from 'path';
 import fs from 'fs';
+import path from 'path';
 import CallSite = NodeJS.CallSite;
 
 export function getDirname(): string {

@@ -1,4 +1,4 @@
-import { exec } from './exec';
+import { exec } from './exec.js';
 
 export class PackageNotFoundError extends Error {
 

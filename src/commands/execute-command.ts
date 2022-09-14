@@ -1,13 +1,12 @@
-import yargs from 'yargs';
-import logger from 'npmlog';
 import chalk from 'chalk';
-import figures from 'figures';
-import { Repository } from '../core/repository';
-import { MultiTaskCommand } from './multi-task-command';
+import logger from 'npmlog';
 import { Task } from 'power-tasks';
-import { exec } from '../utils/exec';
-import { Command } from '../core/command';
-import { Package } from '../core/package';
+import yargs from 'yargs';
+import { Command } from '../core/command.js';
+import { Package } from '../core/package.js';
+import { Repository } from '../core/repository.js';
+import { exec } from '../utils/exec.js';
+import { MultiTaskCommand } from './multi-task-command.js';
 
 export class ExecuteCommand extends MultiTaskCommand<ExecuteCommand.Options> {
 
