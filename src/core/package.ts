@@ -2,33 +2,33 @@ import fs from 'fs';
 import path from 'path';
 
 export class Package {
-    private _json: any;
-    dependencies: string[] = [];
+  private _json: any;
+  dependencies: string[] = [];
 
-    constructor(readonly dirname: string) {
-        this.reloadJson();
-    }
+  constructor(readonly dirname: string) {
+    this.reloadJson();
+  }
 
-    get name(): string {
-        return this._json.name;
-    }
+  get name(): string {
+    return this._json.name;
+  }
 
-    get version(): string {
-        return this._json.version;
-    }
+  get version(): string {
+    return this._json.version;
+  }
 
-    get json(): any {
-        return this._json;
-    }
+  get json(): any {
+    return this._json;
+  }
 
-    get isPrivate(): boolean {
-        return !!this._json.private;
-    }
+  get isPrivate(): boolean {
+    return !!this._json.private;
+  }
 
-    reloadJson(): any {
-        const f = path.join(this.dirname, 'package.json');
-        this._json = JSON.parse(fs.readFileSync(f, 'utf-8'));
-        return this._json;
-    }
+  reloadJson(): any {
+    const f = path.join(this.dirname, 'package.json');
+    this._json = JSON.parse(fs.readFileSync(f, 'utf-8'));
+    return this._json;
+  }
 
 }

@@ -1,6 +1,5 @@
 import os from 'os';
 import yargs from 'yargs';
-import logger from 'npmlog';
 import {Task} from 'power-tasks';
 import {toNumber} from 'putil-varhelpers'
 import {Repository} from '../core/repository';
@@ -26,7 +25,6 @@ export abstract class MultiTaskCommand<TOptions extends MultiTaskCommand.Options
         const packages = await this._getPackages();
         const childTasks = await this._prepareTasks(packages);
         if (!(childTasks && childTasks.length)) {
-            logger.info(this.commandName, '', 'There is no task to process');
             return;
         }
         // this.enableProgress();
