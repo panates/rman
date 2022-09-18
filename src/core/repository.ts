@@ -8,10 +8,13 @@ import { Package } from './package.js';
 
 export class Repository extends Package {
 
+  readonly rootPackage: Package;
+
   protected constructor(readonly dirname: string,
                         readonly config: any,
                         readonly packages: Package[]) {
     super(dirname);
+    this.rootPackage = new Package(dirname);
   }
 
   getPackages(options?: { scope?: string | string[], toposort?: boolean }): Package[] {

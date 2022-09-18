@@ -87,29 +87,22 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
     return super._prepareTasks(selectedPackages, {newVersions});
   }
 
-  protected async _exec(args: {
-    name: string;
-    json: any;
-    cwd: string;
-    dependencies?: string[];
-    command: string;
-  }, options?: any): Promise<ExecuteCommandResult> {
-    if (args.command === '#') {
-      if (args.name === 'root')
+  protected async _exec(pkg: Package, command: string, args: {}, options?: any): Promise<ExecuteCommandResult> {
+    if (command === '#') {
+      if (pkg === this.repository.rootPackage)
         return {code: 0};
       const cwd = this.options.contents
-          ? path.resolve(this.repository.dirname, path.join(this.options.contents, path.basename(args.cwd)))
-          : args.cwd;
-      return super._exec({
-        ...args,
-        cwd,
-        command: 'npm publish' + (this.options.access ? ' --access=' + this.options.access : '')
-      }, {
-        ...options,
-        stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe'
-      });
+          ? path.resolve(this.repository.dirname, path.join(this.options.contents, path.basename(pkg.dirname)))
+          : pkg.dirname;
+      return super._exec(pkg,
+          'npm publish' + (this.options.access ? ' --access=' + this.options.access : ''),
+          {
+            ...args,
+            cwd,
+            stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe',
+          }, options);
     }
-    return super._exec(args, options);
+    return super._exec(pkg, command, args, options);
   }
 }
 

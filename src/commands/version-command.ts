@@ -1,5 +1,4 @@
 import chalk from 'chalk';
-import fs from 'fs/promises';
 import logger from 'npmlog';
 import path from 'path';
 import { Task } from 'power-tasks';
@@ -16,6 +15,7 @@ import { RunCommand } from './run-command.js';
 export class VersionCommand extends RunCommand<VersionCommand.Options> {
 
   static commandName = 'version';
+  private _updatedPackages = new Set<Package>();
 
   constructor(readonly repository: Repository,
               public bump: string,
@@ -33,6 +33,7 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
     const newVersions: Record<string, string> = {};
     let errorCount = 0;
     const selectedPackages: Package[] = [];
+    const dependentPackages: Package[] = [];
     for (const p of packages) {
       const relDir = path.relative(repository.dirname, p.dirname);
       let status = '';
@@ -82,6 +83,11 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
         continue;
       }
       selectedPackages.push(p);
+
+      packages.forEach(p2 => {
+        if (p2.dependencies.includes(p.name) && !dependentPackages.includes(p2))
+          dependentPackages.push(p2);
+      })
     }
 
     if (errorCount)
@@ -94,63 +100,89 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
       Object.keys(newVersions).forEach(k => newVersions[k] = maxVer);
     }
 
+    dependentPackages.forEach(p2 => {
+      if (!selectedPackages.includes(p2))
+        selectedPackages.push(p2);
+    })
+
     const tasks = await super._prepareTasks(selectedPackages, {newVersions});
     tasks.forEach(t => t.options.exclusive = true);
-    if (this.options.unified)
+
+    if (!this.options.noTag) {
       tasks.push(new Task(async () => {
-        try {
-          await super._exec({
-            name: 'rman',
-            command: 'git tag -a "v' + maxVer + '" -m "version ' + maxVer + '"',
-            cwd: this.repository.dirname,
-            stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe',
-            logLevel: 'silly'
-          });
-        } catch {
-          //
+        while (this._updatedPackages.size) {
+          const filenames: string[] = [];
+          const [first] = this._updatedPackages;
+          for (const pkg of this._updatedPackages) {
+            if (pkg.version === first.version) {
+              filenames.push(path.relative(this.repository.rootPackage.dirname, pkg.jsonFileName));
+              this._updatedPackages.delete(pkg);
+            }
+          }
+          await super._exec(this.repository.rootPackage,
+              'git commit -m "' + first.version + '" ' + filenames.map(s => '"' + s + '"').join(' '),
+              {
+                stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe',
+                logLevel: 'silly'
+              });
         }
+        if (this.options.unified)
+          try {
+            await super._exec(this.repository.rootPackage,
+                'git tag -a "v' + maxVer + '" -m "version ' + maxVer + '"',
+                {
+                  cwd: this.repository.dirname,
+                  stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe',
+                  logLevel: 'silly'
+                });
+          } catch {
+            //
+          }
       }, {exclusive: true}));
+    }
     return tasks;
   }
 
-  protected async _exec(args: {
-    name: string;
-    json: any;
-    cwd: string;
-    dependencies?: string[];
-    command: string;
-  }, options?: any): Promise<ExecuteCommandResult> {
-    if (args.name === 'root')
+  protected async _exec(pkg: Package, command: string, args: {}, options?: any): Promise<ExecuteCommandResult> {
+    if (pkg === this.repository.rootPackage)
       return {code: 0};
-    if (args.command === '#') {
+    if (command === '#') {
       const {newVersions} = options;
-      const oldVer = args.json.version;
-      const newVer = newVersions[args.name];
-      args.json.version = newVer;
-      delete args.json.scripts.version;
-      const f = path.join(args.cwd, 'package.json');
-      const data = JSON.stringify(args.json, undefined, 2);
-      await fs.writeFile(f, data, 'utf-8');
+      pkg.reloadJson();
+      const oldVer = pkg.json.version;
+      const newVer = newVersions[pkg.name];
+      pkg.json.version = newVer;
+      delete pkg.json.scripts.version;
+      pkg.writeJson();
+      if (!this._updatedPackages.has(pkg))
+        this._updatedPackages.add(pkg);
 
-      if (!this.options.noTag) {
-        await super._exec({
-          name: args.name,
-          command: 'git commit -m "' + newVer + '" package.json',
-          cwd: args.cwd,
-          stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe',
-          logLevel: 'silly'
-        });
+      const packages = this.repository.getPackages();
+      for (const p of packages) {
+        if (p.dependencies.includes(pkg.name)) {
+          p.reloadJson();
+          for (const k of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+            if (p.json[k]?.[pkg.name]) {
+              p.json[k][pkg.name] = '^' + newVer;
+            }
+          }
+          p.writeJson();
+          if (!this._updatedPackages.has(p))
+            this._updatedPackages.add(p);
+        }
       }
+
       logger.info(
           this.commandName,
-          args.name,
+          pkg.name,
           logger.separator,
           'Version changed from ' + chalk.cyan(oldVer) + ' to ' + chalk.cyan(newVer)
       );
       return {code: 0};
     }
-    return super._exec(args, options);
+    return super._exec(pkg, command, args, options);
   }
+
 }
 
 export namespace VersionCommand {

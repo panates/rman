@@ -21,14 +21,24 @@ export class Package {
     return this._json;
   }
 
+  get jsonFileName(): string {
+    return path.join(this.dirname, 'package.json');
+  }
+
   get isPrivate(): boolean {
     return !!this._json.private;
   }
 
   reloadJson(): any {
-    const f = path.join(this.dirname, 'package.json');
+    const f = this.jsonFileName;
     this._json = JSON.parse(fs.readFileSync(f, 'utf-8'));
     return this._json;
+  }
+
+  writeJson(): void {
+    const f = this.jsonFileName;
+    const data = JSON.stringify(this._json, undefined, 2);
+    fs.writeFileSync(f, data, 'utf-8')
   }
 
 }

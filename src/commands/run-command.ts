@@ -23,22 +23,13 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
     const packageTasks: Task[] = [];
     for (const p of packages) {
       if (p.json.scripts) {
-        const childTask = this._prepareScriptTask({
-          name: p.name,
-          cwd: p.dirname,
-          json: p.json,
-          dependencies: p.dependencies
-        }, options);
+        const childTask = this._prepareScriptTask(p, options);
         if (childTask) {
           packageTasks.push(childTask);
         }
       }
     }
-    const rootTask = this._prepareScriptTask({
-      name: 'root',
-      cwd: this.repository.dirname,
-      json: this.repository.json
-    });
+    const rootTask = this._prepareScriptTask(this.repository.rootPackage);
     if (!rootTask?.children)
       return packageTasks;
     const tasks: Task[] = [];
@@ -52,13 +43,8 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
     return tasks;
   }
 
-  protected _prepareScriptTask(args: {
-    name: string;
-    json: any;
-    cwd: string;
-    dependencies?: string[];
-  }, ctx?: any): Task | undefined {
-    const json = {...args.json};
+  protected _prepareScriptTask(pkg: Package, options?: any): Task | undefined {
+    const json = {...pkg.json};
     json.scripts = json.scripts || {};
     json.scripts[this.script] = json.scripts[this.script] || '#';
 
@@ -71,23 +57,21 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
       const parsed = Array.isArray(s.parsed) ? s.parsed : [s.parsed];
       for (const cmd of parsed) {
         const task = new Task(async () => {
-          return await this._exec({
-            ...args,
-            command: cmd,
+          return await this._exec(pkg, cmd, {
             stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe'
-          }, ctx);
+          }, options);
         }, {
-          name: args.name + ':' + s.name,
+          name: pkg.name + ':' + s.name,
           dependencies:
               (this.options.parallel || s.name.startsWith('pre') || s.name.startsWith('post')) ?
-                  undefined : args.dependencies
+                  undefined : pkg.dependencies
         });
         children.push(task);
       }
     }
     if (children.length) {
       return new Task(children, {
-        name: args.name,
+        name: pkg.name,
         bail: true,
         serial: true,
       });
@@ -95,46 +79,47 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
   }
 
   protected async _exec(
+      pkg: Package,
+      command: string,
       args: {
-        name: string;
-        cwd: string;
-        dependencies?: string[];
-        command: string;
         stdio?: 'inherit' | 'pipe';
+        cwd?: string;
         json?: any;
         logLevel?: string;
         noThrow?: boolean;
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
       }, options?: any
   ): Promise<ExecuteCommandResult> {
+    const name = pkg === this.repository.rootPackage ? 'root' : pkg.name;
     const logLevel = args.logLevel == null ? 'info' : args.logLevel;
     if (logLevel)
       logger.verbose(this.commandName,
-          chalk.cyan(args.name),
+          chalk.cyan(name),
           chalk.cyanBright.bold('executing'),
           logger.separator,
-          args.command
+          command
       );
     const t = Date.now();
-    const r = await exec(args.command, {cwd: args.cwd, stdio: args.stdio, throwOnError: false});
+    const cwd = args.cwd || pkg.dirname;
+    const r = await exec(command, {cwd, stdio: args.stdio, throwOnError: false});
     if (logLevel)
       if (r.error) {
         logger.error(
             this.commandName,
-            chalk.cyan(args.name),
+            chalk.cyan(name),
             chalk.red.bold('failed'),
             logger.separator,
-            args.command,
+            command,
             logger.separator,
             r.error.message.trim() + ('\n' + r.stdout).trim()
         );
       } else
         logger.log(logLevel,
             this.commandName,
-            chalk.cyan(args.name),
+            chalk.cyan(name),
             chalk.green.bold('executed'),
             logger.separator,
-            args.command,
+            command,
             chalk.yellow(' (' + (Date.now() - t) + ' ms)')
         );
     if (r.error && !args.noThrow)

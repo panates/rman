@@ -32,6 +32,8 @@ export async function exec(command: string, options?: IExecutorOptions): Promise
     ...npmRunPathEnv({cwd: opts.cwd}),
     ...opts.env
   }
+  if (process.env.TS_NODE_PROJECT)
+    delete opts.env.TS_NODE_PROJECT;
   opts.cwd = opts.cwd || process.cwd();
 
   const spawnOptions: SpawnOptions = {

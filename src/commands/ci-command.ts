@@ -31,11 +31,7 @@ export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options>
           await this._fsDelete(path.join(dirname, 'yarn-lock.json'));
           logger.info(this.commandName, chalk.yellow('installing'),
               'Running ' + client + ' install');
-          return super._exec({
-            name: 'root',
-            cwd: this.repository.dirname,
-            json: {...this.repository.json},
-            command: client + ' install',
+          return super._exec(this.repository.rootPackage, client + ' install', {
             stdio: 'inherit'
           });
         }, {exclusive: true})
@@ -43,23 +39,21 @@ export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options>
     return tasks;
   }
 
-  protected async _exec(args: {
-    name: string;
-    json: any;
-    cwd: string;
+  protected async _exec(pkg: Package, command: string, args: {
+    cwd?: string;
     dependencies?: string[];
     command: string;
   }, ctx?: any): Promise<ExecuteCommandResult> {
     if (args.command === '#') {
-      if (args.name === 'root')
+      if (pkg === this.repository.rootPackage)
         return {code: 0};
-      const {cwd} = args;
+      const cwd = args.cwd || pkg.dirname;
       await this._fsDelete(path.join(cwd, 'node_modules'));
       await this._fsDelete(path.join(cwd, 'package-lock.json'));
       await this._fsDelete(path.join(cwd, 'yarn-lock.json'));
       return {code: 0};
     }
-    return super._exec(args, ctx);
+    return super._exec(pkg, command, args, ctx);
   }
 
   protected async _fsDelete(fileOrDir: string): Promise<void> {
