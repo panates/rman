@@ -56,8 +56,9 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                   !r.version
                       ? chalk.yellow('No package information found in repository')
                       : (sameVersion
-                              ? `Version "${chalk.magenta(p.version)}" same in repository`
-                              : `Version "${chalk.magenta(p.version)}" differs from version in repository (${chalk.magenta(r.version)})`
+                              ? `No publish needed. Version (${chalk.magenta(p.version)}) same in repository`
+                              : (`Publishing is possible.` +
+                                  ` Version "${chalk.magenta(p.version)}" differs from version in repository (${chalk.magenta(r.version)})`)
                       )
               );
               return;
@@ -67,13 +68,14 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                   this.commandName,
                   logPkgName,
                   logger.separator,
-                  `Ignored. Same version (${p.version}) in repository`);
+                  `No publish needed. Version (${chalk.magenta(p.version)}) same in repository`);
             } else {
-              logger.info(
+              logger.verbose(
                   this.commandName,
                   logPkgName,
                   logger.separator,
-                  `Version (${r.version}) in repository`);
+                  `Publishing is possible.` +
+                  ` Version "${chalk.magenta(p.version)}" differs from version in repository (${chalk.magenta(r.version)})`);
               selectedPackages.push(p);
             }
           }).catch(e => {
