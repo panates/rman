@@ -58,6 +58,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
       for (const cmd of parsed) {
         const task = new Task(async () => {
           return await this._exec(pkg, cmd, {
+            script: s.name,
             stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe'
           }, options);
         }, {
@@ -87,6 +88,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
         json?: any;
         logLevel?: string;
         noThrow?: boolean;
+        script?: string;
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
       }, options?: any
   ): Promise<ExecuteCommandResult> {
@@ -95,6 +97,8 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
     if (logLevel)
       logger.verbose(this.commandName,
           chalk.cyan(name),
+          logger.separator,
+          chalk.cyanBright.bold(args.script),
           chalk.cyanBright.bold('executing'),
           logger.separator,
           command
@@ -107,6 +111,8 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
         logger.error(
             this.commandName,
             chalk.cyan(name),
+            logger.separator,
+            chalk.cyanBright.bold(args.script),
             chalk.red.bold('failed'),
             logger.separator,
             command,
@@ -117,7 +123,9 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
         logger.log(logLevel,
             this.commandName,
             chalk.cyan(name),
-            chalk.green.bold('executed'),
+            logger.separator,
+            chalk.cyanBright.bold(args.script),
+            chalk.green.bold('success'),
             logger.separator,
             command,
             chalk.yellow(' (' + (Date.now() - t) + ' ms)')

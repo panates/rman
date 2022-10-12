@@ -137,8 +137,8 @@ export namespace Command {
   export function composeOptions<TOptions extends GlobalOptions = GlobalOptions>(
       commandName: string, yargArgs: any, config: any
   ): Partial<TOptions> {
-    const result = merge({}, yargArgs) as TOptions;
-    merge(result, config, {filter: (_, key) => key !== 'command'})
+    const result = merge({}, config, {filter: (_, key) => key !== 'command'}) as TOptions;
+    merge(result, yargArgs);
     const cfgCmd = config.command && typeof config.command === 'object' ?
         config.command[commandName] : undefined;
     if (cfgCmd && typeof cfgCmd === 'object')
