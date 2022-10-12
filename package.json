@@ -43,7 +43,7 @@
     "js-yaml": "^4.1.0",
     "npmlog": "^6.0.2",
     "path-key": "^4.0.0",
-    "power-tasks": "^1.1.0",
+    "power-tasks": "^1.2.0",
     "putil-merge": "^3.9.0",
     "putil-varhelpers": "^1.6.4",
     "semver": "^7.3.8",
