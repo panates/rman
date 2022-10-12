@@ -33,7 +33,7 @@ export abstract class MultiTaskCommand<TOptions extends MultiTaskCommand.Options
       concurrency: this.options.concurrency || os.cpus().length,
       bail: this.options.bail,
     })
-    await this._task.toPromise().catch(() => void (0));
+    await this._task.toPromise();
   }
 
   protected async _getPackages(): Promise<Package[]> {

@@ -32,13 +32,15 @@ export async function runCli(options?: { argv?: string[], cwd?: string }) {
         .usage('$0 <cmd> [options...]')
         .help('help').alias('help', 'h')
         .showHelpOnFail(false, 'Run with --help for available options')
-        .fail((msg: any, err) => {
-          const text = (msg
-              ? msg + '\n\n' + chalk.whiteBright('Run with --help for available options')
-              : (err ? err.message : ''));
-          // eslint-disable-next-line no-console
-          console.log('\n' + chalk.red(text));
-          throw msg;
+        .fail((msg: any, err: any) => {
+          if (!err.logged) {
+            const text = (msg
+                ? msg + '\n\n' + chalk.whiteBright('Run with --help for available options')
+                : (err ? err.message : ''));
+            // eslint-disable-next-line no-console
+            console.log('\n' + chalk.red(text));
+            throw msg;
+          } else process.exit(1);
         })
         // group options under "Global Options:" header
         .options(Command.globalOptions)
@@ -58,7 +60,7 @@ export async function runCli(options?: { argv?: string[], cwd?: string }) {
       program.showHelp();
     else
       await program.parseAsync()
-          .catch(() => false);
+          .catch(() => process.exit(1));
   } catch (e: any) {
     logger.error('rman', e);
   }
