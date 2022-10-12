@@ -7,7 +7,6 @@ import merge from 'putil-merge';
 import { AsyncEventEmitter, TypedEventEmitterClass } from 'strict-typed-events';
 import yargs from 'yargs';
 import { isTTY } from './constants.js';
-import logger from 'npmlog';
 
 const noOp = () => void (0);
 
@@ -84,9 +83,9 @@ export abstract class Command<TOptions extends Command.GlobalOptions = Command.G
       if (this.listenerCount('error'))
         await this.emitAsync('error', e).catch(noOp);
       this.logger.resume();
-      logger.error(
+      this.logger.error(
           this.commandName,
-          logger.separator,
+          this.logger.separator,
           e.message.trim()
       )
       e.logged = true;
