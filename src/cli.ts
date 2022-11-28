@@ -33,7 +33,7 @@ export async function runCli(options?: { argv?: string[], cwd?: string }) {
         .help('help').alias('help', 'h')
         .showHelpOnFail(false, 'Run with --help for available options')
         .fail((msg: any, err: any) => {
-          if (!err.logged) {
+          if (!err?.logged) {
             const text = (msg
                 ? msg + '\n\n' + chalk.whiteBright('Run with --help for available options')
                 : (err ? err.message : ''));
