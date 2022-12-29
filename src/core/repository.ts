@@ -37,6 +37,12 @@ export class Repository extends Package {
         ...pkg.json.peerDependencies,
         ...pkg.json.optionalDependencies
       }
+      const configDeps = this.config.packages?.[pkg.name]?.dependencies;
+      if (configDeps) {
+        if (Array.isArray(configDeps))
+          configDeps.forEach(x => o[x] = o[x] || '*');
+        else Object.assign(o, configDeps);
+      }
       const dependencies: string[] = [];
       for (const k of Object.keys(o)) {
         const p = this.getPackage(k);
