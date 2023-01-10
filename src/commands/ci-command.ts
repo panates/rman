@@ -16,7 +16,7 @@ export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options>
 
   constructor(readonly repository: Repository,
               options?: CleanInstallCommand.Options) {
-    super(repository, 'clean_', options);
+    super(repository, 'ci', options);
   }
 
   protected async _prepareTasks(packages: Package[]): Promise<Task[]> {
@@ -29,7 +29,7 @@ export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options>
           await this._fsDelete(path.join(dirname, 'node_modules'));
           await this._fsDelete(path.join(dirname, 'package-lock.json'));
           await this._fsDelete(path.join(dirname, 'yarn-lock.json'));
-          logger.info(this.commandName, chalk.yellow('installing'),
+          logger.info(this.commandName, chalk.yellow('install'),
               'Running ' + client + ' install');
           return super._exec(this.repository.rootPackage, client + ' install', {
             stdio: 'inherit'
@@ -44,9 +44,10 @@ export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options>
     dependencies?: string[];
     command: string;
   }, ctx?: any): Promise<ExecuteCommandResult> {
-    if (args.command === '#') {
+    if (command === '#') {
       if (pkg === this.repository.rootPackage)
         return {code: 0};
+      logger.info(this.commandName, 'Clearing ' + pkg.name);
       const cwd = args.cwd || pkg.dirname;
       await this._fsDelete(path.join(cwd, 'node_modules'));
       await this._fsDelete(path.join(cwd, 'package-lock.json'));
@@ -58,8 +59,8 @@ export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options>
 
   protected async _fsDelete(fileOrDir: string): Promise<void> {
     if (await fsExists(fileOrDir)) {
-      logger.info(this.commandName, chalk.yellow('clean'),
-          'Deleting ' + path.relative(this.repository.dirname, fileOrDir));
+      logger.info(this.commandName, chalk.yellow('rmdir'),
+          path.relative(this.repository.dirname, fileOrDir));
       await fsDelete(fileOrDir);
     }
   }
