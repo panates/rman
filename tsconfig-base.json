@@ -19,7 +19,6 @@
     "experimentalDecorators": false,
     "emitDecoratorMetadata": false,
     "strict": true,
-    "strictNullChecks": true,
-    "experimentalSpecifierResolution": "node"
+    "strictNullChecks": true
   }
 }
