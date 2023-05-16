@@ -1,5 +1,5 @@
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
-import onExit from 'signal-exit';
+import { onExit } from 'signal-exit';
 import { npmRunPathEnv } from './npm-run-path.js';
 
 export interface IExecutorOptions {
