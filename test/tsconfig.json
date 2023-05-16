@@ -1,11 +1,5 @@
 {
   "extends": "../tsconfig-base.json",
-  "include": ["**/*.ts"],
-  "compilerOptions": {
-    "types": ["node", "jest"],
-    "baseUrl": "./",
-    "paths": {
-    }
-  }
+  "include": ["**/*.ts"]
 }
 
