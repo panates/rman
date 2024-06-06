@@ -15,8 +15,8 @@
       "extends": [
         "plugin:@typescript-eslint/recommended",
         "plugin:@typescript-eslint/recommended-requiring-type-checking",
-        "plugin:import/recommended",
-        "plugin:import/typescript"
+        "plugin:import-x/recommended",
+        "plugin:import-x/typescript"
       ],
       "parser": "@typescript-eslint/parser",
       "parserOptions": {
@@ -27,14 +27,14 @@
       "plugins": [
         "@typescript-eslint",
         "simple-import-sort",
-        "import",
+        "import-x",
         "unused-imports",
         "security"
       ],
       "rules": {
-        "import/no-cycle": "error",
-        "import/no-unresolved": ["off", {"commonjs": true, "amd": true}],
-        "import/extensions": ["error", "ignorePackages"],
+        "import-x/no-cycle": "error",
+        "import-x/no-unresolved": ["off", {"commonjs": true, "amd": true}],
+        "import-x/extensions": ["error", "ignorePackages"],
         "@typescript-eslint/array-type": "error",
         "@typescript-eslint/explicit-member-accessibility": [
           "off",
