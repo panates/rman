@@ -5,25 +5,21 @@ module.exports = {
   verbose: true,
   forceExit: true,
   detectOpenHandles: true,
-  testMatch: [
-    '<rootDir>/test/**/*.spec.ts'
-  ],
+  testMatch: ['<rootDir>/test/**/*.spec.ts'],
   testPathIgnorePatterns: ['/node_modules/'],
   transform: {
-    '^.+\\.(t|j)s$': 'ts-jest'
+    '^.+\\.(t|j)s$': 'ts-jest',
   },
   moduleNameMapper: {
-    '^(\\.{1,2}/.*)\\.js$': '$1'
+    '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   globals: {
     'ts-jest': {
       diagnostics: false,
       tsconfig: '<rootDir>/test/tsconfig.json',
-      useESM: true
-    }
+      useESM: true,
+    },
   },
   extensionsToTreatAsEsm: ['.ts'],
-  coverageDirectory: "<rootDir>/coverage/",
+  coverageDirectory: '<rootDir>/coverage/',
 };
-
-

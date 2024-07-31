@@ -10,21 +10,18 @@ export function getDirname(): string {
   };
 
   const e = new Error();
-  if (!e.stack)
-    throw Error('Can not parse stack');
+  if (!e.stack) throw Error('Can not parse stack');
   const stack: CallSite[] = (e.stack as unknown as CallSite[]).slice(1);
-  while (stack) {
+  while (stack.length) {
     const frame = stack.shift();
     const filename = frame && frame.getFileName();
-    if (filename)
-      return path.dirname(filename).replace('file://', '');
+    if (filename) return path.dirname(filename).replace('file://', '');
   }
   throw Error('Can not parse stack');
 }
 
 export function getPackageJson(dirname: string): any {
   const f = path.resolve(dirname, 'package.json');
-  if (!fs.existsSync(f))
-    return
+  if (!fs.existsSync(f)) return;
   return JSON.parse(fs.readFileSync(f, 'utf-8'));
 }

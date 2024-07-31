@@ -3,22 +3,19 @@ import logger from 'npmlog';
 logger.addLevel('output', 3300, {}, '');
 
 declare module 'npmlog' {
+  interface Logger {
+    output(prefix: string, message: string, ...args: any[]): void;
 
-    interface Logger {
-        output(prefix: string, message: string, ...args: any[]): void;
+    success(prefix: string, message: string, ...args: any[]): void;
 
-        success(prefix: string, message: string, ...args: any[]): void;
+    disp: Record<string, string>;
 
-        disp: Record<string, string>;
+    showProgress();
 
-        showProgress();
+    hideProgress();
 
-        hideProgress();
+    separator: string;
 
-        separator: string;
-
-        levelIndex: number;
-    }
-
+    levelIndex: number;
+  }
 }
-

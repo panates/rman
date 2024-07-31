@@ -98,9 +98,9 @@ export function npmRunPath(options: RunPathOptions = {}) {
  ```
  */
 export function npmRunPathEnv(options: EnvOptions = {}) {
-  const env = {...(options.env || process.env)};
-  const path_: string = pathKey({env});
-  const opts: RunPathOptions = {...options, path: env[path_]};
+  const env = { ...(options.env || process.env) };
+  const path_: string = pathKey({ env });
+  const opts: RunPathOptions = { ...options, path: env[path_] };
   env[path_] = npmRunPath(opts);
   return env;
 }

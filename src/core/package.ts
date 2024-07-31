@@ -38,7 +38,6 @@ export class Package {
   writeJson(): void {
     const f = this.jsonFileName;
     const data = JSON.stringify(this._json, undefined, 2);
-    fs.writeFileSync(f, data, 'utf-8')
+    fs.writeFileSync(f, data, 'utf-8');
   }
-
 }

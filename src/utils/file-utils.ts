@@ -1,9 +1,12 @@
-import fsa from 'fs/promises';
 import { Stats } from 'node:fs';
+import fsa from 'fs/promises';
 import path from 'path';
 
 export async function fsExists(s: string): Promise<boolean> {
-  return fsa.lstat(s).then(() => true).catch(() => false);
+  return fsa
+    .lstat(s)
+    .then(() => true)
+    .catch(() => false);
 }
 
 export async function tryStat(s): Promise<Stats | undefined> {
@@ -19,8 +22,7 @@ export async function fsDelete(fileOrDir: string): Promise<boolean> {
     }
     if (stat.isDirectory()) {
       const list = await fsa.readdir(fileOrDir);
-      for (const file of list)
-        await fsDelete(path.join(fileOrDir, file));
+      for (const file of list) await fsDelete(path.join(fileOrDir, file));
       await fsa.rmdir(fileOrDir);
       return true;
     }
