@@ -51,6 +51,7 @@
     "signal-exit": "^4.1.0",
     "strict-typed-events": "^2.4.0",
     "strip-color": "^0.1.0",
+    "tslib": "^2.6.3",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
