@@ -1,8 +1,7 @@
 # compiled output
 /node_modules
-/dist
-/cjs
-/esm
+
+/build
 
 # environment variables
 .env
