@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import colors from 'ansi-colors';
 import fs from 'fs/promises';
 import logger from 'npmlog';
 import path from 'path';
@@ -37,12 +37,12 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
       .fail((msg: any, err: any) => {
         if (!err?.logged) {
           const text = msg
-            ? msg + '\n\n' + chalk.whiteBright('Run with --help for available options')
+            ? msg + '\n\n' + colors.whiteBright('Run with --help for available options')
             : err
               ? err.message
               : '';
           // eslint-disable-next-line no-console
-          console.log('\n' + chalk.red(text));
+          console.log('\n' + colors.red(text));
           throw msg;
         } else process.exit(1);
       })

@@ -3,7 +3,6 @@
  * Inspired from [npm-run-path](https://github.com/sindresorhus/npm-run-path)
  */
 import path from 'path';
-import pathKey from 'path-key';
 import process from 'process';
 
 export interface RunPathOptions {
@@ -85,6 +84,19 @@ export function npmRunPath(options: RunPathOptions = {}) {
   return [...result, path_].join(path.delimiter);
 }
 
+function pathKey(options?: { env?: any; platform?: string }): string {
+  const env = options?.env || process.env;
+  const platform = options?.platform || process.platform;
+  if (platform !== 'win32') {
+    return 'PATH';
+  }
+  return (
+    Object.keys(env)
+      .reverse()
+      .find(key => key.toUpperCase() === 'PATH') || 'Path'
+  );
+}
+
 /**
  @returns The augmented [`process.env`](https://nodejs.org/api/process.html#process_process_env) object.
  @example
@@ -93,8 +105,8 @@ export function npmRunPath(options: RunPathOptions = {}) {
  import {npmRunPathEnv} from 'npm-run-path';
  // `foo` is a locally installed binary
  childProcess.execFileSync('foo', {
-	env: npmRunPathEnv()
-});
+ env: npmRunPathEnv()
+ });
  ```
  */
 export function npmRunPathEnv(options: EnvOptions = {}) {

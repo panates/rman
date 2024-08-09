@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import colors from 'ansi-colors';
 import envinfo from 'envinfo';
 import semver from 'semver';
 import yargs from 'yargs';
@@ -30,20 +30,20 @@ export class InfoCommand extends Command {
       0,
     );
     for (const [categoryName, category] of Object.entries<object>(systemInfo)) {
-      this.logger.output('', '', chalk.whiteBright(categoryName) + ':');
+      this.logger.output('', '', colors.whiteBright(categoryName) + ':');
       for (const [n, v] of Object.entries(category)) {
-        const label = '    ' + chalk.reset(n) + ' '.repeat(maxName - n.length) + ' :';
+        const label = '    ' + colors.reset(n) + ' '.repeat(maxName - n.length) + ' :';
         if (typeof v === 'string') {
-          this.logger.output('', label, chalk.yellowBright(v));
+          this.logger.output('', label, colors.yellowBright(v));
           continue;
         }
         if (v.version) {
-          this.logger.output('', label, chalk.yellowBright(v.version), v.path ? ' ' + chalk.yellow(v.path) : '');
+          this.logger.output('', label, colors.yellowBright(v.version), v.path ? ' ' + colors.yellow(v.path) : '');
         }
         if (v.installed) {
           if (v.wanted === 'latest' || semver.intersects(v.installed, v.wanted)) {
-            this.logger.output('', label, chalk.yellowBright(v.installed));
-          } else this.logger.output('', label, chalk.red(v.installed), ' => ', chalk.yellowBright(v.wanted));
+            this.logger.output('', label, colors.yellowBright(v.installed));
+          } else this.logger.output('', label, colors.red(v.installed), ' => ', colors.yellowBright(v.wanted));
         }
       }
     }

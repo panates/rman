@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import colors from 'ansi-colors';
 import logger from 'npmlog';
 import path from 'path';
 import { Task } from 'power-tasks';
@@ -31,7 +31,7 @@ export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options>
           await this._fsDelete(path.join(dirname, 'node_modules'));
           await this._fsDelete(path.join(dirname, 'package-lock.json'));
           await this._fsDelete(path.join(dirname, 'yarn-lock.json'));
-          logger.info(this.commandName, chalk.yellow('install'), 'Running ' + client + ' install');
+          logger.info(this.commandName, colors.yellow('install'), 'Running ' + client + ' install');
           return super._exec(this.repository.rootPackage, client + ' install', {
             stdio: 'inherit',
           });
@@ -66,7 +66,7 @@ export class CleanInstallCommand extends RunCommand<CleanInstallCommand.Options>
 
   protected async _fsDelete(fileOrDir: string): Promise<void> {
     if (await fsExists(fileOrDir)) {
-      logger.info(this.commandName, chalk.yellow('rmdir'), path.relative(this.repository.dirname, fileOrDir));
+      logger.info(this.commandName, colors.yellow('rmdir'), path.relative(this.repository.dirname, fileOrDir));
       await fsDelete(fileOrDir);
     }
   }

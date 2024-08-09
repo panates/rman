@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import colors from 'ansi-colors';
 import logger from 'npmlog';
 import path from 'path';
 import { Task } from 'power-tasks';
@@ -40,13 +40,13 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
       let status = '';
       let message = '';
       let newVer: any = '';
-      const logPkgName = chalk.yellow(p.name);
+      const logPkgName = colors.yellow(p.name);
 
       if (!this.options.noTag) {
         const isDirty = dirtyFiles.find(f => !path.relative(relDir, f).startsWith('..'));
         if (isDirty) {
           if (!this.options.ignoreDirty) errorCount++;
-          status = this.options.ignoreDirty ? chalk.cyan.bold('skip') : chalk.redBright.bold('error');
+          status = this.options.ignoreDirty ? colors.cyan.bold('skip') : colors.redBright.bold('error');
           message = 'Git directory is not clean';
         }
       }
@@ -59,7 +59,7 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
             : undefined;
         if (newVer) newVersions[p.name] = newVer;
         else {
-          status = chalk.cyanBright.bold('no-change');
+          status = colors.cyanBright.bold('no-change');
           message = 'No change detected';
         }
       }
@@ -78,7 +78,7 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
             this.options.ignoreDirty ? 'info' : 'error',
             this.commandName,
             logPkgName,
-            chalk.whiteBright(p.version),
+            colors.whiteBright(p.version),
             status,
             logger.separator,
             message,
@@ -182,7 +182,7 @@ export class VersionCommand extends RunCommand<VersionCommand.Options> {
         this.commandName,
         pkg.name,
         logger.separator,
-        'Version changed from ' + chalk.cyan(oldVer) + ' to ' + chalk.cyan(newVer),
+        'Version changed from ' + colors.cyan(oldVer) + ' to ' + colors.cyan(newVer),
       );
       return { code: 0 };
     }

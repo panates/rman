@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import colors from 'ansi-colors';
 import logger from 'npmlog';
 import { Task } from 'power-tasks';
 import yargs from 'yargs';
@@ -29,7 +29,7 @@ export class ExecuteCommand extends MultiTaskCommand<ExecuteCommand.Options> {
           logger.verbose(
             this.commandName,
             p.name,
-            chalk.cyanBright.bold('executing'),
+            colors.cyanBright.bold('executing'),
             logger.separator,
             this.cmd + ' ' + (this.argv?.join(' ') || ''),
           );
@@ -42,10 +42,10 @@ export class ExecuteCommand extends MultiTaskCommand<ExecuteCommand.Options> {
             r.error ? 'error' : 'info',
             this.commandName,
             p.name,
-            r.error ? chalk.red.bold('failed') : chalk.green.bold('success'),
+            r.error ? colors.red.bold('failed') : colors.green.bold('success'),
             logger.separator,
             this.cmd,
-            chalk.yellow(' (' + (Date.now() - t) + ' ms') + ')',
+            colors.yellow(' (' + (Date.now() - t) + ' ms') + ')',
           );
         },
         {

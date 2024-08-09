@@ -1,6 +1,5 @@
 import './logger.js';
-import chalk from 'chalk';
-import figures from 'figures';
+import colors from 'ansi-colors';
 import isCi from 'is-ci';
 import npmlog from 'npmlog';
 import merge from 'putil-merge';
@@ -9,6 +8,7 @@ import yargs from 'yargs';
 import { isTTY } from './constants.js';
 
 const noOp = () => undefined;
+const lineVerticalDashed0 = '┆';
 
 export interface CommandEvents {
   start: () => void | Promise<void>;
@@ -30,7 +30,7 @@ export abstract class Command<
     super();
     this._options = options || ({} as TOptions);
     if (isCi) this.options.ci = true;
-    this.logger.separator = chalk.gray(figures.lineVerticalDashed0);
+    this.logger.separator = colors.gray(lineVerticalDashed0);
     Object.defineProperty(this.logger, 'levelIndex', {
       get(): any {
         return npmlog.levels[npmlog.level] || 0;

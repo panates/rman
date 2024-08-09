@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import colors from 'ansi-colors';
 import logger from 'npmlog';
 import path from 'path';
 import { Task } from 'power-tasks';
@@ -30,7 +30,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
 
     const promises: Promise<any>[] = [];
     for (const p of packages) {
-      const logPkgName = chalk.yellow(p.name);
+      const logPkgName = colors.yellow(p.name);
       if (p.json.private) {
         logger.info(this.commandName, logPkgName, logger.separator, `Ignored. Package is set to "private"`);
         continue;
@@ -49,11 +49,11 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                 logPkgName,
                 logger.separator,
                 !r.version
-                  ? chalk.yellow('No package information found in repository')
+                  ? colors.yellow('No package information found in repository')
                   : sameVersion
-                    ? `No publish needed. Version (${chalk.magenta(p.version)}) same in repository`
+                    ? `No publish needed. Version (${colors.magenta(p.version)}) same in repository`
                     : `Publishing is possible.` +
-                      ` Version "${chalk.magenta(p.version)}" differs from version in repository (${chalk.magenta(r.version)})`,
+                      ` Version "${colors.magenta(p.version)}" differs from version in repository (${colors.magenta(r.version)})`,
               );
               return;
             }
@@ -62,7 +62,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                 this.commandName,
                 logPkgName,
                 logger.separator,
-                `No publish needed. Version (${chalk.magenta(p.version)}) same in repository`,
+                `No publish needed. Version (${colors.magenta(p.version)}) same in repository`,
               );
             } else {
               logger.verbose(
@@ -70,7 +70,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                 logPkgName,
                 logger.separator,
                 `Publishing is possible.` +
-                  ` Version "${chalk.magenta(p.version)}" differs from version in repository (${chalk.magenta(r.version)})`,
+                  ` Version "${colors.magenta(p.version)}" differs from version in repository (${colors.magenta(r.version)})`,
               );
               selectedPackages.push(p);
             }

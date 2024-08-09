@@ -1,4 +1,4 @@
-import chalk from 'chalk';
+import colors from 'ansi-colors';
 import EasyTable from 'easy-table';
 import logger from 'npmlog';
 import path from 'path';
@@ -77,10 +77,10 @@ export class ListCommand<TOptions extends ListCommand.Options = ListCommand.Opti
         } else {
           if (this.onPrintTable) this.onPrintTable(p, o, table);
           else {
-            table.cell('Package', chalk.yellowBright(p.name));
-            table.cell('Version', chalk.yellow(p.version));
-            table.cell('Private', p.isPrivate ? chalk.magentaBright('yes') : '');
-            table.cell('Changed', isDirty ? chalk.magenta('dirty') : isCommitted ? chalk.yellow('committed') : '');
+            table.cell('Package', colors.yellowBright(p.name));
+            table.cell('Version', colors.yellow(p.version));
+            table.cell('Private', p.isPrivate ? colors.magentaBright('yes') : '');
+            table.cell('Changed', isDirty ? colors.magenta('dirty') : isCommitted ? colors.yellow('committed') : '');
             table.cell('Path', path.relative(repository.dirname, p.dirname));
             table.newRow();
           }

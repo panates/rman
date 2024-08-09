@@ -1,5 +1,5 @@
 import parseNpmScript from '@netlify/parse-npm-script';
-import chalk from 'chalk';
+import colors from 'ansi-colors';
 import logger from 'npmlog';
 import { Task } from 'power-tasks';
 import yargs from 'yargs';
@@ -105,10 +105,10 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
     if (logLevel) {
       logger.verbose(
         this.commandName,
-        chalk.cyan(name),
+        colors.cyan(name),
         logger.separator,
-        chalk.cyanBright.bold(args.script),
-        chalk.cyanBright.bold('executing'),
+        colors.cyanBright.bold(args.script || ''),
+        colors.cyanBright.bold('executing'),
         logger.separator,
         command,
       );
@@ -120,10 +120,10 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
       if (r.error) {
         logger.error(
           this.commandName,
-          chalk.cyan(name),
+          colors.cyan(name),
           logger.separator,
-          chalk.cyanBright.bold(args.script),
-          chalk.red.bold('failed'),
+          colors.cyanBright.bold(args.script || ''),
+          colors.red.bold('failed'),
           logger.separator,
           command,
           logger.separator,
@@ -133,13 +133,13 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
         logger.log(
           logLevel,
           this.commandName,
-          chalk.cyan(name),
+          colors.cyan(name),
           logger.separator,
-          chalk.cyanBright.bold(args.script),
-          chalk.green.bold('success'),
+          colors.cyanBright.bold(args.script || ''),
+          colors.green.bold('success'),
           logger.separator,
           command,
-          chalk.yellow(' (' + (Date.now() - t) + ' ms)'),
+          colors.yellow(' (' + (Date.now() - t) + ' ms)'),
         );
       }
     }
