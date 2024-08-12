@@ -1,4 +1,4 @@
-import yargs from 'yargs';
+import * as yargs from 'yargs';
 import { Command } from '../core/command.js';
 import { Package } from '../core/package.js';
 import { Repository } from '../core/repository.js';

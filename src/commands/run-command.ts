@@ -2,7 +2,7 @@ import parseNpmScript from '@netlify/parse-npm-script';
 import colors from 'ansi-colors';
 import logger from 'npmlog';
 import { Task } from 'power-tasks';
-import yargs from 'yargs';
+import * as yargs from 'yargs';
 import { Command } from '../core/command.js';
 import { Package } from '../core/package.js';
 import { Repository } from '../core/repository.js';

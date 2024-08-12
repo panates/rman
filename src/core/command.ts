@@ -4,7 +4,7 @@ import isCi from 'is-ci';
 import npmlog from 'npmlog';
 import merge from 'putil-merge';
 import { AsyncEventEmitter, TypedEventEmitterClass } from 'strict-typed-events';
-import yargs from 'yargs';
+import * as yargs from 'yargs';
 import { isTTY } from './constants.js';
 
 const noOp = () => undefined;

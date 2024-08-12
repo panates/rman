@@ -1,7 +1,7 @@
 import os from 'os';
 import { Task } from 'power-tasks';
 import { toNumber } from 'putil-varhelpers';
-import yargs from 'yargs';
+import * as yargs from 'yargs';
 import { Command } from '../core/command.js';
 import { isTTY } from '../core/constants.js';
 import { Package } from '../core/package.js';

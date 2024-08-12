@@ -4,7 +4,7 @@ import path from 'path';
 import { Task } from 'power-tasks';
 import semver from 'semver';
 import stripColor from 'strip-color';
-import yargs from 'yargs';
+import * as yargs from 'yargs';
 import { Command } from '../core/command.js';
 import { Package } from '../core/package.js';
 import { Repository } from '../core/repository.js';
