@@ -15,11 +15,15 @@ export class NpmHelper {
     this.cwd = options?.cwd || process.cwd();
   }
 
-  async getPackageInfo(packageName: string): Promise<any> {
-    const x = await exec('npm', {
-      cwd: this.cwd,
-      argv: ['view', packageName, '--json'],
-    });
+  async getPackageInfo(
+    packageName: string,
+    options?: {
+      userconfig?: string;
+    },
+  ): Promise<any> {
+    const argv = ['view', packageName, '--json'];
+    if (options?.userconfig) argv.push('--userconfig', options.userconfig);
+    const x = await exec('npm', { cwd: this.cwd, argv });
     if (x && x.stdout) {
       if (x.code && x.stdout.includes('404')) {
         return new PackageNotFoundError('Package ' + packageName + ' not found in repository');
