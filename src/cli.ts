@@ -41,7 +41,6 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
             : err
               ? err.message
               : '';
-          // eslint-disable-next-line no-console
           console.log('\n' + colors.red(text));
           throw msg;
         } else process.exit(1);

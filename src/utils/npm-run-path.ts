@@ -1,4 +1,3 @@
-/* eslint-disable max-len */
 /**
  * Inspired from [npm-run-path](https://github.com/sindresorhus/npm-run-path)
  */

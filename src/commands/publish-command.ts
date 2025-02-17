@@ -93,7 +93,9 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
         : pkg.dirname;
       return super._exec(
         pkg,
-        'npm publish' + (this.options.access ? ' --access=' + this.options.access : ''),
+        'npm publish' +
+          (this.options.access ? ' --access=' + this.options.access : '') +
+          (this.options.userconfig ? ` --userconfig="${this.options.userconfig}"` : ''),
         {
           ...args,
           cwd,
@@ -111,6 +113,7 @@ export namespace PublishCommand {
     contents?: string;
     access?: string;
     checkOnly?: boolean;
+    userconfig?: string;
   }
 
   export const cliCommandOptions: Record<string, yargs.Options> = {
@@ -126,6 +129,10 @@ export namespace PublishCommand {
         'you must publish with --access public to publish scoped packages.',
       type: 'string',
       choices: ['public', 'restricted'],
+    },
+    userconfig: {
+      describe: '# Path of .npmrc file to use for authentication',
+      type: 'string',
     },
     'check-only': {
       describe: '#  Only performs version checking and do not apply "publish" to the registry.',

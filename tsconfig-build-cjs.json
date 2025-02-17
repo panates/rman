@@ -4,7 +4,7 @@
     "module": "CommonJS",
     "moduleResolution": "Node",
     "declaration": false,
-    "outDir": "build/cjs",
+    "outDir": "build/cjs"
   },
   "include": ["src"]
 }

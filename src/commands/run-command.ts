@@ -115,7 +115,11 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
     }
     const t = Date.now();
     const cwd = args.cwd || pkg.dirname;
-    const r = await exec(command, { cwd, stdio: args.stdio, throwOnError: false });
+    const r = await exec(command, {
+      cwd,
+      stdio: args.stdio,
+      throwOnError: false,
+    });
     if (logLevel) {
       if (r.error) {
         logger.error(

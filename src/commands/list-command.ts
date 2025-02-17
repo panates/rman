@@ -98,7 +98,6 @@ export class ListCommand<TOptions extends ListCommand.Options = ListCommand.Opti
     }
     if ((table as any).rows.length) {
       logger.output('', '%s', table.toString().trim());
-      // eslint-disable-next-line no-console
       console.log('');
       logger.info('list', '%i Package(s) found', count);
       return arr;

@@ -1,6 +1,6 @@
 import glob from 'fast-glob';
 import fs from 'fs';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import path from 'path';
 import merge from 'putil-merge';
 import { getPackageJson } from '../utils/get-dirname.js';
