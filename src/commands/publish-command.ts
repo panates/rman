@@ -40,7 +40,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
       const npmHelper = new NpmHelper({ cwd: p.dirname });
       promises.push(
         npmHelper
-          .getPackageInfo(p.json.name)
+          .getPackageInfo(p.json.name, { userconfig: this.options.userconfig })
           .then(r => {
             const sameVersion = !!(r && r.version === p.version);
             if (this.options.checkOnly) {
