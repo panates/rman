@@ -88,9 +88,12 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
   protected async _exec(pkg: Package, command: string, args: {}, options?: any): Promise<ExecuteCommandResult> {
     if (command === '#') {
       if (pkg === this.repository.rootPackage) return { code: 0 };
-      const cwd = this.options.contents
-        ? path.resolve(this.repository.dirname, path.join(this.options.contents, path.basename(pkg.dirname)))
-        : pkg.dirname;
+      let cwd = pkg.dirname;
+      if (this.options.contents) {
+        const contents = this.options.contents.replaceAll('${{package.basename}}', pkg.basename);
+        if (contents.startsWith('/')) cwd = path.join(this.repository.dirname, contents);
+        else cwd = path.join(pkg.dirname, contents);
+      }
       return super._exec(
         pkg,
         'npm publish' +

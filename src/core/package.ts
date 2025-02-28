@@ -9,6 +9,10 @@ export class Package {
     this.reloadJson();
   }
 
+  get basename(): string {
+    return path.basename(this.dirname);
+  }
+
   get name(): string {
     return this._json.name;
   }
