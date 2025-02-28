@@ -90,7 +90,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
       if (pkg === this.repository.rootPackage) return { code: 0 };
       let cwd = pkg.dirname;
       if (this.options.contents) {
-        const contents = this.options.contents.replaceAll('${{package.basename}}', pkg.basename);
+        const contents = this.options.contents.replaceAll('${package.basename}', pkg.basename);
         if (contents.startsWith('/')) cwd = path.join(this.repository.dirname, contents);
         else cwd = path.join(pkg.dirname, contents);
       }
