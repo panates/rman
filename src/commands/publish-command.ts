@@ -54,8 +54,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
                 : `Publishing is possible.` +
                     ` Version "${colors.magenta(p.version)}" differs from version in repository (${colors.magenta(fetchedVersion)})`,
             );
-            if (this.options.checkOnly) return;
-            if (fetchedVersion === p.version) {
+            if (!sameVersion) {
               selectedPackages.push(p);
             }
           })
@@ -73,6 +72,16 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
       );
     }
     await Promise.all(promises);
+
+    if (this.options.checkOnly)
+      logger.verbose(this.commandName, '', logger.separator, `${selectedPackages.length} packages can be be published`);
+    else
+      logger.verbose(this.commandName, '', logger.separator, `${selectedPackages.length} packages will be published`);
+
+    selectedPackages.forEach(p => {
+      p.json.scripts = p.json.scripts || {};
+      p.json.scripts.publish = '#';
+    });
 
     return super._prepareTasks(selectedPackages, { newVersions });
   }

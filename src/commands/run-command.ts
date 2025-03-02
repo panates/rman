@@ -23,12 +23,12 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
   protected _prepareTasks(packages: Package[], options?: any): Task[] | Promise<Task[]> {
     const packageTasks: Task[] = [];
     for (const p of packages) {
-      // if (p.json.scripts) {
-      const childTask = this._prepareScriptTask(p, options);
-      if (childTask) {
-        packageTasks.push(childTask);
+      if (p.json.scripts) {
+        const childTask = this._prepareScriptTask(p, options);
+        if (childTask) {
+          packageTasks.push(childTask);
+        }
       }
-      // }
     }
     const rootTask = this._prepareScriptTask(this.repository.rootPackage);
     const children = rootTask?.options.children as Task[] | undefined;
