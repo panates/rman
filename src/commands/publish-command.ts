@@ -8,6 +8,7 @@ import { Package } from '../core/package.js';
 import { Repository } from '../core/repository.js';
 import { ExecuteCommandResult } from '../utils/exec.js';
 import { NpmHelper } from '../utils/npm-utils.js';
+import { PackageNotFoundError } from '../utils/package-not-found-error.js';
 import { RunCommand } from './run-command.js';
 
 export class PublishCommand extends RunCommand<PublishCommand.Options> {
@@ -37,46 +38,37 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
       }
 
       logger.info(this.commandName, logPkgName, logger.separator, `Fetching package information from repository`);
-      const npmHelper = new NpmHelper({ cwd: p.dirname });
+      const npmHelper = new NpmHelper({ cwd: p.dirname, userconfig: this.options.userconfig });
       promises.push(
         npmHelper
-          .getPackageInfo(p.json.name, { userconfig: this.options.userconfig })
+          .getPackageInfo(p.json.name)
           .then(r => {
-            const sameVersion = !!(r && r.version === p.version);
-            if (this.options.checkOnly) {
-              logger.info(
-                this.commandName,
-                logPkgName,
-                logger.separator,
-                !r.version
-                  ? colors.yellow('No package information found in repository')
-                  : sameVersion
-                    ? `No publish needed. Version (${colors.magenta(p.version)}) same in repository`
-                    : `Publishing is possible.` +
-                      ` Version "${colors.magenta(p.version)}" differs from version in repository (${colors.magenta(r.version)})`,
-              );
-              return;
-            }
-            if (r && r.version === p.version) {
-              logger.info(
-                this.commandName,
-                logPkgName,
-                logger.separator,
-                `No publish needed. Version (${colors.magenta(p.version)}) same in repository`,
-              );
-            } else {
-              logger.verbose(
-                this.commandName,
-                logPkgName,
-                logger.separator,
-                `Publishing is possible.` +
-                  ` Version "${colors.magenta(p.version)}" differs from version in repository (${colors.magenta(r.version)})`,
-              );
+            const fetchedVersion = r.version;
+            const sameVersion = fetchedVersion === p.version;
+            logger.info(
+              this.commandName,
+              logPkgName,
+              logger.separator,
+              sameVersion
+                ? `No publish needed. Version (${colors.magenta(p.version)}) same in repository`
+                : `Publishing is possible.` +
+                    ` Version "${colors.magenta(p.version)}" differs from version in repository (${colors.magenta(fetchedVersion)})`,
+            );
+            if (this.options.checkOnly) return;
+            if (fetchedVersion === p.version) {
               selectedPackages.push(p);
             }
           })
           .catch(e => {
-            if (e.name !== 'PackageNotFoundError') throw e;
+            if (e instanceof PackageNotFoundError) {
+              logger.info(
+                this.commandName,
+                logPkgName,
+                logger.separator,
+                'Publishing is possible. No package information found in repository',
+              );
+              selectedPackages.push(p);
+            } else throw e;
           }),
       );
     }
@@ -94,11 +86,12 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
         if (contents.startsWith('/')) cwd = path.join(this.repository.dirname, contents);
         else cwd = path.join(pkg.dirname, contents);
       }
+      const npmHelper = new NpmHelper({ cwd: pkg.dirname, userconfig: this.options.userconfig });
       return super._exec(
         pkg,
         'npm publish' +
           (this.options.access ? ' --access=' + this.options.access : '') +
-          (this.options.userconfig ? ` --userconfig="${this.options.userconfig}"` : ''),
+          (npmHelper.userconfig ? ` --userconfig="${npmHelper.userconfig}"` : ''),
         {
           ...args,
           cwd,
