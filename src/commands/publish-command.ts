@@ -100,6 +100,7 @@ export class PublishCommand extends RunCommand<PublishCommand.Options> {
         pkg,
         'npm publish' +
           (this.options.access ? ' --access=' + this.options.access : '') +
+          (this.options.tag ? ' --tag=' + this.options.tag : '') +
           (npmHelper.userconfig ? ` --userconfig="${npmHelper.userconfig}"` : ''),
         {
           ...args,
@@ -117,6 +118,7 @@ export namespace PublishCommand {
   export interface Options extends RunCommand.Options {
     contents?: string;
     access?: string;
+    tag?: string;
     checkOnly?: boolean;
     userconfig?: string;
   }
@@ -134,6 +136,10 @@ export namespace PublishCommand {
         'you must publish with --access public to publish scoped packages.',
       type: 'string',
       choices: ['public', 'restricted'],
+    },
+    tag: {
+      describe: '',
+      type: 'string',
     },
     userconfig: {
       describe: '# Path of .npmrc file to use for authentication',
