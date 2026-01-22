@@ -12,10 +12,12 @@ export class Repository extends Package {
   protected constructor(
     readonly dirname: string,
     readonly config: any,
+    readonly monorepo: boolean,
     readonly packages: Package[],
   ) {
     super(dirname);
     this.rootPackage = new Package(dirname);
+    if (!monorepo) this.packages = [this.rootPackage];
   }
 
   getPackages(options?: { scope?: string | string[]; toposort?: boolean }): Package[] {
@@ -73,23 +75,28 @@ export class Repository extends Package {
   }
 
   static create(root?: string, options?: { deep?: number }): Repository {
-    let dirname = root || process.cwd();
+    const dirname = root || process.cwd();
     let deep = options?.deep ?? 10;
-    while (deep-- >= 0 && fs.existsSync(dirname)) {
-      const f = path.join(dirname, 'package.json');
+    let pkgDirname = dirname;
+    while (deep-- >= 0 && fs.existsSync(pkgDirname)) {
+      const f = path.join(pkgDirname, 'package.json');
       if (fs.existsSync(f)) {
         const pkgJson = JSON.parse(fs.readFileSync(f, 'utf-8'));
         if (Array.isArray(pkgJson.workspaces)) {
-          const packages = this._resolvePackages(dirname, pkgJson.workspaces);
-          const config = this._readConfig(dirname);
-          const repo = new Repository(dirname, config, packages);
+          const packages = this._resolvePackages(pkgDirname, pkgJson.workspaces);
+          const config = this._readConfig(pkgDirname);
+          const repo = new Repository(pkgDirname, config, true, packages);
           repo._updateDependencies();
           return repo;
         }
       }
-      dirname = path.resolve(dirname, '..');
+      pkgDirname = path.resolve(dirname, '..');
     }
-    throw new Error('No monorepo project detected');
+    const config = this._readConfig(dirname);
+    const repo = new Repository(dirname, config, false, []);
+    repo._updateDependencies();
+    return repo;
+    // throw new Error('No monorepo project detected');
   }
 
   protected static _resolvePackages(dirname: string, patterns: string[]): Package[] {
