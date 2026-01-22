@@ -37,10 +37,6 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        node: [ '22', '23', '24' ]
     env:
       TZ: Europe/Istanbul  # Set timezone for entire job
 
@@ -60,7 +56,5 @@ jobs:
 
       - name: Send coverage to Coveralls
         uses: coverallsapp/github-action@v2
-        # Run only once
-        if: ${{ matrix.node == '22' }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
