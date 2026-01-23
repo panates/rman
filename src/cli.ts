@@ -1,4 +1,5 @@
 import colors from 'ansi-colors';
+import { getDirname } from 'cross-dirname';
 import fs from 'fs/promises';
 import logger from 'npmlog';
 import path from 'path';
@@ -14,7 +15,6 @@ import { RunCommand } from './commands/run-command.js';
 import { VersionCommand } from './commands/version-command.js';
 import { Command } from './core/command.js';
 import { Repository } from './core/repository.js';
-import { getDirname } from './utils/get-dirname.js';
 
 export async function runCli(options?: { argv?: string[]; cwd?: string }) {
   try {
