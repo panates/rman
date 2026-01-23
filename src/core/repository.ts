@@ -3,7 +3,6 @@ import fs from 'fs';
 import * as yaml from 'js-yaml';
 import path from 'path';
 import merge from 'putil-merge';
-import { getPackageJson } from '../utils/get-dirname.js';
 import { Package } from './package.js';
 
 export class Repository extends Package {
@@ -118,7 +117,11 @@ export class Repository extends Package {
 
   protected static _readConfig(dirname: string): any {
     const result = {};
-    const pkgJson = getPackageJson(dirname);
+    const f = path.resolve(dirname, 'package.json');
+    let pkgJson;
+    if (fs.existsSync(f)) {
+      pkgJson = JSON.parse(fs.readFileSync(f, 'utf-8'));
+    }
     if (pkgJson && typeof pkgJson.rman === 'object') merge(result, pkgJson.rman, { deep: true });
     let filename = path.resolve(dirname, '.rman.yml');
     if (fs.existsSync(filename)) {
