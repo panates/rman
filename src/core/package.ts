@@ -35,6 +35,9 @@ export class Package {
 
   reloadJson(): any {
     const f = this.jsonFileName;
+    if (!fs.existsSync(f)) {
+      throw new Error(`Package.json not found at ${f}`);
+    }
     this._json = JSON.parse(fs.readFileSync(f, 'utf-8'));
     return this._json;
   }
