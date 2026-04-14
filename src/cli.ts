@@ -1,8 +1,4 @@
 import colors from 'ansi-colors';
-import { getDirname } from 'cross-dirname';
-import fs from 'fs';
-import logger from 'npmlog';
-import path from 'path';
 import yargs from 'yargs';
 import { BuildCommand } from './commands/build-command.js';
 import { ChangedCommand } from './commands/changed-command.js';
@@ -13,16 +9,12 @@ import { ListCommand } from './commands/list-command.js';
 import { PublishCommand } from './commands/publish-command.js';
 import { RunCommand } from './commands/run-command.js';
 import { VersionCommand } from './commands/version-command.js';
+import { version } from './constants.js';
 import { Command } from './core/command.js';
 import { Repository } from './core/repository.js';
 
 export async function runCli(options?: { argv?: string[]; cwd?: string }) {
   try {
-    let s = path.resolve(getDirname(), './package.json');
-    if (!fs.existsSync(s)) {
-      s = path.resolve(getDirname(), '../package.json');
-    }
-    const pkgJson = JSON.parse(fs.readFileSync(s, 'utf-8'));
     const repository = Repository.create(options?.cwd);
     const _argv = options?.argv || process.argv.slice(2);
 
@@ -31,7 +23,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     const program = yargs(_argv)
       // .scriptName('rman')
       .strict()
-      .version(pkgJson.version || '')
+      .version(version)
       .alias('version', 'v')
       .usage('$0 <cmd> [options...]')
       .help('help')
@@ -65,6 +57,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     if (!_argv.length) program.showHelp();
     else await program.parseAsync().catch(() => process.exit(1));
   } catch (e: any) {
-    logger.error('rman', e);
+    console.error(colors.red(e.message));
+    // logger.error('rman', e.message);
   }
 }

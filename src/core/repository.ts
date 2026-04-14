@@ -88,8 +88,10 @@ export class Repository extends Package {
           repo._updateDependencies();
           return repo;
         }
+        /** If we reach to the root of the project */
+        if (fs.existsSync(path.join(pkgDirname, '.git'))) break;
       }
-      pkgDirname = path.resolve(dirname, '..');
+      pkgDirname = path.resolve(pkgDirname, '..');
     }
     const config = this._readConfig(dirname);
     const repo = new Repository(dirname, config, false, []);
