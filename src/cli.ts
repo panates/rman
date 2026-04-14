@@ -1,5 +1,4 @@
 import colors from 'ansi-colors';
-import logger from 'npmlog';
 import yargs from 'yargs';
 import { BuildCommand } from './commands/build-command.js';
 import { ChangedCommand } from './commands/changed-command.js';

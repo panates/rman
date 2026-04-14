@@ -1,11 +1,11 @@
 # compiled output
 /node_modules
-
 /build
 
 # environment variables
 .env
 .development.env
+*.tsbuildinfo
 
 # Debug
 test/debug.ts
