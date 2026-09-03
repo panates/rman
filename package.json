@@ -1,7 +1,7 @@
 {
   "name": "rman",
   "description": "Repository manager",
-  "version": "0.37.4",
+  "version": "0.38.0",
   "author": "Panates",
   "license": "MIT",
   "dependencies": {
