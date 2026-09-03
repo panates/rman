@@ -6,7 +6,7 @@ import * as yargs from 'yargs';
 import { Command } from '../core/command.js';
 import { Package } from '../core/package.js';
 import { Repository } from '../core/repository.js';
-import { exec, ExecuteCommandResult } from '../utils/exec.js';
+import { exec, type ExecuteCommandResult } from '../utils/exec.js';
 import { MultiTaskCommand } from './multi-task-command.js';
 
 export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCommand<TOptions> {
@@ -63,7 +63,7 @@ export class RunCommand<TOptions extends RunCommand.Options> extends MultiTaskCo
               cmd,
               {
                 script: s.name,
-                stdio: logger.levelIndex < 1000 ? 'inherit' : 'pipe',
+                stdio: 'inherit', //logger.levelIndex < 1000 ? 'inherit' : 'pipe',
               },
               options,
             ),

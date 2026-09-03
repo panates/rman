@@ -6,7 +6,7 @@ import * as yargs from 'yargs';
 import { Command } from '../core/command.js';
 import { Package } from '../core/package.js';
 import { Repository } from '../core/repository.js';
-import { ExecuteCommandResult } from '../utils/exec.js';
+import type { ExecuteCommandResult } from '../utils/exec.js';
 import { fsDelete, fsExists } from '../utils/file-utils.js';
 import { RunCommand } from './run-command.js';
 
