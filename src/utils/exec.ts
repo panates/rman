@@ -1,4 +1,4 @@
-import { ChildProcess, spawn, SpawnOptions } from 'child_process';
+import { ChildProcess, spawn, type SpawnOptions } from 'child_process';
 import { onExit } from 'signal-exit';
 import { npmRunPathEnv } from './npm-run-path.js';
 

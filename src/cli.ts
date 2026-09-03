@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import colors from 'ansi-colors';
 import yargs from 'yargs';
 import { BuildCommand } from './commands/build-command.js';
@@ -61,3 +62,5 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     // logger.error('rman', e.message);
   }
 }
+
+runCli().catch(() => 0);
