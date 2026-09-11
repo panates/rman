@@ -1,11 +1,16 @@
 # compiled output
 /node_modules
 /build
+*.tsbuildinfo
+graphify-out
+.claude
+
+# old (pre-v1) implementation kept locally for reference - never committed
+/old
 
 # environment variables
 .env
 .development.env
-*.tsbuildinfo
 
 # Debug
 test/debug.ts

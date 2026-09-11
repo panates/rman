@@ -83,19 +83,6 @@ export function npmRunPath(options: RunPathOptions = {}) {
   return [...result, path_].join(path.delimiter);
 }
 
-function pathKey(options?: { env?: any; platform?: string }): string {
-  const env = options?.env || process.env;
-  const platform = options?.platform || process.platform;
-  if (platform !== 'win32') {
-    return 'PATH';
-  }
-  return (
-    Object.keys(env)
-      .reverse()
-      .find(key => key.toUpperCase() === 'PATH') || 'Path'
-  );
-}
-
 /**
  @returns The augmented [`process.env`](https://nodejs.org/api/process.html#process_process_env) object.
  @example
@@ -114,4 +101,17 @@ export function npmRunPathEnv(options: EnvOptions = {}) {
   const opts: RunPathOptions = { ...options, path: env[path_] };
   env[path_] = npmRunPath(opts);
   return env;
+}
+
+function pathKey(options?: { env?: any; platform?: string }): string {
+  const env = options?.env || process.env;
+  const platform = options?.platform || process.platform;
+  if (platform !== 'win32') {
+    return 'PATH';
+  }
+  return (
+    Object.keys(env)
+      .reverse()
+      .find(key => key.toUpperCase() === 'PATH') || 'Path'
+  );
 }

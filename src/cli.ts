@@ -1,34 +1,39 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import colors from 'ansi-colors';
 import yargs from 'yargs';
-import { BuildCommand } from './commands/build-command.js';
-import { ChangedCommand } from './commands/changed-command.js';
-import { CleanInstallCommand } from './commands/ci-command.js';
-import { ExecuteCommand } from './commands/execute-command.js';
-import { InfoCommand } from './commands/info-command.js';
-import { ListCommand } from './commands/list-command.js';
-import { PublishCommand } from './commands/publish-command.js';
-import { RunCommand } from './commands/run-command.js';
-import { VersionCommand } from './commands/version-command.js';
+import { hideBin } from 'yargs/helpers';
+import * as buildCommand from './commands/build.command.js';
+import * as changelogCommand from './commands/changelog.command.js';
+import * as ciCommand from './commands/ci.command.js';
+import * as cleanCommand from './commands/clean.command.js';
+import * as infoCommand from './commands/info.command.js';
+import * as listCommand from './commands/list.command.js';
+import * as runCommand from './commands/run.command.js';
+import * as testCommand from './commands/test.command.js';
 import { version } from './constants.js';
-import { Command } from './core/command.js';
 import { Repository } from './core/repository.js';
+import { LOG_LEVELS } from './utils/logger.js';
 
 export async function runCli(options?: { argv?: string[]; cwd?: string }) {
   try {
     const repository = Repository.create(options?.cwd);
-    const _argv = options?.argv || process.argv.slice(2);
-
-    const globalKeys = Object.keys(Command.globalOptions).concat(['help', 'version']);
+    const _argv = options?.argv || hideBin(process.argv);
 
     const program = yargs(_argv)
-      // .scriptName('rman')
-      .strict()
+      .scriptName('rman2')
       .version(version)
       .alias('version', 'v')
       .usage('$0 <cmd> [options...]')
       .help('help')
       .alias('help', 'h')
+      .option('log-level', {
+        describe:
+          'Default verbosity of the per-step log for run/build/ci (default: info, or .rmanrc "logLevel"; ' +
+          'overridable per-package via .rmanrc run.<script>.logLevel)',
+        choices: LOG_LEVELS,
+      })
       .showHelpOnFail(false, 'Run with --help for available options')
       .fail((msg: any, err: any) => {
         if (!err?.logged) {
@@ -40,27 +45,32 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
           console.log('\n' + colors.red(text));
           throw msg;
         } else process.exit(1);
-      })
-      // group options under "Global Options:" header
-      .options(Command.globalOptions)
-      .group(globalKeys, 'Global Options:');
+      });
 
-    InfoCommand.initCli(repository, program);
-    ListCommand.initCli(repository, program);
-    ChangedCommand.initCli(repository, program);
-    ExecuteCommand.initCli(repository, program);
-    RunCommand.initCli(repository, program);
-    VersionCommand.initCli(repository, program);
-    PublishCommand.initCli(repository, program);
-    CleanInstallCommand.initCli(repository, program);
-    BuildCommand.initCli(repository, program);
+    infoCommand.initCli(repository, program);
+    listCommand.initCli(repository, program);
+    runCommand.initCli(repository, program);
+    buildCommand.initCli(repository, program);
+    ciCommand.initCli(repository, program);
+    cleanCommand.initCli(repository, program);
+    changelogCommand.initCli(repository, program);
+    testCommand.initCli(repository, program);
+
+    program.demandCommand(1).strict().completion();
 
     if (!_argv.length) program.showHelp();
     else await program.parseAsync().catch(() => process.exit(1));
   } catch (e: any) {
     console.error(colors.red(e.message));
-    // logger.error('rman', e.message);
   }
 }
 
-runCli().catch(() => 0);
+function isMain(): boolean {
+  try {
+    return !!process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) runCli().catch(() => 0);
