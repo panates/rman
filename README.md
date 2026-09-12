@@ -341,6 +341,13 @@ See [docs/api.md#configuration-rmanrc-rmanyml](docs/api.md#configuration-rmanrc-
 full key reference (every `run.<script>.*` sub-key, `clean.*`, `changelog.*`, precedence rules,
 and which keys are root-level-only today).
 
+**Editor autocomplete:** `rman` ships a JSON Schema for `.rmanrc`/`.rman.yml` at
+`rman/rmanrc.schema.json` - add `"$schema": "./node_modules/rman/rmanrc.schema.json"` to your
+`.rmanrc` (or the equivalent `# yaml-language-server: $schema=...` comment in `.rman.yml`) to get
+autocomplete and validation in VS Code/WebStorm. See
+[docs/api.md#editor-support-json-schema](docs/api.md#editor-support-json-schema) for details,
+including a WebStorm setup that needs no changes to the config file itself.
+
 ## Programmatic API
 
 Every command above is a thin wrapper around an exported service function - call them directly

@@ -25,6 +25,10 @@ function postBuild() {
     path.resolve(buildDir, 'README.md'),
   );
   fs.copyFileSync(path.resolve('./LICENSE'), path.resolve(buildDir, 'LICENSE'));
+  fs.copyFileSync(
+    path.resolve('./schemas/rmanrc.schema.json'),
+    path.resolve(buildDir, 'rmanrc.schema.json'),
+  );
 
   /** Update version */
   const constantsFile = path.resolve(buildDir, 'constants.js');

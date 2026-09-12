@@ -1,0 +1,202 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/panates/rman/main/schemas/rmanrc.schema.json",
+  "title": "rman configuration",
+  "description": "Schema for rman's .rmanrc (JSON) and .rman.yml (YAML) config files, and the \"rman\" key in package.json. See docs/api.md#configuration-rmanrc-rmanyml for the full reference.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Path/URL to this schema - not read by rman itself, purely for editor tooling."
+    },
+    "packageManager": {
+      "type": "string",
+      "enum": ["npm", "yarn", "pnpm", "bun"],
+      "default": "npm",
+      "description": "Package manager used by \"ci\"/\"publish\". Root-level only - an explicit --package-manager CLI flag wins over this."
+    },
+    "logLevel": {
+      "$ref": "#/definitions/logLevel",
+      "default": "info",
+      "description": "Default verbosity of the classic per-step log for run/build/test/ci/clean. Root-level only. An explicit --log-level CLI flag wins over this."
+    },
+    "allowBranch": {
+      "$ref": "#/definitions/stringOrStringArray",
+      "description": "Refuse to run a state-changing command unless the current git branch matches one of these globs. Root-level only. An explicit --allow-branch CLI flag replaces this entirely (never merges)."
+    },
+    "ignoreBranch": {
+      "$ref": "#/definitions/stringOrStringArray",
+      "description": "Refuse to run a state-changing command if the current git branch matches one of these globs. Root-level only. An explicit --ignore-branch CLI flag replaces this entirely (never merges)."
+    },
+    "group": {
+      "description": "Release-versioning group for \"version\"/\"publish\": true (default) puts the package in the implicit repo-wide group; a string joins exactly the other packages sharing that string; false makes it a solo, fully independent group. Per-package cascaded.",
+      "default": true,
+      "oneOf": [{ "type": "boolean" }, { "type": "string", "minLength": 1 }]
+    },
+    "version": {
+      "type": "object",
+      "description": "Options for the \"version\" command/VersionService.",
+      "additionalProperties": false,
+      "properties": {
+        "commitMessage": {
+          "type": "string",
+          "default": "chore(release): v{version}",
+          "description": "Commit message for every group a \"version\" run commits. \"{version}\" is substituted when every bumped package in that commit shares one version. Root-level only."
+        },
+        "script": {
+          "$ref": "#/definitions/stringOrStringArray",
+          "description": "Command(s) to run as this package's own \"version\" npm-lifecycle step, when its package.json does not define one itself."
+        },
+        "preScript": {
+          "$ref": "#/definitions/stringOrStringArray",
+          "description": "Command(s) to run as this package's own \"preversion\" step, when its package.json does not define one itself."
+        },
+        "postScript": {
+          "$ref": "#/definitions/stringOrStringArray",
+          "description": "Command(s) to run as this package's own \"postversion\" step, when its package.json does not define one itself."
+        }
+      }
+    },
+    "changelog": {
+      "type": "object",
+      "description": "Options for the \"changelog\" command/ChangelogService, and for \"version --changelog\".",
+      "additionalProperties": false,
+      "properties": {
+        "ignoreTypes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Conventional Commit types (e.g. \"chore\", \"ci\") dropped entirely from changelog output, instead of being folded into \"Other Changes\". Per-package cascaded."
+        },
+        "template": {
+          "type": "string",
+          "description": "Path (relative to the repository root) to a changelog template file - not the template text itself. Supports {{package}}/{{version}}/{{date}}/{{commits}} and {{features}}/{{fixes}}/{{other}}. Per-package cascaded."
+        },
+        "filePath": {
+          "type": "string",
+          "default": "CHANGELOG.md",
+          "description": "Where \"--write\" prepends this package's entry, relative to that package's own directory. Per-package cascaded."
+        },
+        "tagPattern": {
+          "type": "string",
+          "default": "v*",
+          "description": "Glob for this package's release tags. Include \"{name}\" for independent per-package tags (e.g. \"{name}@*\"); omit it for one shared repo-wide tag scheme. Per-package cascaded."
+        }
+      }
+    },
+    "clean": {
+      "type": "object",
+      "description": "Options for the \"clean\" command/CleanService.",
+      "additionalProperties": false,
+      "properties": {
+        "include": {
+          "$ref": "#/definitions/stringOrStringArray",
+          "description": "Extra glob(s) to remove, resolved relative to this package's own directory. Per-package cascaded (a package's own value replaces the root's, it does not merge)."
+        },
+        "exclude": {
+          "$ref": "#/definitions/stringOrStringArray",
+          "description": "Glob(s) protected from \"include\" (and from the built-in TypeScript-artifact cleanup), relative to this package's own directory. Per-package cascaded."
+        },
+        "skip": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opts this package out of \"clean\" entirely. Per-package cascaded."
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "description": "Per-script options for \"run\"/\"build\"/\"test\"/RunService, keyed by npm script name (e.g. \"build\", \"lint\", \"test\").",
+      "additionalProperties": { "$ref": "#/definitions/runScriptConfig" }
+    },
+    "packages": {
+      "type": "object",
+      "description": "Per-package overrides, keyed by the in-repo package's own name.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "dependencies": {
+            "description": "Extra in-repo \"dependencies\" not present in this package's real package.json, purely for rman's own dependency graph (topo-sort, --deps/--dependents, run's task scheduling). An array defaults each entry's range to \"*\"; an object gives an explicit name -> range map.",
+            "oneOf": [
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "object", "additionalProperties": { "type": "string" } }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "logLevel": {
+      "type": "string",
+      "enum": ["silent", "error", "info", "verbose"]
+    },
+    "stringOrStringArray": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      ]
+    },
+    "runScriptConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Max packages built at once for this script. Default: CPU count."
+        },
+        "topo": {
+          "type": "boolean",
+          "default": true,
+          "description": "Respect the package dependency graph: a package waits for its dependencies and is skipped if one fails. Set false for independent scripts (lint/test) - alphabetical order, no failure skipping."
+        },
+        "bail": {
+          "type": "boolean",
+          "default": true,
+          "description": "Stop the whole batch on this package's own failure. Unusual precedence: this package-level value outranks even an explicit CLI --bail/--no-bail flag."
+        },
+        "progress": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the live progress panel for this script (auto-disabled off a TTY)."
+        },
+        "logLevel": {
+          "$ref": "#/definitions/logLevel",
+          "description": "Verbosity of the classic per-step log for this package/script, when the live panel is off."
+        },
+        "changedSince": {
+          "type": "string",
+          "description": "Root-level fallback commit/hash for \"--changed-since\", used only when the CLI flag is not given."
+        },
+        "skip": {
+          "type": "boolean",
+          "default": false,
+          "description": "Excludes this package (or the repository root's own pre/post hooks) from running this script entirely."
+        },
+        "if": {
+          "type": "string",
+          "description": "Conditional-execution expression: atoms \"changed\"/\"dirty\"/\"committed\" (optionally \"= <hash>\" or \"= {ENV_VAR}\"), combined with and/or/not/(...). E.g. \"changed\", \"(changed or dirty) and not committed\"."
+        },
+        "script": {
+          "$ref": "#/definitions/stringOrStringArray",
+          "description": "Command(s) to run as this package's own script, when its package.json does not define one for this script name."
+        },
+        "preScript": {
+          "$ref": "#/definitions/stringOrStringArray",
+          "description": "Command(s) to run as this package's own \"pre<script>\" hook, when its package.json does not define one."
+        },
+        "postScript": {
+          "$ref": "#/definitions/stringOrStringArray",
+          "description": "Command(s) to run as this package's own \"post<script>\" hook, when its package.json does not define one."
+        },
+        "override": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, \"script\"/\"preScript\"/\"postScript\" above replace the package's own package.json definition even when it already has one."
+        }
+      }
+    }
+  }
+}

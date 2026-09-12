@@ -1,7 +1,7 @@
 {
   "name": "rman",
   "description": "Repository manager",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "Panates",
   "license": "MIT",
   "dependencies": {
@@ -85,7 +85,8 @@
       "types": "./index.d.ts",
       "default": "./index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./rmanrc.schema.json": "./rmanrc.schema.json"
   },
   "bin": {
     "rman": "cli.js"

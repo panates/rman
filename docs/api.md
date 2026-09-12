@@ -45,6 +45,7 @@ standalone utilities (`detectChangeHash`, `Logger`). For the CLI itself (command
   - [`Repository`](#repository)
   - [`Package`](#package)
 - [Configuration (`.rmanrc` / `.rman.yml`)](#configuration-rmanrc-rmanyml)
+  - [Editor support (JSON Schema)](#editor-support-json-schema)
 - [Services](#services)
   - [`VersionService`](#versionservice)
   - [`PublishService`](#publishservice)
@@ -277,6 +278,36 @@ version:
 `--bail`/`--no-bail` flag on the command line, because "this package's failure must always stop
 the batch" is a more specific, intentional statement than a broad flag meant for the whole run -
 and shouldn't be silently overridable by it.
+
+### Editor support (JSON Schema)
+
+`rman` ships a JSON Schema for `.rmanrc`/`.rman.yml` at `rman/rmanrc.schema.json` (also available
+in this repo at [`schemas/rmanrc.schema.json`](../schemas/rmanrc.schema.json)) - point your editor
+at it to get autocomplete, inline docs, and typo/type validation while editing config.
+
+**`.rmanrc` (JSON):** add a `"$schema"` key (rman itself ignores it):
+
+```json
+{
+  "$schema": "./node_modules/rman/rmanrc.schema.json",
+  "packageManager": "pnpm"
+}
+```
+
+**`.rman.yml` (YAML):** add a `yaml-language-server` directive as the first line (recognized by
+VS Code's YAML extension, and by WebStorm/IntelliJ IDEs):
+
+```yaml
+# yaml-language-server: $schema=./node_modules/rman/rmanrc.schema.json
+packageManager: pnpm
+```
+
+**WebStorm/IntelliJ, without editing the file at all:** since `.rmanrc` has no file extension,
+the IDE needs to be told both that it's JSON and which schema applies - open *Preferences ->
+Languages & Frameworks -> Schemas and DTDs -> JSON Schema Mappings*, add a mapping to
+`node_modules/rman/rmanrc.schema.json`, and add a file path pattern of `.rmanrc` (and `.rman.yml`
+as a second mapping, under the *YAML* mappings section instead). This applies project-wide without
+touching every config file's contents.
 
 ## Services
 
