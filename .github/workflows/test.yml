@@ -9,8 +9,8 @@ on:
 
   # on git push
   push:
-    branches:
-      - dev
+    branches-ignore:
+      - main
 
 # Only one run per branch at a time
 concurrency:
