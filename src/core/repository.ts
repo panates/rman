@@ -1,8 +1,8 @@
 import glob from 'fast-glob';
 import fs from 'fs';
-import * as yaml from 'js-yaml';
 import path from 'path';
-import merge from 'putil-merge';
+import { GitHelper } from '../utils/git.js';
+import { resolveConfig } from './config.js';
 import { Package } from './package.js';
 
 export class Repository extends Package {
@@ -10,23 +10,93 @@ export class Repository extends Package {
 
   protected constructor(
     readonly dirname: string,
-    readonly config: any,
     readonly monorepo: boolean,
     readonly packages: Package[],
+    /** The directory `Repository.create()` was actually invoked from - unlike `dirname` (the
+     *  resolved repository root, possibly several levels up), this is where the user's shell
+     *  really was. Used by `currentPackage` to scope commands to "the package I'm standing in". */
+    readonly cwd: string = dirname,
   ) {
     super(dirname);
     this.rootPackage = new Package(dirname);
     if (!monorepo) this.packages = [this.rootPackage];
+    this._resolveConfigs();
+    this._updateDependencies();
+  }
+
+  /**
+   * The package whose own directory contains `cwd` (the deepest match, so a package nested
+   * inside another's directory resolves to the innermost one) - or `undefined` when `cwd` *is*
+   * the repository root itself, or isn't inside any known package (e.g. a non-monorepo checkout,
+   * or a stray directory the workspace glob doesn't cover).
+   */
+  get currentPackage(): Package | undefined {
+    if (path.resolve(this.cwd) === path.resolve(this.dirname)) return undefined;
+    let best: Package | undefined;
+    for (const pkg of this.packages) {
+      const rel = path.relative(pkg.dirname, this.cwd);
+      const isSelfOrDescendant = rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+      if (isSelfOrDescendant && (!best || pkg.dirname.length > best.dirname.length)) best = pkg;
+    }
+    return best;
   }
 
   getPackages(options?: { scope?: string | string[]; toposort?: boolean }): Package[] {
-    const result = [...this.packages];
+    let result = [...this.packages];
+    if (options?.scope) {
+      const scopes = Array.isArray(options.scope) ? options.scope : [options.scope];
+      result = result.filter(p => scopes.includes(p.name));
+    }
     if (options?.toposort) topoSortPackages(result);
     return result;
   }
 
   getPackage(name: string): Package | undefined {
     return this.packages.find(p => p.name === name);
+  }
+
+  /**
+   * Reports each package's git change status. `dirty` (uncommitted local
+   * changes) is always checked first, regardless of `hash` - a file can be
+   * dirty no matter what it's being compared against. Once a package isn't
+   * dirty, the reference point decides the rest: without `hash`, `committed`
+   * means committed but not yet in the upstream branch; with `hash`, `changed`
+   * means it differs from that commit. Otherwise a package is `clean`.
+   */
+  async listStatus(options?: { hash?: string }): Promise<Record<string, Repository.PackageStatus>> {
+    const hash = options?.hash;
+    const git = new GitHelper({ cwd: this.dirname });
+    const packages = this.getPackages();
+    const belongsTo = (p: Package, files: string[]) => files.some(f => !path.relative(p.dirname, f).startsWith('..'));
+
+    const [dirtyFiles, referenceFiles] = await Promise.all([
+      git.listDirtyFiles({ absolute: true }),
+      hash ? git.listChangedSince(hash, { absolute: true }) : git.listCommittedFiles({ absolute: true }),
+    ]);
+
+    const result: Record<string, Repository.PackageStatus> = {};
+    for (const p of packages) {
+      if (belongsTo(p, dirtyFiles)) result[p.name] = 'dirty';
+      else if (belongsTo(p, referenceFiles)) result[p.name] = hash ? 'changed' : 'committed';
+      else result[p.name] = 'clean';
+    }
+    return result;
+  }
+
+  /**
+   * Resolves the effective rman config for the repository root and every
+   * package, cascading root -> intermediate directories -> package directory,
+   * so a `.rmanrc` placed anywhere along that path overrides the levels above it.
+   */
+  protected _resolveConfigs(): void {
+    const cache = new Map<string, any>();
+    const rootConfig = resolveConfig(this.dirname, this.dirname, cache);
+    this.config = rootConfig;
+    this.rootPackage.config = rootConfig;
+    for (const pkg of this.packages) {
+      if (pkg === this.rootPackage) continue;
+      pkg.config = resolveConfig(this.dirname, pkg.dirname, cache);
+    }
   }
 
   protected _updateDependencies() {
@@ -38,7 +108,7 @@ export class Repository extends Package {
         ...pkg.json.peerDependencies,
         ...pkg.json.optionalDependencies,
       };
-      const configDeps = this.config.packages?.[pkg.name]?.dependencies;
+      const configDeps = pkg.config.packages?.[pkg.name]?.dependencies;
       if (configDeps) {
         if (Array.isArray(configDeps)) configDeps.forEach(x => (o[x] = o[x] || '*'));
         else Object.assign(o, configDeps);
@@ -57,13 +127,14 @@ export class Repository extends Package {
       if (circularCheck.includes(pkg.name)) return;
       circularCheck.push(pkg.name);
       for (const s of pkg.dependencies) {
-        if (!target.includes(s)) {
-          target.push(s);
-          const p = this.getPackage(s);
-          if (p) {
-            deepFindDependencies(p, target);
-          }
-        }
+        /** `target` starts out *as* the top-level package's own `dependencies` array, so its
+         *  direct entries are trivially "already in target" - recursing only when newly-added
+         *  would mean a direct dependency's own transitive deps never get pulled in. Recurse
+         *  unconditionally (guarded by circularCheck); only skip re-adding an existing entry,
+         *  and never let the top-level package end up depending on itself via a cycle. */
+        if (s !== circularCheck[0] && !target.includes(s)) target.push(s);
+        const p = this.getPackage(s);
+        if (p) deepFindDependencies(p, target);
       }
     };
 
@@ -83,21 +154,14 @@ export class Repository extends Package {
         const pkgJson = JSON.parse(fs.readFileSync(f, 'utf-8'));
         if (Array.isArray(pkgJson.workspaces)) {
           const packages = this._resolvePackages(pkgDirname, pkgJson.workspaces);
-          const config = this._readConfig(pkgDirname);
-          const repo = new Repository(pkgDirname, config, true, packages);
-          repo._updateDependencies();
-          return repo;
+          return new Repository(pkgDirname, true, packages, dirname);
         }
         /** If we reach to the root of the project */
         if (fs.existsSync(path.join(pkgDirname, '.git'))) break;
       }
       pkgDirname = path.resolve(pkgDirname, '..');
     }
-    const config = this._readConfig(dirname);
-    const repo = new Repository(dirname, config, false, []);
-    repo._updateDependencies();
-    return repo;
-    // throw new Error('No monorepo project detected');
+    return new Repository(dirname, false, [], dirname);
   }
 
   protected static _resolvePackages(dirname: string, patterns: string[]): Package[] {
@@ -116,27 +180,10 @@ export class Repository extends Package {
     }
     return packages;
   }
+}
 
-  protected static _readConfig(dirname: string): any {
-    const result = {};
-    const f = path.resolve(dirname, 'package.json');
-    let pkgJson;
-    if (fs.existsSync(f)) {
-      pkgJson = JSON.parse(fs.readFileSync(f, 'utf-8'));
-    }
-    if (pkgJson && typeof pkgJson.rman === 'object') merge(result, pkgJson.rman, { deep: true });
-    let filename = path.resolve(dirname, '.rman.yml');
-    if (fs.existsSync(filename)) {
-      const obj = yaml.load(fs.readFileSync(filename, 'utf-8'));
-      if (obj && typeof obj === 'object') merge(result, obj, { deep: true });
-    }
-    filename = path.resolve(dirname, '.rmanrc');
-    if (fs.existsSync(filename)) {
-      const obj = JSON.parse(fs.readFileSync(filename, 'utf-8'));
-      if (obj && typeof obj === 'object') merge(result, obj, { deep: true });
-    }
-    return result;
-  }
+export namespace Repository {
+  export type PackageStatus = 'dirty' | 'committed' | 'changed' | 'clean';
 }
 
 function topoSortPackages(packages: Package[]): void {
