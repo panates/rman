@@ -4,6 +4,8 @@ import path from 'path';
 export class Package {
   private _json: any;
   dependencies: string[] = [];
+  /** Effective rman config for this package, cascaded from the repository root. */
+  config: any = {};
 
   constructor(readonly dirname: string) {
     this.reloadJson();

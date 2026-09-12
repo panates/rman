@@ -1,0 +1,330 @@
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import expect from 'expect';
+import { Repository } from '../../src/core/repository.js';
+
+function mkTmp(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-repository-test-'));
+}
+
+function writeJson(dir: string, rel: string, data: unknown) {
+  fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+  fs.writeFileSync(path.join(dir, rel), JSON.stringify(data));
+}
+
+describe('core/Repository', () => {
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+  function tmp(): string {
+    const d = mkTmp();
+    dirs.push(d);
+    return d;
+  }
+
+  describe('create()', () => {
+    it('detects a monorepo from a "workspaces" field and discovers its packages', () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+
+      const repo = Repository.create(dir);
+      expect(repo.monorepo).toBe(true);
+      expect(
+        repo
+          .getPackages()
+          .map(p => p.name)
+          .sort(),
+      ).toEqual(['pkg-a', 'pkg-b']);
+    });
+
+    it('treats a directory with no "workspaces" field as a single package', () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'solo', version: '1.0.0' });
+
+      const repo = Repository.create(dir);
+      expect(repo.monorepo).toBe(false);
+      expect(repo.getPackages().map(p => p.name)).toEqual(['solo']);
+      expect(repo.rootPackage.name).toBe('solo');
+    });
+
+    it('walks upward from a nested cwd to find the workspace root', () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      const nested = path.join(dir, 'packages', 'a', 'src', 'deep');
+      fs.mkdirSync(nested, { recursive: true });
+
+      const repo = Repository.create(nested);
+      expect(repo.dirname).toBe(dir);
+      expect(repo.monorepo).toBe(true);
+    });
+
+    it('stops walking upward at a ".git" boundary that has no "workspaces"', () => {
+      const dir = tmp();
+      fs.mkdirSync(path.join(dir, '.git'));
+      writeJson(dir, 'package.json', { name: 'root', version: '1.0.0' });
+      const nested = path.join(dir, 'nested');
+      fs.mkdirSync(nested, { recursive: true });
+      writeJson(nested, 'package.json', { name: 'nested', version: '1.0.0' });
+
+      const repo = Repository.create(nested);
+      expect(repo.monorepo).toBe(false);
+      expect(repo.rootPackage.name).toBe('nested');
+    });
+  });
+
+  describe('getPackages() / getPackage()', () => {
+    function fixtureRepo(): Repository {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        dependencies: { 'pkg-a': '1.0.0' },
+      });
+      writeJson(dir, 'packages/c/package.json', {
+        name: 'pkg-c',
+        version: '1.0.0',
+        dependencies: { 'pkg-b': '1.0.0' },
+      });
+      return Repository.create(dir);
+    }
+
+    it('getPackage() finds a package by name, or returns undefined', () => {
+      const repo = fixtureRepo();
+      expect(repo.getPackage('pkg-b')?.name).toBe('pkg-b');
+      expect(repo.getPackage('does-not-exist')).toBeUndefined();
+    });
+
+    it('getPackages({toposort:true}) orders dependencies before their dependents', () => {
+      const repo = fixtureRepo();
+      const order = repo.getPackages({ toposort: true }).map(p => p.name);
+      expect(order.indexOf('pkg-a')).toBeLessThan(order.indexOf('pkg-b'));
+      expect(order.indexOf('pkg-b')).toBeLessThan(order.indexOf('pkg-c'));
+    });
+
+    it('getPackages({scope}) filters to just the named package(s)', () => {
+      const repo = fixtureRepo();
+      expect(repo.getPackages({ scope: 'pkg-b' }).map(p => p.name)).toEqual(['pkg-b']);
+      expect(
+        repo
+          .getPackages({ scope: ['pkg-a', 'pkg-c'] })
+          .map(p => p.name)
+          .sort(),
+      ).toEqual(['pkg-a', 'pkg-c']);
+      expect(repo.getPackages({ scope: 'does-not-exist' })).toEqual([]);
+    });
+  });
+
+  describe('currentPackage', () => {
+    function fixtureDir(): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      return dir;
+    }
+
+    it('is undefined when the repository was created from its own root', () => {
+      const dir = fixtureDir();
+      expect(Repository.create(dir).currentPackage).toBeUndefined();
+    });
+
+    it('resolves to the package whose directory the repository was created from', () => {
+      const dir = fixtureDir();
+      const repo = Repository.create(path.join(dir, 'packages/a'));
+      expect(repo.currentPackage?.name).toBe('pkg-a');
+    });
+
+    it('resolves to the owning package even from a directory nested deep inside it', () => {
+      const dir = fixtureDir();
+      const nested = path.join(dir, 'packages/a', 'src', 'deep');
+      fs.mkdirSync(nested, { recursive: true });
+      const repo = Repository.create(nested);
+      expect(repo.currentPackage?.name).toBe('pkg-a');
+    });
+
+    it('is undefined for a non-monorepo (a single-package repository is always "at the root")', () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'solo', version: '1.0.0' });
+      expect(Repository.create(dir).currentPackage).toBeUndefined();
+    });
+  });
+
+  describe('dependency resolution', () => {
+    it('populates .dependencies from dependencies/devDependencies/peerDependencies/optionalDependencies, limited to in-repo packages', () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        dependencies: { 'pkg-a': '1.0.0', lodash: '^4.0.0' },
+        devDependencies: { 'pkg-nonexistent': '1.0.0' },
+      });
+      const repo = Repository.create(dir);
+      // lodash and pkg-nonexistent aren't workspace packages, so they're excluded.
+      expect(repo.getPackage('pkg-b')?.dependencies).toEqual(['pkg-a']);
+    });
+
+    it('resolves transitive dependencies (a depends on b depends on c => a lists both)', () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        dependencies: { 'pkg-b': '1.0.0' },
+      });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        dependencies: { 'pkg-c': '1.0.0' },
+      });
+      writeJson(dir, 'packages/c/package.json', { name: 'pkg-c', version: '1.0.0' });
+
+      const repo = Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.dependencies.sort()).toEqual(['pkg-b', 'pkg-c']);
+    });
+
+    it('does not loop forever on a 2-cycle, and a package never ends up depending on itself', () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        dependencies: { 'pkg-b': '1.0.0' },
+      });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        dependencies: { 'pkg-a': '1.0.0' },
+      });
+
+      const repo = Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.dependencies).toEqual(['pkg-b']);
+      expect(repo.getPackage('pkg-b')?.dependencies).toEqual(['pkg-a']);
+    });
+
+    it('does not loop forever on a 3-cycle either, and still excludes self from each package', () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        dependencies: { 'pkg-b': '1.0.0' },
+      });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        dependencies: { 'pkg-c': '1.0.0' },
+      });
+      writeJson(dir, 'packages/c/package.json', {
+        name: 'pkg-c',
+        version: '1.0.0',
+        dependencies: { 'pkg-a': '1.0.0' },
+      });
+
+      const repo = Repository.create(dir);
+      // each package transitively reaches the other two, but never itself.
+      expect(repo.getPackage('pkg-a')?.dependencies.sort()).toEqual(['pkg-b', 'pkg-c']);
+      expect(repo.getPackage('pkg-b')?.dependencies.sort()).toEqual(['pkg-a', 'pkg-c']);
+      expect(repo.getPackage('pkg-c')?.dependencies.sort()).toEqual(['pkg-a', 'pkg-b']);
+    });
+
+    it('adds extra dependencies declared via .rmanrc packages.<name>.dependencies', () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ packages: { 'pkg-b': { dependencies: ['pkg-a'] } } }),
+      );
+
+      const repo = Repository.create(dir);
+      expect(repo.getPackage('pkg-b')?.dependencies).toEqual(['pkg-a']);
+    });
+  });
+
+  describe('config cascading (pkg.config)', () => {
+    it('every package inherits the root config, overridable by its own .rmanrc', () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ foo: 'root', bar: 'root' }));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      fs.writeFileSync(path.join(dir, 'packages/b/.rmanrc'), JSON.stringify({ bar: 'b-own' }));
+
+      const repo = Repository.create(dir);
+      expect(repo.config).toEqual({ foo: 'root', bar: 'root' });
+      expect(repo.getPackage('pkg-a')?.config).toEqual({ foo: 'root', bar: 'root' });
+      expect(repo.getPackage('pkg-b')?.config).toEqual({ foo: 'root', bar: 'b-own' });
+    });
+  });
+
+  describe('listStatus()', () => {
+    let dir: string;
+    let originDir: string;
+    let repo: Repository;
+    let baseHash: string;
+
+    const git = (...args: string[]): string => execFileSync('git', args, { cwd: dir, stdio: 'pipe' }).toString().trim();
+
+    before(() => {
+      dir = tmp();
+      originDir = tmp();
+      fs.rmSync(originDir, { recursive: true, force: true });
+      execFileSync('git', ['init', '-q', '--bare', originDir]);
+
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/untouched/package.json', { name: 'untouched', version: '1.0.0' });
+      writeJson(dir, 'packages/committed/package.json', { name: 'committed', version: '1.0.0' });
+      writeJson(dir, 'packages/dirty/package.json', { name: 'dirty', version: '1.0.0' });
+
+      git('init', '-q');
+      git('config', 'user.email', 't@t.com');
+      git('config', 'user.name', 't');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'init');
+      baseHash = git('rev-parse', 'HEAD');
+
+      git('remote', 'add', 'origin', originDir);
+      git('branch', '-M', 'main');
+      git('push', '-u', 'origin', 'main', '-q');
+
+      fs.writeFileSync(path.join(dir, 'packages/committed/file.txt'), 'v2');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'change committed pkg');
+
+      fs.writeFileSync(path.join(dir, 'packages/dirty/file.txt'), 'uncommitted');
+
+      repo = Repository.create(dir);
+    });
+
+    it('reports dirty/committed/clean relative to upstream when no hash is given', async () => {
+      const status = await repo.listStatus();
+      expect(status.dirty).toBe('dirty');
+      expect(status.committed).toBe('committed');
+      expect(status.untouched).toBe('clean');
+    });
+
+    it('dirty always takes priority over committed', async () => {
+      // the "committed" package has no working-tree changes, so it should never show as dirty.
+      const status = await repo.listStatus();
+      expect(status.committed).not.toBe('dirty');
+    });
+
+    it('with a hash, resolves to changed/clean instead of dirty/committed - except dirty still wins', async () => {
+      const status = await repo.listStatus({ hash: baseHash });
+      expect(status.committed).toBe('changed');
+      expect(status.untouched).toBe('clean');
+      expect(status.dirty).toBe('dirty');
+    });
+  });
+});
