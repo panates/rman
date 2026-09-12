@@ -30,6 +30,13 @@ export namespace VersionService {
     /** A package with uncommitted local changes is excluded from bumping (status `'skip'`)
      *  instead of aborting the whole plan (status `'error'`). Default false. */
     ignoreDirty?: boolean;
+    /** Makes every computed bump a prerelease (`1.2.3` -> `1.3.0-beta.0` for a `minor`, say)
+     *  tagged with this identifier, instead of a normal release - same idea as `npm version
+     *  <type> --preid <name>`. A group already sitting on a matching prerelease (same identifier)
+     *  just has its prerelease counter incremented instead of jumping to a new base version - see
+     *  `incVersion`. Has no effect when `bump` is an explicit semver version rather than a keyword
+     *  (there's no severity left to "pre-fix" at that point). */
+    preid?: string;
   }
 
   export interface ApplyOptions {
@@ -150,10 +157,10 @@ export namespace VersionService {
     }
 
     for (const [key, members] of groups) {
-      computeGroupPlan(key, members, changeByPackage, explicitVersion, entries);
+      computeGroupPlan(key, members, changeByPackage, explicitVersion, options.preid, entries);
     }
 
-    rippleCrossGroup(packages, entries);
+    rippleCrossGroup(packages, entries, options.preid);
 
     const result = packages.map(pkg => entries.get(pkg.name)!);
     if (repository.monorepo) result.push(buildRootEntry(repository, result));
@@ -310,6 +317,22 @@ function maxVersion(versions: string[]): string {
 }
 
 /**
+ * `semver.inc`, "pre-ified" when `preid` is given: `current` already sitting on a prerelease with
+ * that *same* identifier just has its prerelease counter incremented (`'prerelease'`, e.g.
+ * `1.2.3-beta.0` -> `1.2.3-beta.1`) rather than jumping to a new base version every time this
+ * runs again during the same beta/rc cycle; anything else (a plain release, or a prerelease under
+ * a *different* identifier - switching from `beta` to `rc`, say) starts a fresh prerelease of
+ * `severity`'s own type (`'prepatch'`/`'preminor'`/`'premajor'`, e.g. `1.2.3` -> `1.3.0-beta.0`
+ * for a `minor`). Without `preid`, this is just `semver.inc(current, severity)`.
+ */
+function incVersion(current: string, severity: VersionService.BumpKeyword, preid: string | undefined): string {
+  if (!preid) return semver.inc(current, severity) ?? current;
+  const existing = semver.prerelease(current);
+  const releaseType = existing && String(existing[0]) === preid ? 'prerelease' : (`pre${severity}` as const);
+  return semver.inc(current, releaseType, preid) ?? current;
+}
+
+/**
  * Decides one group's new version and which of its members actually receive it, writing an
  * `Entry` per member into `entries`. `changeByPackage` holds each eligible package's own detected
  * severity (or `undefined` for one with no real commits since its last tag) - `undefined` here
@@ -320,6 +343,7 @@ function computeGroupPlan(
   members: Package[],
   changeByPackage: Map<string, { severity?: VersionService.BumpKeyword; reason: string }>,
   explicitVersion: string | undefined,
+  preid: string | undefined,
   entries: Map<string, VersionService.Entry>,
 ): void {
   const label = groupLabel(key);
@@ -341,7 +365,7 @@ function computeGroupPlan(
       const s = changeByPackage.get(m.name)!.severity!;
       return SEVERITY_RANK[s] > SEVERITY_RANK[worst] ? s : worst;
     }, 'patch');
-    to = semver.inc(current, severity) ?? current;
+    to = incVersion(current, severity, preid);
   }
 
   const bumping = new Set<Package>(changed);
@@ -387,7 +411,11 @@ function computeGroupPlan(
  * group, and so on; never touches a same-group dependent that a plain patch deliberately left
  * alone (see `computeGroupPlan`'s patch case).
  */
-function rippleCrossGroup(packages: Package[], entries: Map<string, VersionService.Entry>): void {
+function rippleCrossGroup(
+  packages: Package[],
+  entries: Map<string, VersionService.Entry>,
+  preid: string | undefined,
+): void {
   const worklist = [...entries.values()].filter(e => e.status === 'bump');
   while (worklist.length) {
     const source = worklist.shift()!;
@@ -404,7 +432,7 @@ function rippleCrossGroup(packages: Package[], entries: Map<string, VersionServi
       const next: VersionService.Entry = {
         ...entry,
         status: 'bump',
-        to: semver.inc(groupCeiling, 'patch') ?? groupCeiling,
+        to: incVersion(groupCeiling, 'patch', preid),
         reason: `depends on ${source.package.name}@${source.to}`,
       };
       entries.set(pkg.name, next);

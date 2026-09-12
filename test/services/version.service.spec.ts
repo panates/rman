@@ -245,6 +245,71 @@ describe('services/version', () => {
     });
   });
 
+  describe('--preid', () => {
+    it('starts a fresh prerelease line for a patch severity', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+      fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+      commitAll(dir, 'fix: a bug');
+
+      const repo = Repository.create(dir);
+      const plan = await VersionService.getPlan(repo, { preid: 'beta' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1-beta.0' });
+    });
+
+    it('starts a fresh prerelease line for an explicit minor/major severity too', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+
+      const repo = Repository.create(dir);
+      const plan = await VersionService.getPlan(repo, { bump: 'major', preid: 'beta' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0-beta.0' });
+    });
+
+    it('increments an existing prerelease with the same identifier instead of starting over', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.1-beta.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+      commitAll(dir, 'fix: a bug');
+
+      const repo = Repository.create(dir);
+      const plan = await VersionService.getPlan(repo, { preid: 'beta' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1-beta.1' });
+    });
+
+    it('switching to a different identifier starts a fresh prerelease instead of incrementing', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.1-beta.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+      commitAll(dir, 'fix: a bug');
+
+      const repo = Repository.create(dir);
+      const plan = await VersionService.getPlan(repo, { preid: 'rc' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.2-rc.0' });
+    });
+
+    it('has no effect when bump is an explicit semver version', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+
+      const repo = Repository.create(dir);
+      const plan = await VersionService.getPlan(repo, { bump: '9.9.9', preid: 'beta' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '9.9.9' });
+    });
+  });
+
   describe('group propagation (a monorepo with two same-group packages)', () => {
     function fixture(): string {
       const dir = tmp();

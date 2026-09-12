@@ -47,6 +47,13 @@ export function initCli(repository: Repository, program: Argv) {
             "Also write each bumped package's CHANGELOG.md (same as running changelog --write " +
             'separately) and fold it into the same commit as its version bump',
           type: 'boolean',
+        })
+        .option('preid', {
+          describe:
+            'Make the bump a prerelease with this identifier (e.g. "beta" -> 1.2.3-beta.0). ' +
+            'Running again with the same --preid increments it (-> 1.2.3-beta.1); a different ' +
+            'identifier starts a fresh prerelease line. Ignored when bump is an explicit semver version.',
+          type: 'string',
         }),
     handler: async args => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));
@@ -55,6 +62,7 @@ export function initCli(repository: Repository, program: Argv) {
         ...readPackageFilterOptions(args),
         bump,
         ignoreDirty: args.ignoreDirty as boolean | undefined,
+        preid: args.preid as string | undefined,
       });
       printPlan(plan);
 
