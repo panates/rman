@@ -29,3 +29,27 @@ export function parseConventionalCommit(subject: string): ParsedCommitSubject | 
   const [, type, , scope, breakingMark, description] = m;
   return { type: type.toLowerCase(), scope, breaking: !!breakingMark, description };
 }
+
+/** Whether a commit `body` carries a Conventional Commits `BREAKING CHANGE:` (or
+ *  `BREAKING-CHANGE:`) footer - the other, footer-based way to mark a breaking change, alongside
+ *  the inline `!` the subject line alone can carry (see `parseConventionalCommit`, whose own
+ *  `breaking` only ever reflects that marker, never a footer, since it only sees the subject). */
+export function hasBreakingChangeFooter(body: string): boolean {
+  return /^BREAKING[ -]CHANGE:/im.test(body);
+}
+
+/**
+ * A `Release-As: patch|minor|major` footer in a commit `body` - lets that one commit's own
+ * contribution to a detected bump severity be overridden by hand, regardless of what its subject
+ * line (or a `BREAKING CHANGE:` footer) would otherwise imply. The motivating case: a `feat:`
+ * commit that needs to ship right now as a patch, without waiting for the rest of a minor's worth
+ * of work to land - `Release-As: patch` on just that commit ships it alone, at patch severity,
+ * while a later genuine `feat:` (with no override) still correctly triggers a minor of its own.
+ * Case-insensitive; the last match wins if a body somehow has more than one, matching how multiple
+ * git trailers of the same key are conventionally read (later overrides earlier).
+ */
+export function parseReleaseAs(body: string): 'patch' | 'minor' | 'major' | undefined {
+  const matches = [...body.matchAll(/^release-as:\s*(patch|minor|major)\s*$/gim)];
+  const last = matches.at(-1);
+  return last ? (last[1].toLowerCase() as 'patch' | 'minor' | 'major') : undefined;
+}

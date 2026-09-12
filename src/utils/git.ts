@@ -9,6 +9,9 @@ export interface GitOptions {
 export interface CommitInfo {
   sha: string;
   subject: string;
+  /** Everything after the subject line (blank line included) - where Conventional Commits'
+   *  footers/trailers live (`BREAKING CHANGE:`, `Release-As:`, ...) - see `conventional-commits.ts`. */
+  body: string;
   /** Absolute paths of every file this commit touched. */
   files: string[];
 }
@@ -18,6 +21,18 @@ export class GitHelper {
 
   constructor(options?: GitOptions) {
     this.cwd = options?.cwd || process.cwd();
+  }
+
+  /** The current branch name, or `undefined` in detached HEAD state (or outside a git repository) -
+   *  what `branch-guard.ts` checks `allowBranch`/`ignoreBranch` against. */
+  async currentBranch(): Promise<string | undefined> {
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: this.cwd });
+      const branch = stdout.trim();
+      return branch && branch !== 'HEAD' ? branch : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Files with uncommitted local changes (working tree + index). */
@@ -116,14 +131,22 @@ export class GitHelper {
   private async _commitInfoFor(shas: string[]): Promise<CommitInfo[]> {
     const commits: CommitInfo[] = [];
     for (const sha of shas) {
-      const { stdout: subject } = await execFileAsync('git', ['show', sha, '--no-patch', '--format=%s'], {
+      // subject and body in one call (NUL-separated, since a commit message itself never
+      // contains one) - halves the process-spawns per commit compared to two separate `git show`s.
+      const { stdout: header } = await execFileAsync('git', ['show', sha, '--no-patch', '--format=%s%x00%b'], {
         cwd: this.cwd,
       });
+      const [subject = '', body = ''] = header.split('\0');
       const { stdout: filesOut } = await execFileAsync('git', ['show', sha, '--name-only', '--pretty=format:'], {
         cwd: this.cwd,
       });
       const files = filesOut.trim() ? filesOut.trim().split(/\r?\n/) : [];
-      commits.push({ sha, subject: subject.trim(), files: files.map(f => path.join(this.cwd, f)) });
+      commits.push({
+        sha,
+        subject: subject.trim(),
+        body: body.trim(),
+        files: files.map(f => path.join(this.cwd, f)),
+      });
     }
     return commits;
   }

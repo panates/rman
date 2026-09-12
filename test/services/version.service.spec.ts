@@ -89,6 +89,75 @@ describe('services/version', () => {
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0' });
     });
 
+    it('a "BREAKING CHANGE:" footer implies major, same as an inline "!" marker', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+      fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+      commitAll(dir, 'feat: a feature\n\nBREAKING CHANGE: drops the old API entirely');
+
+      const repo = Repository.create(dir);
+      const plan = await VersionService.getPlan(repo);
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0' });
+    });
+
+    describe('"Release-As: <severity>" footer override', () => {
+      it('lets a "feat:" commit ship as a patch instead of triggering a minor', async () => {
+        const dir = tmp();
+        writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+        initGit(dir);
+        commitAll(dir, 'init');
+        fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+        commitAll(dir, 'feat: needs to ship now, not wait for the rest of the minor\n\nRelease-As: patch');
+
+        const repo = Repository.create(dir);
+        const plan = await VersionService.getPlan(repo);
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
+      });
+
+      it("doesn't suppress a genuine later feat without an override in the same range", async () => {
+        const dir = tmp();
+        writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+        initGit(dir);
+        commitAll(dir, 'init');
+        fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+        commitAll(dir, 'feat: ship now\n\nRelease-As: patch');
+        fs.writeFileSync(path.join(dir, 'y.txt'), 'y');
+        commitAll(dir, 'feat: a real, un-overridden feature');
+
+        const repo = Repository.create(dir);
+        const plan = await VersionService.getPlan(repo);
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.1.0' });
+      });
+
+      it('can also escalate a plain "fix:" up to major', async () => {
+        const dir = tmp();
+        writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+        initGit(dir);
+        commitAll(dir, 'init');
+        fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+        commitAll(dir, 'fix: actually a breaking fix\n\nRelease-As: major');
+
+        const repo = Repository.create(dir);
+        const plan = await VersionService.getPlan(repo);
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0' });
+      });
+
+      it('is case-insensitive', async () => {
+        const dir = tmp();
+        writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+        initGit(dir);
+        commitAll(dir, 'init');
+        fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+        commitAll(dir, 'feat: ship now\n\nrelease-as: PATCH');
+
+        const repo = Repository.create(dir);
+        const plan = await VersionService.getPlan(repo);
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
+      });
+    });
+
     it('a non-conventional commit still defaults to patch (something changed)', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });

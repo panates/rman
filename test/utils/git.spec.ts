@@ -210,6 +210,28 @@ describe('utils/GitHelper', () => {
       expect(commits.map(c => c.subject)).toEqual(['chore: bump a']);
     });
 
+    it('captures the full body (footers/trailers included) alongside the subject', async () => {
+      const dir = tmp();
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      fs.writeFileSync(path.join(dir, 'a.txt'), 'v1');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'init');
+      const baseHash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
+
+      fs.writeFileSync(path.join(dir, 'a.txt'), 'v2');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: a feature\n\nSome explanation.\n\nRelease-As: patch');
+
+      const git = new GitHelper({ cwd: dir });
+      const commits = await git.listCommits({ hash: baseHash });
+      expect(commits[0].subject).toBe('feat: a feature');
+      expect(commits[0].body).toContain('Some explanation.');
+      expect(commits[0].body).toContain('Release-As: patch');
+    });
+
     it('throws a clear error for an invalid hash instead of silently returning []', async () => {
       const dir = tmp();
       execFileSync('git', ['init', '-q'], { cwd: dir });

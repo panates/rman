@@ -3,7 +3,12 @@ import semver from 'semver';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import { findLatestTag, tagPattern } from '../utils/change-hash.js';
-import { parseConventionalCommit, VERSION_BUMP_PATTERN } from '../utils/conventional-commits.js';
+import {
+  hasBreakingChangeFooter,
+  parseConventionalCommit,
+  parseReleaseAs,
+  VERSION_BUMP_PATTERN,
+} from '../utils/conventional-commits.js';
 import { exec } from '../utils/exec.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
@@ -275,16 +280,27 @@ function groupLabel(key: string): string {
   return key;
 }
 
-/** Highest bump type implied by `commits`' subjects: any `!` breaking marker wins outright;
- *  otherwise `feat` implies minor; anything else (a `fix`, an unrecognized type, a non-conventional
- *  message) defaults to patch - something changed, so at least a patch release is warranted. */
+/**
+ * Highest bump type implied by `commits`: a `Release-As: patch|minor|major` footer (see
+ * `parseReleaseAs`) replaces what that one commit's own subject/footers would otherwise imply,
+ * entirely - the escape hatch for e.g. a `feat:` that needs to ship as a patch right now, without
+ * waiting for the rest of a minor's worth of work. Absent that, a `!` marker or a `BREAKING
+ * CHANGE:` footer wins outright; otherwise `feat` implies minor; anything else (a `fix`, an
+ * unrecognized type, a non-conventional message) defaults to patch - something changed, so at
+ * least a patch release is warranted.
+ */
 function detectSeverity(commits: CommitInfo[]): VersionService.BumpKeyword {
   let severity: VersionService.BumpKeyword = 'patch';
   for (const c of commits) {
+    const override = parseReleaseAs(c.body);
+    if (override === 'major') return 'major';
+    if (override) {
+      if (SEVERITY_RANK[override] > SEVERITY_RANK[severity]) severity = override;
+      continue;
+    }
     const parsed = parseConventionalCommit(c.subject);
-    if (!parsed) continue;
-    if (parsed.breaking) return 'major';
-    if (parsed.type === 'feat') severity = 'minor';
+    if (parsed?.breaking || hasBreakingChangeFooter(c.body)) return 'major';
+    if (parsed?.type === 'feat') severity = 'minor';
   }
   return severity;
 }
