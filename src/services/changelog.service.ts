@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
-import { detectChangeHash, extractVersion, tagPattern } from '../utils/change-hash.js';
+import { detectChangeHash, extractVersion, findLatestTag, tagPattern } from '../utils/change-hash.js';
+import { parseConventionalCommit, VERSION_BUMP_PATTERN } from '../utils/conventional-commits.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 
 export namespace ChangelogService {
@@ -177,17 +178,6 @@ export namespace ChangelogService {
   }
 }
 
-/** `type(scope): description`, optionally with a `!` breaking-change marker - Conventional
- *  Commits' subject-line shape. Anything that doesn't match falls into "Other Changes" as-is. */
-const CONVENTIONAL_PATTERN = /^(\w+)(\(([^)]+)\))?!?:\s*(.+)$/;
-
-/** A bare version-bump commit (`"6.0.1"`, `"v2.3.0-beta.1"`, ...) - many release tools commit the
- *  version bump itself with just the new version number as the message. That's a release marker,
- *  not a change worth describing, so these are dropped before they'd otherwise land in "Other
- *  Changes" as meaningless noise (or, if a package's only commits were these, an empty-looking
- *  entry for it at all). */
-const VERSION_BUMP_PATTERN = /^v?\d+\.\d+\.\d+(?:[-+][\w.]+)?$/;
-
 interface GroupedCommits {
   features: string[];
   fixes: string[];
@@ -207,13 +197,13 @@ function groupCommits(subjects: string[], ignoreTypes: Set<string> = new Set()):
   const grouped: GroupedCommits = { features: [], fixes: [], other: [] };
   for (const subject of subjects) {
     if (VERSION_BUMP_PATTERN.test(subject)) continue;
-    const m = CONVENTIONAL_PATTERN.exec(subject);
-    if (!m) {
+    const parsed = parseConventionalCommit(subject);
+    if (!parsed) {
       grouped.other.push(subject);
       continue;
     }
-    const [, type, , scope, description] = m;
-    if (ignoreTypes.has(type.toLowerCase())) continue;
+    const { type, scope, description } = parsed;
+    if (ignoreTypes.has(type)) continue;
     const line = scope ? `**${scope}:** ${description}` : description;
     if (type === 'feat') grouped.features.push(line);
     else if (type === 'fix') grouped.fixes.push(line);
@@ -268,16 +258,12 @@ function resolveFilePath(pkg: Package, optionsFilePath?: string): string {
 
 /**
  * This package's current version, from git tags rather than its (possibly stale - see the
- * `{{version}}` doc on `Changelog.getEntries`) package.json. A `{name}`-bearing pattern looks up that
- * package's *own* tags directly (newest by version sort); a repo-wide pattern instead finds the
- * nearest tag HEAD actually descends from, since no single package "owns" that tag. Falls back to
- * package.json's version if no matching tag exists at all (never tagged, or a fresh package).
+ * `{{version}}` doc on `Changelog.getEntries`) package.json. Falls back to package.json's version
+ * if no matching tag exists at all (never tagged, or a fresh package) - see `findLatestTag`.
  */
 async function resolveVersion(git: GitHelper, pkg: Package): Promise<string> {
-  const pattern = tagPattern(pkg);
-  const expanded = pattern.replace('{name}', pkg.name);
-  const tag = pattern.includes('{name}') ? (await git.listTags(expanded))[0] : await git.describeTag(expanded);
-  return tag ? extractVersion(tag, expanded) : pkg.version || '';
+  const tag = await findLatestTag(git, pkg);
+  return tag ? extractVersion(tag, tagPattern(pkg).replace('{name}', pkg.name)) : pkg.version || '';
 }
 
 /** The most specific package whose directory contains `file` - the repository root itself as the

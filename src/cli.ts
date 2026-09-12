@@ -12,6 +12,7 @@ import * as infoCommand from './commands/info.command.js';
 import * as listCommand from './commands/list.command.js';
 import * as runCommand from './commands/run.command.js';
 import * as testCommand from './commands/test.command.js';
+import * as versionCommand from './commands/version.command.js';
 import { version } from './constants.js';
 import { Repository } from './core/repository.js';
 import { LOG_LEVELS } from './utils/logger.js';
@@ -55,6 +56,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     cleanCommand.initCli(repository, program);
     changelogCommand.initCli(repository, program);
     testCommand.initCli(repository, program);
+    versionCommand.initCli(repository, program);
 
     program.demandCommand(1).strict().completion();
 

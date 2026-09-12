@@ -13,6 +13,18 @@ export function tagPattern(pkg: Package): string {
   return typeof cfg?.tagPattern === 'string' && cfg.tagPattern ? cfg.tagPattern : DEFAULT_TAG_PATTERN;
 }
 
+/** This package's most recent release tag - the `{name}`-bearing pattern looks up that package's
+ *  *own* tags directly (newest by version sort); a repo-wide pattern instead finds the nearest tag
+ *  HEAD actually descends from, since no single package "owns" that tag. `undefined` if never
+ *  tagged at all (a fresh package, or one that's never been released). Shared by `changelog`
+ *  (reading the last-documented version) and `version` (finding the boundary a bump measures
+ *  "since"). */
+export async function findLatestTag(git: GitHelper, pkg: Package): Promise<string | undefined> {
+  const pattern = tagPattern(pkg);
+  const expanded = pattern.replace('{name}', pkg.name);
+  return pattern.includes('{name}') ? (await git.listTags(expanded))[0] : await git.describeTag(expanded);
+}
+
 /** Strips the pattern's literal prefix (everything before its first `*`) from `tag` to get just
  *  the version part - e.g. tag `@sqb/builder@1.2.3` against pattern `@sqb/builder@*` -> `1.2.3`.
  *  A pattern with no `*` is returned as its own "version" verbatim (an exact tag, nothing to strip). */

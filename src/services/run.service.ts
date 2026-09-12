@@ -51,8 +51,8 @@ export namespace RunService {
    *   run:
    *     build:
    *       script: tsc -b
-   *       pre: [node ./generate.js, node ./validate.js]
-   *       post: node ./copy-assets.js
+   *       preScript: [node ./generate.js, node ./validate.js]
+   *       postScript: node ./copy-assets.js
    *       override: true   # use these even if the package *does* define its own
    */
   export function getConfig(pkg: Package, script: string): Record<string, unknown> {
@@ -405,7 +405,7 @@ function printLegacyStepLine(
   );
 }
 
-/** A `run.<script>.script`/`.pre`/`.post` value: one command, or several to run in sequence. */
+/** A `run.<script>.script`/`.preScript`/`.postScript` value: one command, or several to run in sequence. */
 function normalizeScriptValue(value: unknown): string | undefined {
   if (typeof value === 'string') return value || undefined;
   if (Array.isArray(value)) {
@@ -419,11 +419,11 @@ function normalizeScriptValue(value: unknown): string | undefined {
 
 /**
  * Resolves a package's steps for `script`, including its own pre/post hooks (npm's own
- * convention) - `.rmanrc run.<script>.script`/`.pre`/`.post` (cascaded) can each supply a command
- * (or an array of them, run in sequence) to use when the package's own package.json has none for
- * that slot (`script`/`pre<script>`/`post<script>`), letting a package run a script it never
- * defined at all. `run.<script>.override` goes further: with it, the config's command replaces
- * the package's own for a slot even when the package *does* define one there.
+ * convention) - `.rmanrc run.<script>.script`/`.preScript`/`.postScript` (cascaded) can each supply
+ * a command (or an array of them, run in sequence) to use when the package's own package.json has
+ * none for that slot (`script`/`pre<script>`/`post<script>`), letting a package run a script it
+ * never defined at all. `run.<script>.override` goes further: with it, the config's command
+ * replaces the package's own for a slot even when the package *does* define one there.
  */
 function getScriptSteps(pkg: Package, script: string): ScriptStep[] {
   const cfg = RunService.getConfig(pkg, script);
@@ -435,8 +435,8 @@ function getScriptSteps(pkg: Package, script: string): ScriptStep[] {
     if (cfg.override === true || !hasOwn) json.scripts[key] = value;
   };
   applyConfigScript(script, cfg.script);
-  applyConfigScript('pre' + script, cfg.pre);
-  applyConfigScript('post' + script, cfg.post);
+  applyConfigScript('pre' + script, cfg.preScript);
+  applyConfigScript('post' + script, cfg.postScript);
   json.scripts[script] = json.scripts[script] || '#';
   const info = parseNpmScript(json, 'npm run ' + script);
   if (!info?.raw?.length) return [];

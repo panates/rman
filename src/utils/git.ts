@@ -95,7 +95,25 @@ export class GitHelper {
       }
       shas = Array.from(cherryOut.matchAll(/[a-f0-9]{7,40}/gi)).map(m => m[0]);
     }
+    return this._commitInfoFor(shas);
+  }
 
+  /** Every commit reachable from HEAD, oldest first - for a boundary-free "everything so far"
+   *  view (e.g. a package that's never been tagged/released at all, so there's no "since" ref to
+   *  measure from and `listCommits()`'s own no-hash fallback, upstream push status, doesn't apply -
+   *  a repo with no configured remote at all is common and shouldn't read as "nothing happened"). */
+  async listAllCommits(): Promise<CommitInfo[]> {
+    let stdout: string;
+    try {
+      ({ stdout } = await execFileAsync('git', ['log', '--reverse', '--format=%H'], { cwd: this.cwd }));
+    } catch {
+      return [];
+    }
+    const shas = stdout.trim() ? stdout.trim().split(/\r?\n/) : [];
+    return this._commitInfoFor(shas);
+  }
+
+  private async _commitInfoFor(shas: string[]): Promise<CommitInfo[]> {
     const commits: CommitInfo[] = [];
     for (const sha of shas) {
       const { stdout: subject } = await execFileAsync('git', ['show', sha, '--no-patch', '--format=%s'], {
@@ -166,6 +184,40 @@ export class GitHelper {
       return stdout.trim() || undefined;
     } catch {
       return undefined;
+    }
+  }
+
+  /** Stages and commits exactly `files` (relative to `cwd`, or absolute) with `message` - never a
+   *  blanket `git add -A`, so the commit only ever contains what the caller explicitly asked for. */
+  async commit(files: string[], message: string): Promise<void> {
+    try {
+      await execFileAsync('git', ['add', '--', ...files], { cwd: this.cwd });
+      await execFileAsync('git', ['commit', '-m', message], { cwd: this.cwd });
+    } catch (e: any) {
+      throw new Error(`Unable to commit ${files.join(', ')}: ${e.message}`, { cause: e });
+    }
+  }
+
+  /** Creates an annotated tag `name` pointing at HEAD, with `message` (defaults to `name`).
+   *  Throws if a tag with that name already exists - callers wanting idempotent tagging should
+   *  check `tagExists` first. */
+  async createTag(name: string, message?: string): Promise<void> {
+    try {
+      await execFileAsync('git', ['tag', '-a', name, '-m', message ?? name], { cwd: this.cwd });
+    } catch (e: any) {
+      throw new Error(`Unable to create tag "${name}": ${e.message}`, { cause: e });
+    }
+  }
+
+  /** Pushes the current branch to `remote` (default `"origin"`), and its tags too unless
+   *  `options.tags` is `false`. */
+  async push(options?: { remote?: string; tags?: boolean }): Promise<void> {
+    const remote = options?.remote ?? 'origin';
+    try {
+      await execFileAsync('git', ['push', remote], { cwd: this.cwd });
+      if (options?.tags !== false) await execFileAsync('git', ['push', remote, '--tags'], { cwd: this.cwd });
+    } catch (e: any) {
+      throw new Error(`Unable to push to "${remote}": ${e.message}`, { cause: e });
     }
   }
 }

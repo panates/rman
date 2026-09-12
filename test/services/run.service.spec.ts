@@ -290,13 +290,13 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('config-script-ran'))).toBe(true);
     });
 
-    it('run.<script>.pre/.post fill in for missing pre/post hooks around the package.json script', async () => {
+    it('run.<script>.preScript/.postScript fill in for missing pre/post hooks around the package.json script', async () => {
       const repo = fixture({
         'pkg-a': {
           scripts: { build: quiet('echo main-ran') },
           rmanrc: {
             run: {
-              build: { pre: quiet('echo pre-ran'), post: quiet('echo post-ran') },
+              build: { preScript: quiet('echo pre-ran'), postScript: quiet('echo post-ran') },
             },
           },
         },
@@ -311,7 +311,7 @@ describe('run: Run.runScript() integration', () => {
       const repo = fixture({
         'pkg-a': {
           scripts: { build: quiet('echo main-ran'), prebuild: quiet('echo own-pre-ran') },
-          rmanrc: { run: { build: { pre: quiet('echo config-pre-ran'), override: true } } },
+          rmanrc: { run: { build: { preScript: quiet('echo config-pre-ran'), override: true } } },
         },
       });
       const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
@@ -334,7 +334,7 @@ describe('run: Run.runScript() integration', () => {
         'pkg-a': {
           rmanrc: {
             run: {
-              build: { pre: [quiet('echo pre-1-ran'), quiet('echo pre-2-ran')], script: quiet('echo main-ran') },
+              build: { preScript: [quiet('echo pre-1-ran'), quiet('echo pre-2-ran')], script: quiet('echo main-ran') },
             },
           },
         },
@@ -353,7 +353,7 @@ describe('run: Run.runScript() integration', () => {
     it('an earlier failure in an array stops the later commands, same as "&&" in package.json', async () => {
       const repo = fixture({
         'pkg-a': {
-          rmanrc: { run: { build: { pre: ['exit 1', quiet('echo should-not-run')] } } },
+          rmanrc: { run: { build: { preScript: ['exit 1', quiet('echo should-not-run')] } } },
         },
       });
       const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false, bail: false }));

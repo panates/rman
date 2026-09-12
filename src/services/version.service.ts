@@ -1,0 +1,433 @@
+import path from 'node:path';
+import semver from 'semver';
+import type { Package } from '../core/package.js';
+import type { Repository } from '../core/repository.js';
+import { findLatestTag, tagPattern } from '../utils/change-hash.js';
+import { parseConventionalCommit, VERSION_BUMP_PATTERN } from '../utils/conventional-commits.js';
+import { exec } from '../utils/exec.js';
+import { type CommitInfo, GitHelper } from '../utils/git.js';
+
+export namespace VersionService {
+  export type BumpKeyword = 'patch' | 'minor' | 'major';
+
+  export function isBumpKeyword(value: unknown): value is BumpKeyword {
+    return value === 'patch' || value === 'minor' || value === 'major';
+  }
+
+  export interface Options {
+    /** A release-type keyword (applied as the severity for every group that has real changes) or
+     *  a concrete semver version (applied as the literal new version wherever something changed) -
+     *  either way, this replaces auto-detection entirely. Omit to auto-detect the severity per
+     *  group from conventional-commit subjects since each package's/group's last release tag. */
+    bump?: string;
+    /** A package with uncommitted local changes is excluded from bumping (status `'skip'`)
+     *  instead of aborting the whole plan (status `'error'`). Default false. */
+    ignoreDirty?: boolean;
+  }
+
+  export interface ApplyOptions {
+    /** Push the resulting commit(s) and tag(s) to the remote once applied. Default false - same
+     *  as a plain `npm version`, which never pushes on its own either. */
+    push?: boolean;
+  }
+
+  /** One package's outcome in a version plan - see `getPlan`. */
+  export interface Entry {
+    package: Package;
+    /** Internal group identity packages are batched by (not for display) - see `resolveGroupKey`. */
+    groupKey: string;
+    /** Human-readable group name: `'default'` for the implicit repo-wide group, the configured
+     *  name for a named `group`, or the package's own name when it isn't grouped with anyone. */
+    group: string;
+    status: 'bump' | 'skip' | 'error' | 'no-change';
+    from: string;
+    /** Only set when `status === 'bump'`. */
+    to?: string;
+    /** Human-readable explanation - e.g. why a package was skipped, or why it's being bumped
+     *  despite having no commits of its own (a dependency of it changed elsewhere). */
+    reason?: string;
+  }
+
+  /**
+   * Computes what a version bump *would* do, across every package `.rmanrc group` puts together -
+   * never writes anything (no package.json edits, no git commits/tags) and safe to call any time,
+   * including as the "preview" a bare `rman version` (no bump given) stops at.
+   *
+   * Packages are partitioned into groups by their resolved `group` value (cascaded): `true`
+   * (the default) puts every such package into one implicit repo-wide group; a string joins
+   * exactly the other packages sharing that same string, regardless of the repo's default; `false`
+   * makes a package its own solo group. Each group's "current version" is always the highest
+   * version currently found among its own members (never persisted anywhere) - see
+   * `resolveGroupKey`.
+   *
+   * Within a group, a member with real commits since its own last release tag (or an explicit
+   * `bump`) sets the group's severity to the highest found among changed members; the new version
+   * is that current version bumped by that severity. Which members actually receive it depends on
+   * the severity: **patch** only the changed member(s) (a caret dependency range already tolerates
+   * a patch bump, no republish needed downstream); **minor** also every transitive in-group
+   * dependent; **major** the entire group, changed or not - see `computeGroupPlan`.
+   *
+   * Across groups: a package depending on another group's bumped package always gets exactly a
+   * **patch** bump of its own (never inheriting the source's severity) - the dependency reference
+   * itself is the only thing that changed for it. This never re-triggers *its own* group's
+   * minor/major cascade (a patch never cascades), but can itself ripple into a third group, and so
+   * on, until nothing new is affected - see `rippleCrossGroup`.
+   *
+   * A monorepo's root package is never a real member of any group (it's never published on its
+   * own) - it gets one trailing informational entry instead, always `'bump'`ed to whatever single
+   * version every group ended up sharing, or the overall highest version when groups diverged.
+   */
+  export async function getPlan(repository: Repository, options: Options = {}): Promise<Entry[]> {
+    const bump = options.bump?.trim();
+    const explicitSeverity = bump && isBumpKeyword(bump) ? bump : undefined;
+    const explicitVersion = bump && !explicitSeverity ? (semver.valid(bump) ?? undefined) : undefined;
+    if (bump && !explicitSeverity && !explicitVersion) {
+      throw new Error(`Invalid "bump": "${bump}" (expected "patch", "minor", "major", or a valid semver version)`);
+    }
+
+    const git = new GitHelper({ cwd: repository.dirname });
+    const packages = repository.getPackages();
+
+    const dirtyFiles = await git.listDirtyFiles({ absolute: true });
+    const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
+
+    const entries = new Map<string, Entry>();
+    const eligible: Package[] = [];
+    for (const pkg of packages) {
+      if (isDirty(pkg)) {
+        entries.set(pkg.name, {
+          package: pkg,
+          groupKey: resolveGroupKey(pkg),
+          group: groupLabel(resolveGroupKey(pkg)),
+          status: options.ignoreDirty ? 'skip' : 'error',
+          from: pkg.version,
+          reason: 'uncommitted local changes',
+        });
+        continue;
+      }
+      eligible.push(pkg);
+    }
+
+    const changeByPackage = new Map<string, { severity?: BumpKeyword; reason: string }>();
+    await Promise.all(
+      eligible.map(async pkg => {
+        if (explicitVersion) {
+          changeByPackage.set(pkg.name, { severity: undefined, reason: `explicit version ${explicitVersion}` });
+          return;
+        }
+        const tag = await findLatestTag(git, pkg);
+        const commits = tag ? await git.listCommits({ hash: tag }) : await git.listAllCommits();
+        const belongsToPkg = (c: CommitInfo) => c.files.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
+        const real = commits.filter(c => belongsToPkg(c) && !VERSION_BUMP_PATTERN.test(c.subject));
+        if (!real.length) return;
+        changeByPackage.set(pkg.name, {
+          severity: explicitSeverity ?? detectSeverity(real),
+          reason: tag ? `changed since ${tag}` : 'unreleased commits',
+        });
+      }),
+    );
+
+    const groups = new Map<string, Package[]>();
+    for (const pkg of eligible) {
+      const key = resolveGroupKey(pkg);
+      const list = groups.get(key);
+      if (list) list.push(pkg);
+      else groups.set(key, [pkg]);
+    }
+
+    for (const [key, members] of groups) {
+      computeGroupPlan(key, members, changeByPackage, explicitVersion, entries);
+    }
+
+    rippleCrossGroup(packages, entries);
+
+    const result = packages.map(pkg => entries.get(pkg.name)!);
+    if (repository.monorepo) result.push(buildRootEntry(repository, result));
+    return result;
+  }
+
+  /**
+   * Same as `getPlan`, and additionally writes every `'bump'` entry's new version into its own
+   * `package.json` (and refreshes any other bumped package's dependency range on it), runs that
+   * package's `version.preScript`/`.script`/`.postScript` (or its own real `preversion`/`version`/
+   * `postversion` npm scripts) around the write, then commits and tags **once per group** - so
+   * independently-versioned groups each get their own clean commit/tag rather than one entangled
+   * commit spanning unrelated version lines. Pushes only when `options.push` is set - same as a
+   * plain `npm version`, this never reaches the network on its own otherwise.
+   */
+  export async function applyPlan(repository: Repository, plan: Entry[], options: ApplyOptions = {}): Promise<Entry[]> {
+    const git = new GitHelper({ cwd: repository.dirname });
+    // The root's own entry is only ever a real package to write/commit like any other when this
+    // *isn't* a monorepo (see `getPlan`) - in a monorepo it's the separate, purely informational
+    // entry handled below instead, since it's never published on its own.
+    const isRealEntry = (e: Entry) => !(repository.monorepo && e.package === repository.rootPackage);
+    const bumped = plan.filter(e => e.status === 'bump' && isRealEntry(e));
+    const bumpedByName = new Map(bumped.map(e => [e.package.name, e]));
+
+    for (const entry of bumped) {
+      const pkg = entry.package;
+      await runVersionScript(pkg, 'preScript', 'preversion');
+      pkg.json.version = entry.to;
+      for (const depKey of DEPENDENCY_KEYS) {
+        const deps = pkg.json[depKey];
+        if (!deps) continue;
+        for (const depName of Object.keys(deps)) {
+          const depEntry = bumpedByName.get(depName);
+          if (depEntry) deps[depName] = '^' + depEntry.to;
+        }
+      }
+      await runVersionScript(pkg, 'script', 'version');
+      pkg.writeJson();
+      await runVersionScript(pkg, 'postScript', 'postversion');
+    }
+
+    const rootEntry = repository.monorepo ? plan.find(e => e.package === repository.rootPackage) : undefined;
+    if (rootEntry?.status === 'bump') {
+      repository.rootPackage.json.version = rootEntry.to;
+      repository.rootPackage.writeJson();
+    }
+
+    const byGroup = new Map<string, Entry[]>();
+    for (const entry of bumped) {
+      const list = byGroup.get(entry.groupKey);
+      if (list) list.push(entry);
+      else byGroup.set(entry.groupKey, [entry]);
+    }
+    for (const [, groupEntries] of byGroup) {
+      const files = groupEntries.map(e => path.relative(repository.dirname, e.package.jsonFileName));
+      await git.commit(files, buildCommitMessage(repository, groupEntries));
+      const tags = new Set(groupEntries.map(e => expandTag(e.package, e.to!)));
+      for (const tag of tags) if (!(await git.tagExists(tag))) await git.createTag(tag);
+    }
+
+    /** The root's own informational version write isn't part of any group's release, but still
+     *  needs to land in *some* commit rather than being left as an uncommitted local edit. */
+    if (rootEntry?.status === 'bump') {
+      await git.commit(
+        [path.relative(repository.dirname, repository.rootPackage.jsonFileName)],
+        `chore: sync root version to ${rootEntry.to}`,
+      );
+    }
+
+    if (options.push && bumped.length) await git.push();
+    return plan;
+  }
+}
+
+const DEPENDENCY_KEYS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const;
+
+const SEVERITY_RANK: Record<VersionService.BumpKeyword, number> = { patch: 0, minor: 1, major: 2 };
+
+/** `.rmanrc group` (cascaded): `true` (the default - see `resolveConfig`'s cascade, this is what a
+ *  package inherits when nobody sets it at all) puts a package in the one implicit repo-wide
+ *  group; a non-empty string joins exactly the other packages sharing that string, regardless of
+ *  the repo's own default; `false` makes it a solo group of one. */
+function resolveGroupKey(pkg: Package): string {
+  const g = pkg.config?.group;
+  if (g === false) return `solo:${pkg.name}`;
+  if (typeof g === 'string' && g) return `named:${g}`;
+  return 'default';
+}
+
+function groupLabel(key: string): string {
+  if (key.startsWith('named:')) return key.slice('named:'.length);
+  if (key.startsWith('solo:')) return key.slice('solo:'.length);
+  return key;
+}
+
+/** Highest bump type implied by `commits`' subjects: any `!` breaking marker wins outright;
+ *  otherwise `feat` implies minor; anything else (a `fix`, an unrecognized type, a non-conventional
+ *  message) defaults to patch - something changed, so at least a patch release is warranted. */
+function detectSeverity(commits: CommitInfo[]): VersionService.BumpKeyword {
+  let severity: VersionService.BumpKeyword = 'patch';
+  for (const c of commits) {
+    const parsed = parseConventionalCommit(c.subject);
+    if (!parsed) continue;
+    if (parsed.breaking) return 'major';
+    if (parsed.type === 'feat') severity = 'minor';
+  }
+  return severity;
+}
+
+function maxVersion(versions: string[]): string {
+  return versions.reduce((m, v) => (semver.gt(v, m) ? v : m), versions[0]);
+}
+
+/**
+ * Decides one group's new version and which of its members actually receive it, writing an
+ * `Entry` per member into `entries`. `changeByPackage` holds each eligible package's own detected
+ * severity (or `undefined` for one with no real commits since its last tag) - `undefined` here
+ * always means "unchanged", never "explicit version" (that path is handled separately below).
+ */
+function computeGroupPlan(
+  key: string,
+  members: Package[],
+  changeByPackage: Map<string, { severity?: VersionService.BumpKeyword; reason: string }>,
+  explicitVersion: string | undefined,
+  entries: Map<string, VersionService.Entry>,
+): void {
+  const label = groupLabel(key);
+  const changed = members.filter(m => changeByPackage.has(m.name));
+  if (!changed.length) {
+    for (const m of members) {
+      entries.set(m.name, { package: m, groupKey: key, group: label, status: 'no-change', from: m.version });
+    }
+    return;
+  }
+
+  const current = maxVersion(members.map(m => m.version));
+  let to: string;
+  let severity: VersionService.BumpKeyword | undefined;
+  if (explicitVersion) {
+    to = explicitVersion;
+  } else {
+    severity = changed.reduce<VersionService.BumpKeyword>((worst, m) => {
+      const s = changeByPackage.get(m.name)!.severity!;
+      return SEVERITY_RANK[s] > SEVERITY_RANK[worst] ? s : worst;
+    }, 'patch');
+    to = semver.inc(current, severity) ?? current;
+  }
+
+  const bumping = new Set<Package>(changed);
+  if (!explicitVersion && severity === 'major') {
+    for (const m of members) bumping.add(m);
+  } else if (!explicitVersion && severity === 'minor') {
+    const worklist = [...changed];
+    while (worklist.length) {
+      const cur = worklist.pop()!;
+      for (const m of members) {
+        if (bumping.has(m)) continue;
+        if (m.dependencies.includes(cur.name)) {
+          bumping.add(m);
+          worklist.push(m);
+        }
+      }
+    }
+  }
+
+  for (const m of members) {
+    if (bumping.has(m)) {
+      const own = changeByPackage.get(m.name);
+      entries.set(m.name, {
+        package: m,
+        groupKey: key,
+        group: label,
+        status: 'bump',
+        from: m.version,
+        to,
+        reason: own?.reason ?? `in-group dependent of a ${severity} change`,
+      });
+    } else {
+      entries.set(m.name, { package: m, groupKey: key, group: label, status: 'no-change', from: m.version });
+    }
+  }
+}
+
+/**
+ * A package depending on another group's bumped package always receives exactly a patch bump of
+ * its own, computed from its *own* group's current ceiling (the highest `to`/version among its
+ * group right now) - never the source's version, and never the source's severity. Runs as a
+ * worklist until nothing new is affected, since patching one package can itself cross into a third
+ * group, and so on; never touches a same-group dependent that a plain patch deliberately left
+ * alone (see `computeGroupPlan`'s patch case).
+ */
+function rippleCrossGroup(packages: Package[], entries: Map<string, VersionService.Entry>): void {
+  const worklist = [...entries.values()].filter(e => e.status === 'bump');
+  while (worklist.length) {
+    const source = worklist.shift()!;
+    for (const pkg of packages) {
+      const entry = entries.get(pkg.name)!;
+      if (entry.status === 'bump' || entry.groupKey === source.groupKey) continue;
+      if (!pkg.dependencies.includes(source.package.name)) continue;
+
+      const groupCeiling = maxVersion(
+        packages
+          .filter(p => entries.get(p.name)!.groupKey === entry.groupKey)
+          .map(p => entries.get(p.name)!.to ?? p.version),
+      );
+      const next: VersionService.Entry = {
+        ...entry,
+        status: 'bump',
+        to: semver.inc(groupCeiling, 'patch') ?? groupCeiling,
+        reason: `depends on ${source.package.name}@${source.to}`,
+      };
+      entries.set(pkg.name, next);
+      worklist.push(next);
+    }
+  }
+}
+
+/** The root's own `version` field is purely informational in a monorepo (it's never published on
+ *  its own) - it always reflects whatever single version every group ended up sharing, or the
+ *  overall highest version when groups diverged onto different numbers. Reports `'no-change'`
+ *  (not `'bump'`) when nothing in the repository changed at all. */
+function buildRootEntry(repository: Repository, memberEntries: VersionService.Entry[]): VersionService.Entry {
+  const root = repository.rootPackage;
+  const anyBumped = memberEntries.some(e => e.status === 'bump');
+  if (!anyBumped) {
+    return { package: root, groupKey: '__root__', group: 'root', status: 'no-change', from: root.version };
+  }
+  const finalVersions = memberEntries.map(e => e.to ?? e.from);
+  const unique = new Set(finalVersions);
+  const to = unique.size === 1 ? finalVersions[0] : maxVersion(finalVersions);
+  return {
+    package: root,
+    groupKey: '__root__',
+    group: 'root',
+    status: 'bump',
+    from: root.version,
+    to,
+    reason: 'informational - monorepo root is never published on its own',
+  };
+}
+
+/** `.rmanrc version.commitMessage` (root-level; `{version}` is replaced when every bumped package
+ *  in this commit shares one version) - defaults to `"chore(release): v{version}"`, or a plain
+ *  listing of `name@version` pairs when this particular commit spans different versions (a
+ *  cross-group ripple can land a lone forced patch in a group that otherwise didn't move). */
+function buildCommitMessage(repository: Repository, entries: VersionService.Entry[]): string {
+  const versions = new Set(entries.map(e => e.to));
+  if (versions.size === 1) {
+    const template = repository.rootPackage.config?.version?.commitMessage;
+    const version = entries[0].to!;
+    if (typeof template === 'string' && template) return template.replace(/\{version\}/g, version);
+    return `chore(release): v${version}`;
+  }
+  return `chore(release): ${entries.map(e => `${e.package.name}@${e.to}`).join(', ')}`;
+}
+
+/** Expands `pkg`'s (cascaded) `.rmanrc changelog.tagPattern` into a concrete tag name for
+ *  `version` - the same pattern `changelog` reads tags back with (see `findLatestTag`), just run
+ *  forward: `{name}` becomes the package's own name, and `*` becomes `version`. */
+function expandTag(pkg: Package, version: string): string {
+  const pattern = tagPattern(pkg).replace('{name}', pkg.name);
+  const starIdx = pattern.indexOf('*');
+  return starIdx === -1 ? pattern : pattern.slice(0, starIdx) + version + pattern.slice(starIdx + 1);
+}
+
+/** A `version.<key>` value: one command, or several to run in sequence - same shape as
+ *  `run.<script>.script`/`.preScript`/`.postScript`. */
+function normalizeScriptValue(value: unknown): string | undefined {
+  if (typeof value === 'string') return value || undefined;
+  if (Array.isArray(value)) {
+    const parts = value.filter((v): v is string => typeof v === 'string' && !!v);
+    return parts.length ? parts.join(' && ') : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Runs `pkg`'s own real npm lifecycle script (`preversion`/`version`/`postversion`) if it defines
+ * one for this phase, otherwise its `.rmanrc version.<cfgKey>` equivalent if configured - neither
+ * replaces the version write itself (unlike `ci`'s own-script override), they're hooks around a
+ * write that always happens, since dependency ranges and tags depend on it happening consistently.
+ */
+async function runVersionScript(
+  pkg: Package,
+  cfgKey: 'preScript' | 'script' | 'postScript',
+  npmScriptName: 'preversion' | 'version' | 'postversion',
+): Promise<void> {
+  const own = pkg.json.scripts?.[npmScriptName];
+  const command = typeof own === 'string' && own ? own : normalizeScriptValue(pkg.config?.version?.[cfgKey]);
+  if (command) await exec(command, { cwd: pkg.dirname, stdio: 'inherit' });
+}
