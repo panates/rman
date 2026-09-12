@@ -208,13 +208,27 @@ describe('services/ci', () => {
       return { packageManager: script as CiService.PackageManager };
     }
 
+    /** Same as `stubPackageManager()`, but the "install" step busy-waits a bit before exiting -
+     *  the panel's own redraw only ticks every 100ms (see `ProgressPanel.start()`), and on a fast
+     *  enough machine (observed on GitHub Actions runners) the whole `reinstall()` call - wipe and
+     *  a no-op install alike - can complete well within that first 100ms, so the loop never fires
+     *  even once and the live panel writes nothing at all to assert on. A deliberately slow
+     *  install step guarantees at least one tick lands while it's still "running". */
+    function stubSlowPackageManager(): { packageManager: CiService.PackageManager } {
+      const binDir = tmp();
+      const script = path.join(binDir, 'fake-pm');
+      fs.writeFileSync(script, `#!/usr/bin/env node\nconst t=Date.now();while(Date.now()-t<250){}\n`);
+      fs.chmodSync(script, 0o755);
+      return { packageManager: script as CiService.PackageManager };
+    }
+
     it('defaults to the shared ProgressPanel on a TTY (title, package names) - same default as run/build', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       fs.mkdirSync(path.join(dir, 'packages/a/node_modules'), { recursive: true });
       const repo = Repository.create(dir);
-      const { packageManager } = stubPackageManager();
+      const { packageManager } = stubSlowPackageManager();
 
       const { writes } = await withLivePanel(() => CiService.reinstall(repo, { packageManager }));
 
@@ -222,7 +236,8 @@ describe('services/ci', () => {
       const plain = writes.join('').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
       expect(plain).toContain('CI');
       // pkg-a's wipe is near-instant, so it may finish before any render tick catches it running -
-      // "root" reliably shows up instead, since its install step takes a little longer.
+      // "root" reliably shows up instead, since its (deliberately slowed) install step is what's
+      // still "running" by the time the first tick fires.
       expect(plain).toContain('root');
     });
 
