@@ -10,6 +10,7 @@ import * as ciCommand from './commands/ci.command.js';
 import * as cleanCommand from './commands/clean.command.js';
 import * as infoCommand from './commands/info.command.js';
 import * as listCommand from './commands/list.command.js';
+import * as publishCommand from './commands/publish.command.js';
 import * as runCommand from './commands/run.command.js';
 import * as testCommand from './commands/test.command.js';
 import * as versionCommand from './commands/version.command.js';
@@ -57,6 +58,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     changelogCommand.initCli(repository, program);
     testCommand.initCli(repository, program);
     versionCommand.initCli(repository, program);
+    publishCommand.initCli(repository, program);
 
     program.demandCommand(1).strict().completion();
 
