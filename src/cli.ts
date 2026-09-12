@@ -28,7 +28,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     const _argv = options?.argv || hideBin(process.argv);
 
     const program = yargs(_argv)
-      .scriptName('rman2')
+      .scriptName('rman')
       .version(version)
       .alias('version', 'v')
       .usage('$0 <cmd> [options...]')
