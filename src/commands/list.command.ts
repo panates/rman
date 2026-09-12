@@ -3,6 +3,7 @@ import EasyTable from 'easy-table';
 import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
 import { ListService } from '../services/list.service.js';
+import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
 function statusLabel(status: Repository.PackageStatus): string {
   switch (status) {
@@ -58,7 +59,7 @@ export function initCli(repository: Repository, program: Argv) {
     aliases: ['ls'],
     describe: 'Lists packages in repository',
     builder: cmd =>
-      cmd
+      applyPackageFilterOptions(cmd)
         .example('$0 list', '# List all packages')
         .example('$0 list --json', '# List all packages in JSON format')
         .conflicts('graph', ['parseable', 'json'])
@@ -102,6 +103,7 @@ export function initCli(repository: Repository, program: Argv) {
         }),
     handler: async args => {
       const items = await ListService.getPackages(repository, {
+        ...readPackageFilterOptions(args),
         toposort: args.toposort as boolean,
         changed: args.changed as boolean,
         changedSince: args.changedSince as string | undefined,

@@ -220,6 +220,47 @@ export class GitHelper {
       throw new Error(`Unable to push to "${remote}": ${e.message}`, { cause: e });
     }
   }
+
+  /** Raw `git diff <hash>..HEAD` text (committed changes plus any uncommitted local ones, same as
+   *  plain `git diff <hash>`) - unlike `listChangedSince`, the actual patch content, not just
+   *  which files changed. `pathspec`, if given, narrows it to just that file/directory. */
+  async diff(hash: string, pathspec?: string): Promise<string> {
+    const args = ['diff', hash];
+    if (pathspec) args.push('--', pathspec);
+    try {
+      const { stdout } = await execFileAsync('git', args, { cwd: this.cwd, maxBuffer: 64 * 1024 * 1024 });
+      return stdout;
+    } catch (e: any) {
+      throw new Error(`Unable to diff since "${hash}": ${e.message}`, { cause: e });
+    }
+  }
+
+  /** `git format-patch --root -o <outputDir> HEAD` - one `.patch` file per commit reachable from
+   *  HEAD (oldest first), `--root` included so the very first commit gets one too. Returns the
+   *  patch file paths, in commit order - what `import` replays into another repository. */
+  async formatPatches(outputDir: string): Promise<string[]> {
+    try {
+      const { stdout } = await execFileAsync('git', ['format-patch', '--root', '-o', outputDir, 'HEAD'], {
+        cwd: this.cwd,
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      return stdout.trim() ? stdout.trim().split(/\r?\n/) : [];
+    } catch (e: any) {
+      throw new Error(`Unable to format patches: ${e.message}`, { cause: e });
+    }
+  }
+
+  /** Applies `patchFiles` (as produced by `formatPatches`, in order) via `git am`, preserving each
+   *  original commit's author/date/message. `--3way` lets a patch that no longer applies cleanly
+   *  fall back to a content-level three-way merge instead of failing outright. */
+  async applyPatches(patchFiles: string[]): Promise<void> {
+    if (!patchFiles.length) return;
+    try {
+      await execFileAsync('git', ['am', '--3way', ...patchFiles], { cwd: this.cwd, maxBuffer: 64 * 1024 * 1024 });
+    } catch (e: any) {
+      throw new Error(`Unable to apply patches: ${e.message}`, { cause: e });
+    }
+  }
 }
 
 const execFileAsync = promisify(execFile);

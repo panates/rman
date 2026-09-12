@@ -155,4 +155,51 @@ describe('commands/list', () => {
       expect(lines).toEqual(['pkg-z', 'pkg-a']);
     });
   });
+
+  describe('--scope / --ignore / --deps / --dependents', () => {
+    function chainFixture(): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/base/package.json', { name: 'pkg-base', version: '1.0.0' });
+      writeJson(dir, 'packages/lib/package.json', {
+        name: 'pkg-lib',
+        version: '1.0.0',
+        dependencies: { 'pkg-base': '1.0.0' },
+      });
+      writeJson(dir, 'packages/app/package.json', {
+        name: 'pkg-app',
+        version: '1.0.0',
+        dependencies: { 'pkg-lib': '1.0.0' },
+      });
+      return dir;
+    }
+
+    it('--scope only includes packages matching the glob', async () => {
+      const dir = chainFixture();
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['list', '--scope', 'pkg-lib', '--short'] }));
+      expect(lines).toEqual(['pkg-lib']);
+    });
+
+    it('--ignore excludes packages matching the glob', async () => {
+      const dir = chainFixture();
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['list', '--ignore', 'pkg-app', '--short'] }));
+      expect(lines.sort()).toEqual(['pkg-base', 'pkg-lib']);
+    });
+
+    it('--scope with --deps also includes what the scoped package depends on', async () => {
+      const dir = chainFixture();
+      const lines = await captureLogs(() =>
+        runCli({ cwd: dir, argv: ['list', '--scope', 'pkg-lib', '--deps', '--short'] }),
+      );
+      expect(lines.sort()).toEqual(['pkg-base', 'pkg-lib']);
+    });
+
+    it('--scope with --dependents also includes what depends on the scoped package', async () => {
+      const dir = chainFixture();
+      const lines = await captureLogs(() =>
+        runCli({ cwd: dir, argv: ['list', '--scope', 'pkg-lib', '--dependents', '--short'] }),
+      );
+      expect(lines.sort()).toEqual(['pkg-app', 'pkg-lib']);
+    });
+  });
 });

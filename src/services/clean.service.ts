@@ -5,10 +5,11 @@ import fg from 'fast-glob';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import { Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
+import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { type ProgressItem, ProgressPanel } from '../utils/progress-panel.js';
 
 export namespace CleanService {
-  export interface Options {
+  export interface Options extends PackageFilterOptions {
     /** Show the live progress panel. Default true; auto-disabled when stdout isn't a TTY. */
     progress?: boolean;
     /** Report what would be removed without actually removing anything. Default false. */
@@ -52,7 +53,7 @@ export namespace CleanService {
     const cwdScope = options.root ? undefined : repository.currentPackage;
     const packages = repository.getPackages().filter(p => p !== repository.rootPackage);
     const allTargets = cwdScope ? [cwdScope] : [repository.rootPackage, ...packages];
-    const targets = allTargets.filter(pkg => !cleanConfig(pkg).skip);
+    const targets = filterPackages(allTargets, options).filter(pkg => !cleanConfig(pkg).skip);
 
     const dryRun = options.dryRun ?? false;
     const progress = options.progress ?? true;

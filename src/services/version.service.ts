@@ -6,6 +6,8 @@ import { findLatestTag, tagPattern } from '../utils/change-hash.js';
 import { parseConventionalCommit, VERSION_BUMP_PATTERN } from '../utils/conventional-commits.js';
 import { exec } from '../utils/exec.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
+import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
+import { ChangelogService } from './changelog.service.js';
 
 export namespace VersionService {
   export type BumpKeyword = 'patch' | 'minor' | 'major';
@@ -14,7 +16,7 @@ export namespace VersionService {
     return value === 'patch' || value === 'minor' || value === 'major';
   }
 
-  export interface Options {
+  export interface Options extends PackageFilterOptions {
     /** A release-type keyword (applied as the severity for every group that has real changes) or
      *  a concrete semver version (applied as the literal new version wherever something changed) -
      *  either way, this replaces auto-detection entirely. Omit to auto-detect the severity per
@@ -29,6 +31,13 @@ export namespace VersionService {
     /** Push the resulting commit(s) and tag(s) to the remote once applied. Default false - same
      *  as a plain `npm version`, which never pushes on its own either. */
     push?: boolean;
+    /** Overrides `.rmanrc version.commitMessage` (and the built-in default) for every group's
+     *  commit this run produces - `{version}` is still substituted the same way. */
+    message?: string;
+    /** Also writes each bumped package's `CHANGELOG.md` (via `ChangelogService.generateToFile`,
+     *  scoped to just the packages this run actually bumped) and folds those file changes into the
+     *  same per-group commit, instead of requiring a separate `rman changelog --write` run. */
+    changelog?: boolean;
   }
 
   /** One package's outcome in a version plan - see `getPlan`. */
@@ -86,7 +95,7 @@ export namespace VersionService {
     }
 
     const git = new GitHelper({ cwd: repository.dirname });
-    const packages = repository.getPackages();
+    const packages = filterPackages(repository.getPackages(), options);
 
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
     const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
@@ -187,6 +196,33 @@ export namespace VersionService {
       repository.rootPackage.writeJson();
     }
 
+    /** Written before the per-group commits below so each group's changelog file lands in the
+     *  *same* commit as its version bump, rather than needing a separate `changelog --write` run.
+     *  Bounded by each package's own *pre-bump* tag (the same one `getPlan` measured "changed
+     *  since" from - see `expandTag`) rather than `changelog`'s own default auto-detection (an npm
+     *  registry lookup, falling back to not-yet-pushed commits) - that boundary can drift from the
+     *  one `version` itself just used, and the not-yet-pushed fallback needs a configured remote
+     *  `version` never required at all. Falls back to `changelog`'s own default only when this
+     *  package genuinely has no prior tag (a first-ever release). */
+    const changelogFileByPackage = new Map<string, string>();
+    if (options.changelog) {
+      for (const entry of bumped) {
+        const fromTag = expandTag(entry.package, entry.from);
+        const from = (await git.tagExists(fromTag)) ? fromTag : undefined;
+        const changelogEntries = await ChangelogService.generateToFile(repository, {
+          scope: entry.package.name,
+          root: true,
+          from,
+        });
+        for (const ce of changelogEntries) {
+          changelogFileByPackage.set(
+            ce.package.name,
+            path.relative(repository.dirname, path.join(ce.package.dirname, ce.filePath)),
+          );
+        }
+      }
+    }
+
     const byGroup = new Map<string, Entry[]>();
     for (const entry of bumped) {
       const list = byGroup.get(entry.groupKey);
@@ -195,7 +231,11 @@ export namespace VersionService {
     }
     for (const [, groupEntries] of byGroup) {
       const files = groupEntries.map(e => path.relative(repository.dirname, e.package.jsonFileName));
-      await git.commit(files, buildCommitMessage(repository, groupEntries));
+      for (const e of groupEntries) {
+        const changelogFile = changelogFileByPackage.get(e.package.name);
+        if (changelogFile) files.push(changelogFile);
+      }
+      await git.commit(files, buildCommitMessage(repository, groupEntries, options.message));
       const tags = new Set(groupEntries.map(e => expandTag(e.package, e.to!)));
       for (const tag of tags) if (!(await git.tagExists(tag))) await git.createTag(tag);
     }
@@ -385,14 +425,15 @@ function buildRootEntry(repository: Repository, memberEntries: VersionService.En
  *  in this commit shares one version) - defaults to `"chore(release): v{version}"`, or a plain
  *  listing of `name@version` pairs when this particular commit spans different versions (a
  *  cross-group ripple can land a lone forced patch in a group that otherwise didn't move). */
-function buildCommitMessage(repository: Repository, entries: VersionService.Entry[]): string {
+function buildCommitMessage(repository: Repository, entries: VersionService.Entry[], messageOverride?: string): string {
   const versions = new Set(entries.map(e => e.to));
   if (versions.size === 1) {
-    const template = repository.rootPackage.config?.version?.commitMessage;
+    const template = messageOverride ?? repository.rootPackage.config?.version?.commitMessage;
     const version = entries[0].to!;
     if (typeof template === 'string' && template) return template.replace(/\{version\}/g, version);
     return `chore(release): v${version}`;
   }
+  if (messageOverride) return messageOverride;
   return `chore(release): ${entries.map(e => `${e.package.name}@${e.to}`).join(', ')}`;
 }
 

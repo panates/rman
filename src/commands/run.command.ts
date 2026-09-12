@@ -2,9 +2,10 @@ import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
 import { RunService } from '../services/run.service.js';
 import type { LogLevel } from '../utils/logger.js';
+import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
 export function applyRunOptions<T>(cmd: Argv<T>): Argv<T> {
-  return cmd
+  return applyPackageFilterOptions(cmd)
     .option('parallel', {
       describe:
         'Max packages to build at once: omit/true for CPU count (or .rmanrc run.<script>.concurrency), ' +
@@ -54,6 +55,7 @@ export function applyRunOptions<T>(cmd: Argv<T>): Argv<T> {
 
 export function readRunOptions(args: any): RunService.Options {
   return {
+    ...readPackageFilterOptions(args),
     parallel: args.parallel as boolean | number | undefined,
     topo: args.topo as boolean,
     bail: args.bail as boolean,

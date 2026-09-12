@@ -3,13 +3,14 @@ import colors from 'ansi-colors';
 import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
 import { VersionService } from '../services/version.service.js';
+import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
 export function initCli(repository: Repository, program: Argv) {
   program.command({
     command: 'version [bump]',
     describe: 'Bumps versions of changed packages (and their dependents), grouped via .rmanrc "group"',
     builder: cmd =>
-      cmd
+      applyPackageFilterOptions(cmd)
         .example('$0 version patch', '# Bump patch severity directly, applied immediately')
         .example('$0 version', "# Auto-detect severity from commits, show the plan, don't write anything")
         .example('$0 version --interactive', '# Show the plan either way, then ask for confirmation')
@@ -31,10 +32,25 @@ export function initCli(repository: Repository, program: Argv) {
         .option('push', {
           describe: 'Push the resulting commit(s) and tag(s) to the remote once applied',
           type: 'boolean',
+        })
+        .option('message', {
+          alias: 'm',
+          describe:
+            'Override the commit message for every group this run commits (default: .rmanrc ' +
+            'version.commitMessage, or "chore(release): v{version}") - "{version}" is substituted ' +
+            "when a commit's own group shares one version.",
+          type: 'string',
+        })
+        .option('changelog', {
+          describe:
+            "Also write each bumped package's CHANGELOG.md (same as running changelog --write " +
+            'separately) and fold it into the same commit as its version bump',
+          type: 'boolean',
         }),
     handler: async args => {
       const bump = args.bump as string | undefined;
       const plan = await VersionService.getPlan(repository, {
+        ...readPackageFilterOptions(args),
         bump,
         ignoreDirty: args.ignoreDirty as boolean | undefined,
       });
@@ -65,7 +81,11 @@ export function initCli(repository: Repository, program: Argv) {
       }
       if (!apply) return;
 
-      const applied = await VersionService.applyPlan(repository, plan, { push: args.push as boolean | undefined });
+      const applied = await VersionService.applyPlan(repository, plan, {
+        push: args.push as boolean | undefined,
+        message: args.message as string | undefined,
+        changelog: args.changelog as boolean | undefined,
+      });
       for (const entry of applied) {
         if (entry.status === 'bump') {
           console.log(

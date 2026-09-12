@@ -2,13 +2,14 @@ import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
 import { CiService } from '../services/ci.service.js';
 import type { LogLevel } from '../utils/logger.js';
+import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
 export function initCli(repository: Repository, program: Argv) {
   program.command({
     command: 'ci',
     describe: 'Deletes node_modules and lockfiles in every package, then reinstalls from scratch',
     builder: cmd =>
-      cmd
+      applyPackageFilterOptions(cmd)
         .example('$0 ci', '')
         .option('package-manager', {
           describe: 'Package manager to install with (default: npm, or .rmanrc "packageManager")',
@@ -22,6 +23,7 @@ export function initCli(repository: Repository, program: Argv) {
         }),
     handler: async args => {
       await CiService.reinstall(repository, {
+        ...readPackageFilterOptions(args),
         packageManager: args.packageManager as CiService.PackageManager | undefined,
         progress: args.progress as boolean | undefined,
         logLevel: args.logLevel as LogLevel | undefined,

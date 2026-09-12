@@ -5,6 +5,7 @@ import type { Repository } from '../core/repository.js';
 import { detectChangeHash, extractVersion, findLatestTag, tagPattern } from '../utils/change-hash.js';
 import { parseConventionalCommit, VERSION_BUMP_PATTERN } from '../utils/conventional-commits.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
+import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 
 export namespace ChangelogService {
   /** Injectable dependencies shared by `getEntries`/`generate` - currently just the npm registry lookup
@@ -14,7 +15,7 @@ export namespace ChangelogService {
     npmViewVersion?: (name: string, cwd: string) => Promise<string | undefined>;
   }
 
-  export interface Options {
+  export interface Options extends PackageFilterOptions {
     /** Generate the changelog since this commit/hash - applied the same way to every package.
      *  Default (also `"npm"` explicitly): auto-detect it per package instead, from that package's
      *  currently-published npm version (see `detectChangeHash`); a package this can't be resolved
@@ -115,7 +116,7 @@ export namespace ChangelogService {
   export async function getEntries(repository: Repository, options: Options = {}, deps: Deps = {}): Promise<Entry[]> {
     const cwdScope = options.root ? undefined : repository.currentPackage;
     const packages = repository.getPackages().filter(p => p !== repository.rootPackage);
-    const targets = cwdScope ? [cwdScope] : [repository.rootPackage, ...packages];
+    const targets = cwdScope ? [cwdScope] : filterPackages([repository.rootPackage, ...packages], options);
 
     const git = new GitHelper({ cwd: repository.dirname });
     // dropped up front, not just while grouping - a package whose only commits are version bumps

@@ -222,4 +222,42 @@ describe('commands/version', () => {
       expect(output).toContain('updated');
     });
   });
+
+  describe('-m / --message', () => {
+    // the fixture is a monorepo, so HEAD is always the root's own trailing informational-sync
+    // commit ("chore: sync root version to ...") - the actual group release commit is right below it.
+    it('overrides the default commit message, with {version} substituted', async () => {
+      const dir = fixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--message', 'release: v{version}'] }));
+      expect(git(dir, 'log', '-1', '--format=%s', 'HEAD~1')).toBe('release: v1.0.1');
+    });
+
+    it('without it, falls back to the built-in default commit message', async () => {
+      const dir = fixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+      expect(git(dir, 'log', '-1', '--format=%s', 'HEAD~1')).toBe('chore(release): v1.0.1');
+    });
+  });
+
+  describe('--changelog', () => {
+    it("writes each bumped package's CHANGELOG.md and folds it into the same commit as the version bump", async () => {
+      const dir = fixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--changelog'] }));
+
+      const changelog = fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf-8');
+      expect(changelog).toContain('a bug');
+
+      // the changelog file was committed together with the version bump, not left uncommitted.
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+      const committedFiles = git(dir, 'show', '--name-only', '--pretty=format:', 'HEAD~1');
+      expect(committedFiles).toContain('packages/a/CHANGELOG.md');
+      expect(committedFiles).toContain('packages/a/package.json');
+    });
+
+    it('without it, no CHANGELOG.md is written at all', async () => {
+      const dir = fixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+      expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
+    });
+  });
 });

@@ -1,8 +1,9 @@
 import path from 'path';
 import type { Repository } from '../core/repository.js';
+import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 
 export namespace ListService {
-  export interface Options {
+  export interface Options extends PackageFilterOptions {
     /** Topological order (dependencies before dependents) instead of lexical by directory. */
     toposort?: boolean;
     /** Only include packages that have changed since the last publish (dirty or committed but
@@ -27,7 +28,7 @@ export namespace ListService {
    *  status relative to upstream. Pure data - no console output; `rman list`'s own command
    *  decides how to present it (table, JSON, parseable, names only, or a dependency graph). */
   export async function getPackages(repository: Repository, options: Options = {}): Promise<Item[]> {
-    const packages = repository.getPackages({ toposort: options.toposort });
+    const packages = filterPackages(repository.getPackages({ toposort: options.toposort }), options);
     const status = await repository.listStatus({ hash: options.changedSince });
 
     let items: Item[] = packages.map(p => ({

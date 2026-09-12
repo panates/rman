@@ -7,10 +7,11 @@ import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import { exec } from '../utils/exec.js';
 import { LOG_LEVELS, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
+import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { type ProgressItem, ProgressPanel } from '../utils/progress-panel.js';
 
 export namespace RunService {
-  export interface Options {
+  export interface Options extends PackageFilterOptions {
     /** Max packages built at once: `true`/omitted = CPU count, a number = that many, `false` = serial (1). */
     parallel?: boolean | number;
     /** Respect the package dependency graph: a package waits for its dependencies and is skipped
@@ -177,6 +178,7 @@ export namespace RunService {
     const topo = resolveBool(options.topo, repository.rootPackage, script, 'topo', true);
     let packages = repository.getPackages({ toposort: topo, scope: cwdScope?.name });
     if (!topo) packages = [...packages].sort((a, b) => a.name.localeCompare(b.name));
+    packages = filterPackages(packages, options);
 
     const changed = resolveBool(options.changed, repository.rootPackage, script, 'changed', false);
     const changedSince =

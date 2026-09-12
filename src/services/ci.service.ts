@@ -5,12 +5,13 @@ import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import { exec } from '../utils/exec.js';
 import { Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
+import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { formatDuration, type ProgressItem, ProgressPanel } from '../utils/progress-panel.js';
 
 export namespace CiService {
   export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
 
-  export interface Options {
+  export interface Options extends PackageFilterOptions {
     packageManager?: PackageManager;
     /** Show the live progress panel while running. Default true, same as `run`/`build`; auto-disabled
      *  when stdout isn't a TTY. Doesn't affect what's printed once done - see `run`. */
@@ -70,7 +71,10 @@ export namespace CiService {
     const logger = new Logger(options.logLevel ?? resolveRootLogLevel(repository));
     // root is handled separately below - for a non-monorepo, getPackages() would otherwise
     // include it a second time (it doubles as "the" package).
-    const packages = repository.getPackages().filter(p => p !== repository.rootPackage);
+    const packages = filterPackages(
+      repository.getPackages().filter(p => p !== repository.rootPackage),
+      options,
+    );
 
     const progress = options.progress ?? true;
     const panel = new ProgressPanel('CI', !!process.stdout.isTTY && progress);

@@ -5,9 +5,13 @@ import colors from 'ansi-colors';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import * as buildCommand from './commands/build.command.js';
+import * as changedCommand from './commands/changed.command.js';
 import * as changelogCommand from './commands/changelog.command.js';
 import * as ciCommand from './commands/ci.command.js';
 import * as cleanCommand from './commands/clean.command.js';
+import * as diffCommand from './commands/diff.command.js';
+import * as execCommand from './commands/exec.command.js';
+import * as importCommand from './commands/import.command.js';
 import * as infoCommand from './commands/info.command.js';
 import * as listCommand from './commands/list.command.js';
 import * as publishCommand from './commands/publish.command.js';
@@ -59,6 +63,10 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     testCommand.initCli(repository, program);
     versionCommand.initCli(repository, program);
     publishCommand.initCli(repository, program);
+    execCommand.initCli(repository, program);
+    changedCommand.initCli(repository, program);
+    diffCommand.initCli(repository, program);
+    importCommand.initCli(repository, program);
 
     program.demandCommand(1).strict().completion();
 

@@ -3,13 +3,14 @@ import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
 import { ChangelogService } from '../services/changelog.service.js';
 import { Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
+import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
 export function initCli(repository: Repository, program: Argv) {
   program.command({
     command: 'changelog',
     describe: 'Generates a changelog per package from unreleased commits',
     builder: cmd =>
-      cmd
+      applyPackageFilterOptions(cmd)
         .example('$0 changelog', "# Auto-detects each package's last published version on npm")
         .example('$0 changelog --from <hash> --write', '# Since a specific commit, written to file')
         .option('from', {
@@ -47,17 +48,15 @@ export function initCli(repository: Repository, program: Argv) {
         logger.info(colors.gray('Checking published npm versions...'));
       }
 
+      const options = {
+        ...readPackageFilterOptions(args),
+        from,
+        filePath: args.filePath as string | undefined,
+        root: args.root as boolean | undefined,
+      };
       const entries = args.write
-        ? await ChangelogService.generateToFile(repository, {
-            from,
-            filePath: args.filePath as string | undefined,
-            root: args.root as boolean | undefined,
-          })
-        : await ChangelogService.getEntries(repository, {
-            from,
-            filePath: args.filePath as string | undefined,
-            root: args.root as boolean | undefined,
-          });
+        ? await ChangelogService.generateToFile(repository, options)
+        : await ChangelogService.getEntries(repository, options);
 
       if (!entries.length) {
         logger.info(colors.gray('No unreleased changes.'));
