@@ -12,6 +12,7 @@ import {
 import { exec } from '../utils/exec.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
+import { parseWorkspaceRange } from '../utils/workspace-range.js';
 import { ChangelogService } from './changelog.service.js';
 
 export namespace VersionService {
@@ -194,7 +195,16 @@ export namespace VersionService {
         if (!deps) continue;
         for (const depName of Object.keys(deps)) {
           const depEntry = bumpedByName.get(depName);
-          if (depEntry) deps[depName] = '^' + depEntry.to;
+          if (!depEntry) continue;
+          const workspace = parseWorkspaceRange(deps[depName]);
+          if (workspace) {
+            // A bare "workspace:*"/"^"/"~" selector always resolves to the dependency's *current*
+            // version at publish time (see `resolveWorkspaceRange`) - nothing to rewrite here. Only
+            // an explicit version/range after "workspace:" needs bumping, same as a plain range.
+            if (workspace.selector === 'explicit') deps[depName] = `workspace:^${depEntry.to}`;
+            continue;
+          }
+          deps[depName] = '^' + depEntry.to;
         }
       }
       await runVersionScript(pkg, 'script', 'version');
@@ -266,7 +276,9 @@ export namespace VersionService {
   }
 }
 
-const DEPENDENCY_KEYS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const;
+/** Every `package.json` field holding dependency ranges - shared with `PublishService`'s own
+ *  `"workspace:"` rewrite-for-publish step, since it needs to scan the same fields. */
+export const DEPENDENCY_KEYS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const;
 
 const SEVERITY_RANK: Record<VersionService.BumpKeyword, number> = { patch: 0, minor: 1, major: 2 };
 

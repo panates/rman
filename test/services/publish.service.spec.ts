@@ -269,5 +269,97 @@ describe('services/publish', () => {
       expect(entryFor(applied, 'pkg-a').status).toBe('up-to-date');
       expect(fs.existsSync(logFile)).toBe(false);
     });
+
+    describe('"workspace:" protocol dependency ranges', () => {
+      function fixture(pkgBDependencyRange: string): string {
+        const dir = tmp();
+        writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+        writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.2.3' });
+        writeJson(dir, 'packages/b/package.json', {
+          name: 'pkg-b',
+          version: '1.0.0',
+          dependencies: { 'pkg-a': pkgBDependencyRange },
+        });
+        return dir;
+      }
+
+      function readDeps(dir: string): Record<string, string> {
+        return JSON.parse(fs.readFileSync(path.join(dir, 'packages/b/package.json'), 'utf-8')).dependencies;
+      }
+
+      /** Unlike `stubPublishBin` (which only logs its own cwd/argv), this shim reads and logs the
+       *  `package.json` it actually sees *at the moment it runs* - the only way to observe the
+       *  rewritten range, since `applyPlan` restores the original file right after the publish
+       *  command returns (in its `finally`), before control ever gets back to the test. */
+      function stubPublishBinCapturingDeps(dir: string): { logFile: string } {
+        const binDir = path.join(dir, 'node_modules', '.bin');
+        fs.mkdirSync(binDir, { recursive: true });
+        const logFile = path.join(tmp(), 'npm-deps-seen.log');
+        fs.writeFileSync(
+          path.join(binDir, 'npm'),
+          `#!/usr/bin/env node\n` +
+            `const fs = require('fs');\n` +
+            `const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));\n` +
+            `fs.appendFileSync(${JSON.stringify(logFile)}, JSON.stringify(pkg.dependencies || {}) + '\\n');\n`,
+        );
+        fs.chmodSync(path.join(binDir, 'npm'), 0o755);
+        return { logFile };
+      }
+
+      it('rewrites a bare "workspace:*" range to the dependency\'s exact current version for the publish call', async () => {
+        const dir = fixture('workspace:*');
+        const repo = Repository.create(dir);
+        const { logFile } = stubPublishBinCapturingDeps(dir);
+
+        const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined, 'pkg-b': undefined }));
+        await PublishService.applyPlan(repo, plan);
+
+        const seen = fs
+          .readFileSync(logFile, 'utf-8')
+          .trim()
+          .split('\n')
+          .map(line => JSON.parse(line));
+        const seenForB = seen.find(deps => 'pkg-a' in deps);
+        expect(seenForB['pkg-a']).toBe('1.2.3');
+      });
+
+      it('rewrites "workspace:^"/"workspace:~" to a real "^"/"~" range, and restores the original file afterward', async () => {
+        const dir = fixture('workspace:^');
+        const repo = Repository.create(dir);
+        stubPublishBin(dir, 'npm');
+
+        const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined, 'pkg-b': undefined }));
+        await PublishService.applyPlan(repo, plan);
+
+        // Once applyPlan returns, the working-tree file must be back to its original "workspace:^".
+        expect(readDeps(dir)['pkg-a']).toBe('workspace:^');
+      });
+
+      it('restores the original file even when the publish command itself fails', async () => {
+        const dir = fixture('workspace:*');
+        const repo = Repository.create(dir);
+        const binDir = path.join(dir, 'node_modules', '.bin');
+        fs.mkdirSync(binDir, { recursive: true });
+        fs.writeFileSync(path.join(binDir, 'npm'), `#!/usr/bin/env node\nprocess.exit(1);\n`);
+        fs.chmodSync(path.join(binDir, 'npm'), 0o755);
+
+        const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined, 'pkg-b': undefined }));
+        const applied = await PublishService.applyPlan(repo, plan);
+
+        expect(entryFor(applied, 'pkg-b').status).toBe('error');
+        expect(readDeps(dir)['pkg-a']).toBe('workspace:*');
+      });
+
+      it('leaves a package with no "workspace:" ranges untouched (no extra disk I/O)', async () => {
+        const dir = fixture('^1.0.0');
+        const repo = Repository.create(dir);
+        stubPublishBin(dir, 'npm');
+
+        const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined, 'pkg-b': undefined }));
+        await PublishService.applyPlan(repo, plan);
+
+        expect(readDeps(dir)['pkg-a']).toBe('^1.0.0');
+      });
+    });
   });
 });

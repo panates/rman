@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Package } from '../core/package.js';
@@ -6,7 +7,9 @@ import type { Repository } from '../core/repository.js';
 import { exec } from '../utils/exec.js';
 import { GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
+import { parseWorkspaceRange, resolveWorkspaceRange } from '../utils/workspace-range.js';
 import { CiService } from './ci.service.js';
+import { DEPENDENCY_KEYS } from './version.service.js';
 
 export namespace PublishService {
   /** Injectable registry lookup - mainly for tests, so they don't depend on network access or a
@@ -129,6 +132,7 @@ export namespace PublishService {
     const packageManager = CiService.resolvePackageManager(repository, options.packageManager);
     const failed = new Set<string>();
     const result: Entry[] = [];
+    const packagesByName = new Map(repository.getPackages().map(p => [p.name, p]));
 
     for (const entry of plan) {
       if (entry.status !== 'publish') {
@@ -142,6 +146,7 @@ export namespace PublishService {
         result.push({ ...entry, status: 'error', reason: `dependency "${blocker}" failed to publish` });
         continue;
       }
+      const restore = rewriteWorkspaceRangesForPublish(pkg, packagesByName);
       try {
         await exec(buildPublishCommand(packageManager, options), {
           cwd: resolvePublishDir(pkg, options.contents),
@@ -151,6 +156,8 @@ export namespace PublishService {
       } catch (e: any) {
         failed.add(pkg.name);
         result.push({ ...entry, status: 'error', reason: e.message });
+      } finally {
+        restore?.();
       }
     }
     return result;
@@ -197,4 +204,42 @@ function buildPublishCommand(packageManager: CiService.PackageManager, options: 
   if (options.registry) args.push('--registry', options.registry);
   if (options.userconfig) args.push('--userconfig', options.userconfig);
   return `${packageManager} ${args.join(' ')}`;
+}
+
+/**
+ * Rewrites every `"workspace:"` dependency range in `pkg`'s `package.json` to a real,
+ * registry-publishable range (the same substitution pnpm/yarn's own publish performs - see
+ * `resolveWorkspaceRange`), just before shelling out to `npm publish` - which reads whatever is
+ * actually on disk, unlike pnpm/yarn's own publish this never packs into a staging tarball first.
+ * Returns a function that restores the file's original bytes (and `pkg`'s in-memory state)
+ * verbatim; always invoke it from a `finally`, so a failed publish never leaves a rewritten
+ * `package.json` behind. Returns `undefined` (nothing to restore, no disk write at all) when `pkg`
+ * has no `"workspace:"` ranges to begin with.
+ */
+function rewriteWorkspaceRangesForPublish(
+  pkg: Package,
+  packagesByName: Map<string, Package>,
+): (() => void) | undefined {
+  const hasWorkspaceRange = DEPENDENCY_KEYS.some(depKey => {
+    const deps = pkg.json[depKey];
+    return deps && Object.values(deps).some(v => parseWorkspaceRange(v));
+  });
+  if (!hasWorkspaceRange) return undefined;
+
+  const original = fs.readFileSync(pkg.jsonFileName, 'utf-8');
+  for (const depKey of DEPENDENCY_KEYS) {
+    const deps = pkg.json[depKey];
+    if (!deps) continue;
+    for (const depName of Object.keys(deps)) {
+      const parsed = parseWorkspaceRange(deps[depName]);
+      if (!parsed) continue;
+      const depPkg = packagesByName.get(depName);
+      if (depPkg) deps[depName] = resolveWorkspaceRange(parsed, depPkg.version);
+    }
+  }
+  pkg.writeJson();
+  return () => {
+    fs.writeFileSync(pkg.jsonFileName, original, 'utf-8');
+    pkg.reloadJson();
+  };
 }

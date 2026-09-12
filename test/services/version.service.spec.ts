@@ -310,6 +310,53 @@ describe('services/version', () => {
     });
   });
 
+  describe('applyPlan() - "workspace:" protocol dependency ranges', () => {
+    function fixture(pkgADependencyRange: string): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        dependencies: { 'pkg-a': pkgADependencyRange },
+      });
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      return dir;
+    }
+
+    function readDeps(dir: string, rel: string): Record<string, string> {
+      return JSON.parse(fs.readFileSync(path.join(dir, rel), 'utf-8')).dependencies;
+    }
+
+    for (const selector of ['*', '^', '~']) {
+      it(`leaves a bare "workspace:${selector}" range untouched after a bump`, async () => {
+        const dir = fixture(`workspace:${selector}`);
+        fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+        commitAll(dir, 'feat!: a breaking change in pkg-a');
+
+        const repo = Repository.create(dir);
+        const plan = await VersionService.getPlan(repo);
+        await VersionService.applyPlan(repo, plan);
+
+        expect(readDeps(dir, 'packages/b/package.json')['pkg-a']).toBe(`workspace:${selector}`);
+      });
+    }
+
+    it('bumps the embedded version of an explicit "workspace:<range>" dependency range', async () => {
+      const dir = fixture('workspace:^1.0.0');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      commitAll(dir, 'feat!: a breaking change in pkg-a');
+
+      const repo = Repository.create(dir);
+      const plan = await VersionService.getPlan(repo);
+      await VersionService.applyPlan(repo, plan);
+
+      expect(readDeps(dir, 'packages/b/package.json')['pkg-a']).toBe('workspace:^2.0.0');
+    });
+  });
+
   describe('group propagation (a monorepo with two same-group packages)', () => {
     function fixture(): string {
       const dir = tmp();
