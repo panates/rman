@@ -2,8 +2,8 @@
 
 [![NPM Version][npm-image]][npm-url]
 [![NPM Downloads][downloads-image]][downloads-url]
-[![Quality Check][qc-image]][qc-url]
-[![License][license-image]][license-url]
+[![CI Tests][ci-test-image]][ci-test-url]
+[![Test Coverage][coveralls-image]][coveralls-url]
 
 **rman** is a monorepo management CLI: a self-contained alternative to reaching for Lerna,
 Changesets, and a handful of shell scripts glued together. One tool for running scripts across
@@ -366,11 +366,11 @@ Full reference, with detailed examples for every service (`VersionService`, `Pub
 
 rman is available under the [MIT](LICENSE) license.
 
-[npm-image]: https://img.shields.io/npm/v/rman.svg
+[npm-image]: https://img.shields.io/npm/v/rman
 [npm-url]: https://npmjs.org/package/rman
 [downloads-image]: https://img.shields.io/npm/dm/rman.svg
 [downloads-url]: https://npmjs.org/package/rman
-[qc-image]: https://github.com/panates/rman/actions/workflows/qc.yml/badge.svg
-[qc-url]: https://github.com/panates/rman/actions/workflows/qc.yml
-[license-image]: https://img.shields.io/npm/l/rman.svg
-[license-url]: https://github.com/panates/rman/blob/main/LICENSE
+[ci-test-image]: https://github.com/panates/rman/actions/workflows/test.yml/badge.svg
+[ci-test-url]: https://github.com/panates/rman/actions/workflows/test.yml
+[coveralls-image]: https://img.shields.io/coveralls/panates/rman/dev.svg
+[coveralls-url]: https://coveralls.io/r/panates/rman
