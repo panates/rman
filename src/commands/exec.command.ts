@@ -1,6 +1,7 @@
 import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
 import { ExecService } from '../services/exec.service.js';
+import { applyBranchGuardOptions, assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
 import type { LogLevel } from '../utils/logger.js';
 import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
@@ -9,7 +10,7 @@ export function initCli(repository: Repository, program: Argv) {
     command: 'exec [command..]',
     describe: 'Runs an arbitrary shell command in each package - unlike run, not tied to any npm script',
     builder: cmd =>
-      applyPackageFilterOptions(cmd)
+      applyBranchGuardOptions(applyPackageFilterOptions(cmd))
         .parserConfiguration({ 'populate--': true, 'unknown-options-as-args': true })
         .example('$0 exec rm -rf dist', '# Not an npm script - runs directly in every package')
         .example(
@@ -67,6 +68,7 @@ export function initCli(repository: Repository, program: Argv) {
         })
         .conflicts('changed', 'changed-since'),
     handler: async args => {
+      await assertAllowedBranch(repository, readBranchGuardOptions(args));
       const afterDashDash = args['--'] as string[] | undefined;
       const tokens = afterDashDash?.length ? afterDashDash : (args.command as unknown as string[] | undefined);
       if (!tokens?.length) {

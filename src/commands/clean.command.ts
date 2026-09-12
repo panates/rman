@@ -1,6 +1,7 @@
 import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
 import { CleanService } from '../services/clean.service.js';
+import { applyBranchGuardOptions, assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
 import type { LogLevel } from '../utils/logger.js';
 import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
@@ -9,7 +10,7 @@ export function initCli(repository: Repository, program: Argv) {
     command: 'clean',
     describe: 'Removes compiled TypeScript output and any extra files/dirs configured via .rmanrc "clean"',
     builder: cmd =>
-      applyPackageFilterOptions(cmd)
+      applyBranchGuardOptions(applyPackageFilterOptions(cmd))
         .example('$0 clean', '')
         .example('$0 clean --dry-run', '# Preview what would be removed')
         .option('progress', {
@@ -28,6 +29,7 @@ export function initCli(repository: Repository, program: Argv) {
           type: 'boolean',
         }),
     handler: async args => {
+      await assertAllowedBranch(repository, readBranchGuardOptions(args));
       await CleanService.clean(repository, {
         ...readPackageFilterOptions(args),
         progress: args.progress as boolean | undefined,

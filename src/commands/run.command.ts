@@ -1,11 +1,12 @@
 import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
 import { RunService } from '../services/run.service.js';
+import { applyBranchGuardOptions, assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
 import type { LogLevel } from '../utils/logger.js';
 import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
 export function applyRunOptions<T>(cmd: Argv<T>): Argv<T> {
-  return applyPackageFilterOptions(cmd)
+  return applyBranchGuardOptions(applyPackageFilterOptions(cmd))
     .option('parallel', {
       describe:
         'Max packages to build at once: omit/true for CPU count (or .rmanrc run.<script>.concurrency), ' +
@@ -80,6 +81,7 @@ export function initCli(repository: Repository, program: Argv) {
           type: 'string',
         }),
     handler: async args => {
+      await assertAllowedBranch(repository, readBranchGuardOptions(args));
       await RunService.runScript(repository, args.script as string, { ...readRunOptions(args), commandName: 'run' });
     },
   });

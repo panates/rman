@@ -3,6 +3,7 @@ import colors from 'ansi-colors';
 import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
 import { VersionService } from '../services/version.service.js';
+import { applyBranchGuardOptions, assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
 export function initCli(repository: Repository, program: Argv) {
@@ -10,7 +11,7 @@ export function initCli(repository: Repository, program: Argv) {
     command: 'version [bump]',
     describe: 'Bumps versions of changed packages (and their dependents), grouped via .rmanrc "group"',
     builder: cmd =>
-      applyPackageFilterOptions(cmd)
+      applyBranchGuardOptions(applyPackageFilterOptions(cmd))
         .example('$0 version patch', '# Bump patch severity directly, applied immediately')
         .example('$0 version', "# Auto-detect severity from commits, show the plan, don't write anything")
         .example('$0 version --interactive', '# Show the plan either way, then ask for confirmation')
@@ -48,6 +49,7 @@ export function initCli(repository: Repository, program: Argv) {
           type: 'boolean',
         }),
     handler: async args => {
+      await assertAllowedBranch(repository, readBranchGuardOptions(args));
       const bump = args.bump as string | undefined;
       const plan = await VersionService.getPlan(repository, {
         ...readPackageFilterOptions(args),

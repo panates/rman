@@ -4,6 +4,7 @@ import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
 import { CiService } from '../services/ci.service.js';
 import { PublishService } from '../services/publish.service.js';
+import { applyBranchGuardOptions, assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
 export function initCli(repository: Repository, program: Argv) {
@@ -11,7 +12,7 @@ export function initCli(repository: Repository, program: Argv) {
     command: 'publish',
     describe: 'Publishes every non-private package whose local version is not already on the registry',
     builder: cmd =>
-      applyPackageFilterOptions(cmd)
+      applyBranchGuardOptions(applyPackageFilterOptions(cmd))
         .example('$0 publish', '# Show the plan, then ask for confirmation')
         .example('$0 publish --yes', '# Publish immediately, no confirmation')
         .example('$0 publish --dry-run', '# Only show the plan, never publish')
@@ -59,6 +60,7 @@ export function initCli(repository: Repository, program: Argv) {
           type: 'string',
         }),
     handler: async args => {
+      await assertAllowedBranch(repository, readBranchGuardOptions(args));
       const options = {
         ...readPackageFilterOptions(args),
         ignoreDirty: args.ignoreDirty as boolean | undefined,

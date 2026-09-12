@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,6 +36,20 @@ async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
     console.log = original;
   }
   return lines;
+}
+
+/** A run refused by --allow-branch/--ignore-branch hits cli.ts's `.fail()` handler on an
+ *  already-logged error, which calls the real `process.exit(1)` - fatal to the test runner itself,
+ *  since it's the same process. */
+async function withStubbedExit(fn: () => Promise<void>): Promise<void> {
+  const originalExit = process.exit;
+  // @ts-expect-error - observing the call instead of actually terminating the test process.
+  process.exit = () => undefined;
+  try {
+    await fn();
+  } finally {
+    process.exit = originalExit;
+  }
 }
 
 describe('commands/clean', () => {
@@ -118,6 +133,49 @@ describe('commands/clean', () => {
 
       const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['clean', '--no-progress'] }));
       expect(lines.some(l => l.includes('pkg-a'))).toBe(true);
+    });
+  });
+
+  describe('--allow-branch / --ignore-branch', () => {
+    function git(dir: string, ...args: string[]): string {
+      return execFileSync('git', args, { cwd: dir, stdio: 'pipe' }).toString().trim();
+    }
+
+    it('refuses to run from a branch that does not match --allow-branch', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeFile(dir, 'packages/a/src/foo.js');
+      git(dir, 'init', '-q');
+      git(dir, 'config', 'user.email', 't@t.com');
+      git(dir, 'config', 'user.name', 't');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'init');
+      git(dir, 'checkout', '-q', '-b', 'feature/x');
+
+      const lines: string[] = [];
+      await withStubbedExit(async () => {
+        lines.push(...(await captureLogs(() => runCli({ cwd: dir, argv: ['clean', '--allow-branch', 'main'] }))));
+      });
+      expect(lines.some(l => l.includes('feature/x'))).toBe(true);
+      // nothing ran - refused before the clean itself.
+      expect(fs.existsSync(path.join(dir, 'packages/a/src/foo.js'))).toBe(true);
+    });
+
+    it('proceeds normally on a branch that matches --allow-branch', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeFile(dir, 'packages/a/src/foo.js');
+      git(dir, 'init', '-q');
+      git(dir, 'config', 'user.email', 't@t.com');
+      git(dir, 'config', 'user.name', 't');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'init');
+      git(dir, 'checkout', '-q', '-b', 'main');
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['clean', '--allow-branch', 'main'] }));
+      expect(fs.existsSync(path.join(dir, 'packages/a/src/foo.js'))).toBe(false);
     });
   });
 });
