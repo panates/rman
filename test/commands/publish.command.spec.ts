@@ -65,6 +65,21 @@ function calledWith(logContent: string, subcommand: string): boolean {
     .some(line => line.split('||')[1]?.startsWith(subcommand));
 }
 
+/** Forces `process.stdout.isTTY` to `false` for the duration of `fn`, restoring whatever it was
+ *  before - the "refuses to prompt" path only takes effect off a TTY, but the test runner's own
+ *  stdout can genuinely be a TTY (e.g. run directly in an interactive terminal rather than piped/
+ *  redirected), which would otherwise fall through to a real `readline` prompt and hang waiting for
+ *  keyboard input instead of failing the assertion. */
+async function withStubbedNonTTY<T>(fn: () => Promise<T>): Promise<T> {
+  const originalIsTTY = process.stdout.isTTY;
+  Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: true });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process.stdout, 'isTTY', { value: originalIsTTY, configurable: true });
+  }
+}
+
 async function withStubbedNpm<T>(dir: string, fn: (logFile: string) => Promise<T>): Promise<T> {
   const binDir = path.join(dir, 'node_modules', '.bin');
   fs.mkdirSync(binDir, { recursive: true });
@@ -164,11 +179,13 @@ describe('commands/publish', () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
 
-      await withStubbedNpm(dir, async logFile => {
-        const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['publish'] }));
-        expect(lines.some(l => l.includes('Not a TTY'))).toBe(true);
-        expect(calledWith(fs.readFileSync(logFile, 'utf-8'), 'publish')).toBe(false);
-      });
+      await withStubbedNonTTY(() =>
+        withStubbedNpm(dir, async logFile => {
+          const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['publish'] }));
+          expect(lines.some(l => l.includes('Not a TTY'))).toBe(true);
+          expect(calledWith(fs.readFileSync(logFile, 'utf-8'), 'publish')).toBe(false);
+        }),
+      );
     });
   });
 

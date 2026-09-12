@@ -178,7 +178,7 @@ describe('services/clean', () => {
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       const repo = Repository.create(dir);
 
-      const lines = await captureLogs(() => CleanService.clean(repo));
+      const lines = await captureLogs(() => CleanService.clean(repo, { progress: false }));
       expect(lines.some(l => l.includes('clean'))).toBe(true);
     });
 
@@ -227,7 +227,7 @@ describe('services/clean', () => {
       writeFile(dir, 'build/out.js');
 
       const repo = Repository.create(dir);
-      const lines = await captureLogs(() => CleanService.clean(repo, { dryRun: true }));
+      const lines = await captureLogs(() => CleanService.clean(repo, { dryRun: true, progress: false }));
 
       expect(exists(dir, 'packages/a/src/foo.js')).toBe(true);
       expect(exists(dir, 'packages/a/tsconfig.tsbuildinfo')).toBe(true);
@@ -320,7 +320,7 @@ describe('services/clean', () => {
       writeFile(dir, 'packages/a/src/foo.js');
       const repo = Repository.create(dir);
 
-      const lines = await captureLogs(() => CleanService.clean(repo, { logLevel: 'silent' }));
+      const lines = await captureLogs(() => CleanService.clean(repo, { logLevel: 'silent', progress: false }));
       expect(lines.some(l => l.includes('pkg-a'))).toBe(false);
       // the level only affects logging - the actual cleanup still happened.
       expect(exists(dir, 'packages/a/src/foo.js')).toBe(false);
@@ -333,7 +333,7 @@ describe('services/clean', () => {
       writeFile(dir, 'packages/a/src/foo.js');
       const repo = Repository.create(dir);
 
-      const lines = await captureLogs(() => CleanService.clean(repo));
+      const lines = await captureLogs(() => CleanService.clean(repo, { progress: false }));
       expect(lines.some(l => l.includes('pkg-a'))).toBe(true);
     });
 
@@ -345,7 +345,7 @@ describe('services/clean', () => {
       writeFile(dir, 'packages/a/src/foo.js');
       const repo = Repository.create(dir);
 
-      const lines = await captureLogs(() => CleanService.clean(repo));
+      const lines = await captureLogs(() => CleanService.clean(repo, { progress: false }));
       expect(lines.some(l => l.includes('pkg-a'))).toBe(false);
     });
   });

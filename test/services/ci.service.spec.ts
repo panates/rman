@@ -151,7 +151,7 @@ describe('services/ci', () => {
       const repo = Repository.create(dir);
       const { packageManager } = stubPackageManager();
 
-      const lines = await captureLogs(() => CiService.reinstall(repo, { packageManager }));
+      const lines = await captureLogs(() => CiService.reinstall(repo, { packageManager, progress: false }));
       expect(lines.some(l => l.includes('rmdir'))).toBe(false);
       expect(lines.some(l => l.includes('clean') && l.includes('pkg-a'))).toBe(true);
     });

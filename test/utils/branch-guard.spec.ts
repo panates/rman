@@ -30,6 +30,19 @@ describe('utils/branch-guard', () => {
     return execFileSync('git', args, { cwd: dir, stdio: 'pipe' }).toString().trim();
   }
 
+  /** A rejected `assertAllowedBranch` call has already printed its own red message via
+   *  `console.log` before throwing (see the "logging convention" tests below) - suppressed here
+   *  since most tests only care about the thrown error, not that printed line. */
+  async function captureLogs<T>(fn: () => Promise<T>): Promise<T> {
+    const original = console.log;
+    console.log = () => {};
+    try {
+      return await fn();
+    } finally {
+      console.log = original;
+    }
+  }
+
   function repoOnBranch(branch: string, rmanrc?: unknown): Repository {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
@@ -58,7 +71,9 @@ describe('utils/branch-guard', () => {
 
     it('rejects when the current branch does not match', async () => {
       const repo = repoOnBranch('feature/foo');
-      await expect(assertAllowedBranch(repo, { allowBranch: 'main' })).rejects.toThrow(/feature\/foo/);
+      await captureLogs(() =>
+        expect(assertAllowedBranch(repo, { allowBranch: 'main' })).rejects.toThrow(/feature\/foo/),
+      );
     });
 
     it('supports a glob (e.g. "release/*") and an array of alternatives', async () => {
@@ -71,7 +86,7 @@ describe('utils/branch-guard', () => {
       await expect(assertAllowedBranch(allowed)).resolves.toBeUndefined();
 
       const blocked = repoOnBranch('side-branch', { allowBranch: 'main' });
-      await expect(assertAllowedBranch(blocked)).rejects.toThrow(/side-branch/);
+      await captureLogs(() => expect(assertAllowedBranch(blocked)).rejects.toThrow(/side-branch/));
     });
 
     it('an explicit CLI option replaces .rmanrc entirely, rather than merging with it', async () => {
@@ -84,7 +99,9 @@ describe('utils/branch-guard', () => {
   describe('ignoreBranch', () => {
     it('rejects when the current branch matches the glob', async () => {
       const repo = repoOnBranch('wip/experiment');
-      await expect(assertAllowedBranch(repo, { ignoreBranch: 'wip/*' })).rejects.toThrow(/wip\/experiment/);
+      await captureLogs(() =>
+        expect(assertAllowedBranch(repo, { ignoreBranch: 'wip/*' })).rejects.toThrow(/wip\/experiment/),
+      );
     });
 
     it('passes when the current branch does not match', async () => {

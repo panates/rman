@@ -19,6 +19,19 @@ async function withStubbedExit(fn: () => Promise<void>): Promise<void> {
   }
 }
 
+/** Suppresses `exec`'s own real "exec .../success ..." console output for the duration of `fn` -
+ *  none of these tests assert on it (they check the filesystem side effect instead), so left
+ *  uncaptured it's just noise on top of every other suite's own output. */
+async function captureLogs(fn: () => Promise<void>): Promise<void> {
+  const original = console.log;
+  console.log = () => {};
+  try {
+    await fn();
+  } finally {
+    console.log = original;
+  }
+}
+
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-exec-cmd-test-'));
 }
@@ -44,7 +57,7 @@ describe('commands/exec', () => {
     writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
 
-    await runCli({ cwd: dir, argv: ['exec', '--no-progress', 'touch', 'marker.txt'] });
+    await captureLogs(() => runCli({ cwd: dir, argv: ['exec', '--no-progress', 'touch', 'marker.txt'] }));
 
     expect(fs.existsSync(path.join(dir, 'packages/a/marker.txt'))).toBe(true);
   });
@@ -55,7 +68,9 @@ describe('commands/exec', () => {
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
     writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
 
-    await runCli({ cwd: dir, argv: ['exec', '--no-progress', '--scope', 'pkg-a', 'touch', 'marker.txt'] });
+    await captureLogs(() =>
+      runCli({ cwd: dir, argv: ['exec', '--no-progress', '--scope', 'pkg-a', 'touch', 'marker.txt'] }),
+    );
 
     expect(fs.existsSync(path.join(dir, 'packages/a/marker.txt'))).toBe(true);
     expect(fs.existsSync(path.join(dir, 'packages/b/marker.txt'))).toBe(false);
@@ -68,7 +83,7 @@ describe('commands/exec', () => {
 
     // "--bail" is one of exec's own options too - without the leading "--" here, it would be
     // parsed as that instead of reaching "touch" as a (literal, touch's own "--"-escaped) filename.
-    await runCli({ cwd: dir, argv: ['exec', '--no-progress', '--', 'touch', '--', '--bail'] });
+    await captureLogs(() => runCli({ cwd: dir, argv: ['exec', '--no-progress', '--', 'touch', '--', '--bail'] }));
 
     expect(fs.existsSync(path.join(dir, 'packages/a/--bail'))).toBe(true);
   });
@@ -85,7 +100,9 @@ describe('commands/exec', () => {
     execFileSync('git', ['checkout', '-q', '-b', 'feature/x'], { cwd: dir });
 
     await withStubbedExit(() =>
-      runCli({ cwd: dir, argv: ['exec', '--no-progress', '--allow-branch', 'main', 'touch', 'marker.txt'] }),
+      captureLogs(() =>
+        runCli({ cwd: dir, argv: ['exec', '--no-progress', '--allow-branch', 'main', 'touch', 'marker.txt'] }),
+      ),
     );
 
     // refused before running anything - "--allow-branch"/"main" never reached the [command..]

@@ -114,12 +114,14 @@ describe('services/exec', () => {
     });
     const repo = Repository.create(dir);
 
-    await expect(
-      ExecService.exec(repo, `bash -c "[ $(basename $(pwd)) = a ] && exit 1 || echo ran >> ${marker}"`, {
-        progress: false,
-        parallel: false,
-      }),
-    ).rejects.toThrow();
+    await captureLogs(async () => {
+      await expect(
+        ExecService.exec(repo, `bash -c "[ $(basename $(pwd)) = a ] && exit 1 || echo ran >> ${marker}"`, {
+          progress: false,
+          parallel: false,
+        }),
+      ).rejects.toThrow();
+    });
     expect(fs.existsSync(marker)).toBe(false);
   });
 

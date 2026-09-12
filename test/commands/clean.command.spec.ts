@@ -87,7 +87,7 @@ describe('commands/clean', () => {
       writeFile(dir, 'packages/a/src/foo.ts', 'export {}');
       writeFile(dir, 'packages/a/src/foo.js');
 
-      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['clean', '--dry-run'] }));
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['clean', '--dry-run', '--no-progress'] }));
 
       expect(exists(dir, 'packages/a/src/foo.js')).toBe(true);
       expect(lines.some(l => l.includes('would rm'))).toBe(true);
