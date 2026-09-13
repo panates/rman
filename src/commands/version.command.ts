@@ -1,5 +1,6 @@
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
+import EasyTable from 'easy-table';
 import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
 import { VersionService } from '../services/version.service.js';
@@ -126,23 +127,30 @@ export function initCli(repository: Repository, program: Argv) {
 }
 
 function printPlan(entries: VersionService.Entry[]): void {
+  const table = new EasyTable();
   for (const e of entries) {
-    const name = colors.cyan(e.package.name);
-    const group = colors.gray(`(${e.group})`);
-    switch (e.status) {
-      case 'bump':
-        console.log(colors.green('bump'), name, group, e.from, '->', colors.yellow(e.to!), colors.gray(e.reason ?? ''));
-        break;
-      case 'no-change':
-        console.log(colors.gray('no-change'), name, group, e.from);
-        break;
-      case 'skip':
-        console.log(colors.cyan('skip'), name, group, colors.gray(e.reason ?? ''));
-        break;
-      case 'error':
-        console.log(colors.red('error'), name, group, colors.red(e.reason ?? ''));
-        break;
-    }
+    table.cell('Status', statusLabel(e.status));
+    table.cell('Package', colors.cyan(e.package.name));
+    table.cell('Group', colors.gray(`(${e.group})`));
+    table.cell('From', e.from);
+    table.cell('', e.status === 'bump' ? '->' : '');
+    table.cell('To', e.status === 'bump' ? colors.yellow(e.to!) : '');
+    table.cell('Reason', e.status === 'error' ? colors.red(e.reason ?? '') : colors.gray(e.reason ?? ''));
+    table.newRow();
+  }
+  console.log(table.toString().trim());
+}
+
+function statusLabel(status: VersionService.Entry['status']): string {
+  switch (status) {
+    case 'bump':
+      return colors.green('bump');
+    case 'no-change':
+      return colors.gray('no-change');
+    case 'skip':
+      return colors.cyan('skip');
+    case 'error':
+      return colors.red('error');
   }
 }
 
