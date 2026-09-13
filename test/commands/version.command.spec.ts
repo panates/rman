@@ -121,6 +121,33 @@ describe('commands/version', () => {
     });
   });
 
+  describe('--show', () => {
+    it('previews an explicit bump without applying it', async () => {
+      const dir = fixture();
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--show'] }));
+
+      expect(lines.some(l => l.includes('bump') && l.includes('pkg-a') && l.includes('1.0.1'))).toBe(true);
+      expect(lines.some(l => l.includes('Preview only'))).toBe(true);
+      expect(lines.some(l => l.includes('updated'))).toBe(false);
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
+      expect(pkg.version).toBe('1.0.0');
+    });
+
+    it('still uses the given severity to compute the plan, unlike omitting bump entirely', async () => {
+      const dir = fixture(); // a "fix:" commit, which would auto-detect to "patch" on its own
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'major', '--show'] }));
+
+      expect(lines.some(l => l.includes('bump') && l.includes('pkg-a') && l.includes('2.0.0'))).toBe(true);
+    });
+
+    it('rejects being combined with --interactive', async () => {
+      const dir = fixture();
+      await withStubbedExit(() => captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--show', '-i'] })));
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
+      expect(pkg.version).toBe('1.0.0'); // never got far enough to apply anything
+    });
+  });
+
   describe('--ignore-dirty', () => {
     it('without it, a dirty package aborts the whole run', async () => {
       const dir = fixture();

@@ -1,14 +1,128 @@
 import fs from 'fs';
 import * as yaml from 'js-yaml';
+import { createRequire } from 'module';
 import path from 'path';
 import merge from 'putil-merge';
+import { pathToFileURL } from 'url';
+
+/**
+ * The shape of `.rmanrc`/`.rmanrc.yml`/`.rmanrc.cjs`/`.mjs`/`.js` (and `package.json`'s own
+ * `"rman"` key) - see docs/api.md#configuration-rmanrc-rmanrcyml for the full reference. Every
+ * field is optional and cascades from the repository root down to each package's own directory.
+ * Purely a typing aid (used by `defineConfig` below, and importable on its own for a `.rmanrc.ts`/
+ * `.mts` authored config, or a plain `: RmanConfig` annotation) - never read by rman itself, which
+ * only ever sees the plain JS object a JS config file exports.
+ */
+export interface RmanConfig {
+  packageManager?: 'npm' | 'yarn' | 'pnpm' | 'bun';
+  logLevel?: 'silent' | 'error' | 'info' | 'verbose';
+  allowBranch?: string | string[];
+  ignoreBranch?: string | string[];
+  group?: boolean | string;
+  version?: RmanConfig.VersionOptions;
+  changelog?: RmanConfig.ChangelogOptions;
+  clean?: RmanConfig.CleanOptions;
+  /** Keyed by npm script name (e.g. `"build"`, `"lint"`, `"test"`). */
+  run?: Record<string, RmanConfig.RunScriptOptions>;
+  /** Keyed by the in-repo package's own name. */
+  packages?: Record<string, RmanConfig.PackageOptions>;
+}
+
+export namespace RmanConfig {
+  export interface VersionOptions {
+    commitMessage?: string;
+    script?: string | string[];
+    preScript?: string | string[];
+    postScript?: string | string[];
+  }
+
+  export interface ChangelogOptions {
+    ignoreTypes?: string[];
+    template?: string;
+    filePath?: string;
+    tagPattern?: string;
+  }
+
+  export interface CleanOptions {
+    include?: string | string[];
+    exclude?: string | string[];
+    skip?: boolean;
+  }
+
+  export interface RunScriptOptions {
+    concurrency?: number;
+    topo?: boolean;
+    bail?: boolean;
+    progress?: boolean;
+    logLevel?: 'silent' | 'error' | 'info' | 'verbose';
+    changedSince?: string;
+    skip?: boolean;
+    if?: string;
+    script?: string | string[];
+    preScript?: string | string[];
+    postScript?: string | string[];
+    override?: boolean;
+  }
+
+  export interface PackageOptions {
+    dependencies?: string[] | Record<string, string>;
+  }
+}
+
+/**
+ * Identity helper for authoring a `.rmanrc.cjs`/`.mjs`/`.js` config with full type-checking and
+ * autocomplete - the same `defineConfig` pattern Vite/Vitest use. Returns `config` completely
+ * unchanged; this exists purely so TypeScript can infer/check against `RmanConfig`, not for any
+ * runtime behavior:
+ *
+ *   // .rmanrc.mjs
+ *   import { defineConfig } from 'rman';
+ *   export default defineConfig({ packageManager: 'pnpm' });
+ *
+ *   // .rmanrc.cjs
+ *   const { defineConfig } = require('rman');
+ *   module.exports = defineConfig({ packageManager: 'pnpm' });
+ */
+export function defineConfig(config: RmanConfig): RmanConfig {
+  return config;
+}
+
+/** `.rmanrc.cjs`/`.rmanrc.mjs`/`.rmanrc.js`, checked in this order - a JS module whose default
+ *  export (or, lacking one, the module's own exports object) is the config. Both CommonJS (`.cjs`,
+ *  or a `.js` under a `"type": "commonjs"` package.json) and native ESM (`.mjs`, or a `.js` under
+ *  `"type": "module"`) are supported - the reason `readDirConfig`/`resolveConfig` are async at all. */
+const JS_CONFIG_FILES = ['.rmanrc.cjs', '.rmanrc.mjs', '.rmanrc.js'];
+
+const requireJsConfig = createRequire(import.meta.url);
+
+/**
+ * Loads `file`'s config object. Tries `require()` first - not just an optimization: a CommonJS
+ * module's `module.exports` is more reliably observed this way than through dynamic `import()`'s
+ * CJS-interop synthesis, which some ESM loader hooks (e.g. ts-node/swc-node-style transpilers
+ * registered via `--import`) can end up short-circuiting into an empty object. `require()` throws
+ * `ERR_REQUIRE_ESM` for a genuinely-ESM file (`.mjs`, or `.js` under `"type": "module"`) - only
+ * then does this fall back to `import()`, the one case that actually needs it. Either path can
+ * hand back an ES module namespace instead of a plain object (Node's `require(esm)` support does
+ * this too, not just `import()`), so `.default` is preferred whenever present.
+ */
+async function loadJsConfig(file: string): Promise<any> {
+  let mod: any;
+  try {
+    mod = requireJsConfig(file);
+  } catch (e: any) {
+    if (e?.code !== 'ERR_REQUIRE_ESM') throw e;
+    mod = await import(pathToFileURL(file).href);
+  }
+  return mod?.default ?? mod;
+}
 
 /**
  * Reads the rman configuration defined at a single directory level, merging
- * (in increasing precedence): `package.json#rman`, `.rman.yml`, `.rmanrc`.
+ * (in increasing precedence): `package.json#rman`, `.rmanrc.yml`, `.rmanrc`,
+ * then `.rmanrc.cjs`/`.rmanrc.mjs`/`.rmanrc.js` (whichever exist, in that order).
  */
-export function readDirConfig(dirname: string): any {
-  const result = {};
+export async function readDirConfig(dirname: string): Promise<RmanConfig> {
+  const result: RmanConfig = {};
 
   const pkgJsonFile = path.join(dirname, 'package.json');
   if (fs.existsSync(pkgJsonFile)) {
@@ -16,7 +130,7 @@ export function readDirConfig(dirname: string): any {
     if (pkgJson && typeof pkgJson.rman === 'object') merge(result, pkgJson.rman, { deep: true });
   }
 
-  const ymlFile = path.join(dirname, '.rman.yml');
+  const ymlFile = path.join(dirname, '.rmanrc.yml');
   if (fs.existsSync(ymlFile)) {
     const obj = yaml.load(fs.readFileSync(ymlFile, 'utf-8'));
     if (obj && typeof obj === 'object') merge(result, obj, { deep: true });
@@ -26,6 +140,14 @@ export function readDirConfig(dirname: string): any {
   if (fs.existsSync(rcFile)) {
     const obj = JSON.parse(fs.readFileSync(rcFile, 'utf-8'));
     if (obj && typeof obj === 'object') merge(result, obj, { deep: true });
+  }
+
+  for (const jsFileName of JS_CONFIG_FILES) {
+    const jsFile = path.join(dirname, jsFileName);
+    if (fs.existsSync(jsFile)) {
+      const obj = await loadJsConfig(jsFile);
+      if (obj && typeof obj === 'object') merge(result, obj, { deep: true });
+    }
   }
 
   return result;
@@ -38,12 +160,16 @@ export function readDirConfig(dirname: string): any {
  * package (or any intermediate directory) narrow or override the repository's
  * root configuration for itself and everything below it.
  */
-export function resolveConfig(rootDir: string, targetDir: string, cache: Map<string, any> = new Map()): any {
-  const result = {};
+export async function resolveConfig(
+  rootDir: string,
+  targetDir: string,
+  cache: Map<string, RmanConfig> = new Map(),
+): Promise<RmanConfig> {
+  const result: RmanConfig = {};
   for (const dir of dirChain(rootDir, targetDir)) {
     let local = cache.get(dir);
     if (!local) {
-      local = readDirConfig(dir);
+      local = await readDirConfig(dir);
       cache.set(dir, local);
     }
     merge(result, local, { deep: true });

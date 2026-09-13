@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: a36b6e5acf4c433f9c819753ea0ba707d39a4b9c
-package-version: 0.38.0
-date: 2026-09-12
+git-commit: b6924c69810870582f615a81c97b587e4057910d
+package-version: 1.0.3
+date: 2026-09-13
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff a36b6e5acf4c433f9c819753ea0ba707d39a4b9c..HEAD -- src/
+  git diff b6924c69810870582f615a81c97b587e4057910d..HEAD -- src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -24,12 +24,12 @@ shelling out to the `rman` binary at all.
 ```ts
 import { Repository, VersionService } from 'rman';
 
-const repository = Repository.create();
+const repository = await Repository.create();
 const plan = await VersionService.getPlan(repository);
 ```
 
 This document covers that programmatic surface: `Repository`/`Package`, every `*Service`
-namespace, the `.rmanrc`/`.rman.yml` configuration schema those services read, and a few
+namespace, the `.rmanrc`/`.rmanrc.yml` configuration schema those services read, and a few
 standalone utilities (`detectChangeHash`, `Logger`). For the CLI itself (commands, flags,
 `--help` text), see [docs/cli.md](cli.md) (or [README.md](../README.md) for a fast-start overview).
 
@@ -44,7 +44,8 @@ standalone utilities (`detectChangeHash`, `Logger`). For the CLI itself (command
 - [Core concepts](#core-concepts)
   - [`Repository`](#repository)
   - [`Package`](#package)
-- [Configuration (`.rmanrc` / `.rman.yml`)](#configuration-rmanrc-rmanyml)
+- [Configuration (`.rmanrc` / `.rmanrc.yml`)](#configuration-rmanrc-rmanrcyml)
+  - [JS config (`.rmanrc.cjs` / `.rmanrc.mjs` / `.rmanrc.js`)](#js-config-rmanrccjs-rmanrcmjs-rmanrcjs)
   - [Editor support (JSON Schema)](#editor-support-json-schema)
 - [Services](#services)
   - [`VersionService`](#versionservice)
@@ -76,6 +77,7 @@ imported from the package's default export:
 import {
   Repository,
   Package,
+  defineConfig,
   VersionService,
   PublishService,
   ChangelogService,
@@ -91,6 +93,7 @@ import {
   LOG_LEVELS,
   resolveRootLogLevel,
 } from 'rman';
+import type { RmanConfig } from 'rman';
 ```
 
 ## Core concepts
@@ -108,7 +111,7 @@ class Repository extends Package {
   readonly packages: Package[]; // every package; root NOT included when monorepo
   readonly cwd: string; // the directory Repository.create() was actually invoked from
 
-  static create(root?: string, options?: { deep?: number }): Repository;
+  static create(root?: string, options?: { deep?: number }): Promise<Repository>;
 
   get currentPackage(): Package | undefined;
   getPackages(options?: { scope?: string | string[]; toposort?: boolean }): Package[];
@@ -127,12 +130,16 @@ namespace Repository {
 directory before finding one, that directory becomes a non-monorepo repository root. If nothing is
 found within the depth limit, you get a plain single-package `Repository` rooted at `root` itself.
 
+Async because config resolution can load a `.rmanrc.cjs`/`.rmanrc.mjs`/`.rmanrc.js` module (see
+[Configuration](#configuration-rmanrc-rmanrcyml) below), which needs a dynamic `import()` for a
+genuinely-ESM file - always `await` it.
+
 ```ts
 // From anywhere inside a monorepo or a single package:
-const repository = Repository.create();
+const repository = await Repository.create();
 
 // Or against an explicit path (e.g. a script that batch-processes several repos):
-const repository = Repository.create('/path/to/some/repo');
+const repository = await Repository.create('/path/to/some/repo');
 
 console.log(repository.monorepo); // true | false
 console.log(repository.packages.map(p => p.name));
@@ -144,7 +151,7 @@ Several services (`RunService`, `CleanService`, `ChangelogService`, ...) use thi
 themselves to "just the package I'm standing in" unless a `root: true` option overrides it:
 
 ```ts
-const repository = Repository.create('/repo/packages/pkg-a');
+const repository = await Repository.create('/repo/packages/pkg-a');
 repository.currentPackage?.name; // 'pkg-a'
 ```
 
@@ -174,7 +181,7 @@ const sinceRelease = await repository.listStatus({ hash: 'v1.2.0' });
 class Package {
   readonly dirname: string;
   dependencies: string[]; // in-repo package names this one depends on (full transitive closure)
-  config: any; // this package's own effective, cascaded .rmanrc config
+  config: RmanConfig; // this package's own effective, cascaded .rmanrc config
 
   get basename(): string; // path.basename(dirname)
   get name(): string; // package.json "name"
@@ -192,7 +199,7 @@ class Package {
 full transitive closure across every in-repo package (guarding against cycles), which is what
 powers topological sort, `--deps`/`--dependents` filtering, and `RunService`'s task scheduling.
 It also folds in anything declared under `.rmanrc packages.<name>.dependencies` (see the
-[config reference](#configuration-rmanrc-rmanyml)) - a way to tell rman about an in-repo
+[config reference](#configuration-rmanrc-rmanrcyml)) - a way to tell rman about an in-repo
 dependency relationship that isn't expressed as a real `package.json` dependency.
 
 ```ts
@@ -201,7 +208,7 @@ pkgA.json.description = 'Updated via script';
 pkgA.writeJson();
 ```
 
-## Configuration (`.rmanrc` / `.rman.yml`)
+## Configuration (`.rmanrc` / `.rmanrc.yml`)
 
 Every directory between the repository root and a package can carry its own config, cascaded the
 same way a `tsconfig.json` `extends` chain works: a value set closer to a package overrides
@@ -210,12 +217,13 @@ toward the root. Root-only keys are only ever consulted from the *root's* own re
 the current implementation (see the table below), even though nothing stops you from setting them
 deeper.
 
-For a single directory, three sources merge together in **increasing precedence**:
+For a single directory, up to six sources merge together in **increasing precedence**:
 
 1. `package.json`'s own `"rman"` key (a plain object)
-2. `.rman.yml` (YAML, parsed with `js-yaml`)
+2. `.rmanrc.yml` (YAML, parsed with `js-yaml`)
 3. `.rmanrc` (**JSON**, parsed with `JSON.parse` - despite the dotfile-style name, this is not INI
-   or YAML; reach for `.rman.yml` if you want a more human-friendly format)
+   or YAML; reach for `.rmanrc.yml` if you want a more human-friendly format)
+4. `.rmanrc.cjs`, then `.rmanrc.mjs`, then `.rmanrc.js` - whichever exist, in that order (see below)
 
 ```json
 // .rmanrc (JSON)
@@ -227,7 +235,7 @@ For a single directory, three sources merge together in **increasing precedence*
 ```
 
 ```yaml
-# .rman.yml (YAML) - equivalent to the above
+# .rmanrc.yml (YAML) - equivalent to the above
 packageManager: pnpm
 group: true
 version:
@@ -242,6 +250,67 @@ version:
     "packageManager": "pnpm"
   }
 }
+```
+
+### JS config (`.rmanrc.cjs` / `.rmanrc.mjs` / `.rmanrc.js`)
+
+For config that needs real logic (reading an environment variable, computing a value, sharing a
+fragment between packages), a JS file's **default export** (or its whole `module.exports`, for a
+CommonJS file with no `default`) is used as the config object - the same shape as the other
+formats, just computed instead of static:
+
+```js
+// .rmanrc.cjs (CommonJS - always, regardless of the nearest package.json "type")
+module.exports = {
+  packageManager: 'pnpm',
+  logLevel: process.env.CI ? 'verbose' : 'info',
+};
+```
+
+```js
+// .rmanrc.mjs (native ESM - always) / .rmanrc.js (ESM only under a "type": "module" package.json)
+export default {
+  packageManager: 'pnpm',
+};
+```
+
+`.rmanrc.cjs` is always CommonJS and `.rmanrc.mjs` is always ESM, regardless of the repository's own
+`package.json` `"type"` field; a plain `.rmanrc.js` follows that field the same way any other `.js`
+file in the repository would (CommonJS by default, ESM under `"type": "module"`). This is also
+*why* [`Repository.create()`](#repository) is async: loading a genuinely-ESM file needs a dynamic
+`import()`, which can't happen synchronously.
+
+**Type-checked authoring:** `rman` exports an `RmanConfig` type and a `defineConfig()` identity
+helper (the same pattern Vite/Vitest use) - wrap the config object in it to get full autocomplete
+and type errors in a JS config file, the equivalent of what the [JSON Schema](#editor-support-json-schema)
+gives `.rmanrc`/`.rmanrc.yml`:
+
+```js
+// .rmanrc.mjs
+import { defineConfig } from 'rman';
+
+export default defineConfig({
+  packageManager: 'pnpm', // autocompletes to 'npm' | 'yarn' | 'pnpm' | 'bun'
+});
+```
+
+```js
+// .rmanrc.cjs
+const { defineConfig } = require('rman');
+
+module.exports = defineConfig({
+  packageManager: 'pnpm',
+});
+```
+
+`defineConfig()` returns its argument completely unchanged - it exists purely for TypeScript
+inference, not runtime behavior. `RmanConfig` is also importable on its own, e.g. for a `.rmanrc.ts`
+authored with a separate build step, or just to annotate a config object built up elsewhere:
+
+```ts
+import type { RmanConfig } from 'rman';
+
+const config: RmanConfig = { packageManager: 'pnpm' };
 ```
 
 ### Config keys reference
@@ -281,9 +350,11 @@ and shouldn't be silently overridable by it.
 
 ### Editor support (JSON Schema)
 
-`rman` ships a JSON Schema for `.rmanrc`/`.rman.yml` at `rman/rmanrc.schema.json` (also available
+`rman` ships a JSON Schema for `.rmanrc`/`.rmanrc.yml` at `rman/rmanrc.schema.json` (also available
 in this repo at [`schemas/rmanrc.schema.json`](../schemas/rmanrc.schema.json)) - point your editor
-at it to get autocomplete, inline docs, and typo/type validation while editing config.
+at it to get autocomplete, inline docs, and typo/type validation while editing config. This only
+applies to the JSON/YAML forms; a `.rmanrc.cjs`/`.mjs`/`.js` file is plain code, so a schema can't
+validate it - your editor's own JS/TS tooling (JSDoc types, etc.) is the closest equivalent there.
 
 **`.rmanrc` (JSON):** add a `"$schema"` key (rman itself ignores it):
 
@@ -294,7 +365,7 @@ at it to get autocomplete, inline docs, and typo/type validation while editing c
 }
 ```
 
-**`.rman.yml` (YAML):** add a `yaml-language-server` directive as the first line (recognized by
+**`.rmanrc.yml` (YAML):** add a `yaml-language-server` directive as the first line (recognized by
 VS Code's YAML extension, and by WebStorm/IntelliJ IDEs):
 
 ```yaml
@@ -305,7 +376,7 @@ packageManager: pnpm
 **WebStorm/IntelliJ, without editing the file at all:** since `.rmanrc` has no file extension,
 the IDE needs to be told both that it's JSON and which schema applies - open *Preferences ->
 Languages & Frameworks -> Schemas and DTDs -> JSON Schema Mappings*, add a mapping to
-`node_modules/rman/rmanrc.schema.json`, and add a file path pattern of `.rmanrc` (and `.rman.yml`
+`node_modules/rman/rmanrc.schema.json`, and add a file path pattern of `.rmanrc` (and `.rmanrc.yml`
 as a second mapping, under the *YAML* mappings section instead). This applies project-wide without
 touching every config file's contents.
 
@@ -364,7 +435,7 @@ const DEPENDENCY_KEYS = ['dependencies', 'devDependencies', 'peerDependencies', 
 ```ts
 import { Repository, VersionService } from 'rman';
 
-const repository = Repository.create();
+const repository = await Repository.create();
 
 // 1. Compute a plan - never writes anything.
 const plan = await VersionService.getPlan(repository); // auto-detect severity from commits

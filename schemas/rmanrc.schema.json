@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/panates/rman/main/schemas/rmanrc.schema.json",
   "title": "rman configuration",
-  "description": "Schema for rman's .rmanrc (JSON) and .rman.yml (YAML) config files, and the \"rman\" key in package.json. See docs/api.md#configuration-rmanrc-rmanyml for the full reference.",
+  "description": "Schema for rman's .rmanrc (JSON) and .rmanrc.yml (YAML) config files, and the \"rman\" key in package.json. See docs/api.md#configuration-rmanrc-rmanrcyml for the full reference.",
   "type": "object",
   "properties": {
     "$schema": {

@@ -26,13 +26,13 @@ describe('core/Repository', () => {
   }
 
   describe('create()', () => {
-    it('detects a monorepo from a "workspaces" field and discovers its packages', () => {
+    it('detects a monorepo from a "workspaces" field and discovers its packages', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
 
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       expect(repo.monorepo).toBe(true);
       expect(
         repo
@@ -42,29 +42,29 @@ describe('core/Repository', () => {
       ).toEqual(['pkg-a', 'pkg-b']);
     });
 
-    it('treats a directory with no "workspaces" field as a single package', () => {
+    it('treats a directory with no "workspaces" field as a single package', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'solo', version: '1.0.0' });
 
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       expect(repo.monorepo).toBe(false);
       expect(repo.getPackages().map(p => p.name)).toEqual(['solo']);
       expect(repo.rootPackage.name).toBe('solo');
     });
 
-    it('walks upward from a nested cwd to find the workspace root', () => {
+    it('walks upward from a nested cwd to find the workspace root', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       const nested = path.join(dir, 'packages', 'a', 'src', 'deep');
       fs.mkdirSync(nested, { recursive: true });
 
-      const repo = Repository.create(nested);
+      const repo = await Repository.create(nested);
       expect(repo.dirname).toBe(dir);
       expect(repo.monorepo).toBe(true);
     });
 
-    it('stops walking upward at a ".git" boundary that has no "workspaces"', () => {
+    it('stops walking upward at a ".git" boundary that has no "workspaces"', async () => {
       const dir = tmp();
       fs.mkdirSync(path.join(dir, '.git'));
       writeJson(dir, 'package.json', { name: 'root', version: '1.0.0' });
@@ -72,14 +72,14 @@ describe('core/Repository', () => {
       fs.mkdirSync(nested, { recursive: true });
       writeJson(nested, 'package.json', { name: 'nested', version: '1.0.0' });
 
-      const repo = Repository.create(nested);
+      const repo = await Repository.create(nested);
       expect(repo.monorepo).toBe(false);
       expect(repo.rootPackage.name).toBe('nested');
     });
   });
 
   describe('getPackages() / getPackage()', () => {
-    function fixtureRepo(): Repository {
+    async function fixtureRepo(): Promise<Repository> {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
@@ -96,21 +96,21 @@ describe('core/Repository', () => {
       return Repository.create(dir);
     }
 
-    it('getPackage() finds a package by name, or returns undefined', () => {
-      const repo = fixtureRepo();
+    it('getPackage() finds a package by name, or returns undefined', async () => {
+      const repo = await fixtureRepo();
       expect(repo.getPackage('pkg-b')?.name).toBe('pkg-b');
       expect(repo.getPackage('does-not-exist')).toBeUndefined();
     });
 
-    it('getPackages({toposort:true}) orders dependencies before their dependents', () => {
-      const repo = fixtureRepo();
+    it('getPackages({toposort:true}) orders dependencies before their dependents', async () => {
+      const repo = await fixtureRepo();
       const order = repo.getPackages({ toposort: true }).map(p => p.name);
       expect(order.indexOf('pkg-a')).toBeLessThan(order.indexOf('pkg-b'));
       expect(order.indexOf('pkg-b')).toBeLessThan(order.indexOf('pkg-c'));
     });
 
-    it('getPackages({scope}) filters to just the named package(s)', () => {
-      const repo = fixtureRepo();
+    it('getPackages({scope}) filters to just the named package(s)', async () => {
+      const repo = await fixtureRepo();
       expect(repo.getPackages({ scope: 'pkg-b' }).map(p => p.name)).toEqual(['pkg-b']);
       expect(
         repo
@@ -131,34 +131,34 @@ describe('core/Repository', () => {
       return dir;
     }
 
-    it('is undefined when the repository was created from its own root', () => {
+    it('is undefined when the repository was created from its own root', async () => {
       const dir = fixtureDir();
-      expect(Repository.create(dir).currentPackage).toBeUndefined();
+      expect((await Repository.create(dir)).currentPackage).toBeUndefined();
     });
 
-    it('resolves to the package whose directory the repository was created from', () => {
+    it('resolves to the package whose directory the repository was created from', async () => {
       const dir = fixtureDir();
-      const repo = Repository.create(path.join(dir, 'packages/a'));
+      const repo = await Repository.create(path.join(dir, 'packages/a'));
       expect(repo.currentPackage?.name).toBe('pkg-a');
     });
 
-    it('resolves to the owning package even from a directory nested deep inside it', () => {
+    it('resolves to the owning package even from a directory nested deep inside it', async () => {
       const dir = fixtureDir();
       const nested = path.join(dir, 'packages/a', 'src', 'deep');
       fs.mkdirSync(nested, { recursive: true });
-      const repo = Repository.create(nested);
+      const repo = await Repository.create(nested);
       expect(repo.currentPackage?.name).toBe('pkg-a');
     });
 
-    it('is undefined for a non-monorepo (a single-package repository is always "at the root")', () => {
+    it('is undefined for a non-monorepo (a single-package repository is always "at the root")', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'solo', version: '1.0.0' });
-      expect(Repository.create(dir).currentPackage).toBeUndefined();
+      expect((await Repository.create(dir)).currentPackage).toBeUndefined();
     });
   });
 
   describe('dependency resolution', () => {
-    it('populates .dependencies from dependencies/devDependencies/peerDependencies/optionalDependencies, limited to in-repo packages', () => {
+    it('populates .dependencies from dependencies/devDependencies/peerDependencies/optionalDependencies, limited to in-repo packages', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
@@ -168,12 +168,12 @@ describe('core/Repository', () => {
         dependencies: { 'pkg-a': '1.0.0', lodash: '^4.0.0' },
         devDependencies: { 'pkg-nonexistent': '1.0.0' },
       });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       // lodash and pkg-nonexistent aren't workspace packages, so they're excluded.
       expect(repo.getPackage('pkg-b')?.dependencies).toEqual(['pkg-a']);
     });
 
-    it('resolves transitive dependencies (a depends on b depends on c => a lists both)', () => {
+    it('resolves transitive dependencies (a depends on b depends on c => a lists both)', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', {
@@ -188,11 +188,11 @@ describe('core/Repository', () => {
       });
       writeJson(dir, 'packages/c/package.json', { name: 'pkg-c', version: '1.0.0' });
 
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       expect(repo.getPackage('pkg-a')?.dependencies.sort()).toEqual(['pkg-b', 'pkg-c']);
     });
 
-    it('does not loop forever on a 2-cycle, and a package never ends up depending on itself', () => {
+    it('does not loop forever on a 2-cycle, and a package never ends up depending on itself', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', {
@@ -206,12 +206,12 @@ describe('core/Repository', () => {
         dependencies: { 'pkg-a': '1.0.0' },
       });
 
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       expect(repo.getPackage('pkg-a')?.dependencies).toEqual(['pkg-b']);
       expect(repo.getPackage('pkg-b')?.dependencies).toEqual(['pkg-a']);
     });
 
-    it('does not loop forever on a 3-cycle either, and still excludes self from each package', () => {
+    it('does not loop forever on a 3-cycle either, and still excludes self from each package', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', {
@@ -230,14 +230,14 @@ describe('core/Repository', () => {
         dependencies: { 'pkg-a': '1.0.0' },
       });
 
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       // each package transitively reaches the other two, but never itself.
       expect(repo.getPackage('pkg-a')?.dependencies.sort()).toEqual(['pkg-b', 'pkg-c']);
       expect(repo.getPackage('pkg-b')?.dependencies.sort()).toEqual(['pkg-a', 'pkg-c']);
       expect(repo.getPackage('pkg-c')?.dependencies.sort()).toEqual(['pkg-a', 'pkg-b']);
     });
 
-    it('adds extra dependencies declared via .rmanrc packages.<name>.dependencies', () => {
+    it('adds extra dependencies declared via .rmanrc packages.<name>.dependencies', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
@@ -247,13 +247,13 @@ describe('core/Repository', () => {
         JSON.stringify({ packages: { 'pkg-b': { dependencies: ['pkg-a'] } } }),
       );
 
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       expect(repo.getPackage('pkg-b')?.dependencies).toEqual(['pkg-a']);
     });
   });
 
   describe('config cascading (pkg.config)', () => {
-    it('every package inherits the root config, overridable by its own .rmanrc', () => {
+    it('every package inherits the root config, overridable by its own .rmanrc', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ foo: 'root', bar: 'root' }));
@@ -261,7 +261,7 @@ describe('core/Repository', () => {
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
       fs.writeFileSync(path.join(dir, 'packages/b/.rmanrc'), JSON.stringify({ bar: 'b-own' }));
 
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       expect(repo.config).toEqual({ foo: 'root', bar: 'root' });
       expect(repo.getPackage('pkg-a')?.config).toEqual({ foo: 'root', bar: 'root' });
       expect(repo.getPackage('pkg-b')?.config).toEqual({ foo: 'root', bar: 'b-own' });
@@ -276,7 +276,7 @@ describe('core/Repository', () => {
 
     const git = (...args: string[]): string => execFileSync('git', args, { cwd: dir, stdio: 'pipe' }).toString().trim();
 
-    before(() => {
+    before(async () => {
       dir = tmp();
       originDir = tmp();
       fs.rmSync(originDir, { recursive: true, force: true });
@@ -304,7 +304,7 @@ describe('core/Repository', () => {
 
       fs.writeFileSync(path.join(dir, 'packages/dirty/file.txt'), 'uncommitted');
 
-      repo = Repository.create(dir);
+      repo = await Repository.create(dir);
     });
 
     it('reports dirty/committed/clean relative to upstream when no hash is given', async () => {

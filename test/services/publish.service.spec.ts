@@ -43,7 +43,7 @@ describe('services/publish', () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0', private: true });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
 
       const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'skip', reason: 'private package' });
@@ -52,7 +52,7 @@ describe('services/publish', () => {
     it('never published (registry has nothing) is a publish candidate', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
 
       const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
       expect(entryFor(plan, 'pkg-a')).toMatchObject({
@@ -65,7 +65,7 @@ describe('services/publish', () => {
     it('local version already on the registry is up-to-date, not a candidate', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
 
       const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '1.0.0' }));
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'up-to-date', registryVersion: '1.0.0' });
@@ -74,7 +74,7 @@ describe('services/publish', () => {
     it('local version differs from the registry (either direction) is a publish candidate', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.2.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
 
       const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '1.1.0' }));
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish', registryVersion: '1.1.0' });
@@ -90,7 +90,7 @@ describe('services/publish', () => {
           cwd: dir,
         });
         fs.writeFileSync(path.join(dir, 'dirty.txt'), 'x');
-        const repo = Repository.create(dir);
+        const repo = await Repository.create(dir);
 
         let queried = false;
         const plan = await PublishService.getPlan(
@@ -112,7 +112,7 @@ describe('services/publish', () => {
         writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
         execFileSync('git', ['init', '-q'], { cwd: dir });
         fs.writeFileSync(path.join(dir, 'dirty.txt'), 'x');
-        const repo = Repository.create(dir);
+        const repo = await Repository.create(dir);
 
         const plan = await PublishService.getPlan(repo, { ignoreDirty: true }, registry({}));
         expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'skip', reason: 'uncommitted local changes' });
@@ -124,7 +124,7 @@ describe('services/publish', () => {
         const dir = tmp();
         writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
         writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-        const repo = Repository.create(dir);
+        const repo = await Repository.create(dir);
 
         const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
         expect(plan.some(e => e.package === repo.rootPackage)).toBe(false);
@@ -133,7 +133,7 @@ describe('services/publish', () => {
       it('in a single-package repo, root is a normal candidate like any other package', async () => {
         const dir = tmp();
         writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
-        const repo = Repository.create(dir);
+        const repo = await Repository.create(dir);
 
         const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
         expect(plan.some(e => e.package === repo.rootPackage && e.status === 'publish')).toBe(true);
@@ -149,7 +149,7 @@ describe('services/publish', () => {
         dependencies: { 'pkg-a': '1.0.0' },
       });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
 
       const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined, 'pkg-b': undefined }));
       const names = plan.map(e => e.package.name);
@@ -180,7 +180,7 @@ describe('services/publish', () => {
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0', private: true });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { logFile } = stubPublishBin(dir, 'npm');
 
       const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
@@ -194,7 +194,7 @@ describe('services/publish', () => {
     it('passes --access/--tag/--otp/--registry/--userconfig through to the publish command', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { logFile } = stubPublishBin(dir, 'npm');
 
       const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
@@ -215,7 +215,7 @@ describe('services/publish', () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0', publishConfig: { directory: 'dist' } });
       fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { logFile } = stubPublishBin(dir, 'npm');
 
       const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
@@ -235,7 +235,7 @@ describe('services/publish', () => {
         dependencies: { 'pkg-a': '1.0.0' },
       });
       writeJson(dir, 'packages/c/package.json', { name: 'pkg-c', version: '1.0.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       // "npm" for pkg-a fails outright; pkg-c gets a real stub so it can still succeed independently.
       const binDir = path.join(dir, 'node_modules', '.bin');
       fs.mkdirSync(binDir, { recursive: true });
@@ -260,7 +260,7 @@ describe('services/publish', () => {
     it('a skip/up-to-date entry passes through applyPlan untouched, never invoking the package manager', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { logFile } = stubPublishBin(dir, 'npm');
 
       const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '1.0.0' }));
@@ -308,7 +308,7 @@ describe('services/publish', () => {
 
       it('rewrites a bare "workspace:*" range to the dependency\'s exact current version for the publish call', async () => {
         const dir = fixture('workspace:*');
-        const repo = Repository.create(dir);
+        const repo = await Repository.create(dir);
         const { logFile } = stubPublishBinCapturingDeps(dir);
 
         const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined, 'pkg-b': undefined }));
@@ -325,7 +325,7 @@ describe('services/publish', () => {
 
       it('rewrites "workspace:^"/"workspace:~" to a real "^"/"~" range, and restores the original file afterward', async () => {
         const dir = fixture('workspace:^');
-        const repo = Repository.create(dir);
+        const repo = await Repository.create(dir);
         stubPublishBin(dir, 'npm');
 
         const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined, 'pkg-b': undefined }));
@@ -337,7 +337,7 @@ describe('services/publish', () => {
 
       it('restores the original file even when the publish command itself fails', async () => {
         const dir = fixture('workspace:*');
-        const repo = Repository.create(dir);
+        const repo = await Repository.create(dir);
         const binDir = path.join(dir, 'node_modules', '.bin');
         fs.mkdirSync(binDir, { recursive: true });
         fs.writeFileSync(path.join(binDir, 'npm'), `#!/usr/bin/env node\nprocess.exit(1);\n`);
@@ -352,7 +352,7 @@ describe('services/publish', () => {
 
       it('leaves a package with no "workspace:" ranges untouched (no extra disk I/O)', async () => {
         const dir = fixture('^1.0.0');
-        const repo = Repository.create(dir);
+        const repo = await Repository.create(dir);
         stubPublishBin(dir, 'npm');
 
         const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined, 'pkg-b': undefined }));

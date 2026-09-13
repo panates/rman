@@ -9,7 +9,7 @@
 Changesets, and a handful of shell scripts glued together. One tool for running scripts across
 packages, computing semantic version bumps from your commit history, publishing, changelogs,
 importing external repos with history intact, and more - all driven by a single, cascading
-`.rmanrc`/`.rman.yml` config.
+`.rmanrc`/`.rmanrc.yml` config.
 
 Every command is also available as a **programmatic API** - see [docs/api.md](docs/api.md) if you
 want to call `rman`'s logic directly from a Node.js script instead of shelling out to the CLI.
@@ -243,6 +243,7 @@ rman version --changelog         # also write/fold in each bumped package's CHAN
 rman version patch --push        # commit, tag, and push in one go
 rman version patch --message "chore(release): {version}"
 rman version --ignore-dirty      # exclude dirty packages instead of aborting the whole run
+rman version patch --show        # preview what an explicit patch bump would do, without applying it
 ```
 
 Severity, when not given explicitly, is auto-detected per package/group from
@@ -298,12 +299,13 @@ covered, then run `rman ci` to install it.
 
 `rman` reads config cascaded from the repository root down to each package's own directory (the
 same way a `tsconfig.json` `extends` chain works) - a value set closer to a package overrides the
-same key set further up. Three file forms are supported per directory, merged in increasing
-precedence: `package.json`'s own `"rman"` key, `.rman.yml` (YAML), and `.rmanrc` (**JSON**, despite
-the dotfile-style name).
+same key set further up. Several file forms are supported per directory, merged in increasing
+precedence: `package.json`'s own `"rman"` key, `.rmanrc.yml` (YAML), `.rmanrc` (**JSON**, despite
+the dotfile-style name), and `.rmanrc.cjs`/`.rmanrc.mjs`/`.rmanrc.js` for config that needs real
+logic (a JS module's default export).
 
 ```yaml
-# .rman.yml, at the repository root
+# .rmanrc.yml, at the repository root
 packageManager: pnpm
 logLevel: info
 allowBranch: [main, release/*]
@@ -337,14 +339,23 @@ run:
 { "group": "plugins" }
 ```
 
-See [docs/api.md#configuration-rmanrc-rmanyml](docs/api.md#configuration-rmanrc-rmanyml) for the
+See [docs/api.md#configuration-rmanrc-rmanrcyml](docs/api.md#configuration-rmanrc-rmanrcyml) for the
 full key reference (every `run.<script>.*` sub-key, `clean.*`, `changelog.*`, precedence rules,
 and which keys are root-level-only today).
 
-**Editor autocomplete:** `rman` ships a JSON Schema for `.rmanrc`/`.rman.yml` at
+**Editor autocomplete:** `rman` ships a JSON Schema for `.rmanrc`/`.rmanrc.yml` at
 `rman/rmanrc.schema.json` - add `"$schema": "./node_modules/rman/rmanrc.schema.json"` to your
-`.rmanrc` (or the equivalent `# yaml-language-server: $schema=...` comment in `.rman.yml`) to get
-autocomplete and validation in VS Code/WebStorm. See
+`.rmanrc` (or the equivalent `# yaml-language-server: $schema=...` comment in `.rmanrc.yml`) to get
+autocomplete and validation in VS Code/WebStorm. For a `.rmanrc.cjs`/`.mjs`/`.js` config, wrap it in
+the exported `defineConfig()` helper instead for the same autocomplete via the `RmanConfig` type:
+
+```js
+// .rmanrc.mjs
+import { defineConfig } from 'rman';
+export default defineConfig({ packageManager: 'pnpm' });
+```
+
+See
 [docs/api.md#editor-support-json-schema](docs/api.md#editor-support-json-schema) for details,
 including a WebStorm setup that needs no changes to the config file itself.
 
@@ -356,7 +367,7 @@ from your own Node.js scripts without shelling out to the `rman` binary:
 ```ts
 import { Repository, VersionService } from 'rman';
 
-const repository = Repository.create();
+const repository = await Repository.create();
 const plan = await VersionService.getPlan(repository);
 await VersionService.applyPlan(repository, plan, { changelog: true, push: true });
 ```

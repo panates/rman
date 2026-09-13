@@ -15,6 +15,7 @@ export function initCli(repository: Repository, program: Argv) {
         .example('$0 version patch', '# Bump patch severity directly, applied immediately')
         .example('$0 version', "# Auto-detect severity from commits, show the plan, don't write anything")
         .example('$0 version --interactive', '# Show the plan either way, then ask for confirmation')
+        .example('$0 version patch --show', '# Preview what an explicit patch bump would do, without applying it')
         .positional('bump', {
           describe:
             'A release-type keyword ("patch"/"minor"/"major") or an explicit semver version. ' +
@@ -26,6 +27,14 @@ export function initCli(repository: Repository, program: Argv) {
           describe: 'Show the plan and ask for confirmation before applying (with or without an explicit bump)',
           type: 'boolean',
         })
+        .option('show', {
+          describe:
+            'Show the resulting plan for the given bump without applying it - unlike omitting bump ' +
+            'entirely, this still uses the given release-type keyword/version to compute the plan, ' +
+            'just never writes it.',
+          type: 'boolean',
+        })
+        .conflicts('show', 'interactive')
         .option('ignore-dirty', {
           describe: 'Exclude a package with uncommitted local changes instead of aborting the whole run',
           type: 'boolean',
@@ -79,6 +88,11 @@ export function initCli(repository: Repository, program: Argv) {
 
       if (!plan.some(e => e.status === 'bump')) {
         console.log(colors.gray('Nothing to version.'));
+        return;
+      }
+
+      if (args.show) {
+        console.log(colors.gray('Preview only (--show) - nothing was written.'));
         return;
       }
 

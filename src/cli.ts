@@ -24,7 +24,7 @@ import { LOG_LEVELS } from './utils/logger.js';
 
 export async function runCli(options?: { argv?: string[]; cwd?: string }) {
   try {
-    const repository = Repository.create(options?.cwd);
+    const repository = await Repository.create(options?.cwd);
     const _argv = options?.argv || hideBin(process.argv);
 
     const program = yargs(_argv)

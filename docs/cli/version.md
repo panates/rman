@@ -1,4 +1,4 @@
-<!-- verified against commit a36b6e5acf4c433f9c819753ea0ba707d39a4b9c - see ../cli.md for the baseline convention -->
+<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli.md for the baseline convention -->
 
 # `rman version [bump]`
 
@@ -29,6 +29,7 @@ options, in addition to:
 | `--message <text>` | `-m` | string | Override the commit message for every group this run commits. Default: `.rmanrc version.commitMessage`, or `"chore(release): v{version}"`. `{version}` is substituted when a commit's own group shares one version. |
 | `--changelog` | - | boolean | Also write each bumped package's `CHANGELOG.md` (same as running `changelog --write` separately) and fold it into the same commit as the version bump. |
 | `--preid <name>` | - | string | Make the bump a prerelease with this identifier (e.g. `"beta"` -> `1.2.3-beta.0`). Running again with the same `--preid` increments it (`-> 1.2.3-beta.1`); a different identifier starts a fresh prerelease line. Ignored when `bump` is an explicit semver version. |
+| `--show` | - | boolean | Show the resulting plan for the given `bump` without applying it - unlike omitting `bump` entirely, this still uses the given release-type keyword/version to compute the plan, just never writes it. Conflicts with `--interactive`. |
 
 ## Examples
 
@@ -58,6 +59,7 @@ rman version patch --push         # commit, tag, and push in one go
 rman version patch --message "chore(release): {version}"
 rman version --ignore-dirty       # exclude dirty packages instead of aborting the whole run
 rman version --scope pkg-a --dependents  # only pkg-a and whatever depends on it
+rman version patch --show         # preview what an explicit patch bump would do, without applying it
 ```
 
 Any package with uncommitted local changes aborts the whole run (`N package(s) have uncommitted

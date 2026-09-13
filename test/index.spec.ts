@@ -28,6 +28,7 @@ describe('public API (src/index.ts)', () => {
     expect(typeof api.ListService.getPackages).toBe('function');
     expect(typeof api.RunService.runScript).toBe('function');
     expect(api.LOG_LEVELS).toEqual(['silent', 'error', 'info', 'verbose']);
+    expect(typeof api.defineConfig).toBe('function');
   });
 
   it('Repository.create() + List.getPackages() work when imported from the public entry point, returning data with no console output', async () => {
@@ -45,7 +46,7 @@ describe('public API (src/index.ts)', () => {
         cwd: dir,
       });
 
-      const repo = api.Repository.create(dir);
+      const repo = await api.Repository.create(dir);
       const originalLog = console.log;
       const logged: unknown[] = [];
       console.log = (...args: unknown[]) => logged.push(args);

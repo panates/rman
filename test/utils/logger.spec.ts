@@ -70,26 +70,26 @@ describe('utils/resolveRootLogLevel', () => {
     fs.writeFileSync(path.join(dir, rel), JSON.stringify(data));
   }
 
-  it('defaults to "info" when .rmanrc has no logLevel', () => {
+  it('defaults to "info" when .rmanrc has no logLevel', async () => {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'root', private: true });
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
     expect(resolveRootLogLevel(repo)).toBe('info');
   });
 
-  it('reads the root .rmanrc "logLevel"', () => {
+  it('reads the root .rmanrc "logLevel"', async () => {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'root', private: true });
     writeJson(dir, '.rmanrc', { logLevel: 'silent' });
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
     expect(resolveRootLogLevel(repo)).toBe('silent');
   });
 
-  it('falls back to "info" for an invalid value, instead of failing', () => {
+  it('falls back to "info" for an invalid value, instead of failing', async () => {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'root', private: true });
     writeJson(dir, '.rmanrc', { logLevel: 'chatty' });
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
     expect(resolveRootLogLevel(repo)).toBe('info');
   });
 });

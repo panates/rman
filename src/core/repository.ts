@@ -20,8 +20,9 @@ export class Repository extends Package {
     super(dirname);
     this.rootPackage = new Package(dirname);
     if (!monorepo) this.packages = [this.rootPackage];
-    this._resolveConfigs();
-    this._updateDependencies();
+    // Config resolution can load a `.rmanrc.cjs`/`.mjs`/`.js` module (dynamic `import()`, always
+    // async) - a constructor can't `await`, so `create()` finishes this instance off via `_init()`
+    // once construction itself (synchronous) completes.
   }
 
   /**
@@ -88,14 +89,14 @@ export class Repository extends Package {
    * package, cascading root -> intermediate directories -> package directory,
    * so a `.rmanrc` placed anywhere along that path overrides the levels above it.
    */
-  protected _resolveConfigs(): void {
+  protected async _resolveConfigs(): Promise<void> {
     const cache = new Map<string, any>();
-    const rootConfig = resolveConfig(this.dirname, this.dirname, cache);
+    const rootConfig = await resolveConfig(this.dirname, this.dirname, cache);
     this.config = rootConfig;
     this.rootPackage.config = rootConfig;
     for (const pkg of this.packages) {
       if (pkg === this.rootPackage) continue;
-      pkg.config = resolveConfig(this.dirname, pkg.dirname, cache);
+      pkg.config = await resolveConfig(this.dirname, pkg.dirname, cache);
     }
   }
 
@@ -144,7 +145,7 @@ export class Repository extends Package {
     }
   }
 
-  static create(root?: string, options?: { deep?: number }): Repository {
+  static async create(root?: string, options?: { deep?: number }): Promise<Repository> {
     const dirname = root || process.cwd();
     let deep = options?.deep ?? 10;
     let pkgDirname = dirname;
@@ -154,14 +155,23 @@ export class Repository extends Package {
         const pkgJson = JSON.parse(fs.readFileSync(f, 'utf-8'));
         if (Array.isArray(pkgJson.workspaces)) {
           const packages = this._resolvePackages(pkgDirname, pkgJson.workspaces);
-          return new Repository(pkgDirname, true, packages, dirname);
+          return Repository._init(new Repository(pkgDirname, true, packages, dirname));
         }
         /** If we reach to the root of the project */
         if (fs.existsSync(path.join(pkgDirname, '.git'))) break;
       }
       pkgDirname = path.resolve(pkgDirname, '..');
     }
-    return new Repository(dirname, false, [], dirname);
+    return Repository._init(new Repository(dirname, false, [], dirname));
+  }
+
+  /** Finishes constructing `repo` with the async work a constructor can't do itself - resolving
+   *  `.rmanrc`/`.rmanrc.yml`/`.rmanrc.cjs`/`.mjs`/`.js` config (which may need a dynamic `import()`)
+   *  before the dependency graph is built from it. */
+  private static async _init(repo: Repository): Promise<Repository> {
+    await repo._resolveConfigs();
+    repo._updateDependencies();
+    return repo;
   }
 
   protected static _resolvePackages(dirname: string, patterns: string[]): Package[] {
