@@ -2,6 +2,7 @@ import colors from 'ansi-colors';
 import semver from 'semver';
 import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
+import { CiService } from '../services/ci.service.js';
 import { SystemInfo } from '../services/system-info.js';
 
 function printSystemInfo(systemInfo: SystemInfo.SystemInfo): void {
@@ -63,7 +64,7 @@ export function initCli(repository: Repository, program: Argv) {
           type: 'boolean',
         }),
     handler: async args => {
-      const systemInfo = await SystemInfo.getSystemInfo();
+      const systemInfo = await SystemInfo.getSystemInfo(CiService.resolvePackageManager(repository));
       const repositoryInfo = SystemInfo.getRepositoryInfo(repository);
       if (args.json) {
         console.log(JSON.stringify({ ...systemInfo, repository: repositoryInfo }, undefined, 2));

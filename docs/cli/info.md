@@ -6,10 +6,11 @@
 rman info [options]
 ```
 
-Prints local environment information (OS, CPU, memory, shell, Node/npm/Yarn versions, git,
-installed `rman`/`typescript` versions) alongside basic repository information (monorepo vs.
-single package, name, version, root path, package count). Useful for bug reports and CI debugging.
-No package filtering options apply - this command reports on the whole environment/repository.
+Prints local environment information (OS, CPU, memory, shell, Node + whichever package manager
+`.rmanrc "packageManager"` actually configures (default npm), git, installed `rman`/`typescript`
+versions) alongside basic repository information (monorepo vs. single package, name, version, root
+path, package count). Useful for bug reports and CI debugging. No package filtering options apply -
+this command reports on the whole environment/repository.
 
 ## Options
 
@@ -41,6 +42,10 @@ rman info
     Root     : /Users/me/dev/my-monorepo
     Packages : 6 (run "list" to see them)
 ```
+
+With `.rmanrc { "packageManager": "pnpm" }`, `Binaries` reports `pnpm`'s own version instead of
+npm's - every package-manager-aware command (`ci`/`publish`) already shells out to the configured
+one, not npm, so that's the version actually relevant here.
 
 ```bash
 rman info --json

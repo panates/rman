@@ -123,7 +123,8 @@ rman list --scope '@myorg/*' --ignore '*-internal'
 
 ### `rman info`
 
-Prints local environment (OS/CPU/memory, Node/npm/Yarn versions, git) and repository information.
+Prints local environment (OS/CPU/memory, Node + whichever package manager `.rmanrc
+"packageManager"` configures, git) and repository information.
 
 ```bash
 rman info
