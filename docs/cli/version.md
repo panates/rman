@@ -39,9 +39,11 @@ rman version
 ```
 
 ```
-bump   pkg-a (default) 1.2.0 -> 1.3.0 changed since v1.2.0
-bump   pkg-b (default) 1.0.4 -> 1.1.0 in-group dependent of a minor change
-no-change pkg-c (default) 2.0.1
+Status     Package  Group      From   To     Reason
+---------  -------  ---------  -----  -----  -------------------------------
+bump       pkg-a    (default)  1.2.0  1.3.0  changed since v1.2.0
+bump       pkg-b    (default)  1.0.4  1.1.0  in-group dependent of a minor change
+no-change  pkg-c    (default)  2.0.1
 Run again with an explicit bump, or --interactive, to apply.
 ```
 
