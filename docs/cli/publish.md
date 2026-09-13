@@ -6,9 +6,15 @@
 rman publish [options...]
 ```
 
-Publishes every non-private package whose local version isn't already on the registry. Shows the
-plan first, then asks for confirmation (unless `--yes` or `--dry-run`), then publishes
-sequentially, in topological order (dependencies before dependents).
+Publishes every package to its configured target(s) - `npm` by default, or whatever each package's
+own (cascaded) `.rmanrc "publish.target"` says (`"npm"`, `"docker"`, or both). Shows the plan first,
+then asks for confirmation (unless `--yes` or `--dry-run`), then publishes sequentially, in
+topological order (dependencies before dependents).
+
+The npm side is opt-out (every non-private package is a candidate, unless it explicitly narrows its
+own `publish.target` to exclude `"npm"`); the docker side is opt-in (only a package that explicitly
+lists `"docker"` in `publish.target` is a candidate at all) - see
+[Docker publishing](#docker-publishing-publishdocker) below.
 
 ## Options
 
@@ -19,6 +25,7 @@ options, in addition to:
 | --- | --- | --- | --- | --- |
 | `--yes` | `-y` | boolean | - | Skip the confirmation prompt and publish immediately. |
 | `--dry-run` | - | boolean | - | Only show the plan - never publishes, regardless of `--yes`. |
+| `--target <name>` | - | array | `npm`, `docker` | Restrict this run to just these target(s) (repeatable). Default: whatever each package is configured for. `--target docker` on a package that opts in without a `publish.docker` config errors clearly instead of being silently skipped. |
 | `--ignore-dirty` | - | boolean | - | Exclude a package with uncommitted local changes instead of aborting the whole run. |
 | `--package-manager <name>` | - | string | `npm`, `yarn`, `pnpm`, `bun` | Package manager to publish with. Default: `npm`, or `.rmanrc "packageManager"`. |
 | `--access <level>` | - | string | `public`, `restricted` | `npm publish --access <level>` - required by the registry for a *new* scoped package. |
@@ -27,6 +34,7 @@ options, in addition to:
 | `--registry <url>` | - | string | - | Registry to check against **and** publish to (default: whatever `.npmrc` already configures). |
 | `--userconfig <path>` | - | string | - | Path to a custom `.npmrc` for both the registry check and the actual publish. |
 | `--contents <dir>` | - | string | - | Subdirectory to publish from, relative to each package's own directory - only consulted when a package has no `publishConfig.directory` of its own (that always wins when present). |
+| `--docker-namespace <ns>` | - | string | - | Prefixed onto a bare (no `/`) `publish.docker.image`. Default: the `DOCKERHUB_NAMESPACE` environment variable. |
 
 ## Examples
 
@@ -70,6 +78,44 @@ pnpm/yarn's own `publish` performs. The original file is restored immediately af
 failure, since `rman` publishes directly from the working tree rather than a staged tarball. See
 [`PublishService`](../api.md#publishservice) for the full mechanics and test-verified examples.
 
+## Docker publishing (`publish.docker`)
+
+A package opts into building/pushing a Docker image by adding `"docker"` to its own (cascaded)
+`.rmanrc "publish.target"`, plus a `"publish.docker"` block - required once `"docker"` is listed;
+missing it is a clear `'error'` in the plan, not a silent skip:
+
+```jsonc
+// packages/my-app/.rmanrc - a docker-only app is typically also "private": true in package.json
+{
+  "publish": {
+    "target": ["docker"],
+    "docker": {
+      "image": "my-app", // bare - prefixed with --docker-namespace/DOCKERHUB_NAMESPACE
+      "platforms": ["linux/amd64", "linux/arm64"], // default ["linux/amd64"]
+      "buildContexts": { "root": "../.." }, // docker buildx build --build-context root=<path>
+      "buildArgs": { "GITHUB_TOKEN": "$GITHUB_TOKEN" } // "$NAME" expands from the environment
+    }
+  }
+}
+```
+
+`publish.docker.image` already containing a `/` (e.g. `"someregistry.io/team/my-app"`) is used
+verbatim, no namespace prefixing. Requires `DOCKERHUB_USERNAME`/`DOCKERHUB_PASSWORD` environment
+variables to log in (once per run, before any package's build) and `docker buildx` on the machine.
+Each `'publish'` entry builds and pushes `<image>:<version>` and `<image>:latest` via a single
+`docker buildx build --push`; whether the tag already exists (`docker manifest inspect`) decides
+`'publish'` vs `'up-to-date'`, the same idea `npm view` serves on the npm side. A
+`publish.docker.readme` file (default `DOCKER_README.md`, relative to the package's own directory),
+if present, updates the DockerHub repository's description afterward.
+
+```bash
+rman publish --target docker              # only the packages configured for the "docker" target
+rman publish --target npm --target docker # both, explicitly (same as omitting --target)
+rman publish --docker-namespace myorg
+```
+
+See [`DockerPublishService`](../api.md#dockerpublishservice) for the full mechanics.
+
 ## Failure handling
 
 If a package fails to publish, every still-pending dependent (transitively) is marked as failed and
@@ -79,4 +125,4 @@ actually reached the registry. Unrelated packages elsewhere in the plan are unaf
 ## See also
 
 - [`rman version`](version.md) - typically run right before `publish`.
-- [`PublishService`](../api.md#publishservice) - the underlying service.
+- [`PublishService`](../api.md#publishservice) / [`DockerPublishService`](../api.md#dockerpublishservice) - the underlying services.

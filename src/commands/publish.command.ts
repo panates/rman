@@ -1,8 +1,11 @@
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
 import type { Argv } from 'yargs';
+import type { RmanConfig } from '../core/config.js';
+import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import { CiService } from '../services/ci.service.js';
+import { DockerPublishService } from '../services/docker-publish.service.js';
 import { PublishService } from '../services/publish.service.js';
 import { applyBranchGuardOptions, assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
@@ -10,12 +13,13 @@ import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/pa
 export function initCli(repository: Repository, program: Argv) {
   program.command({
     command: 'publish',
-    describe: 'Publishes every non-private package whose local version is not already on the registry',
+    describe: 'Publishes every package to its configured target(s) (npm by default, or .rmanrc "publish.target")',
     builder: cmd =>
       applyBranchGuardOptions(applyPackageFilterOptions(cmd))
         .example('$0 publish', '# Show the plan, then ask for confirmation')
         .example('$0 publish --yes', '# Publish immediately, no confirmation')
         .example('$0 publish --dry-run', '# Only show the plan, never publish')
+        .example('$0 publish --target docker', '# Only the packages configured for the "docker" target')
         .option('yes', {
           alias: 'y',
           describe: 'Skip the confirmation prompt and publish immediately',
@@ -24,6 +28,15 @@ export function initCli(repository: Repository, program: Argv) {
         .option('dry-run', {
           describe: 'Only show the plan - never publishes, regardless of --yes',
           type: 'boolean',
+        })
+        .option('target', {
+          describe:
+            'Restrict this run to just these publish target(s) ("npm"/"docker", repeatable) - default: ' +
+            'every target each package itself is configured for (.rmanrc "publish.target", "npm" when unset). ' +
+            'A package that opts into "docker" but has no "publish.docker" config errors clearly instead of ' +
+            'being silently skipped.',
+          type: 'array',
+          choices: ['npm', 'docker'],
         })
         .option('ignore-dirty', {
           describe: 'Exclude a package with uncommitted local changes instead of aborting the whole run',
@@ -58,30 +71,59 @@ export function initCli(repository: Repository, program: Argv) {
             "Subdirectory to publish from, relative to each package's own directory - only consulted when a " +
             'package has no "publishConfig.directory" of its own (that always wins when present)',
           type: 'string',
+        })
+        .option('docker-namespace', {
+          describe:
+            'Prefixed onto a bare (no "/") "publish.docker.image" - default: the DOCKERHUB_NAMESPACE ' +
+            'environment variable.',
+          type: 'string',
         }),
     handler: async args => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));
-      const options = {
+      const targets = resolveTargets(args.target as string[] | undefined);
+      const explicitDockerTarget = !!(args.target as string[] | undefined)?.length && targets.has('docker');
+      const ignoreDirty = args.ignoreDirty as boolean | undefined;
+
+      const npmOptions = {
         ...readPackageFilterOptions(args),
-        ignoreDirty: args.ignoreDirty as boolean | undefined,
+        ignoreDirty,
         registry: args.registry as string | undefined,
         userconfig: args.userconfig as string | undefined,
       };
-      const plan = await PublishService.getPlan(repository, options);
-      printPlan(plan);
+      const dockerOptions = {
+        ...readPackageFilterOptions(args),
+        ignoreDirty,
+        namespace: args.dockerNamespace as string | undefined,
+      };
 
-      const errors = plan.filter(e => e.status === 'error');
-      if (errors.length) {
-        const message =
-          `${errors.length} package(s) have uncommitted local changes ` +
-          '(pass --ignore-dirty to exclude them instead of aborting)';
+      const npmPlan = targets.has('npm') ? await PublishService.getPlan(repository, npmOptions) : [];
+      const dockerPlan = targets.has('docker') ? await DockerPublishService.getPlan(repository, dockerOptions) : [];
+
+      printPlan(npmPlan);
+      printPlan(dockerPlan, 'docker');
+
+      if (explicitDockerTarget && !dockerPlan.length) {
+        const message = '--target docker was given, but no package\'s .rmanrc configures "publish.docker".';
         console.log(colors.red(message));
         const err: any = new Error(message);
         err.logged = true;
         throw err;
       }
 
-      if (!plan.some(e => e.status === 'publish')) {
+      const errors = [...npmPlan, ...dockerPlan].filter(e => e.status === 'error');
+      if (errors.length) {
+        const allDirty = errors.every(e => e.reason === 'uncommitted local changes');
+        const message = allDirty
+          ? `${errors.length} package(s) have uncommitted local changes ` +
+            '(pass --ignore-dirty to exclude them instead of aborting)'
+          : `${errors.length} package(s) failed to prepare for publish - see the errors above`;
+        console.log(colors.red(message));
+        const err: any = new Error(message);
+        err.logged = true;
+        throw err;
+      }
+
+      if (!npmPlan.some(e => e.status === 'publish') && !dockerPlan.some(e => e.status === 'publish')) {
         console.log(colors.gray('Nothing to publish.'));
         return;
       }
@@ -98,22 +140,41 @@ export function initCli(repository: Repository, program: Argv) {
       }
       if (!proceed) return;
 
-      const applied = await PublishService.applyPlan(repository, plan, {
-        ...options,
-        packageManager: args.packageManager as CiService.PackageManager | undefined,
-        access: args.access as 'public' | 'restricted' | undefined,
-        tag: args.tag as string | undefined,
-        otp: args.otp as string | undefined,
-        contents: args.contents as string | undefined,
-      });
+      const appliedNpm = targets.has('npm')
+        ? await PublishService.applyPlan(repository, npmPlan, {
+            ...npmOptions,
+            packageManager: args.packageManager as CiService.PackageManager | undefined,
+            access: args.access as 'public' | 'restricted' | undefined,
+            tag: args.tag as string | undefined,
+            otp: args.otp as string | undefined,
+            contents: args.contents as string | undefined,
+          })
+        : [];
+      const appliedDocker = targets.has('docker') ? await DockerPublishService.applyPlan(repository, dockerPlan) : [];
 
       let failed = false;
-      for (const entry of applied) {
+      for (const entry of appliedNpm) {
         if (entry.status === 'publish') {
           console.log(colors.green('published'), colors.cyan(entry.package.name), entry.version);
-        } else if (entry.status === 'error' && plan.find(e => e.package === entry.package)?.status === 'publish') {
+        } else if (entry.status === 'error' && npmPlan.find(e => e.package === entry.package)?.status === 'publish') {
           failed = true;
           console.log(colors.red('failed'), colors.cyan(entry.package.name), colors.red(entry.reason ?? ''));
+        }
+      }
+      for (const entry of appliedDocker) {
+        if (entry.status === 'publish') {
+          console.log(colors.green('published'), colors.gray('[docker]'), colors.cyan(entry.package.name), entry.image);
+        } else if (
+          entry.status === 'error' &&
+          dockerPlan.find(e => e.package === entry.package)?.status === 'publish'
+        ) {
+          failed = true;
+          console.log(
+            colors.red('failed'),
+            colors.gray('[docker]'),
+            colors.cyan(entry.package.name),
+            colors.red(entry.reason ?? ''),
+          );
         }
       }
       if (failed) {
@@ -125,9 +186,24 @@ export function initCli(repository: Repository, program: Argv) {
   });
 }
 
-function printPlan(entries: PublishService.Entry[]): void {
+function resolveTargets(input: string[] | undefined): Set<RmanConfig.PublishTarget> {
+  if (!input?.length) return new Set(['npm', 'docker']);
+  return new Set(input as RmanConfig.PublishTarget[]);
+}
+
+/** Shared shape of both `PublishService.Entry` and `DockerPublishService.Entry` - just enough for
+ *  `printPlan` to render either, so npm and docker plans print through the same code. */
+interface PrintableEntry {
+  package: Package;
+  version: string;
+  status: 'publish' | 'skip' | 'up-to-date' | 'error';
+  reason?: string;
+}
+
+function printPlan(entries: PrintableEntry[], label?: string): void {
+  const prefix = label ? colors.gray(`[${label}] `) : '';
   for (const e of entries) {
-    const name = colors.cyan(e.package.name);
+    const name = prefix + colors.cyan(e.package.name);
     switch (e.status) {
       case 'publish':
         console.log(colors.green('publish'), name, e.version, colors.gray(e.reason ?? ''));

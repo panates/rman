@@ -189,6 +189,55 @@ describe('commands/publish', () => {
     });
   });
 
+  describe('--target', () => {
+    it('--target docker errors clearly when nothing configures the "docker" target', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      await withStubbedNpm(dir, async () => {
+        const lines: string[] = [];
+        await withStubbedExit(async () => {
+          lines.push(...(await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--target', 'docker'] }))));
+        });
+        expect(lines.some(l => l.includes('no package') && l.includes('publish.docker'))).toBe(true);
+      });
+    });
+
+    it('--target npm never considers a package configured only for "docker"', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        private: true,
+        rman: { publish: { target: ['docker'], docker: { image: 'org/pkg-a' } } },
+      });
+
+      await withStubbedNpm(dir, async logFile => {
+        const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--target', 'npm', '--yes'] }));
+        expect(lines.some(l => l.includes('Nothing to publish.'))).toBe(true);
+        expect(fs.existsSync(logFile)).toBe(false);
+      });
+    });
+
+    it('--target docker shows a "[docker]"-labeled plan entry, without touching npm at all', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        private: true,
+        rman: { publish: { target: ['docker'], docker: { image: 'org/pkg-a' } } },
+      });
+
+      await withStubbedNpm(dir, async logFile => {
+        const lines = await captureLogs(() =>
+          runCli({ cwd: dir, argv: ['publish', '--target', 'docker', '--dry-run'] }),
+        );
+        expect(lines.some(l => l.includes('publish') && l.includes('[docker]') && l.includes('pkg-a'))).toBe(true);
+        expect(fs.existsSync(logFile)).toBe(false); // npm side never even ran
+      });
+    });
+  });
+
   describe('a failed publish', () => {
     it('reports "failed" per package and exits with a logged error', async () => {
       const dir = tmp();
