@@ -105,7 +105,7 @@ describe('run: "if" expression', () => {
     const git = (...args: string[]): string => execFileSync('git', args, { cwd: dir, stdio: 'pipe' }).toString().trim();
     const writeJson = (rel: string, data: unknown) => fs.writeFileSync(path.join(dir, rel), JSON.stringify(data));
 
-    before(() => {
+    before(async () => {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-if-test-'));
       /** "committed" (committed locally but not in upstream) only means anything once a branch has
        *  an upstream - `git cherry` errors out without one - so set up a real bare origin to push to. */
@@ -137,7 +137,7 @@ describe('run: "if" expression', () => {
       // uncommitted local edit -> "dirty" status (takes priority over "committed").
       fs.writeFileSync(path.join(dir, 'packages/pkg-dirty/file.txt'), 'uncommitted');
 
-      repository = Repository.create(dir);
+      repository = await Repository.create(dir);
     });
 
     after(() => {

@@ -43,7 +43,7 @@ describe('utils/branch-guard', () => {
     }
   }
 
-  function repoOnBranch(branch: string, rmanrc?: unknown): Repository {
+  function repoOnBranch(branch: string, rmanrc?: unknown): Promise<Repository> {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
     if (rmanrc) writeJson(dir, '.rmanrc', rmanrc);
@@ -58,61 +58,61 @@ describe('utils/branch-guard', () => {
 
   describe('with neither allowBranch nor ignoreBranch set anywhere', () => {
     it('never blocks - purely opt-in', async () => {
-      const repo = repoOnBranch('whatever-branch-i-want');
+      const repo = await repoOnBranch('whatever-branch-i-want');
       await expect(assertAllowedBranch(repo)).resolves.toBeUndefined();
     });
   });
 
   describe('allowBranch', () => {
     it('passes when the current branch matches the glob', async () => {
-      const repo = repoOnBranch('main');
+      const repo = await repoOnBranch('main');
       await expect(assertAllowedBranch(repo, { allowBranch: 'main' })).resolves.toBeUndefined();
     });
 
     it('rejects when the current branch does not match', async () => {
-      const repo = repoOnBranch('feature/foo');
+      const repo = await repoOnBranch('feature/foo');
       await captureLogs(() =>
         expect(assertAllowedBranch(repo, { allowBranch: 'main' })).rejects.toThrow(/feature\/foo/),
       );
     });
 
     it('supports a glob (e.g. "release/*") and an array of alternatives', async () => {
-      const repo = repoOnBranch('release/1.0');
+      const repo = await repoOnBranch('release/1.0');
       await expect(assertAllowedBranch(repo, { allowBranch: ['main', 'release/*'] })).resolves.toBeUndefined();
     });
 
     it('reads .rmanrc "allowBranch" when no CLI option is given', async () => {
-      const allowed = repoOnBranch('main', { allowBranch: 'main' });
+      const allowed = await repoOnBranch('main', { allowBranch: 'main' });
       await expect(assertAllowedBranch(allowed)).resolves.toBeUndefined();
 
-      const blocked = repoOnBranch('side-branch', { allowBranch: 'main' });
+      const blocked = await repoOnBranch('side-branch', { allowBranch: 'main' });
       await captureLogs(() => expect(assertAllowedBranch(blocked)).rejects.toThrow(/side-branch/));
     });
 
     it('an explicit CLI option replaces .rmanrc entirely, rather than merging with it', async () => {
       // .rmanrc only allows "main", but the CLI value below should be the only thing that matters.
-      const repo = repoOnBranch('feature/foo', { allowBranch: 'main' });
+      const repo = await repoOnBranch('feature/foo', { allowBranch: 'main' });
       await expect(assertAllowedBranch(repo, { allowBranch: 'feature/*' })).resolves.toBeUndefined();
     });
   });
 
   describe('ignoreBranch', () => {
     it('rejects when the current branch matches the glob', async () => {
-      const repo = repoOnBranch('wip/experiment');
+      const repo = await repoOnBranch('wip/experiment');
       await captureLogs(() =>
         expect(assertAllowedBranch(repo, { ignoreBranch: 'wip/*' })).rejects.toThrow(/wip\/experiment/),
       );
     });
 
     it('passes when the current branch does not match', async () => {
-      const repo = repoOnBranch('main');
+      const repo = await repoOnBranch('main');
       await expect(assertAllowedBranch(repo, { ignoreBranch: 'wip/*' })).resolves.toBeUndefined();
     });
   });
 
   describe('logging convention', () => {
     it('prints the message and marks the thrown error "logged", matching every other guard check', async () => {
-      const repo = repoOnBranch('feature/foo');
+      const repo = await repoOnBranch('feature/foo');
       const original = console.log;
       const logged: string[] = [];
       console.log = (...args: unknown[]) => logged.push(args.map(String).join(' '));

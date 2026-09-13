@@ -56,7 +56,7 @@ describe('services/exec', () => {
     writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
     writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     await captureLogs(() => ExecService.exec(repo, appendCommand(marker, 'ran'), { progress: false }));
 
@@ -68,7 +68,7 @@ describe('services/exec', () => {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     const marker = path.join(dir, 'cwd.log');
     await captureLogs(() =>
@@ -89,7 +89,7 @@ describe('services/exec', () => {
       version: '1.0.0',
       dependencies: { 'pkg-a': '1.0.0' },
     });
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     await captureLogs(() =>
       ExecService.exec(repo, `node -e 'require("fs").appendFileSync(${JSON.stringify(marker)}, process.cwd()+"\\n")'`, {
@@ -112,7 +112,7 @@ describe('services/exec', () => {
       version: '1.0.0',
       dependencies: { 'pkg-a': '1.0.0' },
     });
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     await captureLogs(async () => {
       await expect(
@@ -131,7 +131,7 @@ describe('services/exec', () => {
     writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
     writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     await captureLogs(() => ExecService.exec(repo, appendCommand(marker, 'ran'), { progress: false, scope: 'pkg-a' }));
     expect(fs.readFileSync(marker, 'utf-8').trim().split('\n').length).toBe(1);
@@ -141,7 +141,7 @@ describe('services/exec', () => {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     const lines = await captureLogs(() =>
       ExecService.exec(repo, 'echo should-not-run', { progress: false, scope: 'nothing-matches-this' }),

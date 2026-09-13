@@ -128,6 +128,6 @@ tooling and only ever see *one* error line per failure.
 
 ## Configuration
 
-Every command above reads its cascaded `.rmanrc`/`.rman.yml` config the same way - see
-[docs/api.md#configuration-rmanrc--ranyml](api.md#configuration-rmanrc-rmanyml) for the complete
+Every command above reads its cascaded `.rmanrc`/`.rmanrc.yml` config the same way - see
+[docs/api.md#configuration-rmanrc-rmanrcyml](api.md#configuration-rmanrc-rmanrcyml) for the complete
 key reference, merge order, and cascade rules.

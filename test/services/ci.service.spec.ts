@@ -70,34 +70,34 @@ describe('services/ci', () => {
   }
 
   describe('Ci.resolvePackageManager()', () => {
-    it('defaults to npm when neither a CLI value nor .rmanrc specify one', () => {
+    it('defaults to npm when neither a CLI value nor .rmanrc specify one', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', version: '1.0.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       expect(CiService.resolvePackageManager(repo)).toBe('npm');
     });
 
-    it('prefers the explicit CLI value over .rmanrc', () => {
+    it('prefers the explicit CLI value over .rmanrc', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', version: '1.0.0' });
       fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ packageManager: 'yarn' }));
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       expect(CiService.resolvePackageManager(repo, 'pnpm')).toBe('pnpm');
     });
 
-    it('falls back to .rmanrc "packageManager" when no CLI value is given', () => {
+    it('falls back to .rmanrc "packageManager" when no CLI value is given', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', version: '1.0.0' });
       fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ packageManager: 'bun' }));
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       expect(CiService.resolvePackageManager(repo)).toBe('bun');
     });
 
-    it('throws for an unrecognized package manager', () => {
+    it('throws for an unrecognized package manager', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', version: '1.0.0' });
       fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ packageManager: 'rush' }));
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       expect(() => CiService.resolvePackageManager(repo)).toThrow(/Invalid "packageManager"/);
     });
   });
@@ -128,7 +128,7 @@ describe('services/ci', () => {
         fs.mkdirSync(path.join(d, 'node_modules'), { recursive: true });
         fs.writeFileSync(path.join(d, 'package-lock.json'), '{}');
       }
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { packageManager, logFile } = stubPackageManager();
 
       await captureLogs(() => CiService.reinstall(repo, { packageManager }));
@@ -148,7 +148,7 @@ describe('services/ci', () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { packageManager } = stubPackageManager();
 
       const lines = await captureLogs(() => CiService.reinstall(repo, { packageManager, progress: false }));
@@ -166,7 +166,7 @@ describe('services/ci', () => {
         scripts: { ci: writeFileCommand(marker, 'ran') },
       });
       fs.mkdirSync(path.join(dir, 'packages/a/node_modules'), { recursive: true });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { packageManager } = stubPackageManager();
 
       await captureLogs(() => CiService.reinstall(repo, { packageManager }));
@@ -187,7 +187,7 @@ describe('services/ci', () => {
       });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       fs.mkdirSync(path.join(dir, 'node_modules'), { recursive: true });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
 
       // deliberately no stubPackageManager() here, and no packageManager passed - if this ever
       // fell through to the default wipe+install, a real npm would run and this test would
@@ -227,7 +227,7 @@ describe('services/ci', () => {
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       fs.mkdirSync(path.join(dir, 'packages/a/node_modules'), { recursive: true });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { packageManager } = stubSlowPackageManager();
 
       const { writes } = await withLivePanel(() => CiService.reinstall(repo, { packageManager }));
@@ -246,7 +246,7 @@ describe('services/ci', () => {
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       fs.mkdirSync(path.join(dir, 'packages/a/node_modules'), { recursive: true });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { packageManager } = stubPackageManager();
 
       const { result: lines } = await withLivePanel(() =>
@@ -273,7 +273,7 @@ describe('services/ci', () => {
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { packageManager } = stubPackageManager();
 
       const lines = await captureLogs(() => CiService.reinstall(repo, { packageManager }));
@@ -291,7 +291,7 @@ describe('services/ci', () => {
         scripts: { ci: `node -e "console.error('boom-from-pkg-a'); process.exit(1)"` },
       });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { packageManager } = stubPackageManager();
 
       // panel enabled (a real TTY) so the failing script's output is actually captured onto the
@@ -323,7 +323,7 @@ describe('services/ci', () => {
         version: '1.0.0',
         scripts: { ci: `node -e "process.exit(1)"` },
       });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { packageManager } = stubPackageManager();
 
       const lines = await captureLogs(() =>
@@ -340,7 +340,7 @@ describe('services/ci', () => {
         version: '1.0.0',
         scripts: { ci: `node -e "process.exit(1)"` },
       });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { packageManager } = stubPackageManager();
 
       const lines = await captureLogs(() =>
@@ -356,7 +356,7 @@ describe('services/ci', () => {
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ logLevel: 'silent' }));
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      const repo = Repository.create(dir);
+      const repo = await Repository.create(dir);
       const { packageManager } = stubPackageManager();
 
       const lines = await captureLogs(() => CiService.reinstall(repo, { packageManager }));

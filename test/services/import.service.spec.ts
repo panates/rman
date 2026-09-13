@@ -65,7 +65,7 @@ describe('services/import', () => {
   it('places the source repo\'s files under packages/<name>, defaulting the dest to "packages"', async () => {
     const src = sourceRepoFixture();
     const dir = targetRepoFixture();
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     const result = await ImportService.importRepo(repo, src);
 
@@ -79,7 +79,7 @@ describe('services/import', () => {
   it('preserves the full commit history - every original commit is now reachable in the target repo', async () => {
     const src = sourceRepoFixture();
     const dir = targetRepoFixture();
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     await ImportService.importRepo(repo, src);
 
@@ -92,7 +92,7 @@ describe('services/import', () => {
   it('--dest places it under a different subdirectory', async () => {
     const src = sourceRepoFixture();
     const dir = targetRepoFixture();
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     const result = await ImportService.importRepo(repo, src, { dest: 'libs' });
 
@@ -107,7 +107,7 @@ describe('services/import', () => {
     git(src, 'add', '-A');
     git(src, 'commit', '-q', '-m', 'init');
     const dir = targetRepoFixture();
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     const result = await ImportService.importRepo(repo, src);
     expect(result.name).toBe(path.basename(src));
@@ -116,7 +116,7 @@ describe('services/import', () => {
   it('strips the scope for the directory name (e.g. "@scope/name" -> "name")', async () => {
     const src = sourceRepoFixture('@myorg/my-lib');
     const dir = targetRepoFixture();
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     const result = await ImportService.importRepo(repo, src);
     expect(result.name).toBe('@myorg/my-lib');
@@ -126,7 +126,7 @@ describe('services/import', () => {
   it('rejects a source path that is not a git repository', async () => {
     const src = tmp();
     const dir = targetRepoFixture();
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     await expect(ImportService.importRepo(repo, src)).rejects.toThrow(/not a git repository/);
   });
@@ -135,7 +135,7 @@ describe('services/import', () => {
     const src = sourceRepoFixture();
     const dir = targetRepoFixture();
     fs.mkdirSync(path.join(dir, 'packages/my-lib'), { recursive: true });
-    const repo = Repository.create(dir);
+    const repo = await Repository.create(dir);
 
     await expect(ImportService.importRepo(repo, src)).rejects.toThrow(/already exists/);
   });
