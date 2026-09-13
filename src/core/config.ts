@@ -22,6 +22,7 @@ export interface RmanConfig {
   version?: RmanConfig.VersionOptions;
   changelog?: RmanConfig.ChangelogOptions;
   clean?: RmanConfig.CleanOptions;
+  release?: RmanConfig.ReleaseOptions;
   publish?: RmanConfig.PublishOptions;
   /** Keyed by npm script name (e.g. `"build"`, `"lint"`, `"test"`). */
   run?: Record<string, RmanConfig.RunScriptOptions>;
@@ -47,6 +48,15 @@ export namespace RmanConfig {
   export interface CleanOptions {
     include?: string | string[];
     exclude?: string | string[];
+    skip?: boolean;
+  }
+
+  export interface ReleaseOptions {
+    /** Excludes this package from "version"/"changelog"/"publish" (npm and docker) entirely -
+     *  never a bump candidate, never gets a changelog entry, never published. Per-package
+     *  cascaded, typically set in the package's own `.rmanrc` (e.g. one that's released through a
+     *  separate, unrelated process). Independent of `"private"` - that only ever affects npm
+     *  publish specifically. */
     skip?: boolean;
   }
 

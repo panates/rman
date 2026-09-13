@@ -615,6 +615,22 @@ describe('services/version', () => {
     });
   });
 
+  describe('.rmanrc "release.skip"', () => {
+    it('excludes the package entirely, even though it has real changes', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0', rman: { release: { skip: true } } });
+      initGit(dir);
+      commitAll(dir, 'init');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      commitAll(dir, 'fix: a bug');
+
+      const repo = await Repository.create(dir);
+      const plan = await VersionService.getPlan(repo);
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'skip', reason: 'excluded via .rmanrc "release.skip"' });
+    });
+  });
+
   describe('applyPlan()', () => {
     function fixtureWithOrigin(): { dir: string; originDir: string } {
       const dir = tmp();

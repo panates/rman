@@ -264,6 +264,36 @@ describe('services/changelog', () => {
     expect(entries).toEqual([]);
   });
 
+  describe('.rmanrc "release.skip"', () => {
+    it('excludes the package entirely - no heading, even though it has real changes', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0', rman: { release: { skip: true } } });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'init');
+      const baseHash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
+
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: a feature in the skipped package');
+      fs.writeFileSync(path.join(dir, 'packages/b/x.txt'), 'x');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: a feature in the normal package');
+
+      const repo = await Repository.create(dir);
+      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+      expect(output).not.toContain('## pkg-a');
+      expect(output).not.toContain('a feature in the skipped package');
+      expect(output).toContain('## pkg-b');
+      expect(output).toContain('a feature in the normal package');
+    });
+  });
+
   describe('.rmanrc changelog.ignoreTypes', () => {
     it('drops commits of the given conventional-commit types entirely, not just into Other Changes', async () => {
       const dir = tmp();

@@ -68,7 +68,9 @@ packages *and* more than half of all packages (a repo-wide doc pass, a relicense
 attributed to the root alone instead of being repeated in every package's own entry. See
 [`ChangelogService`](../api.md#changelogservice) for the full template placeholder reference
 (`{{package}}`/`{{version}}`/`{{date}}`/`{{commits}}`/`{{features}}`/`{{fixes}}`/`{{other}}`) and
-grouping algorithm.
+grouping algorithm. A package with `.rmanrc "release": { "skip": true }` gets no entry at all,
+regardless of its own commits - see [`rman version`'s own
+note](version.md#excluding-a-package-entirely-rmanrc-releaseskip).
 
 ## See also
 

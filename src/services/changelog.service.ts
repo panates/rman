@@ -116,7 +116,9 @@ export namespace ChangelogService {
   export async function getEntries(repository: Repository, options: Options = {}, deps: Deps = {}): Promise<Entry[]> {
     const cwdScope = options.root ? undefined : repository.currentPackage;
     const packages = repository.getPackages().filter(p => p !== repository.rootPackage);
-    const targets = cwdScope ? [cwdScope] : filterPackages([repository.rootPackage, ...packages], options);
+    const targets = (cwdScope ? [cwdScope] : filterPackages([repository.rootPackage, ...packages], options)).filter(
+      pkg => !pkg.config.release?.skip,
+    );
 
     const git = new GitHelper({ cwd: repository.dirname });
     // dropped up front, not just while grouping - a package whose only commits are version bumps

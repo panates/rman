@@ -104,6 +104,18 @@
         }
       }
     },
+    "release": {
+      "type": "object",
+      "description": "Options spanning \"version\"/\"changelog\"/\"publish\" together. Per-package cascaded.",
+      "additionalProperties": false,
+      "properties": {
+        "skip": {
+          "type": "boolean",
+          "default": false,
+          "description": "Excludes this package from \"version\"/\"changelog\"/\"publish\" (npm and docker) entirely - never a bump candidate, never gets a changelog entry, never published. Independent of \"private\", which only ever affects npm publish specifically."
+        }
+      }
+    },
     "publish": {
       "type": "object",
       "description": "Options for the \"publish\" command/PublishService and DockerPublishService. Per-package cascaded.",

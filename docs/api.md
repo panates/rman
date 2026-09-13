@@ -331,6 +331,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `changelog.tagPattern` | `string` (glob, may contain `{name}`) | `'v*'` | Per-package cascaded. `{name}` → independent per-package tags (`{name}@*`); no `{name}` → one shared repo-wide tag scheme. |
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |
 | `clean.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of `clean` entirely. |
+| `release.skip` | `boolean` | `false` | Per-package cascaded - excludes this package from `version`/`changelog`/`publish` (npm and docker) entirely. Independent of `"private"` (npm-publish-only). |
 | `publish.target` | `'npm' \| 'docker'` or an array of either | `['npm']` | Per-package cascaded. Which registries `publish` targets for this package. |
 | `publish.docker.image` | `string` | none (required once `"docker"` is a target) | A bare name is prefixed with `--docker-namespace`/`DOCKERHUB_NAMESPACE`; one already containing `/` is used verbatim. |
 | `publish.docker.dockerfile` | `string` | `'Dockerfile'` | Relative to the package's own directory. |

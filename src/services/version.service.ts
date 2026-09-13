@@ -116,6 +116,17 @@ export namespace VersionService {
     const entries = new Map<string, Entry>();
     const eligible: Package[] = [];
     for (const pkg of packages) {
+      if (pkg.config.release?.skip) {
+        entries.set(pkg.name, {
+          package: pkg,
+          groupKey: resolveGroupKey(pkg),
+          group: groupLabel(resolveGroupKey(pkg)),
+          status: 'skip',
+          from: pkg.version,
+          reason: 'excluded via .rmanrc "release.skip"',
+        });
+        continue;
+      }
       if (isDirty(pkg)) {
         entries.set(pkg.name, {
           package: pkg,
