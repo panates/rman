@@ -243,6 +243,7 @@ rman version --changelog         # also write/fold in each bumped package's CHAN
 rman version patch --push        # commit, tag, and push in one go
 rman version patch --message "chore(release): {version}"
 rman version --ignore-dirty      # exclude dirty packages instead of aborting the whole run
+rman version patch --show        # preview what an explicit patch bump would do, without applying it
 ```
 
 Severity, when not given explicitly, is auto-detected per package/group from
