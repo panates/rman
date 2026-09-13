@@ -1,14 +1,14 @@
 <!--
 docs-baseline
-git-commit: a36b6e5acf4c433f9c819753ea0ba707d39a4b9c
-package-version: 0.38.0
-date: 2026-09-12
+git-commit: b6924c69810870582f615a81c97b587e4057910d
+package-version: 1.0.3
+date: 2026-09-13
 
 Verified against `src/cli.ts` and every `src/commands/*.command.ts` as of the commit above (and
 `test/cli.spec.ts` / `test/commands/*.command.spec.ts` for behavior examples). Before trusting/
 updating this file (or any page under `docs/cli/`) in a later session, run:
 
-  git diff a36b6e5acf4c433f9c819753ea0ba707d39a4b9c..HEAD -- src/cli.ts src/commands/
+  git diff b6924c69810870582f615a81c97b587e4057910d..HEAD -- src/cli.ts src/commands/
 
 and update only the pages touched by what that diff actually shows - don't regenerate everything
 unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -58,12 +58,6 @@ These apply to every command, before the command name:
 
 Shell completion is also available (`program.completion()` under the hood, from yargs) -
 `rman completion` prints a script to `source` for your shell.
-
-> **Known quirk:** `rman --help`'s auto-generated usage banner currently reads `rman2 <cmd>
-> [options...]` instead of `rman <cmd> [options...]` - `src/cli.ts` sets `.scriptName('rman2')`,
-> which looks like an unintentional typo rather than a deliberate choice (the actual binary,
-> per `package.json`'s `"bin"` field, is `rman`). Every example on this page and its per-command
-> pages uses the real invocation (`rman ...`), not what `--help` happens to print.
 
 ## Command scope: repository root vs. current package
 
