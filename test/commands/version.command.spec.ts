@@ -148,6 +148,32 @@ describe('commands/version', () => {
     });
   });
 
+  describe('--yes', () => {
+    it('auto-detects severity from commits and applies it without a prompt', async () => {
+      const dir = fixture(); // a "fix:" commit, which auto-detects to "patch"
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--yes'] }));
+
+      expect(lines.some(l => l.includes('bump') && l.includes('pkg-a') && l.includes('1.0.1'))).toBe(true);
+      expect(lines.some(l => l.includes('updated') && l.includes('pkg-a'))).toBe(true);
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
+      expect(pkg.version).toBe('1.0.1');
+    });
+
+    it('rejects being combined with --interactive', async () => {
+      const dir = fixture();
+      await withStubbedExit(() => captureLogs(() => runCli({ cwd: dir, argv: ['version', '--yes', '-i'] })));
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
+      expect(pkg.version).toBe('1.0.0'); // never got far enough to apply anything
+    });
+
+    it('without it, an auto-detected plan is never applied', async () => {
+      const dir = fixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version'] }));
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
+      expect(pkg.version).toBe('1.0.0');
+    });
+  });
+
   describe('--ignore-dirty', () => {
     it('without it, a dirty package aborts the whole run', async () => {
       const dir = fixture();

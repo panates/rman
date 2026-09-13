@@ -36,6 +36,14 @@ export function initCli(repository: Repository, program: Argv) {
           type: 'boolean',
         })
         .conflicts('show', 'interactive')
+        .option('yes', {
+          alias: 'y',
+          describe:
+            'Skip the confirmation prompt and apply the computed plan immediately - auto-detected ' +
+            'severity included, no explicit bump keyword required (same idea as "publish --yes").',
+          type: 'boolean',
+        })
+        .conflicts('yes', 'interactive')
         .option('ignore-dirty', {
           describe: 'Exclude a package with uncommitted local changes instead of aborting the whole run',
           type: 'boolean',
@@ -97,11 +105,11 @@ export function initCli(repository: Repository, program: Argv) {
         return;
       }
 
-      let apply = !!bump;
+      let apply = !!bump || !!args.yes;
       if (args.interactive) {
         apply = await confirm('Apply these changes?');
-      } else if (!bump) {
-        console.log(colors.gray('Run again with an explicit bump, or --interactive, to apply.'));
+      } else if (!apply) {
+        console.log(colors.gray('Run again with an explicit bump, --interactive, or --yes, to apply.'));
         return;
       }
       if (!apply) return;

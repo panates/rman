@@ -24,6 +24,7 @@ options, in addition to:
 | Option | Alias | Type | Description |
 | --- | --- | --- | --- |
 | `--interactive` | `-i` | boolean | Show the plan and ask for confirmation before applying - with or without an explicit `bump`. |
+| `--yes` | `-y` | boolean | Skip the confirmation prompt and apply the computed plan immediately - auto-detected severity included, no explicit `bump` keyword required. Conflicts with `--interactive`. |
 | `--ignore-dirty` | - | boolean | Exclude a package with uncommitted local changes instead of aborting the whole run. |
 | `--push` | - | boolean | Push the resulting commit(s) and tag(s) to the remote once applied. |
 | `--message <text>` | `-m` | string | Override the commit message for every group this run commits. Default: `.rmanrc version.commitMessage`, or `"chore(release): v{version}"`. `{version}` is substituted when a commit's own group shares one version. |
@@ -44,11 +45,12 @@ Status     Package  Group      From   To     Reason
 bump       pkg-a    (default)  1.2.0  1.3.0  changed since v1.2.0
 bump       pkg-b    (default)  1.0.4  1.1.0  in-group dependent of a minor change
 no-change  pkg-c    (default)  2.0.1
-Run again with an explicit bump, or --interactive, to apply.
+Run again with an explicit bump, --interactive, or --yes, to apply.
 ```
 
 ```bash
 rman version --interactive        # same preview, then asks "Apply these changes? (y/N)"
+rman version --yes                # auto-detects severity from commits and applies it, no prompt (CI-friendly)
 rman version patch                # apply a patch bump immediately, no confirmation needed
 rman version minor
 rman version major
