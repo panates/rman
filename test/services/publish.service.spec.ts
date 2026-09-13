@@ -49,20 +49,20 @@ describe('services/publish', () => {
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'skip', reason: 'private package' });
     });
 
-    it('.rmanrc "release.skip" skips a non-private, never-published package too', async () => {
+    it('.rmanrc "publish.skip" skips a non-private, never-published package too', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', {
         name: 'pkg-a',
         version: '1.0.0',
-        rman: { release: { skip: true } },
+        rman: { publish: { skip: true } },
       });
       const repo = await Repository.create(dir);
 
       const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
       expect(entryFor(plan, 'pkg-a')).toMatchObject({
         status: 'skip',
-        reason: 'excluded via .rmanrc "release.skip"',
+        reason: 'excluded via .rmanrc "publish.skip"',
       });
     });
 

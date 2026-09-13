@@ -35,6 +35,9 @@ export namespace ChangelogService {
      *  what's actually published) doesn't get changes silently skipped over - see
      *  `detectChangeHash`'s `catchUpFile`. */
     filePath?: string;
+    /** A package with `.rmanrc "publish.skip"` is excluded by default - little point changelogging
+     *  something that's never actually released. Set true to generate for it anyway. */
+    includeSkipped?: boolean;
   }
 
   /** One package's (root included) generated changelog entry - what `getEntries`/`generate`
@@ -117,7 +120,7 @@ export namespace ChangelogService {
     const cwdScope = options.root ? undefined : repository.currentPackage;
     const packages = repository.getPackages().filter(p => p !== repository.rootPackage);
     const targets = (cwdScope ? [cwdScope] : filterPackages([repository.rootPackage, ...packages], options)).filter(
-      pkg => !pkg.config.release?.skip,
+      pkg => options.includeSkipped || !pkg.config.publish?.skip,
     );
 
     const git = new GitHelper({ cwd: repository.dirname });

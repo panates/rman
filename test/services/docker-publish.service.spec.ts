@@ -56,14 +56,14 @@ describe('services/docker-publish', () => {
       expect(plan.some(e => e.package.name === 'pkg-a')).toBe(false);
     });
 
-    it('.rmanrc "release.skip" leaves a docker-targeted package out entirely too', async () => {
+    it('.rmanrc "publish.skip" leaves a docker-targeted package out entirely too', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', {
         name: 'pkg-a',
         version: '1.0.0',
         private: true,
-        rman: { release: { skip: true }, publish: { target: ['docker'], docker: { image: 'myorg/pkg-a' } } },
+        rman: { publish: { skip: true, target: ['docker'], docker: { image: 'myorg/pkg-a' } } },
       });
       const repo = await Repository.create(dir);
 

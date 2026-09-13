@@ -21,6 +21,7 @@ Accepts [package filtering](../cli.md#package-filtering) options, in addition to
 | `--write` | - | boolean | Prepend the generated entry into each package's own changelog file instead of printing it. |
 | `--file-path <path>` | - | string | With `--write`, the file to prepend into, relative to each package's own directory. Default `"CHANGELOG.md"`, or `.rmanrc "changelog.filePath"`. |
 | `--root` | `-r` | boolean | Generate for the whole repository even when standing inside one package's own directory (which otherwise scopes it to just that package). No effect elsewhere. |
+| `--include-skipped` | - | boolean | Also generate for a package with `.rmanrc "publish.skip"` - excluded by default. |
 
 ## Examples
 
@@ -68,9 +69,10 @@ packages *and* more than half of all packages (a repo-wide doc pass, a relicense
 attributed to the root alone instead of being repeated in every package's own entry. See
 [`ChangelogService`](../api.md#changelogservice) for the full template placeholder reference
 (`{{package}}`/`{{version}}`/`{{date}}`/`{{commits}}`/`{{features}}`/`{{fixes}}`/`{{other}}`) and
-grouping algorithm. A package with `.rmanrc "release": { "skip": true }` gets no entry at all,
-regardless of its own commits - see [`rman version`'s own
-note](version.md#excluding-a-package-entirely-rmanrc-releaseskip).
+grouping algorithm. A package with `.rmanrc "publish": { "skip": true }` gets no entry at all by
+default, regardless of its own commits - see [`rman publish`'s own
+note](publish.md#excluding-a-package-entirely-rmanrc-publishskip). Pass `--include-skipped` to
+generate it anyway.
 
 ## See also
 

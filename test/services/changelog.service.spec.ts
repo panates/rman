@@ -264,11 +264,11 @@ describe('services/changelog', () => {
     expect(entries).toEqual([]);
   });
 
-  describe('.rmanrc "release.skip"', () => {
-    it('excludes the package entirely - no heading, even though it has real changes', async () => {
+  describe('.rmanrc "publish.skip"', () => {
+    function fixtureWithSkippedPackage(): { dir: string; baseHash: string } {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0', rman: { release: { skip: true } } });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0', rman: { publish: { skip: true } } });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       run('init', '-q');
@@ -284,13 +284,25 @@ describe('services/changelog', () => {
       fs.writeFileSync(path.join(dir, 'packages/b/x.txt'), 'x');
       run('add', '-A');
       run('commit', '-q', '-m', 'feat: a feature in the normal package');
+      return { dir, baseHash };
+    }
 
+    it('excludes the package by default - no heading, even though it has real changes', async () => {
+      const { dir, baseHash } = fixtureWithSkippedPackage();
       const repo = await Repository.create(dir);
       const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
       expect(output).not.toContain('## pkg-a');
       expect(output).not.toContain('a feature in the skipped package');
       expect(output).toContain('## pkg-b');
       expect(output).toContain('a feature in the normal package');
+    });
+
+    it('--include-skipped (includeSkipped: true) generates it anyway', async () => {
+      const { dir, baseHash } = fixtureWithSkippedPackage();
+      const repo = await Repository.create(dir);
+      const output = content(await ChangelogService.getEntries(repo, { from: baseHash, includeSkipped: true }));
+      expect(output).toContain('## pkg-a');
+      expect(output).toContain('a feature in the skipped package');
     });
   });
 

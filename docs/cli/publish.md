@@ -116,11 +116,12 @@ rman publish --docker-namespace myorg
 
 See [`DockerPublishService`](../api.md#dockerpublishservice) for the full mechanics.
 
-## Excluding a package entirely (`.rmanrc "release.skip"`)
+## Excluding a package entirely (`.rmanrc "publish.skip"`)
 
-A package with `.rmanrc "release": { "skip": true }` is never a candidate for either target - not
-shown, not published. Independent of `"private"` (npm-only) - see [`rman version`'s own
-note](version.md#excluding-a-package-entirely-rmanrc-releaseskip).
+A package with `.rmanrc "publish": { "skip": true }` is never a candidate for either target - not
+shown, not published - regardless of `target`/`"private"`. [`rman changelog`](changelog.md) also
+skips it by default (its own `--include-skipped` overrides); [`rman version`](version.md) never
+consults this at all - a package can still be meaningfully versioned without ever being published.
 
 ## Failure handling
 

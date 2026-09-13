@@ -110,12 +110,8 @@ feat: needs to ship right now, not wait for the rest of the minor
 Release-As: patch
 ```
 
-## Excluding a package entirely (`.rmanrc "release.skip"`)
-
-A package with `.rmanrc "release": { "skip": true }` is never a bump candidate at all (and gets no
-`changelog`/`publish` entry either - see [`rman publish`](publish.md) and
-[`rman changelog`](changelog.md)) - for a package released through some other, unrelated process.
-Independent of `"private"`, which only ever affects npm publish specifically.
+`.rmanrc "publish.skip"` (see [`rman publish`](publish.md#excluding-a-package-entirely-rmanrc-publishskip))
+has no effect here - a package can still be meaningfully versioned even if it's never published.
 
 ## Dependency ranges and `"workspace:"`
 

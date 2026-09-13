@@ -54,7 +54,7 @@ export namespace DockerPublishService {
   export async function getPlan(repository: Repository, options: Options = {}, deps: Deps = {}): Promise<Entry[]> {
     const git = new GitHelper({ cwd: repository.dirname });
     const packages = filterPackages(repository.getPackages({ toposort: true }), options).filter(
-      pkg => targetsDocker(pkg) && !pkg.config.release?.skip,
+      pkg => targetsDocker(pkg) && !pkg.config.publish?.skip,
     );
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
     const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));

@@ -36,6 +36,10 @@ export function initCli(repository: Repository, program: Argv) {
             'Generate for the whole repository even when the current directory is inside a single ' +
             'package (which otherwise scopes it to just that package). No effect elsewhere.',
           type: 'boolean',
+        })
+        .option('include-skipped', {
+          describe: 'Also generate for a package with .rmanrc "publish.skip" - excluded by default',
+          type: 'boolean',
         }),
     handler: async args => {
       const from = args.from as string | undefined;
@@ -53,6 +57,7 @@ export function initCli(repository: Repository, program: Argv) {
         from,
         filePath: args.filePath as string | undefined,
         root: args.root as boolean | undefined,
+        includeSkipped: args.includeSkipped as boolean | undefined,
       };
       const entries = args.write
         ? await ChangelogService.generateToFile(repository, options)

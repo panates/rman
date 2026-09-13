@@ -86,12 +86,12 @@ export namespace PublishService {
     const entries = new Map<string, Entry>();
     const toCheck: Package[] = [];
     for (const pkg of packages) {
-      if (pkg.config.release?.skip) {
+      if (pkg.config.publish?.skip) {
         entries.set(pkg.name, {
           package: pkg,
           version: pkg.version,
           status: 'skip',
-          reason: 'excluded via .rmanrc "release.skip"',
+          reason: 'excluded via .rmanrc "publish.skip"',
         });
       } else if (pkg.isPrivate) {
         entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'skip', reason: 'private package' });

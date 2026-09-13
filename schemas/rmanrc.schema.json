@@ -104,18 +104,6 @@
         }
       }
     },
-    "release": {
-      "type": "object",
-      "description": "Options spanning \"version\"/\"changelog\"/\"publish\" together. Per-package cascaded.",
-      "additionalProperties": false,
-      "properties": {
-        "skip": {
-          "type": "boolean",
-          "default": false,
-          "description": "Excludes this package from \"version\"/\"changelog\"/\"publish\" (npm and docker) entirely - never a bump candidate, never gets a changelog entry, never published. Independent of \"private\", which only ever affects npm publish specifically."
-        }
-      }
-    },
     "publish": {
       "type": "object",
       "description": "Options for the \"publish\" command/PublishService and DockerPublishService. Per-package cascaded.",
@@ -132,6 +120,11 @@
         "docker": {
           "$ref": "#/definitions/dockerPublishConfig",
           "description": "Required once \"docker\" is one of this package's \"publish.target\"s."
+        },
+        "skip": {
+          "type": "boolean",
+          "default": false,
+          "description": "Excludes this package from \"publish\" entirely (npm and docker both), regardless of \"target\"/\"private\" - a single, explicit \"never published\" statement. \"changelog\" also skips it by default (see its own --include-skipped). Independent of \"version\", which never consults this."
         }
       }
     },

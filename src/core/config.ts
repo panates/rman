@@ -22,7 +22,6 @@ export interface RmanConfig {
   version?: RmanConfig.VersionOptions;
   changelog?: RmanConfig.ChangelogOptions;
   clean?: RmanConfig.CleanOptions;
-  release?: RmanConfig.ReleaseOptions;
   publish?: RmanConfig.PublishOptions;
   /** Keyed by npm script name (e.g. `"build"`, `"lint"`, `"test"`). */
   run?: Record<string, RmanConfig.RunScriptOptions>;
@@ -48,15 +47,6 @@ export namespace RmanConfig {
   export interface CleanOptions {
     include?: string | string[];
     exclude?: string | string[];
-    skip?: boolean;
-  }
-
-  export interface ReleaseOptions {
-    /** Excludes this package from "version"/"changelog"/"publish" (npm and docker) entirely -
-     *  never a bump candidate, never gets a changelog entry, never published. Per-package
-     *  cascaded, typically set in the package's own `.rmanrc` (e.g. one that's released through a
-     *  separate, unrelated process). Independent of `"private"` - that only ever affects npm
-     *  publish specifically. */
     skip?: boolean;
   }
 
@@ -86,6 +76,13 @@ export namespace RmanConfig {
      *  one that publishes both sets `['npm', 'docker']`. */
     target?: PublishTarget | PublishTarget[];
     docker?: DockerPublishOptions;
+    /** Excludes this package from `publish` entirely (npm and docker both), regardless of
+     *  `target`/`"private"` - a single, explicit "never published" statement, e.g. for a package
+     *  released through some separate, unrelated process. `changelog` also skips it by default
+     *  (see its own `--include-skipped`) - there's little point changelogging something that's
+     *  never actually released. Independent of `version`, which never consults this at all - a
+     *  package can still be meaningfully versioned without ever being published. */
+    skip?: boolean;
   }
 
   export type PublishTarget = 'npm' | 'docker';
