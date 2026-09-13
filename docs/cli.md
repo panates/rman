@@ -43,7 +43,7 @@ rman <command> --help   # full option list for that one command
 | `diff [package]` | [`docs/cli/diff.md`](cli/diff.md) | Shows the git diff since a package's (or the repo's) last release tag. |
 | `changelog` | [`docs/cli/changelog.md`](cli/changelog.md) | Generates a changelog per package from unreleased commits. |
 | `version [bump]` | [`docs/cli/version.md`](cli/version.md) | Bumps versions of changed packages (and their dependents). |
-| `publish` | [`docs/cli/publish.md`](cli/publish.md) | Publishes every non-private package not already on the registry. |
+| `publish` | [`docs/cli/publish.md`](cli/publish.md) | Publishes every package to its configured target(s) - npm and/or Docker. |
 | `import <path>` | [`docs/cli/import.md`](cli/import.md) | Imports an external git repository as a new package, with history. |
 
 ## Global options
@@ -58,6 +58,9 @@ These apply to every command, before the command name:
 
 Shell completion is also available (`program.completion()` under the hood, from yargs) -
 `rman completion` prints a script to `source` for your shell.
+
+A misspelled command name (e.g. `rman versoin`) gets a `Did you mean version?` suggestion
+(`program.recommendCommands()`, from yargs).
 
 ## Command scope: repository root vs. current package
 

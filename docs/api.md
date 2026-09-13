@@ -50,6 +50,7 @@ standalone utilities (`detectChangeHash`, `Logger`). For the CLI itself (command
 - [Services](#services)
   - [`VersionService`](#versionservice)
   - [`PublishService`](#publishservice)
+  - [`DockerPublishService`](#dockerpublishservice)
   - [`ChangelogService`](#changelogservice)
   - [`RunService`](#runservice)
   - [`CiService`](#ciservice)
@@ -330,6 +331,14 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `changelog.tagPattern` | `string` (glob, may contain `{name}`) | `'v*'` | Per-package cascaded. `{name}` → independent per-package tags (`{name}@*`); no `{name}` → one shared repo-wide tag scheme. |
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |
 | `clean.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of `clean` entirely. |
+| `publish.target` | `'npm' \| 'docker'` or an array of either | `['npm']` | Per-package cascaded. Which registries `publish` targets for this package. |
+| `publish.docker.image` | `string` | none (required once `"docker"` is a target) | A bare name is prefixed with `--docker-namespace`/`DOCKERHUB_NAMESPACE`; one already containing `/` is used verbatim. |
+| `publish.docker.dockerfile` | `string` | `'Dockerfile'` | Relative to the package's own directory. |
+| `publish.docker.platforms` | `string[]` | `['linux/amd64']` | `docker buildx build --platform` targets. |
+| `publish.docker.cwd` | `string` | that package's own directory | Relative to the repository root. |
+| `publish.docker.buildContexts` | `Record<string, string>` | `{}` | Named `--build-context <name>=<path>` entries, each path relative to the package's own directory. |
+| `publish.docker.buildArgs` | `Record<string, string>` | `{}` | `--build-arg <name>=<value>` entries. A value of exactly `"$NAME"` expands from `process.env.NAME`. |
+| `publish.docker.readme` | `string` | `'DOCKER_README.md'` | Relative to the package's own directory - becomes the DockerHub repo's description, if present. |
 | `run.<script>.concurrency` | `number` | CPU count | See [`RunService`](#runservice) below. |
 | `run.<script>.topo` | `boolean` | `true` | Precedence: CLI flag > package config > fallback. |
 | `run.<script>.bail` | `boolean` | `true` | **Unusual precedence:** package config > CLI flag > fallback (see below). |
@@ -659,6 +668,66 @@ await PublishService.applyPlan(repository, plan);
 // -> packages/b/package.json is back to "workspace:*" once applyPlan returns
 ```
 
+### `DockerPublishService`
+
+Computes and applies `docker buildx build --push` across every package that opts into the
+`"docker"` publish target - unlike `PublishService`'s npm side (opt-out via `"private"`), this is
+opt-in: only a package whose own (cascaded) `.rmanrc "publish.target"` includes `"docker"` is a
+candidate at all.
+
+```ts
+namespace DockerPublishService {
+  interface Deps {
+    imageExists?: (image: string, tag: string) => Promise<boolean>; // for tests
+  }
+
+  interface Options extends PackageFilterOptions {
+    ignoreDirty?: boolean;
+    namespace?: string; // prefixed onto a bare "publish.docker.image"
+  }
+
+  type ApplyOptions = Options;
+
+  interface Entry {
+    package: Package;
+    version: string;
+    status: 'publish' | 'skip' | 'up-to-date' | 'error';
+    image?: string; // fully-qualified "<namespace>/<image>"
+    reason?: string;
+  }
+
+  function getPlan(repository: Repository, options?: Options, deps?: Deps): Promise<Entry[]>;
+  function applyPlan(repository: Repository, plan: Entry[]): Promise<Entry[]>;
+}
+```
+
+```ts
+import { DockerPublishService } from 'rman';
+
+const plan = await DockerPublishService.getPlan(repository);
+for (const entry of plan) console.log(entry.status, entry.package.name, entry.image, entry.reason);
+
+await DockerPublishService.applyPlan(repository, plan);
+```
+
+A candidate package missing the required `publish.docker.image` config is `'error'` - opting into
+the target without configuring it is a clear misconfiguration, not a silent no-op. A dirty package
+is `'error'` too, unless `ignoreDirty` downgrades it to `'skip'` (same rule the npm side uses).
+Otherwise, whether `<image>:<version>` already exists (`docker manifest inspect`, queried
+concurrently) decides `'up-to-date'` vs `'publish'` - the same idea `npm view` serves on the npm
+side.
+
+`applyPlan` logs in once (`DOCKERHUB_USERNAME`/`DOCKERHUB_PASSWORD` environment variables) and runs
+`docker buildx create --use` once, then for each `'publish'` entry a single `docker buildx build
+--push`, using that package's own `publish.docker` config: `platforms` (default `["linux/amd64"]`),
+named `buildContexts` (`--build-context <name>=<path>`, each path relative to the package's own
+directory), `buildArgs` (`--build-arg <name>=<value>` - a value of exactly `"$NAME"` expands from
+`process.env.NAME`), an optional `cwd` override (relative to the repository root, for a Dockerfile
+whose own `COPY`/`ADD` paths expect something other than the package's own directory), and
+`dockerfile` (default `"Dockerfile"`). Tags both `<image>:<version>` and `<image>:latest`. A
+`publish.docker.readme` file (default `"DOCKER_README.md"`, relative to the package's own
+directory), if present, updates the DockerHub repository's description afterward.
+
 ### `ChangelogService`
 
 Generates (and optionally writes) a Markdown changelog per package from real commits, grouped into
@@ -960,6 +1029,8 @@ namespace ListService {
     private: boolean;
     status: Repository.PackageStatus;
     dependencies: string[]; // in-repo package names - enough to build a dependency graph
+    publishTargets: RmanConfig.PublishTarget[]; // this package's own "publish.target" (["npm"] when unset)
+    docker?: RmanConfig.DockerPublishOptions; // present only when "docker" is one of publishTargets
   }
 
   function getPackages(repository: Repository, options?: Options): Promise<Item[]>;

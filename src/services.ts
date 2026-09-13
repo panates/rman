@@ -1,6 +1,7 @@
 export { ChangelogService } from './services/changelog.service.js';
 export { CiService } from './services/ci.service.js';
 export { CleanService } from './services/clean.service.js';
+export { DockerPublishService } from './services/docker-publish.service.js';
 export { ExecService } from './services/exec.service.js';
 export { ImportService } from './services/import.service.js';
 export { ListService } from './services/list.service.js';

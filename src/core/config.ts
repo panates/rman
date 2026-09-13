@@ -22,6 +22,7 @@ export interface RmanConfig {
   version?: RmanConfig.VersionOptions;
   changelog?: RmanConfig.ChangelogOptions;
   clean?: RmanConfig.CleanOptions;
+  publish?: RmanConfig.PublishOptions;
   /** Keyed by npm script name (e.g. `"build"`, `"lint"`, `"test"`). */
   run?: Record<string, RmanConfig.RunScriptOptions>;
   /** Keyed by the in-repo package's own name. */
@@ -66,6 +67,42 @@ export namespace RmanConfig {
 
   export interface PackageOptions {
     dependencies?: string[] | Record<string, string>;
+  }
+
+  export interface PublishOptions {
+    /** Which registries `publish` should target for this package - default `['npm']` (every
+     *  existing repo keeps working unchanged). A package that only ever wants Docker images
+     *  (typically also `"private": true`, since it's not meant for npm at all) sets `['docker']`;
+     *  one that publishes both sets `['npm', 'docker']`. */
+    target?: PublishTarget | PublishTarget[];
+    docker?: DockerPublishOptions;
+  }
+
+  export type PublishTarget = 'npm' | 'docker';
+
+  /** Required once `"docker"` is one of this package's `publish.target`s - `publish --target
+   *  docker` errors clearly on a package that opts in here but leaves this out. */
+  export interface DockerPublishOptions {
+    /** DockerHub image name/repository - bare (e.g. `"my-app"`) to be prefixed with
+     *  `--docker-namespace`/`DOCKERHUB_NAMESPACE`, or already-namespaced (contains a `/`) to use
+     *  verbatim. */
+    image: string;
+    /** Relative to the package's own directory. Default `"Dockerfile"`. */
+    dockerfile?: string;
+    /** Default `["linux/amd64"]`. */
+    platforms?: string[];
+    /** Build `cwd` override, relative to the repository root - only needed when the Dockerfile's
+     *  own `COPY`/`ADD` paths expect something other than the package's own directory (rare). */
+    cwd?: string;
+    /** Named `docker buildx build --build-context <name>=<path>` entries, keyed by name - each
+     *  path is relative to the package's own directory (or absolute). */
+    buildContexts?: Record<string, string>;
+    /** `docker buildx build --build-arg <name>=<value>` entries - a value of exactly `"$NAME"`
+     *  expands to `process.env.NAME` at build time (e.g. to pass a CI secret through). */
+    buildArgs?: Record<string, string>;
+    /** A file (relative to the package's own directory) whose contents become the DockerHub repo's
+     *  full description, if present. Default `"DOCKER_README.md"`. */
+    readme?: string;
   }
 }
 
