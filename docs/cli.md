@@ -59,6 +59,9 @@ These apply to every command, before the command name:
 Shell completion is also available (`program.completion()` under the hood, from yargs) -
 `rman completion` prints a script to `source` for your shell.
 
+A misspelled command name (e.g. `rman versoin`) gets a `Did you mean version?` suggestion
+(`program.recommendCommands()`, from yargs).
+
 ## Command scope: repository root vs. current package
 
 Several commands (`run`/`build`/`test`, `exec`, `clean`, `changelog`) automatically scope

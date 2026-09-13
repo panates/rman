@@ -68,7 +68,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     diffCommand.initCli(repository, program);
     importCommand.initCli(repository, program);
 
-    program.demandCommand(1).strict().completion();
+    program.demandCommand(1).strict().recommendCommands().completion();
 
     if (!_argv.length) program.showHelp();
     else await program.parseAsync().catch(() => process.exit(1));
