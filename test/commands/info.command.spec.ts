@@ -115,5 +115,25 @@ describe('commands/info', () => {
       expect(parsed.repository.type).toBe('monorepo');
       expect(parsed.repository.packageCount).toBe(1);
     });
+
+    it('reports npm\'s own Binaries key by default (no .rmanrc "packageManager" set)', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'my-pkg', version: '1.0.0' });
+
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['info', '--json'] }));
+      const parsed = JSON.parse(lines[0]);
+      expect(Object.keys(parsed.Binaries)).toContain('npm');
+      expect(Object.keys(parsed.Binaries)).not.toContain('pnpm');
+    });
+
+    it("reports the configured package manager's own Binaries key instead of npm's", async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'my-pkg', version: '1.0.0', rman: { packageManager: 'pnpm' } });
+
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['info', '--json'] }));
+      const parsed = JSON.parse(lines[0]);
+      expect(Object.keys(parsed.Binaries)).toContain('pnpm');
+      expect(Object.keys(parsed.Binaries)).not.toContain('npm');
+    });
   });
 });

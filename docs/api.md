@@ -1101,15 +1101,20 @@ namespace SystemInfo {
 
   type SystemInfo = Record<string, Record<string, unknown>>; // shape is envinfo's own
 
-  function getSystemInfo(options?: envinfo.RunConfig): Promise<SystemInfo.SystemInfo>;
+  function getSystemInfo(
+    packageManager?: 'npm' | 'yarn' | 'pnpm' | 'bun',
+    options?: envinfo.RunConfig,
+  ): Promise<SystemInfo.SystemInfo>;
   function getRepositoryInfo(repository: Repository): SystemInfo.RepositoryInfo;
 }
 ```
 
 ```ts
-import { SystemInfo } from 'rman';
+import { CiService, SystemInfo } from 'rman';
 
-const sys = await SystemInfo.getSystemInfo(); // OS/CPU/Memory/Shell, Node/Yarn/npm, Git, ...
+// Node + whichever package manager .rmanrc "packageManager" actually configures (default npm) -
+// the "info" command itself resolves this via CiService.resolvePackageManager(repository).
+const sys = await SystemInfo.getSystemInfo(CiService.resolvePackageManager(repository));
 const repo = SystemInfo.getRepositoryInfo(repository);
 console.log(`${repo.type} "${repo.name}" - ${repo.packageCount} package(s)`);
 ```
