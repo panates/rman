@@ -339,6 +339,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `publish.docker.buildContexts` | `Record<string, string>` | `{}` | Named `--build-context <name>=<path>` entries, each path relative to the package's own directory. |
 | `publish.docker.buildArgs` | `Record<string, string>` | `{}` | `--build-arg <name>=<value>` entries. A value of exactly `"$NAME"` expands from `process.env.NAME`. |
 | `publish.docker.readme` | `string` | `'DOCKER_README.md'` | Relative to the package's own directory - becomes the DockerHub repo's description, if present. |
+| `publish.skip` | `boolean` | `false` | Per-package cascaded - excludes this package from `publish` entirely (npm and docker), regardless of `target`/`"private"`. `changelog` also skips it by default (its own `--include-skipped` overrides). `version` never consults this. |
 | `run.<script>.concurrency` | `number` | CPU count | See [`RunService`](#runservice) below. |
 | `run.<script>.topo` | `boolean` | `true` | Precedence: CLI flag > package config > fallback. |
 | `run.<script>.bail` | `boolean` | `true` | **Unusual precedence:** package config > CLI flag > fallback (see below). |
@@ -645,8 +646,9 @@ for (const entry of applied) {
 `getPlan` is deliberately decoupled from `VersionService` - it only ever compares the *current*
 `package.json` version against the registry (via `npm view`, queried concurrently across every
 package), so it works equally well right after a version bump or standing alone in a release
-pipeline that bumped days earlier. A `private: true` package is always `'skip'`ped; a dirty
-package is `'error'` (aborts the plan) unless `ignoreDirty` downgrades it to `'skip'`.
+pipeline that bumped days earlier. A `private: true` package, or one with `.rmanrc
+"publish.skip"`, is always `'skip'`ped; a dirty package is `'error'` (aborts the plan) unless
+`ignoreDirty` downgrades it to `'skip'`.
 
 `applyPlan` publishes **sequentially**, in topological order (dependencies before dependents) - if
 a package fails, every still-pending dependent (transitively) is marked `'error'` and skipped,
@@ -673,7 +675,7 @@ await PublishService.applyPlan(repository, plan);
 Computes and applies `docker buildx build --push` across every package that opts into the
 `"docker"` publish target - unlike `PublishService`'s npm side (opt-out via `"private"`), this is
 opt-in: only a package whose own (cascaded) `.rmanrc "publish.target"` includes `"docker"` is a
-candidate at all.
+candidate at all. `.rmanrc "publish.skip"` excludes it regardless, same as on the npm side.
 
 ```ts
 namespace DockerPublishService {
@@ -743,6 +745,7 @@ namespace ChangelogService {
     from?: string; // commit/hash, or "npm"/omitted to auto-detect per package
     root?: boolean; // whole repository even when standing inside one package
     filePath?: string; // relative to each package's own directory, default "CHANGELOG.md"
+    includeSkipped?: boolean; // include a .rmanrc "publish.skip" package too - excluded by default
   }
 
   interface Entry {
@@ -785,6 +788,9 @@ A commit touching a package's files is attributed to that package's changelog en
 broad enough (touches at least 3 packages *and* more than half of all packages) to count as a
 repo-wide maintenance change (a relicense, a doc pass across every package, ...), in which case
 it's attributed to the root alone instead of being repeated verbatim across most of the repo.
+
+A package with `.rmanrc "publish.skip"` gets no entry at all by default - there's little point
+changelogging something that's never actually released - unless `includeSkipped` is set.
 
 Formatting comes from `.rmanrc changelog.template` - a **path** to a template file (not the
 template text itself), supporting `{{package}}`/`{{version}}`/`{{date}}`/`{{commits}}` (the full
@@ -1127,6 +1133,13 @@ Resolves the commit/hash a package's changes should be measured "since" - the sa
 `ChangelogService` and (indirectly, via each package's own last release tag) `VersionService` use.
 Exported directly since it's broadly useful anywhere you want to answer "what changed for this
 package" without re-implementing the npm-registry-to-git-tag mapping yourself.
+
+Auto-detection order: (1) the package's currently-published npm version, mapped to a git tag; (2)
+failing that (never published, private, no network, ...), the package's own most recent release
+tag directly - the same lookup `VersionService` itself uses, so a package that's never been on npm
+(e.g. Docker-only) but does have real tags from a previous `version` run still gets a correct
+boundary, not just "everything not yet pushed". Either way, `catchUpFile` (if given and existing)
+still widens the result the same way.
 
 ```ts
 interface DetectChangeHashOptions {

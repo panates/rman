@@ -235,6 +235,10 @@ export namespace VersionService {
           scope: entry.package.name,
           root: true,
           from,
+          // version doesn't consult "publish.skip" at all (a package can still be meaningfully
+          // versioned/changelogged without ever being published) - this entry was already decided
+          // to bump, so its folded-in changelog shouldn't then be silently dropped by that flag.
+          includeSkipped: true,
         });
         for (const ce of changelogEntries) {
           changelogFileByPackage.set(

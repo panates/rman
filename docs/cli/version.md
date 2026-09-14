@@ -110,6 +110,9 @@ feat: needs to ship right now, not wait for the rest of the minor
 Release-As: patch
 ```
 
+`.rmanrc "publish.skip"` (see [`rman publish`](publish.md#excluding-a-package-entirely-rmanrc-publishskip))
+has no effect here - a package can still be meaningfully versioned even if it's never published.
+
 ## Dependency ranges and `"workspace:"`
 
 `applyPlan` refreshes any bumped-dependency range to match (`^`-prefixed by default). A bare

@@ -615,6 +615,25 @@ describe('services/version', () => {
     });
   });
 
+  describe('.rmanrc "publish.skip"', () => {
+    it('has no effect on version - the package still bumps normally', async () => {
+      // Deliberately independent of publish/changelog: a package can be meaningfully versioned
+      // even if it's never published, e.g. purely for internal tracking - see PublishService's
+      // and ChangelogService's own "publish.skip" handling for the commands that DO respect it.
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0', rman: { publish: { skip: true } } });
+      initGit(dir);
+      commitAll(dir, 'init');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      commitAll(dir, 'fix: a bug');
+
+      const repo = await Repository.create(dir);
+      const plan = await VersionService.getPlan(repo);
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
+    });
+  });
+
   describe('applyPlan()', () => {
     function fixtureWithOrigin(): { dir: string; originDir: string } {
       const dir = tmp();

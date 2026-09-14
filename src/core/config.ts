@@ -76,6 +76,13 @@ export namespace RmanConfig {
      *  one that publishes both sets `['npm', 'docker']`. */
     target?: PublishTarget | PublishTarget[];
     docker?: DockerPublishOptions;
+    /** Excludes this package from `publish` entirely (npm and docker both), regardless of
+     *  `target`/`"private"` - a single, explicit "never published" statement, e.g. for a package
+     *  released through some separate, unrelated process. `changelog` also skips it by default
+     *  (see its own `--include-skipped`) - there's little point changelogging something that's
+     *  never actually released. Independent of `version`, which never consults this at all - a
+     *  package can still be meaningfully versioned without ever being published. */
+    skip?: boolean;
   }
 
   export type PublishTarget = 'npm' | 'docker';

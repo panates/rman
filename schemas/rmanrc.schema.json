@@ -120,6 +120,11 @@
         "docker": {
           "$ref": "#/definitions/dockerPublishConfig",
           "description": "Required once \"docker\" is one of this package's \"publish.target\"s."
+        },
+        "skip": {
+          "type": "boolean",
+          "default": false,
+          "description": "Excludes this package from \"publish\" entirely (npm and docker both), regardless of \"target\"/\"private\" - a single, explicit \"never published\" statement. \"changelog\" also skips it by default (see its own --include-skipped). Independent of \"version\", which never consults this."
         }
       }
     },
