@@ -105,6 +105,39 @@ describe('utils/detectChangeHash', () => {
     expect(hash).toBeUndefined();
   });
 
+  it("falls back to the package's own release tag when it's never been published on npm at all", async () => {
+    // A Docker-only (or not-yet-published) package still gets a correct boundary from a previous
+    // "version" run's own tag - not just "everything not yet pushed", which is what a plain
+    // "returns undefined" (see the test above) would otherwise force callers into.
+    const dir = tmp();
+    const pkg = makePackage(dir);
+    initRepo(dir);
+    execFileSync('git', ['tag', 'v1.2.3'], { cwd: dir });
+    const git = new GitHelper({ cwd: dir });
+
+    const hash = await detectChangeHash(git, pkg, { npmViewVersion: async () => undefined });
+    expect(hash).toBe('v1.2.3');
+  });
+
+  it('prefers the npm-resolved tag over the plain latest-tag fallback when both exist', async () => {
+    // A version bump/tag that hasn't actually been published to npm yet (publish failed, or is
+    // intentionally delayed) shouldn't make the changelog boundary jump past it - the npm-published
+    // version is the more conservative, more correct "what have we actually shipped" signal.
+    const dir = tmp();
+    const pkg = makePackage(dir);
+    initRepo(dir);
+    execFileSync('git', ['tag', 'v1.2.3'], { cwd: dir });
+    const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+    fs.writeFileSync(path.join(dir, 'more.txt'), 'x');
+    run('add', '-A');
+    run('commit', '-q', '-m', 'chore: bump version, not yet published');
+    run('tag', 'v1.3.0');
+    const git = new GitHelper({ cwd: dir });
+
+    const hash = await detectChangeHash(git, pkg, { npmViewVersion: async () => '1.2.3' });
+    expect(hash).toBe('v1.2.3');
+  });
+
   describe('catchUpFile (avoiding a documentation gap)', () => {
     it("widens the boundary to the file's own last-modifying commit when it is older than the npm-detected tag", async () => {
       // Reproduces a real gap: a changelog file was last written for 1.1.0, but 1.2.0 and 1.5.0

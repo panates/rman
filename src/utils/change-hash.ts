@@ -70,14 +70,18 @@ export interface DetectChangeHashOptions {
  * Resolves the commit/hash a package's changes should be measured "since" - the boundary
  * `changelog --from` uses, but reusable anywhere a command wants to answer "what changed for this
  * package". An explicit `options.from` (anything but `"npm"`) is returned as-is, applying the same
- * way to every package. Otherwise, it's auto-detected from the package's currently-published npm
- * version: looked up via `npmViewVersion`, then mapped to a git tag using `.rmanrc
- * changelog.tagPattern` (so independent and fixed monorepo versioning schemes both work - see
- * `tagPattern`) - and, if `catchUpFile` is given and exists, widened to also cover anything that
- * file hasn't caught up on yet (see its doc comment). Returns `undefined` when nothing can be
- * resolved at all (unpublished, no network, no matching tag, no catch-up file) - callers should
- * fall back to their own default in that case (e.g. `GitHelper.listCommits`'s "not yet pushed"
- * default when no hash is given).
+ * way to every package. Otherwise, it's auto-detected in order: (1) the package's
+ * currently-published npm version - looked up via `npmViewVersion`, then mapped to a git tag using
+ * `.rmanrc changelog.tagPattern` (so independent and fixed monorepo versioning schemes both work -
+ * see `tagPattern`); (2) failing that (never published, private, no network, ...), this package's
+ * own most recent release tag directly - the same `findLatestTag` lookup `version` itself uses, so
+ * a package that's never been on npm (e.g. Docker-only) but has real tags from a previous `version`
+ * run still gets a correct boundary, not just "everything ever". Either way, if `catchUpFile` is
+ * given and exists, the result is widened to also cover anything that file hasn't caught up on yet
+ * (see its doc comment). Returns `undefined` when nothing can be resolved at all (never published
+ * *and* never tagged, no catch-up file - a genuinely first-ever release) - callers should fall back
+ * to their own default in that case (e.g. `GitHelper.listCommits`'s "not yet pushed" default when
+ * no hash is given).
  */
 export async function detectChangeHash(
   git: GitHelper,
@@ -96,6 +100,7 @@ export async function detectChangeHash(
     const tag = starIdx === -1 ? expanded : expanded.slice(0, starIdx) + publishedVersion + expanded.slice(starIdx + 1);
     npmHash = (await git.tagExists(tag)) ? tag : undefined;
   }
+  if (!npmHash) npmHash = await findLatestTag(git, pkg);
 
   const fileHash = options.catchUpFile ? await git.lastCommitTouching(options.catchUpFile) : undefined;
   if (!fileHash) return npmHash;

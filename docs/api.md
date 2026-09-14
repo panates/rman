@@ -1134,6 +1134,13 @@ Resolves the commit/hash a package's changes should be measured "since" - the sa
 Exported directly since it's broadly useful anywhere you want to answer "what changed for this
 package" without re-implementing the npm-registry-to-git-tag mapping yourself.
 
+Auto-detection order: (1) the package's currently-published npm version, mapped to a git tag; (2)
+failing that (never published, private, no network, ...), the package's own most recent release
+tag directly - the same lookup `VersionService` itself uses, so a package that's never been on npm
+(e.g. Docker-only) but does have real tags from a previous `version` run still gets a correct
+boundary, not just "everything not yet pushed". Either way, `catchUpFile` (if given and existing)
+still widens the result the same way.
+
 ```ts
 interface DetectChangeHashOptions {
   from?: string; // an explicit hash wins outright; "npm" (or omitted) triggers auto-detection

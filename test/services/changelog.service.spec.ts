@@ -567,14 +567,17 @@ describe('services/changelog', () => {
     });
 
     it('the default "v*" pattern uses the nearest repo-wide tag for every package, ignoring a stale package.json version', async () => {
-      const { dir } = fixtureWithUnpushedCommits();
+      const { dir, baseHash } = fixtureWithUnpushedCommits();
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       // package.json still says 1.0.0/2.0.0, but the repo has actually moved on to v6.0.8 -
-      // exactly the kind of drift that made package.json's version untrustworthy here.
+      // exactly the kind of drift that made package.json's version untrustworthy here. An explicit
+      // "from" (rather than auto-detection) keeps this test about {{version}} display only - v6.0.8
+      // now also being a real, resolvable release tag would otherwise make it the "since" boundary
+      // too (it's the newest tag, sitting right at HEAD - nothing "since" it by definition).
       run('tag', 'v6.0.8');
 
       const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, {}, noNpm));
+      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
       expect(output).toContain('## pkg-a 6.0.8');
       expect(output).toContain('## pkg-b 6.0.8');
       expect(output).not.toContain('1.0.0');
@@ -582,14 +585,14 @@ describe('services/changelog', () => {
     });
 
     it('"{name}@*" resolves each package\'s own independent version from its own tags', async () => {
-      const { dir } = fixtureWithUnpushedCommits();
+      const { dir, baseHash } = fixtureWithUnpushedCommits();
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       run('tag', 'pkg-a@3.1.0');
       // pkg-b is never tagged - it should still fall back to its own package.json version.
       fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { tagPattern: '{name}@*' } }));
 
       const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, {}, noNpm));
+      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
       expect(output).toContain('## pkg-a 3.1.0');
       expect(output).toContain('## pkg-b 2.0.0');
     });
@@ -617,14 +620,14 @@ describe('services/changelog', () => {
     });
 
     it('a package can override the tag pattern for just itself, cascading from the root default', async () => {
-      const { dir } = fixtureWithUnpushedCommits();
+      const { dir, baseHash } = fixtureWithUnpushedCommits();
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       run('tag', 'v6.0.8'); // root default pattern - applies to pkg-b
       run('tag', 'pkg-a@9.9.9'); // pkg-a's own override
       fs.writeFileSync(path.join(dir, 'packages/a/.rmanrc'), JSON.stringify({ changelog: { tagPattern: '{name}@*' } }));
 
       const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, {}, noNpm));
+      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
       expect(output).toContain('## pkg-a 9.9.9');
       expect(output).toContain('## pkg-b 6.0.8');
     });
@@ -706,6 +709,44 @@ describe('services/changelog', () => {
       );
       expect(output).toContain('- **pkg-a:** add a feature');
       expect(output).toContain('- **pkg-b:** correct a bug');
+    });
+
+    it('falls back to the package\'s own release tag (not "not yet pushed") when it has never been on npm at all', async () => {
+      // The scenario a Docker-only package hits: never published to npm, but has a real release
+      // tag from a previous "version" run - and, unlike fixtureWithUnpushedCommits above, the
+      // commits are already pushed (as they would be by the time a CI "release notes" step runs
+      // right after "version --push"), so the "not yet pushed" fallback alone would find nothing.
+      const dir = tmp();
+      const originDir = tmp();
+      fs.rmSync(originDir, { recursive: true, force: true });
+      execFileSync('git', ['init', '-q', '--bare', originDir]);
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'docker-pkg',
+        version: '1.0.0',
+        private: true,
+        rman: { publish: { target: ['docker'], docker: { image: 'org/docker-pkg' } } },
+      });
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'init');
+      run('tag', 'v1.0.0');
+      run('remote', 'add', 'origin', originDir);
+      run('branch', '-M', 'main');
+      run('push', '-q', '-u', 'origin', 'main');
+      run('push', '-q', 'origin', 'v1.0.0');
+
+      fs.writeFileSync(path.join(dir, 'packages/a/feature.txt'), 'x');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: a feature in the never-published docker package');
+      run('push', '-q');
+
+      const repo = await Repository.create(dir);
+      const output = content(await ChangelogService.getEntries(repo, {}, { npmViewVersion: async () => undefined }));
+      expect(output).toContain('a feature in the never-published docker package');
     });
 
     it('resolves a different boundary per package under independent versioning', async () => {

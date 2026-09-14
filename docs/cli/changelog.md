@@ -17,7 +17,7 @@ Accepts [package filtering](../cli.md#package-filtering) options, in addition to
 
 | Option | Alias | Type | Description |
 | --- | --- | --- | --- |
-| `--from <hash>` | - | string | Generate the changelog since this commit/hash, applied the same way to every package. Default (also `"npm"` explicitly): auto-detect per package from its currently-published npm version, falling back to commits not yet pushed to the current branch's upstream for a package that can't be resolved this way. |
+| `--from <hash>` | - | string | Generate the changelog since this commit/hash, applied the same way to every package. Default (also `"npm"` explicitly): auto-detect per package from its currently-published npm version; failing that, from its own most recent release tag directly (so a never-published, e.g. Docker-only, package still resolves correctly); failing that too, commits not yet pushed to the current branch's upstream. |
 | `--write` | - | boolean | Prepend the generated entry into each package's own changelog file instead of printing it. |
 | `--file-path <path>` | - | string | With `--write`, the file to prepend into, relative to each package's own directory. Default `"CHANGELOG.md"`, or `.rmanrc "changelog.filePath"`. |
 | `--root` | `-r` | boolean | Generate for the whole repository even when standing inside one package's own directory (which otherwise scopes it to just that package). No effect elsewhere. |
