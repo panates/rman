@@ -31,8 +31,8 @@ sources and are **not** interchangeable. Before touching a command, establish wh
 
 | | Question | Criterion | Commands |
 | --- | --- | --- | --- |
-| **A** | Which packages have **changed** since their last release? | the package's last release tag + commits after it whose files fall under that package | `changed`, `version`, `changelog` (+ `publish --target github`, for release notes only) |
-| **B** | Which packages' current version is **not on the target yet**? | the target's own registry (branches per package) | `publish` |
+| **A** | Which packages have **changed** since their last release? | the package's last release tag + commits after it whose files fall under that package | `changed`, `version`, `changelog` (+ `github-release`, for release notes only) |
+| **B** | Which packages' current version is **not on the registry yet**? | the target's own registry (branches per package) | `publish`, `github-release` |
 | **C** | Which packages have I **touched** right now? | working tree + `git cherry` (`Repository.listStatus`) | `list --changed`, `run --changed`/`--changed-since` |
 
 **A and B are uncorrelated.** Never write code that derives one from the other:
@@ -110,7 +110,7 @@ touched package counts as changed.
   `--from <hash>` bypasses that entirely and applies identically to every package.
 - **Trap:** run *after* a tag has been created, auto-detection finds that new tag and reports
   nothing changed. Hence: in CI, release notes are generated **before** `version`; and any code path
-  running after the tag exists (`version --changelog`, `publish --target github`) passes the boundary
+  running after the tag exists (`version --changelog`, `github-release`) passes the boundary
   **explicitly**. Do the same for any new note-generating path.
 - Skips a `.rmanrc "publish.skip"` package by default; `--include-skipped` brings it back.
 
@@ -122,7 +122,7 @@ touched package counts as changed.
   | --- | --- | --- | --- |
   | **b-1** npm-targeted packages | `npm view <name> version` == local `package.json` version | No (opt out via `private`/`target`) | `PublishService` |
   | **b-2** docker-targeted packages | `docker manifest inspect <image>:<version>` | Yes | `DockerPublishService` |
-  | **b-3** the repository, when anything opts into `github` | a GitHub Release exists for the repository's release tag | Yes | `GithubReleaseService` |
+  | **b-3** the repository itself (see `github-release`) | a GitHub Release exists for the repository's release tag | n/a - never optional | `GithubReleaseService` |
 
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
@@ -130,13 +130,30 @@ touched package counts as changed.
 - A new target follows the same shape: opt-in, its own `.rmanrc` config block, its own
   "already there?" check, `getPlan`/`applyPlan`, and an injectable `Deps` check so tests stay offline.
 - `.rmanrc "publish.skip"` excludes a package from **every** target.
-- The one A-flavored part: `--target github`'s `applyPlan` builds the release body via
-  `ChangelogService`. The split is clean - B decides *what ships*, A decides *what the notes say*.
-- `github` is a **repository-level** target, unlike the other two: one release per run, named after
-  the repository's release tag, its body covering every package that shipped under it - not just
-  the ones naming `"github"`. A per-package release would have to invent a tag no package owns.
-  Declare it in the root `.rmanrc` alongside `"npm"` (`"target": ["npm", "github"]`); it is honored
-  as soon as any package resolves it.
+- `publish.target` is about **package distribution only** - which registry a package's artifact
+  goes to. `"github"` as a value would read as *GitHub Packages* (`npm.pkg.github.com`), which is
+  what it will mean if it is ever added; it must never again mean the repository's GitHub Release.
+
+### `github-release`
+
+- **Question B, at the repository level**: does a GitHub Release already exist for the repository's
+  release tag? Plus one A-flavored part - `applyPlan` builds the body via `ChangelogService`. The
+  split stays clean: B decides *whether it is cut*, A decides *what the notes say*.
+- **Not a `publish` target and not opt-in**, and neither of those is a style choice:
+  - A target says where a *package's artifact* ships (npm, Docker Hub, GitHub Packages). A release
+    is the *repository's* record that a version shipped; its tag covers the whole source tree, so a
+    per-package release would have to invent a tag no package owns.
+  - There is no useful repository that releases its code and wants no record of it. Making it
+    configurable only means some repos silently stop having one - which is exactly what a consumer
+    of the CI workflow experienced when it *was* opt-in.
+- It follows that **nothing in `.rmanrc` may gate it** - `githubRelease` carries details only
+  (`repository`/`draft`/`prerelease` at the root, `assets` per package). `publish.skip` and
+  `"private"` do not apply: they exclude registry candidates, and a release is not a registry.
+- Idempotent by construction: the tag already having a release reads `up-to-date`, so CI runs it
+  unconditionally, after `publish` (a failed registry push must not leave a release announcing code
+  that never arrived).
+- A missing release tag is an **error**, never a silent skip - the notes' boundary is the previous
+  release tag, so releasing without one would quietly produce notes covering the entire history.
 
 ### `list` / `run`
 
@@ -149,7 +166,7 @@ touched package counts as changed.
 ### Release identity (repo-level)
 
 A GitHub Release belongs to the repository - the tag covers the whole source tree - so a run
-produces **one**, named after the monorepo root's version. That version is **derived, never
+produces **one** (see `github-release`), named after the monorepo root's version. That version is **derived, never
 configured** (`usesCalendarVersion`, `src/utils/release-version.ts`):
 
 ```

@@ -4,7 +4,6 @@ import fastGlob from 'fast-glob';
 import semver from 'semver';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { expandTag, tagPattern } from '../utils/change-hash.js';
 import { GitHelper } from '../utils/git.js';
 import { expandReleaseTag, isCalendarVersion, releaseTagPattern } from '../utils/release-version.js';
@@ -22,7 +21,7 @@ export namespace GithubReleaseService {
     /** Uncommitted local changes anywhere in the repository make the release `'skip'` instead of
      *  `'error'` - same as `version`/`publish`'s other targets. */
     ignoreDirty?: boolean;
-    /** `owner/repo` override - otherwise the root's own `publish.github.repository`, falling back
+    /** `owner/repo` override - otherwise the root's own `githubRelease.repository`, falling back
      *  to the `origin` remote's URL. */
     repository?: string;
   }
@@ -44,13 +43,14 @@ export namespace GithubReleaseService {
   }
 
   /**
-   * Computes what `publish --target github` *would* do - **one** release per run, or none.
+   * Computes what `github-release` *would* do - **one** release per run.
    *
    * A GitHub Release is a property of the repository, not of a package: the tag covers the whole
-   * source tree, so everything that shipped under it belongs in it. That makes the `"github"`
-   * target a repository-level opt-in (typically in the root `.rmanrc`, alongside `"npm"`); it's
-   * honored as soon as *any* package resolves it, since a per-package release would have to invent
-   * a tag no package owns.
+   * source tree, so everything that shipped under it belongs in it. There is deliberately **no
+   * opt-in**: it isn't a place a package ships to (that's `publish.target`, which is about
+   * registries - npm, Docker Hub, GitHub Packages), it's the repository's own record that a
+   * release happened, and a repository always wants that record. Re-running is harmless - an
+   * existing release for the tag reads `'up-to-date'`.
    *
    * The release is identified by the repository's own version (the root's - see
    * `VersionService`'s `buildRootEntry`): its release tag when that version is a calendar one, and
@@ -65,20 +65,17 @@ export namespace GithubReleaseService {
    */
   export async function getPlan(repository: Repository, options: Options = {}, deps: Deps = {}): Promise<Entry[]> {
     const root = repository.rootPackage;
-    const wanted = [root, ...repository.getPackages()].some(pkg => targetsGithub(pkg) && !pkg.config.publish?.skip);
-    if (!wanted) return [];
-
     const git = new GitHelper({ cwd: repository.dirname });
     const base = { package: root, version: root.version };
 
     const repo =
-      options.repository ?? root.config?.publish?.github?.repository ?? repoFromRemoteUrl(await git.remoteUrl());
+      options.repository ?? root.config?.githubRelease?.repository ?? repoFromRemoteUrl(await git.remoteUrl());
     if (!repo) {
       return [
         {
           ...base,
           status: 'error',
-          reason: 'cannot resolve "owner/repo" - set "publish.github.repository" or an "origin" remote',
+          reason: 'cannot resolve "owner/repo" - set "githubRelease.repository" or an "origin" remote',
         },
       ];
     }
@@ -130,9 +127,9 @@ export namespace GithubReleaseService {
   }
 
   /**
-   * Creates the repository's GitHub Release, then uploads whatever `publish.github.assets` globs
-   * match. The body covers **every** package that shipped under this release - not just the ones
-   * naming `"github"` as a target - since the tag covers all of their code either way.
+   * Creates the repository's GitHub Release, then uploads whatever `githubRelease.assets` globs
+   * match, across every package. The body covers **every** package that shipped under this
+   * release, since the tag covers all of their code either way.
    *
    * Each package's notes are bounded by the *previous repository release*, and headed with that
    * package's own version, so a repo whose packages sit on different version lines still reads
@@ -152,7 +149,7 @@ export namespace GithubReleaseService {
       const release = await createOrUpdateRelease(entry.repository!, entry.tag!, {
         name: entry.tag!,
         body,
-        draft: !!repository.rootPackage.config?.publish?.github?.draft,
+        draft: !!repository.rootPackage.config?.githubRelease?.draft,
         prerelease: resolvePrerelease(repository.rootPackage, entry.version),
       });
       await uploadAssets(repository, entry.repository!, release.id);
@@ -165,12 +162,6 @@ export namespace GithubReleaseService {
 
 const GITHUB_API = 'https://api.github.com';
 const GITHUB_UPLOADS = 'https://uploads.github.com';
-
-function targetsGithub(pkg: Package): boolean {
-  const target = pkg.config.publish?.target;
-  const targets = Array.isArray(target) ? target : target ? [target] : (['npm'] as RmanConfig.PublishTarget[]);
-  return targets.includes('github');
-}
 
 /** The tag naming this repository's release. A calendar root version means several version lines,
  *  so the release needs a name of its own (`release-*`); a plain one means every package shares it,
@@ -186,7 +177,7 @@ function releaseTagGlob(root: Package): string {
 }
 
 function resolvePrerelease(root: Package, version: string): boolean {
-  const configured = root.config?.publish?.github?.prerelease;
+  const configured = root.config?.githubRelease?.prerelease;
   // A calendar version's time part is a semver prerelease identifier by construction - it says
   // nothing about the release being a preview, so it must not be read as one.
   return configured ?? (!isCalendarVersion(version) && !!semver.prerelease(version));
@@ -290,12 +281,12 @@ async function createOrUpdateRelease(
   return release;
 }
 
-/** Every `publish.github.assets` glob across the repository, each resolved against its own
+/** Every `githubRelease.assets` glob across the repository, each resolved against its own
  *  package's directory - an app ships its artifacts from its own folder, but they all land on the
  *  one release the repository cut. */
 async function uploadAssets(repository: Repository, repo: string, releaseId: number): Promise<void> {
   for (const pkg of [repository.rootPackage, ...repository.getPackages()]) {
-    const patterns = pkg.config.publish?.github?.assets;
+    const patterns = pkg.config.githubRelease?.assets;
     if (!patterns?.length) continue;
 
     const files = await fastGlob(patterns, { cwd: pkg.dirname, absolute: true, onlyFiles: true });

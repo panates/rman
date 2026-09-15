@@ -265,11 +265,10 @@ algorithm, prerelease semantics, and `"workspace:"` dependency-range handling.
 
 ### `rman publish`
 
-Publishes every package to its configured target(s) - `npm` by default, or whatever each package's
-own `.rmanrc "publish.target"` says (`"npm"`, `"docker"`, `"github"`, or any combination). Each
-target decides for itself whether the current version is already out there: `npm view` on the npm
-side, `docker manifest inspect` on the docker side, and the GitHub Release for that version's own
-tag on the github side.
+Publishes every package to its configured registry - `npm` by default, or whatever each package's
+own `.rmanrc "publish.target"` says (`"npm"`, `"docker"`, or both). Each target decides for itself
+whether the current version is already out there: `npm view` on the npm side, `docker manifest
+inspect` on the docker side.
 
 ```bash
 rman publish                              # show the plan, then ask for confirmation
@@ -281,7 +280,6 @@ rman publish --otp 123456
 rman publish --registry https://registry.example.com --userconfig ./ci.npmrc
 rman publish --package-manager pnpm
 rman publish --target docker              # only the packages configured for the "docker" target
-rman publish --target github              # only the GitHub Release side of it
 ```
 
 A `"workspace:*"`/`"workspace:^"`/`"workspace:~"` dependency range is automatically rewritten to a
@@ -292,10 +290,19 @@ A package opts into building/pushing a Docker image via `.rmanrc "publish.target
 a `"publish.docker"` block (`image`, `platforms`, `buildContexts`, `buildArgs`, ...) - see
 [docs/cli/publish.md#docker-publishing-publishdocker](docs/cli/publish.md#docker-publishing-publishdocker).
 
-A package with no package registry of its own - a standalone app shipped as release assets, or one
-deployed elsewhere with the release just recording that it shipped - opts into
-`"publish.target": ["github"]` instead, optionally with `"publish.github": { "assets": [...] }` -
-see [docs/cli/publish.md#github-releases-publishgithub](docs/cli/publish.md#github-releases-publishgithub).
+### `rman github-release`
+
+Creates the repository's GitHub Release for the version that just shipped - one per run, named after
+the repository's own release tag, with notes covering every package that shipped under it.
+
+```bash
+rman github-release --yes
+```
+
+It is deliberately neither a `publish.target` nor opt-in: a release isn't a registry a package ships
+to, it's the repository's own record that a version shipped, and every repository wants that record.
+It needs no configuration at all - see
+[docs/cli/github-release.md](docs/cli/github-release.md).
 
 ### `rman import <path>`
 

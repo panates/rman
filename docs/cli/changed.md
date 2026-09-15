@@ -1,4 +1,4 @@
-<!-- verified against commit 3ddad4b3332ca412426780f3db0d4ee62c5c4898 - see ../cli.md for the baseline convention -->
+<!-- verified against commit 4bc7934 - see ../cli.md for the baseline convention -->
 
 # `rman changed`
 
@@ -53,7 +53,7 @@ So an empty `changed` does **not** mean "nothing needs releasing". A version tha
 tagged but whose publish then failed - or one bumped locally and merged in, with CI publishing
 afterward - has no new commits and correctly reports nothing here, while still very much needing to
 be published. That question belongs to [`rman publish`](publish.md), which compares each package's
-current version against its own target registry (npm/docker/github). In CI, gate the *release*
+current version against its own target registry (npm/docker). In CI, gate the *release*
 pipeline on `publish` (e.g. `rman publish --dry-run`), and use `changed` for what it actually
 answers: whether a *new version* is warranted.
 

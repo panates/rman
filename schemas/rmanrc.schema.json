@@ -131,11 +131,11 @@
     },
     "publish": {
       "type": "object",
-      "description": "Options for the \"publish\" command/PublishService, DockerPublishService and GithubReleaseService. Per-package cascaded.",
+      "description": "Options for the \"publish\" command/PublishService and DockerPublishService. Per-package cascaded.",
       "additionalProperties": false,
       "properties": {
         "target": {
-          "description": "Where \"publish\" releases this package to. Default [\"npm\"]. A package that only ships Docker images (typically also \"private\": true) sets [\"docker\"]; a standalone app shipped as GitHub Release assets - or deployed elsewhere, with the release only recording that it shipped - sets [\"github\"]; any combination works. Each target answers \"is this version already out there?\" against its own registry: npm via \"npm view\", docker via \"docker manifest inspect\", github via the release for that version's tag.",
+          "description": "Which registry \"publish\" ships this package to. Default [\"npm\"]. A package that only ships Docker images (typically also \"private\": true) sets [\"docker\"]; both works too. Each target answers \"is this version already out there?\" against its own registry: npm via \"npm view\", docker via \"docker manifest inspect\". This is strictly about package distribution - the repository's GitHub Release is not a target here, see \"githubRelease\" and the \"github-release\" command.",
           "default": [
             "npm"
           ],
@@ -155,16 +155,16 @@
           "$ref": "#/definitions/dockerPublishConfig",
           "description": "Required once \"docker\" is one of this package's \"publish.target\"s."
         },
-        "github": {
-          "$ref": "#/definitions/githubPublishConfig",
-          "description": "Optional even when \"github\" is one of this package's \"publish.target\"s - every required fact already has a sensible default source."
-        },
         "skip": {
           "type": "boolean",
           "default": false,
           "description": "Excludes this package from \"publish\" entirely (every target), regardless of \"target\"/\"private\" - a single, explicit \"never published\" statement. \"changelog\" also skips it by default (see its own --include-skipped). Independent of \"version\", which never consults this."
         }
       }
+    },
+    "githubRelease": {
+      "$ref": "#/definitions/githubReleaseConfig",
+      "description": "Details of the repository's GitHub Release (\"github-release\"/GithubReleaseService). Entirely optional - every required fact already has a sensible default source. Nothing here decides whether a release is cut: a release records that the repository shipped, so it is always cut. \"assets\" is per-package cascaded; the rest is root-level only."
     },
     "run": {
       "type": "object",
@@ -230,8 +230,7 @@
       "type": "string",
       "enum": [
         "npm",
-        "docker",
-        "github"
+        "docker"
       ]
     },
     "dockerPublishConfig": {
@@ -286,7 +285,7 @@
         }
       }
     },
-    "githubPublishConfig": {
+    "githubReleaseConfig": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -295,7 +294,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Files to attach to the release, as glob patterns relative to the package's own directory (e.g. [\"dist/*.tar.gz\"]). A release with no assets is still valid."
+          "description": "Files to attach to the release, as glob patterns relative to the package's own directory (e.g. [\"dist/*.tar.gz\"]). Read from every package, since one release covers the whole source tree. A release with no assets is still valid."
         },
         "repository": {
           "type": "string",

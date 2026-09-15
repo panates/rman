@@ -1,4 +1,4 @@
-<!-- verified against commit 58fe59aa3d3d8dcd8a5d116c306f6c9f5cb5519e - see ../cli.md for the baseline convention -->
+<!-- verified against commit 4bc7934 - see ../cli.md for the baseline convention -->
 
 # `rman version [bump]`
 
@@ -101,7 +101,7 @@ third group, and so on.
 ## The repository's own version
 
 A monorepo root is never published, but its version is the **repository's release identity** - what
-a [GitHub Release](publish.md#github-releases-publishgithub) is named after. It isn't configured;
+a [GitHub Release](github-release.md) is named after. It isn't configured;
 it follows from how many version lines the repo has:
 
 - **One group** - the root follows it, so the repository and its packages share one number.

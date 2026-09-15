@@ -16,6 +16,7 @@ export interface RmanConfig {
   changelog?: RmanConfig.ChangelogOptions;
   clean?: RmanConfig.CleanOptions;
   publish?: RmanConfig.PublishOptions;
+  githubRelease?: RmanConfig.GithubReleaseOptions;
   /** Keyed by npm script name (e.g. `"build"`, `"lint"`, `"test"`). */
   run?: Record<string, RmanConfig.RunScriptOptions>;
   /** Keyed by the in-repo package's own name. */
@@ -74,17 +75,18 @@ export namespace RmanConfig {
   }
 
   export interface PublishOptions {
-    /** Where `publish` should release this package to - default `['npm']` (every existing repo
+    /** Which **registry** `publish` ships this package to - default `['npm']` (every existing repo
      *  keeps working unchanged). A package that only ever wants Docker images (typically also
-     *  `"private": true`, since it's not meant for npm at all) sets `['docker']`; a standalone app
-     *  shipped as GitHub Release assets - or deployed elsewhere entirely, with the release only
-     *  recording that it happened - sets `['github']`; any combination works (`['npm', 'github']`).
+     *  `"private": true`, since it's not meant for npm at all) sets `['docker']`; both works too.
      *  Each target answers "is this version already out there?" against its own registry, so a
-     *  package is never left without one: npm via `npm view`, docker via `docker manifest inspect`,
-     *  github via the release for that version's tag. */
+     *  package is never left without one: npm via `npm view`, docker via `docker manifest inspect`.
+     *
+     *  Note this is strictly about *package distribution*. The repository's GitHub Release is not
+     *  a target here - it isn't a place a package ships to, it's the repository's own record that
+     *  a release happened, and it is never opted into: see `githubRelease` and the
+     *  `github-release` command. */
     target?: PublishTarget | PublishTarget[];
     docker?: DockerPublishOptions;
-    github?: GithubPublishOptions;
     /** Excludes this package from `publish` entirely (every target), regardless of
      *  `target`/`"private"` - a single, explicit "never published" statement, e.g. for a package
      *  released through some separate, unrelated process. `changelog` also skips it by default
@@ -94,7 +96,7 @@ export namespace RmanConfig {
     skip?: boolean;
   }
 
-  export type PublishTarget = 'npm' | 'docker' | 'github';
+  export type PublishTarget = 'npm' | 'docker';
 
   /** Required once `"docker"` is one of this package's `publish.target`s - `publish --target
    *  docker` errors clearly on a package that opts in here but leaves this out. */
@@ -121,19 +123,22 @@ export namespace RmanConfig {
     readme?: string;
   }
 
-  /** Optional even when `"github"` is one of this package's `publish.target`s - unlike docker,
-   *  every required fact (which tag, which repository, what release notes) already has a sensible
-   *  source, so a bare `"target": ["github"]` is a complete configuration on its own. */
-  export interface GithubPublishOptions {
+  /** Entirely optional - `github-release` needs no configuration at all, since every required fact
+   *  (which tag, which repository, what the notes say) already has a sensible source. Nothing here
+   *  decides *whether* a release is cut: a release records that the repository shipped, so it is
+   *  always cut, and these are only details about how. */
+  export interface GithubReleaseOptions {
     /** Files to attach to the release, as glob patterns relative to the package's own directory
-     *  (e.g. `["dist/*.tar.gz"]`). A release with no assets is still perfectly valid - it records
-     *  that the version shipped, which is all a deploy-elsewhere package needs. */
+     *  (e.g. `["dist/*.tar.gz"]`). Read from **every** package, since one release covers the whole
+     *  source tree. A release with no assets at all is still perfectly valid - it records that the
+     *  version shipped, which is all a deploy-elsewhere package needs. */
     assets?: string[];
-    /** `owner/repo`. Default: parsed from the `origin` remote's URL. */
+    /** `owner/repo`. Default: parsed from the `origin` remote's URL. Root-level only. */
     repository?: string;
-    /** Create the release as an unpublished draft. Default `false`. */
+    /** Create the release as an unpublished draft. Default `false`. Root-level only. */
     draft?: boolean;
-    /** Default: whether the version being released is itself a semver prerelease (`1.3.0-beta.0`). */
+    /** Default: whether the version being released is itself a semver prerelease (`1.3.0-beta.0`).
+     *  Root-level only. */
     prerelease?: boolean;
   }
 }
