@@ -335,8 +335,34 @@ export namespace RunService {
     }
 
     if (!children.length) {
-      console.log(colors.gray(`No package defines a "${script}" script.`));
-      return;
+      /**
+       * Two different nothings, and only one of them is fine.
+       *
+       * Nobody in the repository defines this script at all: the name is a mistake - a typo, or a
+       * script that used to exist - and `npm run` fails on exactly this. Staying silent is how
+       * `rman run qc` sat in a CI pipeline for months reporting success while running nothing, with
+       * `qc` defined only on the root (whose own scripts a monorepo never runs, only its
+       * `pre`/`post` bookends).
+       *
+       * Everything was filtered out instead - `--scope`, `--changed`, `run.<script>.skip`, an
+       * `if:` that didn't match: zero is the correct answer to what was asked, and asking "build
+       * only what changed" when nothing changed must not fail a pipeline.
+       */
+      /** `getPackages()` and nothing else - in a monorepo that excludes the root, which is the
+       *  point: the root contributes only `pre`/`post` bookends, never the script itself, so a
+       *  `qc` defined *only* there is exactly the mistake above rather than an excuse for it. (And
+       *  had the root contributed a bookend, `children` wouldn't be empty.) In a single-package
+       *  repository the root *is* the one package, and is covered. */
+      const definedSomewhere = repository.getPackages().some(pkg => getScriptSteps(pkg, script).length > 0);
+      if (definedSomewhere) {
+        console.log(colors.gray(`Nothing to run - every package was filtered out of "${script}".`));
+        return;
+      }
+      const message = `No package defines a "${script}" script.`;
+      console.log(colors.red(message));
+      const err: any = new Error(message);
+      err.logged = true;
+      throw err;
     }
 
     panel.start();

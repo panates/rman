@@ -240,6 +240,13 @@ touched package counts as changed.
 
 ### `list` / `run`
 
+- **An empty run has two endings, and conflating them hid a broken CI step for months.** Nothing
+  defining the script at all is a mistake - `npm run` fails on it, so does `rman` (non-zero). Every
+  package being *filtered out* (`--scope`/`--changed`/`skip`/`if:`) is the correct answer to what
+  was asked, and exits zero. The monorepo root's own `<script>` never counts toward "defined": the
+  root contributes only `pre`/`post` bookends, which is exactly why a `qc` defined solely there ran
+  nothing while reporting success.
+
 - **Question C** (`Repository.listStatus`): `dirty` (uncommitted) / `committed` (`git cherry` -
   committed but not pushed) / `clean`.
 - Meant for the development loop ("only build/test what I touched").

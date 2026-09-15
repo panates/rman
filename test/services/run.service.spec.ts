@@ -186,6 +186,28 @@ describe('run: Run.runScript() integration', () => {
     });
   });
 
+  describe('an empty run', () => {
+    it('fails when no package defines the script - including one defined only on the root', async () => {
+      // How `rman run qc` sat in a CI pipeline reporting success while running nothing: `qc` lived
+      // on the root, whose own scripts a monorepo never runs - only its pre/post bookends. `npm
+      // run` fails on a script that doesn't exist; so does this.
+      const repo = await fixture({ 'pkg-a': { scripts: { build: quiet('echo a') } } }, { scripts: { qc: 'echo qc' } });
+      const { lines, error } = await captureLogs(() => RunService.runScript(repo, 'qc', { progress: false }));
+      expect(error).toBeDefined();
+      expect(lines.some(l => l.includes('No package defines a "qc" script'))).toBe(true);
+    });
+
+    it('succeeds when the script exists but every package was filtered out', async () => {
+      // "build only what changed" must not fail a pipeline on a run where nothing changed.
+      const repo = await fixture({ 'pkg-a': { scripts: { build: quiet('echo a') } } });
+      const { lines, error } = await captureLogs(() =>
+        RunService.runScript(repo, 'build', { progress: false, scope: ['no-such-package'] }),
+      );
+      expect(error).toBeUndefined();
+      expect(lines.some(l => l.includes('filtered out'))).toBe(true);
+    });
+  });
+
   describe('bail', () => {
     it('default (true): stops a not-yet-started independent package after a failure', async () => {
       const repo = await fixture({

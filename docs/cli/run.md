@@ -43,9 +43,17 @@ rman run build --root                 # whole repo, even run from inside one pac
 rman run build --log-level verbose    # also print each step's "executing" line before it runs
 ```
 
-If no package (and no root pre/post hook) defines the given script at all, `rman` prints
-`No package defines a "<script>" script.` and exits successfully - it's not an error to ask for a
-script nothing implements.
+A run with nothing in it ends two different ways, and the difference matters to a CI gate:
+
+- **Nothing defines the script** (no package, and no root `pre`/`post` bookend): `No package defines
+  a "<script>" script.` and a **non-zero exit**. The name is a mistake - a typo, or a script that
+  used to exist - and `npm run` fails on exactly this. Note a monorepo root's own `<script>` does
+  *not* count: the root contributes only its `pre`/`post` hooks, so a `qc` defined only there is
+  this case, not an excuse for it.
+- **Every package was filtered out** by `--scope`/`--changed`, a `run.<script>.skip`, or an `if:`
+  that didn't match: `Nothing to run - every package was filtered out of "<script>".` and a
+  **successful exit**. Zero is the right answer to what was asked; "build only what changed" must
+  not fail a pipeline on a run where nothing changed.
 
 ## Per-package/script configuration (`.rmanrc run.<script>.*`)
 
