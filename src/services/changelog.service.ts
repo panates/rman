@@ -18,10 +18,11 @@ export namespace ChangelogService {
   export interface Options extends PackageFilterOptions {
     /** Generate the changelog since this commit/hash - applied the same way to every package.
      *  Default (also `"npm"` explicitly): auto-detect it per package instead, from that package's
-     *  currently-published npm version (see `detectChangeHash`); a package this can't be resolved
-     *  for (unpublished, no network, no matching tag) falls back to its own commits not yet
-     *  pushed to the current branch's upstream (same reference point `--changed`/
-     *  `--changed-since` use). */
+     *  own most recent release tag first - the same lookup `VersionService`/`changed` use, so this
+     *  never disagrees with them - falling back to its currently-published npm version only when
+     *  it has no tag yet (see `detectChangeHash`); a package this can't be resolved for either way
+     *  (never tagged, unpublished, no network) falls back to its own commits not yet pushed to the
+     *  current branch's upstream (same reference point `--changed`/`--changed-since` use). */
     from?: string;
     /** Generate for the whole repository even when the current directory is inside a single
      *  package (which otherwise scopes it to just that package) - see `Repository.currentPackage`. */

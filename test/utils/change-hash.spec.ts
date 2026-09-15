@@ -119,10 +119,12 @@ describe('utils/detectChangeHash', () => {
     expect(hash).toBe('v1.2.3');
   });
 
-  it('prefers the npm-resolved tag over the plain latest-tag fallback when both exist', async () => {
-    // A version bump/tag that hasn't actually been published to npm yet (publish failed, or is
-    // intentionally delayed) shouldn't make the changelog boundary jump past it - the npm-published
-    // version is the more conservative, more correct "what have we actually shipped" signal.
+  it("prefers this package's own latest tag over a stale npm-resolved one when both exist", async () => {
+    // "version"/"changed" only ever look at tags, never npm - so a repo that already tagged a new
+    // release (e.g. bumped locally before merging, per rman's own docs on this exact scenario)
+    // must resolve to that SAME tag here too, even if npm hasn't caught up to the publish yet.
+    // Disagreeing with "version"/"changed" here is what made "changed" report nothing to do while
+    // "changelog" (pre-fix) would have looked one tag further back.
     const dir = tmp();
     const pkg = makePackage(dir);
     initRepo(dir);
@@ -134,8 +136,12 @@ describe('utils/detectChangeHash', () => {
     run('tag', 'v1.3.0');
     const git = new GitHelper({ cwd: dir });
 
-    const hash = await detectChangeHash(git, pkg, { npmViewVersion: async () => '1.2.3' });
-    expect(hash).toBe('v1.2.3');
+    const hash = await detectChangeHash(git, pkg, {
+      npmViewVersion: async () => {
+        throw new Error('should not be called at all - a tag already resolved the boundary');
+      },
+    });
+    expect(hash).toBe('v1.3.0');
   });
 
   describe('catchUpFile (avoiding a documentation gap)', () => {

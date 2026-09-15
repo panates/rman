@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import type { RmanConfig } from './config.js';
+import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 
 export class Package {
   private _json: any;

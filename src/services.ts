@@ -3,6 +3,7 @@ export { CiService } from './services/ci.service.js';
 export { CleanService } from './services/clean.service.js';
 export { DockerPublishService } from './services/docker-publish.service.js';
 export { ExecService } from './services/exec.service.js';
+export { GithubReleaseService } from './services/github-release.service.js';
 export { ImportService } from './services/import.service.js';
 export { ListService } from './services/list.service.js';
 export { PublishService } from './services/publish.service.js';

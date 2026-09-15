@@ -8,10 +8,10 @@
  * CLI-only concerns (argv parsing, `--help` text, and all console/file presentation) stay in
  * `cli.ts` and the individual `commands/*.command.ts` modules, which are not exported here.
  */
-export type { RmanConfig } from './core/config.js';
 export { defineConfig } from './core/config.js';
 export { Package } from './core/package.js';
 export { Repository } from './core/repository.js';
+export * from './interfaces/rman-config.interface.js';
 export * from './services.js';
 export type { DetectChangeHashOptions } from './utils/change-hash.js';
 export { detectChangeHash } from './utils/change-hash.js';

@@ -42,8 +42,24 @@ rman changed --json
 
 With nothing to bump, prints `Nothing has changed.` (or `[]` with `--json`) and exits successfully.
 
+## Not a "has this been published?" check
+
+`changed` answers a purely **commit-driven** question: what landed since each package's last release
+(the shared [`detectChangeHash`](../api.md#detectchangehash) boundary, the same one
+[`changelog`](changelog.md) measures from), and how big a bump that implies. It never asks any
+registry anything - a registry can only say *older/newer*, never *how much* or *why*.
+
+So an empty `changed` does **not** mean "nothing needs releasing". A version that was bumped and
+tagged but whose publish then failed - or one bumped locally and merged in, with CI publishing
+afterward - has no new commits and correctly reports nothing here, while still very much needing to
+be published. That question belongs to [`rman publish`](publish.md), which compares each package's
+current version against its own target registry (npm/docker/github). In CI, gate the *release*
+pipeline on `publish` (e.g. `rman publish --dry-run`), and use `changed` for what it actually
+answers: whether a *new version* is warranted.
+
 ## See also
 
 - [`rman version`](version.md) - the command this previews; same grouping/severity-detection
   algorithm, see that page (and [`VersionService`](../api.md#versionservice)) for the full details.
 - [`rman diff`](diff.md) - the actual commit-level diff, rather than a version-bump summary.
+- [`rman publish`](publish.md) - the registry-side question this one deliberately doesn't answer.

@@ -2,7 +2,7 @@ import path from 'node:path';
 import semver from 'semver';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
-import { findLatestTag, tagPattern } from '../utils/change-hash.js';
+import { detectChangeHash, expandTag } from '../utils/change-hash.js';
 import {
   hasBreakingChangeFooter,
   parseConventionalCommit,
@@ -38,6 +38,10 @@ export namespace VersionService {
      *  `incVersion`. Has no effect when `bump` is an explicit semver version rather than a keyword
      *  (there's no severity left to "pre-fix" at that point). */
     preid?: string;
+    /** Overrides the npm registry lookup `detectChangeHash` falls back to for a package that has
+     *  no release tag yet - mainly for tests, so they don't depend on network access or a real
+     *  published package. Same shape as `ChangelogService.Deps`/`PublishService.Deps`' own. */
+    npmViewVersion?: (name: string, cwd: string) => Promise<string | undefined>;
   }
 
   export interface ApplyOptions {
@@ -82,8 +86,8 @@ export namespace VersionService {
    * version currently found among its own members (never persisted anywhere) - see
    * `resolveGroupKey`.
    *
-   * Within a group, a member with real commits since its own last release tag (or an explicit
-   * `bump`) sets the group's severity to the highest found among changed members; the new version
+   * Within a group, a member with real commits since its own last release (or an explicit `bump`)
+   * sets the group's severity to the highest found among changed members; the new version
    * is that current version bumped by that severity. Which members actually receive it depends on
    * the severity: **patch** only the changed member(s) (a caret dependency range already tolerates
    * a patch bump, no republish needed downstream); **minor** also every transitive in-group
@@ -98,6 +102,9 @@ export namespace VersionService {
    * A monorepo's root package is never a real member of any group (it's never published on its
    * own) - it gets one trailing informational entry instead, always `'bump'`ed to whatever single
    * version every group ended up sharing, or the overall highest version when groups diverged.
+   *
+   * "Since its own last release" is resolved by the shared `detectChangeHash` - the same boundary
+   * `changelog` measures from, so the two never disagree about which commits are unreleased.
    */
   export async function getPlan(repository: Repository, options: Options = {}): Promise<Entry[]> {
     const bump = options.bump?.trim();
@@ -137,14 +144,14 @@ export namespace VersionService {
           changeByPackage.set(pkg.name, { severity: undefined, reason: `explicit version ${explicitVersion}` });
           return;
         }
-        const tag = await findLatestTag(git, pkg);
-        const commits = tag ? await git.listCommits({ hash: tag }) : await git.listAllCommits();
+        const since = await detectChangeHash(git, pkg, { npmViewVersion: options.npmViewVersion });
+        const commits = since ? await git.listCommits({ hash: since }) : await git.listAllCommits();
         const belongsToPkg = (c: CommitInfo) => c.files.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
         const real = commits.filter(c => belongsToPkg(c) && !VERSION_BUMP_PATTERN.test(c.subject));
         if (!real.length) return;
         changeByPackage.set(pkg.name, {
           severity: explicitSeverity ?? detectSeverity(real),
-          reason: tag ? `changed since ${tag}` : 'unreleased commits',
+          reason: since ? `changed since ${since}` : 'unreleased commits',
         });
       }),
     );
@@ -495,15 +502,6 @@ function buildCommitMessage(repository: Repository, entries: VersionService.Entr
   }
   if (messageOverride) return messageOverride;
   return `chore(release): ${entries.map(e => `${e.package.name}@${e.to}`).join(', ')}`;
-}
-
-/** Expands `pkg`'s (cascaded) `.rmanrc changelog.tagPattern` into a concrete tag name for
- *  `version` - the same pattern `changelog` reads tags back with (see `findLatestTag`), just run
- *  forward: `{name}` becomes the package's own name, and `*` becomes `version`. */
-function expandTag(pkg: Package, version: string): string {
-  const pattern = tagPattern(pkg).replace('{name}', pkg.name);
-  const starIdx = pattern.indexOf('*');
-  return starIdx === -1 ? pattern : pattern.slice(0, starIdx) + version + pattern.slice(starIdx + 1);
 }
 
 /** A `version.<key>` value: one command, or several to run in sequence - same shape as

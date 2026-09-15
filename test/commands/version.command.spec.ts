@@ -312,5 +312,21 @@ describe('commands/version', () => {
       await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
       expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
     });
+
+    it('.rmanrc "version.changelog": true makes it the default - no --changelog flag needed', async () => {
+      const dir = fixture();
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ version: { changelog: true } }));
+      commitAll(dir, 'chore: add .rmanrc');
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+      expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(true);
+    });
+
+    it('--no-changelog overrides .rmanrc "version.changelog": true back off for one run', async () => {
+      const dir = fixture();
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ version: { changelog: true } }));
+      commitAll(dir, 'chore: add .rmanrc');
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--no-changelog'] }));
+      expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
+    });
   });
 });

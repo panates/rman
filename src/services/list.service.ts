@@ -1,6 +1,6 @@
 import path from 'path';
-import type { RmanConfig } from '../core/config.js';
 import type { Repository } from '../core/repository.js';
+import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 
 export namespace ListService {

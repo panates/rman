@@ -199,12 +199,25 @@ export class GitHelper {
   /** The most recent tag matching the glob `pattern` that HEAD actually descends from (unlike
    *  `listTags`, this follows commit ancestry rather than just sorting tag names - the right
    *  choice for a single repo-wide tag scheme, where a package has no tag of its own). */
-  async describeTag(pattern: string): Promise<string | undefined> {
+  async describeTag(pattern: string, ref = 'HEAD'): Promise<string | undefined> {
     try {
-      const { stdout } = await execFileAsync('git', ['describe', '--tags', '--abbrev=0', '--match', pattern], {
+      const { stdout } = await execFileAsync('git', ['describe', '--tags', '--abbrev=0', '--match', pattern, ref], {
         cwd: this.cwd,
       });
       return stdout.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** The repository's very first commit (the oldest root commit, for a history with several) -
+   *  `undefined` for a repository with no commits at all. The "since the beginning" boundary for
+   *  a package being released for the first time, with no earlier tag to measure from. */
+  async rootCommit(): Promise<string | undefined> {
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-list', '--max-parents=0', 'HEAD'], { cwd: this.cwd });
+      const shas = stdout.trim().split(/\r?\n/).filter(Boolean);
+      return shas[shas.length - 1] || undefined;
     } catch {
       return undefined;
     }
@@ -241,6 +254,17 @@ export class GitHelper {
       if (options?.tags !== false) await execFileAsync('git', ['push', remote, '--tags'], { cwd: this.cwd });
     } catch (e: any) {
       throw new Error(`Unable to push to "${remote}": ${e.message}`, { cause: e });
+    }
+  }
+
+  /** `git remote get-url <remote>` (default `"origin"`) - `undefined` when that remote isn't
+   *  configured at all, which is a perfectly normal state for a local-only repository. */
+  async remoteUrl(remote = 'origin'): Promise<string | undefined> {
+    try {
+      const { stdout } = await execFileAsync('git', ['remote', 'get-url', remote], { cwd: this.cwd });
+      return stdout.trim() || undefined;
+    } catch {
+      return undefined;
     }
   }
 

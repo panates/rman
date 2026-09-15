@@ -11,13 +11,14 @@ export function initCli(repository: Repository, program: Argv) {
     describe: 'Generates a changelog per package from unreleased commits',
     builder: cmd =>
       applyPackageFilterOptions(cmd)
-        .example('$0 changelog', "# Auto-detects each package's last published version on npm")
+        .example('$0 changelog', "# Auto-detects each package's own last release tag (or npm version)")
         .example('$0 changelog --from <hash> --write', '# Since a specific commit, written to file')
         .option('from', {
           describe:
             'Generate the changelog since this commit/hash, applied the same way to every package. ' +
-            'Default (also "npm" explicitly): auto-detect per package from its published npm version, ' +
-            "falling back to not-yet-pushed commits for a package that can't be resolved this way",
+            'Default (also "npm" explicitly): auto-detect per package from its own most recent release ' +
+            'tag - same as "version"/"changed" - falling back to its published npm version (no tag yet), ' +
+            "then to not-yet-pushed commits for a package that can't be resolved either way",
           type: 'string',
         })
         .option('write', {

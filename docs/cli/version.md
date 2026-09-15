@@ -28,7 +28,7 @@ options, in addition to:
 | `--ignore-dirty` | - | boolean | Exclude a package with uncommitted local changes instead of aborting the whole run. |
 | `--push` | - | boolean | Push the resulting commit(s) and tag(s) to the remote once applied. |
 | `--message <text>` | `-m` | string | Override the commit message for every group this run commits. Default: `.rmanrc version.commitMessage`, or `"chore(release): v{version}"`. `{version}` is substituted when a commit's own group shares one version. |
-| `--changelog` | - | boolean | Also write each bumped package's `CHANGELOG.md` (same as running `changelog --write` separately) and fold it into the same commit as the version bump. |
+| `--changelog` | - | boolean | Also write each bumped package's `CHANGELOG.md` (same as running `changelog --write` separately) and fold it into the same commit as the version bump. Default: `.rmanrc "version.changelog"`, or `false` - `--no-changelog` still overrides it off for one run, even when that's `true`. |
 | `--preid <name>` | - | string | Make the bump a prerelease with this identifier (e.g. `"beta"` -> `1.2.3-beta.0`). Running again with the same `--preid` increments it (`-> 1.2.3-beta.1`); a different identifier starts a fresh prerelease line. Ignored when `bump` is an explicit semver version. |
 | `--show` | - | boolean | Show the resulting plan for the given `bump` without applying it - unlike omitting `bump` entirely, this still uses the given release-type keyword/version to compute the plan, just never writes it. Conflicts with `--interactive`. |
 
@@ -59,6 +59,7 @@ rman version minor --preid beta   # 1.2.0 -> 1.3.0-beta.0
 rman version minor --preid beta   # (run again later) 1.3.0-beta.0 -> 1.3.0-beta.1
 rman version --preid rc           # switching identifiers starts a fresh line: -> 1.3.0-rc.0
 rman version --changelog          # also write/fold in each bumped package's CHANGELOG.md
+rman version --no-changelog       # skip it for one run, even with .rmanrc "version.changelog": true
 rman version patch --push         # commit, tag, and push in one go
 rman version patch --message "chore(release): {version}"
 rman version --ignore-dirty       # exclude dirty packages instead of aborting the whole run
@@ -99,9 +100,11 @@ third group, and so on.
 
 ## Severity auto-detection
 
-With no explicit `bump`, each package's severity comes from its own commits since its last release
-tag: `fix:` → `patch`; `feat:` → `minor`; `feat!:`/a `BREAKING CHANGE:` footer → `major`; anything
-non-conventional → `patch`. A `Release-As: patch|minor|major` commit-body footer overrides that one
+With no explicit `bump`, each package's severity comes from its own commits since its last release -
+the shared [`detectChangeHash`](../api.md#detectchangehash) boundary [`changelog`](changelog.md)
+measures from too, so the two never disagree about which commits are unreleased. `fix:` → `patch`;
+`feat:` → `minor`; `feat!:`/a `BREAKING CHANGE:` footer → `major`; anything non-conventional →
+`patch`. A `Release-As: patch|minor|major` commit-body footer overrides that one
 commit's own contribution:
 
 ```
