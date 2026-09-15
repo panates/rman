@@ -242,6 +242,70 @@ describe('services/publish', () => {
       expect(fs.realpathSync(call.split(' ')[0])).toBe(fs.realpathSync(path.join(dir, 'dist')));
     });
 
+    it('.rmanrc "publish.directory" points the publish at a build dir, without touching package.json', async () => {
+      // One "[*]" line for a whole repository, instead of publishConfig.directory in every
+      // package.json - which still wins when a package declares one of its own.
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { publish: { directory: 'build' } } }));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      fs.mkdirSync(path.join(dir, 'packages/a/build'), { recursive: true });
+      const repo = await Repository.create(dir);
+      const { logFile } = stubPublishBin(dir, 'npm');
+
+      const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
+      await PublishService.applyPlan(repo, plan);
+
+      const call = fs.readFileSync(logFile, 'utf-8').trim();
+      expect(fs.realpathSync(call.split(' ')[0])).toBe(fs.realpathSync(path.join(dir, 'packages/a/build')));
+    });
+
+    it("generates the build dir's manifest at publish time, and removes it afterwards", async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-dep', version: '2.0.0' });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        publishConfig: { access: 'public', directory: 'build' },
+        dependencies: { 'pkg-dep': 'workspace:^' },
+        devDependencies: { mocha: '^10.0.0' },
+        scripts: { build: 'tsc', test: 'mocha', postinstall: 'node-gyp rebuild' },
+        rman: { publish: { skip: false } },
+      });
+      fs.mkdirSync(path.join(dir, 'packages/b/build'), { recursive: true });
+      const repo = await Repository.create(dir);
+      // Capture the manifest as npm would see it - the stub runs while it is still on disk.
+      const binDir = path.join(dir, 'node_modules', '.bin');
+      fs.mkdirSync(binDir, { recursive: true });
+      const seen = path.join(tmp(), 'seen.json');
+      fs.writeFileSync(
+        path.join(binDir, 'npm'),
+        `#!/usr/bin/env node\nrequire('fs').copyFileSync('package.json', ${JSON.stringify(seen)});\n`,
+      );
+      fs.chmodSync(path.join(binDir, 'npm'), 0o755);
+
+      const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-dep': '2.0.0', 'pkg-b': undefined }));
+      await PublishService.applyPlan(repo, plan);
+
+      const manifest = JSON.parse(fs.readFileSync(seen, 'utf-8'));
+      // The "workspace:" rewrite reaches the published manifest - rewriting only the package's own
+      // file never did, since npm reads the build dir.
+      expect(manifest.dependencies['pkg-dep']).toBe('^2.0.0');
+      expect(manifest.devDependencies).toBeUndefined();
+      // Only the scripts a consumer's install actually runs survive.
+      expect(manifest.scripts).toEqual({ postinstall: 'node-gyp rebuild' });
+      // It pointed *here*; kept, it would point one level deeper again.
+      expect(manifest.publishConfig).toEqual({ access: 'public' });
+
+      // Nothing left behind: the manifest is a publish-time artifact, not a build output.
+      expect(fs.existsSync(path.join(dir, 'packages/b/build/package.json'))).toBe(false);
+      // And the package's own file is untouched.
+      const own = JSON.parse(fs.readFileSync(path.join(dir, 'packages/b/package.json'), 'utf-8'));
+      expect(own.dependencies['pkg-dep']).toBe('workspace:^');
+      expect(own.scripts.build).toBe('tsc');
+    });
+
     it('a failed publish blocks its dependents (skipped as "error"), but not unrelated packages', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });

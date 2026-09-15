@@ -1,3 +1,19 @@
+/**
+ * Prepares the `package.json` that `npm publish` will actually read, and returns a function that
+ * undoes it - always call that from a `finally`, so a failed publish leaves nothing behind.
+ *
+ * Which file that is depends on where the output lives:
+ *
+ * - **Publishing the package directory itself** - its own `package.json` is the manifest, rewritten
+ *   in place: every `"workspace:"` range becomes a real, registry-consumable one (the same
+ *   substitution pnpm/yarn's own publish performs - see `resolveWorkspaceRange`), since `npm
+ *   publish` reads what is on disk rather than packing from a staging tarball.
+ * - **Publishing a build directory** - there is no manifest there until something writes one, and
+ *   that something is this: see `derivePublishManifest`.
+ *
+ * Returns `undefined` when there is nothing to do at all (the package directory, with no
+ * `"workspace:"` range in it) - no disk write, nothing to restore.
+ */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,6 +26,99 @@ import { filterPackages, type PackageFilterOptions } from '../utils/package-filt
 import { parseWorkspaceRange, resolveWorkspaceRange } from '../utils/workspace-range.js';
 import { CiService } from './ci.service.js';
 import { DEPENDENCY_KEYS } from './version.service.js';
+
+function preparePublishManifest(
+  pkg: Package,
+  publishDir: string,
+  packagesByName: Map<string, Package>,
+): (() => void) | undefined {
+  if (path.resolve(publishDir) !== path.resolve(pkg.dirname)) {
+    const file = path.join(publishDir, 'package.json');
+    const previous = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : undefined;
+    fs.mkdirSync(publishDir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(derivePublishManifest(pkg, packagesByName), undefined, 2) + '\n', 'utf-8');
+    return () => {
+      if (previous === undefined) fs.rmSync(file, { force: true });
+      else fs.writeFileSync(file, previous, 'utf-8');
+    };
+  }
+
+  const hasWorkspaceRange = DEPENDENCY_KEYS.some(depKey => {
+    const deps = pkg.json[depKey];
+    return deps && Object.values(deps).some(v => parseWorkspaceRange(v));
+  });
+  if (!hasWorkspaceRange) return undefined;
+
+  const original = fs.readFileSync(pkg.jsonFileName, 'utf-8');
+  resolveWorkspaceRanges(pkg.json, packagesByName);
+  pkg.writeJson();
+  return () => {
+    fs.writeFileSync(pkg.jsonFileName, original, 'utf-8');
+    pkg.reloadJson();
+  };
+}
+
+/**
+ * The manifest to publish from a build directory, derived from the package's own - generated here
+ * rather than by a build script, and deliberately with nothing to configure.
+ *
+ * Generated at *publish* time, which is the whole point: a build script writes it when the build
+ * runs, so bumping the version afterwards (or building before a bump) publishes a manifest that
+ * disagrees with the package - and the `"workspace:"` rewrite above, which only ever touched the
+ * package's own file, never reached the copy at all.
+ *
+ * What comes out is the package's `package.json` minus what a consumer of the tarball can neither
+ * see nor use:
+ *
+ * - `devDependencies` - npm never installs a dependency's own, so they are pure noise.
+ * - `scripts`, **except** `preinstall`/`install`/`postinstall`. Those three are the only ones a
+ *   consumer's install actually runs, and dropping them would silently break every package that
+ *   builds a native module on install. The rest (`build`, `test`, `prepare`, ...) never reach the
+ *   consumer - `prepare` runs for a git dependency, which builds from the repository, not from this
+ *   tarball.
+ * - `private` - rman refuses to publish a private package in the first place, so carrying the flag
+ *   into a manifest that is being published can only be wrong.
+ * - `publishConfig.directory` - it pointed *here*; kept, it would point one level deeper again.
+ */
+function derivePublishManifest(pkg: Package, packagesByName: Map<string, Package>): Record<string, any> {
+  const json: Record<string, any> = structuredClone(pkg.json);
+  resolveWorkspaceRanges(json, packagesByName);
+
+  delete json.devDependencies;
+  delete json.private;
+
+  if (json.scripts) {
+    const kept = Object.fromEntries(Object.entries(json.scripts).filter(([name]) => CONSUMER_SCRIPTS.has(name)));
+    if (Object.keys(kept).length) json.scripts = kept;
+    else delete json.scripts;
+  }
+
+  if (json.publishConfig) {
+    delete json.publishConfig.directory;
+    if (!Object.keys(json.publishConfig).length) delete json.publishConfig;
+  }
+
+  return json;
+}
+
+/** The only lifecycle scripts a consumer's `npm install` of this package runs - see
+ *  https://docs.npmjs.com/cli/using-npm/scripts. */
+const CONSUMER_SCRIPTS = new Set(['preinstall', 'install', 'postinstall']);
+
+/** Rewrites `json`'s `"workspace:"` ranges in place, resolving each against the in-repo package it
+ *  names. Shared by both manifest paths, so they can never disagree about the substitution. */
+function resolveWorkspaceRanges(json: Record<string, any>, packagesByName: Map<string, Package>): void {
+  for (const depKey of DEPENDENCY_KEYS) {
+    const deps = json[depKey];
+    if (!deps) continue;
+    for (const depName of Object.keys(deps)) {
+      const parsed = parseWorkspaceRange(deps[depName]);
+      if (!parsed) continue;
+      const depPkg = packagesByName.get(depName);
+      if (depPkg) deps[depName] = resolveWorkspaceRange(parsed, depPkg.version);
+    }
+  }
+}
 
 export namespace PublishService {
   /** Injectable registry lookup - mainly for tests, so they don't depend on network access or a
@@ -153,12 +262,10 @@ export namespace PublishService {
         result.push({ ...entry, status: 'error', reason: `dependency "${blocker}" failed to publish` });
         continue;
       }
-      const restore = rewriteWorkspaceRangesForPublish(pkg, packagesByName);
+      const publishDir = resolvePublishDir(pkg, options.contents);
+      const restore = preparePublishManifest(pkg, publishDir, packagesByName);
       try {
-        await exec(buildPublishCommand(packageManager, options), {
-          cwd: resolvePublishDir(pkg, options.contents),
-          stdio: 'inherit',
-        });
+        await exec(buildPublishCommand(packageManager, options), { cwd: publishDir, stdio: 'inherit' });
         result.push(entry);
       } catch (e: any) {
         failed.add(pkg.name);
@@ -193,13 +300,14 @@ async function defaultNpmViewVersion(
   }
 }
 
-/** npm's own native `publishConfig.directory` (if the package declares one) always wins over
- *  `options.contents` - the package's own package.json is the more authoritative, persistent
- *  statement of "this is where the publishable output lives", `--contents` is just a fallback for
- *  when it doesn't declare one at all. */
+/** Where the publishable output lives, most specific statement first: the package's own
+ *  `publishConfig.directory` (npm/pnpm's native spelling, and a statement about that one package),
+ *  then `.rmanrc "publish.directory"` (which a `"[*]"` block can say once for a whole repository
+ *  instead of repeating in every `package.json`), then `--contents` for a single run. */
 function resolvePublishDir(pkg: Package, contentsOverride: string | undefined): string {
   const native = pkg.json.publishConfig?.directory;
-  const rel = (typeof native === 'string' && native) || contentsOverride;
+  const configured = pkg.config?.publish?.directory;
+  const rel = (typeof native === 'string' && native) || configured || contentsOverride;
   return rel ? path.resolve(pkg.dirname, rel) : pkg.dirname;
 }
 
@@ -211,42 +319,4 @@ function buildPublishCommand(packageManager: CiService.PackageManager, options: 
   if (options.registry) args.push('--registry', options.registry);
   if (options.userconfig) args.push('--userconfig', options.userconfig);
   return `${packageManager} ${args.join(' ')}`;
-}
-
-/**
- * Rewrites every `"workspace:"` dependency range in `pkg`'s `package.json` to a real,
- * registry-publishable range (the same substitution pnpm/yarn's own publish performs - see
- * `resolveWorkspaceRange`), just before shelling out to `npm publish` - which reads whatever is
- * actually on disk, unlike pnpm/yarn's own publish this never packs into a staging tarball first.
- * Returns a function that restores the file's original bytes (and `pkg`'s in-memory state)
- * verbatim; always invoke it from a `finally`, so a failed publish never leaves a rewritten
- * `package.json` behind. Returns `undefined` (nothing to restore, no disk write at all) when `pkg`
- * has no `"workspace:"` ranges to begin with.
- */
-function rewriteWorkspaceRangesForPublish(
-  pkg: Package,
-  packagesByName: Map<string, Package>,
-): (() => void) | undefined {
-  const hasWorkspaceRange = DEPENDENCY_KEYS.some(depKey => {
-    const deps = pkg.json[depKey];
-    return deps && Object.values(deps).some(v => parseWorkspaceRange(v));
-  });
-  if (!hasWorkspaceRange) return undefined;
-
-  const original = fs.readFileSync(pkg.jsonFileName, 'utf-8');
-  for (const depKey of DEPENDENCY_KEYS) {
-    const deps = pkg.json[depKey];
-    if (!deps) continue;
-    for (const depName of Object.keys(deps)) {
-      const parsed = parseWorkspaceRange(deps[depName]);
-      if (!parsed) continue;
-      const depPkg = packagesByName.get(depName);
-      if (depPkg) deps[depName] = resolveWorkspaceRange(parsed, depPkg.version);
-    }
-  }
-  pkg.writeJson();
-  return () => {
-    fs.writeFileSync(pkg.jsonFileName, original, 'utf-8');
-    pkg.reloadJson();
-  };
 }
