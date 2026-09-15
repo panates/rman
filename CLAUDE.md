@@ -24,6 +24,44 @@ or between exported declarations.
 - When adding a new private helper to an existing file, append it after the last exported
   declaration rather than near whichever exported function happens to call it.
 
+## Config: who a declaration is about
+
+[`src/core/config.ts`](src/core/config.ts). One rule decides it, and it is not the usual cascade:
+
+- **Unmarked keys configure the package of the directory that declares them.** The repository
+  root's own `.rmanrc` therefore configures the *root package* - which is where every repo-wide
+  setting is read from anyway (`packageManager`, `allowBranch`, `version.*`, `githubRelease.*`).
+- **A `"[selector]"` block configures the packages it names** - `"[*]"`, `"[*-dialect]"`,
+  `"[pkg-a]"`. This is the only way a directory speaks about anything but its own package.
+- A directory holding no package (an intermediate `packages/`) has none to speak for, so its
+  unmarked config still cascades to everything below.
+
+**Never restore the old "root config is every package's baseline" cascade.** The same key means
+different things to the two audiences, and conflating them is a measured bug, not a hypothetical:
+`run.build.after` on a package is that package's hook, run in its own directory; on the root it is a
+repo-wide bookend run once at the repository root. One declaration feeding both ran
+`node ../../support/postbuild.cjs` at the root, where it cannot resolve.
+
+- Selector patterns are **globs over package names**, anchored both ends (`"[*-dialect]"` does not
+  match `my-dialect-helper`) - glob, not regex, like every other pattern in rman. `"[*]"` is
+  whatever `getPackages()` returns: not the root in a monorepo, the root itself in a single-package
+  repo.
+- Precedence, lowest first: `"[*]"` → other selectors in declaration order → the package's own
+  unmarked config. Directory levels closer to the package still win.
+- **Trap: in YAML the quotes are mandatory.** A bare `[*]` is a flow sequence and `*` an alias
+  indicator - the file fails to load. Write `"[*]":`.
+- Any string value is interpolated with `{{name}}` / `{{dirname}}` / `{{version}}` for the package
+  it resolved for (`interpolateConfig`) - **every** string, so there is no list of "interpolated
+  keys" to memorize. `{{dirname}}` is the directory (`builder`), `{{name}}` the package name
+  (`@sqb/builder`); they differ for a scoped package.
+- Script hooks are `before` / `exec` / `after` (not `preScript`/`script`/`postScript`), in both
+  `run.<script>` and `version`. A bare string in place of a whole `run.<script>` object is
+  shorthand for `exec`.
+
+**Trap: a single-package repository has no root bookend.** The root *is* the one package, already
+running its own pre/post hooks in the same directory - `RunService` must keep skipping the bookend
+when `!repository.monorepo`, or every hook runs twice (measured).
+
 ## Change and release detection
 
 Three separate questions in rman look like "what changed". They are answered from different

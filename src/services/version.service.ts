@@ -220,7 +220,7 @@ export namespace VersionService {
 
     for (const entry of bumped) {
       const pkg = entry.package;
-      await runVersionScript(pkg, 'preScript', 'preversion');
+      await runVersionScript(pkg, 'before', 'preversion');
       pkg.json.version = entry.to;
       for (const depKey of DEPENDENCY_KEYS) {
         const deps = pkg.json[depKey];
@@ -239,12 +239,12 @@ export namespace VersionService {
           deps[depName] = '^' + depEntry.to;
         }
       }
-      await runVersionScript(pkg, 'script', 'version');
+      await runVersionScript(pkg, 'exec', 'version');
       pkg.writeJson();
       // Before `postversion`, so a script that reacts to the bump sees the whole new state.
       const dockerfile = stampDockerfile(pkg, entry.to!);
       if (dockerfile) dockerfileByPackage.set(pkg.name, path.relative(repository.dirname, dockerfile));
-      await runVersionScript(pkg, 'postScript', 'postversion');
+      await runVersionScript(pkg, 'after', 'postversion');
     }
 
     const rootEntry = repository.monorepo ? plan.find(e => e.package === repository.rootPackage) : undefined;
@@ -595,7 +595,7 @@ function normalizeScriptValue(value: unknown): string | undefined {
  */
 async function runVersionScript(
   pkg: Package,
-  cfgKey: 'preScript' | 'script' | 'postScript',
+  cfgKey: 'before' | 'exec' | 'after',
   npmScriptName: 'preversion' | 'version' | 'postversion',
 ): Promise<void> {
   const own = pkg.json.scripts?.[npmScriptName];

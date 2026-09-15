@@ -2,7 +2,7 @@ import glob from 'fast-glob';
 import fs from 'fs';
 import path from 'path';
 import { GitHelper } from '../utils/git.js';
-import { resolveConfig } from './config.js';
+import { interpolateConfig, resolveConfig } from './config.js';
 import { Package } from './package.js';
 
 export class Repository extends Package {
@@ -85,19 +85,28 @@ export class Repository extends Package {
   }
 
   /**
-   * Resolves the effective rman config for the repository root and every
-   * package, cascading root -> intermediate directories -> package directory,
-   * so a `.rmanrc` placed anywhere along that path overrides the levels above it.
+   * Resolves the effective rman config for the repository root and every package, cascading
+   * root -> intermediate directories -> package directory, so a `.rmanrc` placed anywhere along
+   * that path overrides the levels above it.
+   *
+   * Each package is resolved *by name* as well as by directory, since that is what a `"[selector]"`
+   * block matches against - see `resolveConfig`. The root package is resolved by name too: in a
+   * single-package repository it *is* the one package, so `"[*]"` has to reach it; in a monorepo
+   * nothing under `getPackages()` is the root, so only its own unmarked config applies.
    */
   protected async _resolveConfigs(): Promise<void> {
     const cache = new Map<string, any>();
-    const rootConfig = await resolveConfig(this.dirname, this.dirname, cache);
-    this.config = rootConfig;
-    this.rootPackage.config = rootConfig;
+    const withVars = (pkg: Package, config: any) =>
+      interpolateConfig(config, {
+        name: pkg.name,
+        dirname: path.basename(pkg.dirname),
+        version: pkg.version ?? '',
+      });
+    this.config = withVars(this.rootPackage, await resolveConfig(this.dirname, this.dirname, cache));
     for (const pkg of this.packages) {
-      if (pkg === this.rootPackage) continue;
-      pkg.config = await resolveConfig(this.dirname, pkg.dirname, cache);
+      pkg.config = withVars(pkg, await resolveConfig(this.dirname, pkg.dirname, cache, pkg.name));
     }
+    if (this.monorepo) this.rootPackage.config = this.config;
   }
 
   protected _updateDependencies() {
@@ -109,7 +118,7 @@ export class Repository extends Package {
         ...pkg.json.peerDependencies,
         ...pkg.json.optionalDependencies,
       };
-      const configDeps = pkg.config.packages?.[pkg.name]?.dependencies;
+      const configDeps = pkg.config.dependencies;
       if (configDeps) {
         if (Array.isArray(configDeps)) configDeps.forEach(x => (o[x] = o[x] || '*'));
         else Object.assign(o, configDeps);

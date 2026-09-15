@@ -327,29 +327,40 @@ precedence: `package.json`'s own `"rman"` key, `.rmanrc.yml` (YAML), `.rmanrc` (
 the dotfile-style name), and `.rmanrc.cjs`/`.rmanrc.mjs`/`.rmanrc.js` for config that needs real
 logic (a JS module's default export).
 
+**Who a declaration is about** follows one rule: unmarked keys configure the package of the
+directory declaring them, and a `"[selector]"` block configures the packages it names. So the
+repository root's own keys are the *root package's* - which is where repo-wide settings are read
+from anyway - and they reach the other packages only through a selector.
+
 ```yaml
 # .rmanrc.yml, at the repository root
 packageManager: pnpm
 logLevel: info
 allowBranch: [main, release/*]
 
-group: true # implicit repo-wide version group by default
-
 version:
   commitMessage: 'chore(release): v{version}'
 
-changelog:
-  ignoreTypes: [chore, ci]
-  tagPattern: 'v*'
+'[*]': # every package in the repository - quotes are required in YAML
+  group: true # implicit repo-wide version group by default
+  changelog:
+    ignoreTypes: [chore, ci]
+    tagPattern: 'v*'
+  clean:
+    include: [build, '../../coverage/{{dirname}}'] # {{name}}/{{dirname}}/{{version}} are substituted
+  run:
+    test: mocha # a bare string is shorthand for { exec: mocha }
+    build:
+      concurrency: 4
+      before: [rman run lint]
+      exec: tsc -b tsconfig-build.json
+      after: node ../../support/postbuild.cjs
+    lint:
+      topo: false
+      bail: false
 
-run:
-  build:
-    concurrency: 4
-  lint:
-    topo: false
-    bail: false
-  test:
-    changedSince: v1.0.0
+'[*-dialect]': # a glob over package names, anchored at both ends
+  group: dialects
 ```
 
 ```json
@@ -363,7 +374,7 @@ run:
 ```
 
 See [docs/api.md#configuration-rmanrc-rmanrcyml](docs/api.md#configuration-rmanrc-rmanrcyml) for the
-full key reference (every `run.<script>.*` sub-key, `clean.*`, `changelog.*`, precedence rules,
+full key reference (every `run.<script>.*` sub-key, `clean.*`, `changelog.*`, selector precedence,
 and which keys are root-level-only today).
 
 **Editor autocomplete:** `rman` ships a JSON Schema for `.rmanrc`/`.rmanrc.yml` at

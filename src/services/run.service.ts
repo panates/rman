@@ -51,14 +51,20 @@ export namespace RunService {
    * `getScriptSteps`:
    *   run:
    *     build:
-   *       script: tsc -b
-   *       preScript: [node ./generate.js, node ./validate.js]
-   *       postScript: node ./copy-assets.js
+   *       before: [node ./generate.js, node ./validate.js]
+   *       exec: tsc -b
+   *       after: node ./copy-assets.js
    *       override: true   # use these even if the package *does* define its own
+   *
+   * A bare string is shorthand for `exec`, which is by far the common case - a script that is just
+   * a command, with nothing to configure about how it runs:
+   *   run:
+   *     test: mocha          # same as   test: { exec: mocha }
    */
   export function getConfig(pkg: Package, script: string): Record<string, unknown> {
     const runCfg = pkg.config?.run;
     const cfg = runCfg && typeof runCfg === 'object' ? (runCfg as Record<string, unknown>)[script] : undefined;
+    if (typeof cfg === 'string' || Array.isArray(cfg)) return { exec: cfg };
     return cfg && typeof cfg === 'object' ? (cfg as Record<string, unknown>) : {};
   }
 
@@ -261,10 +267,14 @@ export namespace RunService {
 
     /** Repo-wide bookend: root's own pre/post hooks run once each, exclusively, around every package
      *  (unless root itself opts out via `run.<script>.skip`, fails its own `run.<script>.if`, or the
-     *  run is scoped to a single package by `cwdScope` - a repo-wide bookend has no place there). */
-    const rootIf = !cwdScope && parseIfExpr(rootCfg.if);
+     *  run is scoped to a single package by `cwdScope` - a repo-wide bookend has no place there).
+     *
+     *  Only in a monorepo. Without one the root *is* the single package, already in the loop below
+     *  with the same hooks and the same directory - a bookend would simply run each of them a
+     *  second time. */
+    const rootIf = !cwdScope && repository.monorepo && parseIfExpr(rootCfg.if);
     const rootIfPasses = rootIf ? await evaluateIf(repository, repository.rootPackage, rootIf, ifStatusCache) : true;
-    const rootSkipped = !!cwdScope || rootCfg.skip === true || !rootIfPasses;
+    const rootSkipped = !!cwdScope || !repository.monorepo || rootCfg.skip === true || !rootIfPasses;
     const rootSteps = rootSkipped ? [] : getScriptSteps(repository.rootPackage, script);
     const rootPre = rootSteps.filter(s => s.name === 'pre' + script);
     const rootPost = rootSteps.filter(s => s.name === 'post' + script);
@@ -436,9 +446,9 @@ function getScriptSteps(pkg: Package, script: string): ScriptStep[] {
     const hasOwn = typeof json.scripts[key] === 'string' && json.scripts[key];
     if (cfg.override === true || !hasOwn) json.scripts[key] = value;
   };
-  applyConfigScript(script, cfg.script);
-  applyConfigScript('pre' + script, cfg.preScript);
-  applyConfigScript('post' + script, cfg.postScript);
+  applyConfigScript(script, cfg.exec);
+  applyConfigScript('pre' + script, cfg.before);
+  applyConfigScript('post' + script, cfg.after);
   json.scripts[script] = json.scripts[script] || '#';
   const info = parseNpmScript(json, 'npm run ' + script);
   if (!info?.raw?.length) return [];

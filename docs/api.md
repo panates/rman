@@ -200,7 +200,7 @@ class Package {
 `pkg.dependencies` is **not** just what's declared in `package.json` - `Repository` computes the
 full transitive closure across every in-repo package (guarding against cycles), which is what
 powers topological sort, `--deps`/`--dependents` filtering, and `RunService`'s task scheduling.
-It also folds in anything declared under `.rmanrc packages.<name>.dependencies` (see the
+It also folds in anything declared under `.rmanrc dependencies` (see the
 [config reference](#configuration-rmanrc-rmanrcyml)) - a way to tell rman about an in-repo
 dependency relationship that isn't expressed as a real `package.json` dependency.
 
@@ -215,9 +215,59 @@ pkgA.writeJson();
 Every directory between the repository root and a package can carry its own config, cascaded the
 same way a `tsconfig.json` `extends` chain works: a value set closer to a package overrides
 (replaces, not merges - for scalars/arrays; objects merge recursively) the same key set further up
-toward the root. Root-only keys are only ever consulted from the *root's* own resolved config in
-the current implementation (see the table below), even though nothing stops you from setting them
-deeper.
+toward the root.
+
+**Who a declaration is about is decided by one rule:** unmarked keys configure the package of the
+directory that declares them; a `"[selector]"` block configures the packages it names. So the
+repository root's own `.rmanrc` configures the **root package** - which is where repo-wide settings
+are read from anyway - and reaches the other packages only through a selector:
+
+```yaml
+# the repository root's own .rmanrc.yml
+packageManager: pnpm            # repo-wide, read from the root
+run:
+  build:
+    before: node support/generate.cjs        # a repo-wide bookend, run once at the root
+
+"[*]":                                        # every package in the repository
+  run:
+    build:
+      after: node ../../support/postbuild.cjs # run in each package's own directory
+"[*-dialect]":                                # a glob over package names
+  publish: { skip: true }
+"[pkg-a]":                                    # exactly one
+  dependencies: [pkg-b]
+```
+
+The split exists because the same key means different things to the two audiences. `run.build.after`
+on a package is that package's build hook, run in its own directory; on the root it is a repo-wide
+bookend run once at the repository root. One declaration feeding both ran a package-relative command
+(`node ../../support/postbuild.cjs`) at the root, where it cannot resolve.
+
+Selector details:
+
+- The pattern is a **glob over package names**, anchored at both ends - `"[*-dialect]"` matches
+  `mysql-dialect`, not `my-dialect-helper`. `"[*]"` matches every package `getPackages()` returns:
+  in a monorepo that excludes the root, in a single-package repository it *is* the root.
+- In YAML the quotes are **required**. A bare `[*]` parses as a flow sequence, and `*` as an alias
+  indicator - the file won't load at all.
+- Precedence, lowest first: `"[*]"`, then other selectors in declaration order, then the package's
+  own unmarked config. Levels closer to the package still win over levels above them.
+- A directory holding no package of its own (an intermediate `packages/`, say) has no package to
+  speak for, so its unmarked config still cascades to everything below it.
+
+Any string value may use `{{name}}`, `{{dirname}}` and `{{version}}`, substituted for the package
+the config was resolved for - which is what lets one root declaration stay package-specific:
+
+```yaml
+"[*]":
+  clean:
+    include: ["build", "../../coverage/{{dirname}}"]
+```
+
+`{{dirname}}` is the package's directory name (`builder`), `{{name}}` its package name
+(`@sqb/builder`) - they differ for a scoped package. An unknown `{{...}}` is left alone rather than
+blanked.
 
 For a single directory, up to six sources merge together in **increasing precedence**:
 
@@ -328,7 +378,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `version.changelog` | `boolean` | `false` | Root-level only. Default for `version --changelog` when the CLI flag isn't given - `--no-changelog` still overrides it off for one run. |
 | `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
 | `version.stampDockerfile` | `boolean` | `true` | Per-package cascaded. Rewrite this package's Dockerfile `org.opencontainers.image.version` label to the version being written, in the same commit as the bump. Only ever rewrites a label already declared; reads `publish.docker.dockerfile`. |
-| `version.script` / `.preScript` / `.postScript` | `string \| string[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). |
+| `version.before` / `.exec` / `.after` | `string \| string[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). |
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
 | `changelog.template` | `string` (a file **path**, relative to repo root) | built-in template | Per-package cascaded. Throws if the path doesn't exist. |
 | `changelog.filePath` | `string` | `'CHANGELOG.md'` | Per-package cascaded, relative to that package's own directory. CLI `--file-path` wins when given. |
@@ -356,9 +406,9 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `run.<script>.changedSince` | `string` | none | Root-level fallback, used only when CLI `--changed-since` isn't given. |
 | `run.<script>.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of running this script entirely. |
 | `run.<script>.if` | `string` (small expression grammar) | none (always runs) | Per-package cascaded. See [`RunService`'s conditional execution](#conditional-execution-if). |
-| `run.<script>.script` / `.preScript` / `.postScript` | `string \| string[]` | none | Per-package cascaded - supplies the command(s) to run when the package's own `package.json` doesn't define this script slot. |
+| `run.<script>.before` / `.exec` / `.after` | `string \| string[]` | none | Per-package cascaded - supplies the command(s) to run when the package's own `package.json` doesn't define this script slot. A bare string in place of the whole `run.<script>` object is shorthand for `exec`. |
 | `run.<script>.override` | `boolean` | `false` | Per-package cascaded - when `true`, the config's script replaces the package's own definition even when it has one. |
-| `packages.<pkgName>.dependencies` | `string[] \| Record<string, string>` | none | Declares extra in-repo "dependencies" not present in the package's real `package.json`, purely for rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s task scheduling). |
+| `dependencies` | `string[] \| Record<string, string>` | none | Extra in-repo "dependencies" not present in the package's real `package.json`, purely for rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s task scheduling). Declared from the root through a selector (`"[pkg-a]": { dependencies: [...] }`) or in the package's own `.rmanrc`. |
 
 `run.<script>.bail`'s precedence is worth calling out explicitly, since it's the one exception to
 "CLI always wins": a package's own `.rmanrc bail: true/false` outranks even an explicit
@@ -1012,11 +1062,12 @@ programmatically instead of letting the process exit.
 
 ```yaml
 run:
+  test: mocha # a bare string is shorthand for { exec: mocha }
   build:
     concurrency: 2
-    script: tsc -b # used only if the package's own package.json has no "build" script
-    preScript: [node ./generate.js, node ./validate.js]
-    postScript: node ./copy-assets.js
+    before: [node ./generate.js, node ./validate.js]
+    exec: tsc -b # used only if the package's own package.json has no "build" script
+    after: node ./copy-assets.js
     override: true # use these even if the package DOES define its own build/prebuild/postbuild
   lint:
     topo: false # lint scripts are independent - alphabetical order, no dependency waiting

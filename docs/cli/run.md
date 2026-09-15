@@ -49,24 +49,32 @@ script nothing implements.
 
 ## Per-package/script configuration (`.rmanrc run.<script>.*`)
 
-Every option above has a matching `.rmanrc` key, cascaded per package, so you rarely need to repeat
-flags on every invocation:
+Every option above has a matching `.rmanrc` key, so you rarely need to repeat flags on every
+invocation. **Who a block is about follows the one config rule** (see
+[the config reference](../api.md#configuration-rmanrc-rmanrcyml)): unmarked keys configure the
+package of the directory declaring them, and a `"[selector]"` block configures the packages it
+names - so at the repository root, package-facing script config goes under `"[*]"`:
 
 ```yaml
-run:
-  build:
-    concurrency: 2
-    script: tsc -b # used only if the package's own package.json has no "build" script at all
-    preScript: [node ./generate.js, node ./validate.js] # array -> run in sequence
-    postScript: node ./copy-assets.js
-    override: true # use these even if the package DOES already define build/prebuild/postbuild
-  lint:
-    topo: false # independent packages - alphabetical order, no dependency waiting
-    bail: false # one package's lint failure doesn't stop the others
-  test:
-    skip: true # this package opts out of "test" entirely
-    if: changed # only actually runs when this package has changed since the last publish
+"[*]":
+  run:
+    test: mocha # a bare string is shorthand for { exec: mocha }
+    build:
+      concurrency: 2
+      before: [node ./generate.js, node ./validate.js] # array -> run in sequence
+      exec: tsc -b # used only if the package's own package.json has no "build" script at all
+      after: node ./copy-assets.js
+      override: true # use these even if the package DOES already define build/prebuild/postbuild
+    lint:
+      topo: false # independent packages - alphabetical order, no dependency waiting
+      bail: false # one package's lint failure doesn't stop the others
+    coverage:
+      skip: true # these packages opt out of "coverage" entirely
+      if: changed # only actually runs when the package has changed since the last publish
 ```
+
+Values may use `{{name}}`, `{{dirname}}` and `{{version}}`, substituted per package - so one
+declaration can still say something package-specific (`../../coverage/{{dirname}}`).
 
 **Precedence** for `topo`/`progress`/`concurrency`/`logLevel`: explicit CLI flag > package's own
 resolved `.rmanrc` > built-in fallback. **`bail` is the one exception:** a package's own `.rmanrc
@@ -98,10 +106,16 @@ runs) rather than failing the whole command over a typo in the expression.
 ### Root pre/post hooks
 
 If the repository root defines a `prebuild`/`postbuild` (matching `pre<script>`/`post<script>`)
-npm script, or `.rmanrc run.<script>.preScript`/`.postScript`, it runs once each - exclusively,
-before/after every package's own script - unless the root opts out via `run.<script>.skip`, fails
-its own `run.<script>.if`, or the run is scoped to a single package (`--root` not given while
-standing inside one package's own directory - a repo-wide bookend has no place there).
+npm script, or an **unmarked** `.rmanrc run.<script>.before`/`.after`, it runs once each -
+exclusively, before/after every package's own script - unless the root opts out via
+`run.<script>.skip`, fails its own `run.<script>.if`, or the run is scoped to a single package
+(`--root` not given while standing inside one package's own directory - a repo-wide bookend has no
+place there).
+
+Unmarked is the operative word: a bookend command is run at the repository root, so a
+package-relative one (`node ../../support/postbuild.cjs`) belongs under `"[*]"`, not here. There is
+no bookend in a single-package repository - the root *is* the one package, already running these
+hooks in the same directory, so a bookend would simply run each of them twice.
 
 ## See also
 

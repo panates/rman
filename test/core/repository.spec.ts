@@ -237,15 +237,12 @@ describe('core/Repository', () => {
       expect(repo.getPackage('pkg-c')?.dependencies.sort()).toEqual(['pkg-a', 'pkg-b']);
     });
 
-    it('adds extra dependencies declared via .rmanrc packages.<name>.dependencies', async () => {
+    it('adds extra dependencies declared via a root .rmanrc selector', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-      fs.writeFileSync(
-        path.join(dir, '.rmanrc'),
-        JSON.stringify({ packages: { 'pkg-b': { dependencies: ['pkg-a'] } } }),
-      );
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[pkg-b]': { dependencies: ['pkg-a'] } }));
 
       const repo = await Repository.create(dir);
       expect(repo.getPackage('pkg-b')?.dependencies).toEqual(['pkg-a']);
@@ -253,18 +250,35 @@ describe('core/Repository', () => {
   });
 
   describe('config cascading (pkg.config)', () => {
-    it('every package inherits the root config, overridable by its own .rmanrc', async () => {
+    it('the root\'s own config stays the root\'s; a "[*]" block is what reaches the packages', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ foo: 'root', bar: 'root' }));
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ foo: 'root-only', '[*]': { foo: 'all', bar: 'all' } }),
+      );
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
       fs.writeFileSync(path.join(dir, 'packages/b/.rmanrc'), JSON.stringify({ bar: 'b-own' }));
 
       const repo = await Repository.create(dir);
-      expect(repo.config).toEqual({ foo: 'root', bar: 'root' });
-      expect(repo.getPackage('pkg-a')?.config).toEqual({ foo: 'root', bar: 'root' });
-      expect(repo.getPackage('pkg-b')?.config).toEqual({ foo: 'root', bar: 'b-own' });
+      expect(repo.config).toEqual({ foo: 'root-only' });
+      expect(repo.getPackage('pkg-a')?.config).toEqual({ foo: 'all', bar: 'all' });
+      expect(repo.getPackage('pkg-b')?.config).toEqual({ foo: 'all', bar: 'b-own' });
+    });
+
+    it('substitutes {{name}}/{{dirname}}/{{version}} per package, in every string value', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { clean: { include: ['build', '../../coverage/{{dirname}}'] } } }),
+      );
+      writeJson(dir, 'packages/builder/package.json', { name: '@sqb/builder', version: '6.0.9' });
+
+      const repo = await Repository.create(dir);
+      // {{dirname}} is the directory, not the package name - they differ for a scoped package.
+      expect(repo.getPackage('@sqb/builder')?.config.clean?.include).toEqual(['build', '../../coverage/builder']);
     });
   });
 
