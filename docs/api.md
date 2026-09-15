@@ -334,7 +334,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `changelog.tagPattern` | `string` (glob, may contain `{name}`) | `'v*'` | Per-package cascaded. `{name}` → independent per-package tags (`{name}@*`); no `{name}` → one shared repo-wide tag scheme. |
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |
 | `clean.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of `clean` entirely. |
-| `publish.target` | `'npm' \| 'docker' \| 'github'` or an array of them | `['npm']` | Per-package cascaded. Where `publish` releases this package to. Each target has its own "already published?" check: npm via `npm view`, docker via `docker manifest inspect`, github via the release for that version's tag. |
+| `publish.target` | `'npm' \| 'docker'` or an array of them | `['npm']` | Per-package cascaded. Which **registry** `publish` ships this package to. Each target has its own "already published?" check: npm via `npm view`, docker via `docker manifest inspect`. The repository's GitHub Release is not a target here - see `githubRelease`. |
 | `publish.docker.image` | `string` | none (required once `"docker"` is a target) | A bare name is prefixed with `--docker-namespace`/`DOCKERHUB_NAMESPACE`; one already containing `/` is used verbatim. |
 | `publish.docker.dockerfile` | `string` | `'Dockerfile'` | Relative to the package's own directory. |
 | `publish.docker.platforms` | `string[]` | `['linux/amd64']` | `docker buildx build --platform` targets. |
@@ -342,10 +342,10 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `publish.docker.buildContexts` | `Record<string, string>` | `{}` | Named `--build-context <name>=<path>` entries, each path relative to the package's own directory. |
 | `publish.docker.buildArgs` | `Record<string, string>` | `{}` | `--build-arg <name>=<value>` entries. A value of exactly `"$NAME"` expands from `process.env.NAME`. |
 | `publish.docker.readme` | `string` | `'DOCKER_README.md'` | Relative to the package's own directory - becomes the DockerHub repo's description, if present. |
-| `publish.github.assets` | `string[]` | `[]` | Globs (relative to the package's own directory) uploaded onto the release. A release with no assets is still valid. |
-| `publish.github.repository` | `string` | parsed from the `origin` remote | `owner/repo` the release is created in. |
-| `publish.github.draft` | `boolean` | `false` | Create the release as an unpublished draft. |
-| `publish.github.prerelease` | `boolean` | whether the version is a semver prerelease | Mark the release as a prerelease. |
+| `githubRelease.assets` | `string[]` | `[]` | Per-package cascaded. Globs (relative to the package's own directory) uploaded onto the one release. A release with no assets is still valid. |
+| `githubRelease.repository` | `string` | parsed from the `origin` remote | Root-level only. `owner/repo` the release is created in. |
+| `githubRelease.draft` | `boolean` | `false` | Root-level only. Create the release as an unpublished draft. |
+| `githubRelease.prerelease` | `boolean` | whether the version is a semver prerelease | Root-level only. Mark the release as a prerelease. |
 | `publish.skip` | `boolean` | `false` | Per-package cascaded - excludes this package from `publish` entirely (every target), regardless of `target`/`"private"`. `changelog` also skips it by default (its own `--include-skipped` overrides). `version` never consults this. |
 | `run.<script>.concurrency` | `number` | CPU count | See [`RunService`](#runservice) below. |
 | `run.<script>.topo` | `boolean` | `true` | Precedence: CLI flag > package config > fallback. |
@@ -772,18 +772,17 @@ directory), if present, updates the DockerHub repository's description afterward
 
 ### `GithubReleaseService`
 
-Computes and applies the repository's GitHub Release - the third answer to the same question
-`PublishService` and `DockerPublishService` ask ("is this exact version already out there?"), for
-code with no package registry of its own: a standalone app shipped as release assets, or one
-deployed elsewhere with the release only recording that it shipped.
+Computes and applies the repository's GitHub Release, behind the [`github-release`](cli/github-release.md)
+command. It asks a question that only *looks* like `PublishService`'s and `DockerPublishService`'s:
+those ask whether a package's artifact has reached a registry; this asks whether the repository has
+recorded that a version shipped.
 
-Unlike the other two targets this one is **repository-level**: a release's tag covers the whole
-source tree, so a run produces **one** release, and its body covers every package that shipped
-under it - not just the ones naming `"github"`. A per-package release would have to invent a tag no
-package owns. Declare it in the root `.rmanrc` alongside `"npm"` (`"target": ["npm", "github"]`);
-it's honored as soon as any package resolves it. The `"publish.github"` config block is optional -
-every fact it needs already has a default source - and `"private": true` is irrelevant here (it
-only ever excluded npm candidates).
+That difference is why it is **not** a `publish.target` and **not** opt-in. A release's tag covers
+the whole source tree, so a run produces **one** release whose body covers every package that
+shipped under it - a per-package release would have to invent a tag no package owns - and there is
+no useful repository that releases code and wants no record of it. It needs no configuration at all;
+the optional `"githubRelease"` block only carries details. `"private": true` and `publish.skip` are
+both irrelevant here (they only ever excluded registry candidates).
 
 ```ts
 namespace GithubReleaseService {
@@ -824,7 +823,7 @@ The release is identified by the repository's own version (the root's - see
 (`version.releaseTagPattern`) when that version is a calendar one, and otherwise the tag of the
 single shared version, which is the group's own tag - so a repo with one version line gets no second
 name for the release it already has. `owner/repo` comes from `options.repository`, then the root's
-`publish.github.repository`, then the `origin` remote's URL (SSH and HTTPS forms both parse); an
+`githubRelease.repository`, then the `origin` remote's URL (SSH and HTTPS forms both parse); an
 unresolvable one is `'error'`, not a silent skip. Uncommitted changes anywhere are `'error'` unless
 `ignoreDirty` downgrades them to `'skip'`, and so is a release tag that doesn't exist in this clone -
 either `version` never ran or the tags weren't fetched, and releasing anyway would silently produce
@@ -840,7 +839,7 @@ contributes no section, which is also how a package that didn't ship this time i
 boundary is deliberately not `detectChangeHash`'s auto-detection, which would resolve to the very
 tag being released and correctly find nothing. An existing release for the tag (HTTP 422) is updated
 rather than failed, so a re-run after a partial failure converges. Every package's
-`publish.github.assets` globs (resolved against its own directory) are uploaded onto the one
+`githubRelease.assets` globs (resolved against its own directory) are uploaded onto the one
 release.
 
 ### `ChangelogService`

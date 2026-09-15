@@ -27,8 +27,8 @@ export async function findLatestTag(git: GitHelper, pkg: Package): Promise<strin
 
 /** The forward direction of `findLatestTag`: expands `pkg`'s (cascaded) `.rmanrc
  *  changelog.tagPattern` into the concrete tag name `version` belongs under - `{name}` becomes the
- *  package's own name, `*` becomes `version`. Shared by `version` (creating the tag), `publish
- *  --target github` (finding the release that tag belongs to), and `detectChangeHash`'s own npm
+ *  package's own name, `*` becomes `version`. Shared by `version` (creating the tag),
+ *  `github-release` (finding the release that tag belongs to), and `detectChangeHash`'s own npm
  *  fallback (mapping a published version back onto a tag), so all three name tags identically. */
 export function expandTag(pkg: Package, version: string): string {
   return applyTagPattern(tagPattern(pkg), pkg.name, version);

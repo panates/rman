@@ -43,8 +43,8 @@ describe('services/github-release', () => {
     return { releaseExists: async () => exists };
   }
 
-  /** A monorepo whose root opts the repository into GitHub Releases, as a consumer would - already
-   *  tagged for its current version, the state `version` leaves behind and `publish` expects. */
+  /** A monorepo already tagged for its current version - the state `version` leaves behind and
+   *  `github-release` expects. No opt-in of any kind: a release is always cut. */
   function fixture(
     options: { rootVersion?: string; rootRman?: unknown; remote?: string; tagged?: boolean } = {},
   ): string {
@@ -55,7 +55,7 @@ describe('services/github-release', () => {
       private: true,
       version: rootVersion,
       workspaces: ['packages/*'],
-      rman: options.rootRman ?? { publish: { target: ['npm', 'github'] } },
+      rman: options.rootRman ?? {},
     });
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.2.0' });
     writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.2.0' });
@@ -67,10 +67,14 @@ describe('services/github-release', () => {
   }
 
   describe('getPlan()', () => {
-    it('a repository that never opts into "github" gets no plan at all', async () => {
+    it('needs no opt-in at all - a release records that the repository shipped', async () => {
+      // Every other "should this ship?" question in rman is opt-in; this one deliberately isn't.
+      // A release isn't somewhere a package ships to, so there is nothing to opt a package into.
       const dir = fixture({ rootRman: {} });
       const repo = await Repository.create(dir);
-      expect(await GithubReleaseService.getPlan(repo, {}, releases(false))).toEqual([]);
+      const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
+      expect(plan).toHaveLength(1);
+      expect(plan[0]).toMatchObject({ status: 'publish', tag: 'v1.2.0' });
     });
 
     it('produces exactly one entry - a release belongs to the repository, not a package', async () => {
@@ -103,7 +107,7 @@ describe('services/github-release', () => {
       expect(plan[0]).toMatchObject({ tag: 'release-2026.9.15-1430', version: '2026.9.15-1430' });
     });
 
-    it('a single opted-in package is enough, and still yields one repository release', async () => {
+    it('a "publish.skip" package changes nothing - the tag still covers its code', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, version: '1.2.0', workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.2.0' });
@@ -111,7 +115,7 @@ describe('services/github-release', () => {
         name: 'pkg-b',
         version: '1.2.0',
         private: true,
-        rman: { publish: { target: ['github'] } },
+        rman: { publish: { skip: true } },
       });
       initGit(dir);
       git(dir, 'tag', 'v1.2.0');
@@ -122,9 +126,9 @@ describe('services/github-release', () => {
       expect(plan[0]).toMatchObject({ status: 'publish', tag: 'v1.2.0' });
     });
 
-    it('root "publish.github.repository" wins over whatever the origin remote says', async () => {
+    it('root "githubRelease.repository" wins over whatever the origin remote says', async () => {
       const dir = fixture({
-        rootRman: { publish: { target: ['github'], github: { repository: 'panates/elsewhere' } } },
+        rootRman: { githubRelease: { repository: 'panates/elsewhere' } },
       });
       const repo = await Repository.create(dir);
       const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));

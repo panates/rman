@@ -6,16 +6,19 @@
 rman publish [options...]
 ```
 
-Publishes every package to its configured target(s) - `npm` by default, or whatever each package's
-own (cascaded) `.rmanrc "publish.target"` says (`"npm"`, `"docker"`, `"github"`, or any combination).
-Shows the plan first, then asks for confirmation (unless `--yes` or `--dry-run`), then publishes
-sequentially, in topological order (dependencies before dependents).
+Publishes every package to its configured **registry** - `npm` by default, or whatever each
+package's own (cascaded) `.rmanrc "publish.target"` says (`"npm"`, `"docker"`, or both). Shows the
+plan first, then asks for confirmation (unless `--yes` or `--dry-run`), then publishes sequentially,
+in topological order (dependencies before dependents).
 
 The npm side is opt-out (every non-private package is a candidate, unless it explicitly narrows its
-own `publish.target` to exclude `"npm"`); the docker and github sides are opt-in (only a package
-explicitly listing them in `publish.target` is a candidate at all) - see
-[Docker publishing](#docker-publishing-publishdocker) and
-[GitHub Releases](#github-releases-publishgithub) below.
+own `publish.target` to exclude `"npm"`); the docker side is opt-in (only a package explicitly
+listing it in `publish.target` is a candidate at all) - see
+[Docker publishing](#docker-publishing-publishdocker) below.
+
+`publish.target` is strictly about **where a package's artifact goes**. The repository's GitHub
+Release is not one of these - it isn't a place anything ships to, it's the repository's record that
+a version shipped - and it is not opt-in either: see [`rman github-release`](github-release.md).
 
 Every target answers the same question against its own registry - *is this exact version already out
 there?* - so no package is ever left without an answer:
@@ -24,7 +27,6 @@ there?* - so no package is ever left without an answer:
 | --- | --- | --- |
 | `npm` | `npm view <name> version` == the local `package.json` version | No (opt-out via `private`/`target`) |
 | `docker` | `docker manifest inspect <image>:<version>` succeeds | Yes |
-| `github` | a GitHub Release exists for that version's own tag | Yes |
 
 This is deliberately **not** the same question [`rman changed`](changed.md)/[`version`](version.md)
 answer ("what commits landed since the last release, and how big a bump do they imply") - that one is
@@ -42,7 +44,7 @@ options, in addition to:
 | `--yes` | `-y` | boolean | - | Skip the confirmation prompt and publish immediately. |
 | `--dry-run` | - | boolean | - | Only show the plan - never publishes, regardless of `--yes`. |
 | `--json` | `-j` | boolean | - | Print the plan as JSON (one row per package **and** target: `name`, `target`, `status`, `version`, `reason`) instead of text. |
-| `--target <name>` | - | array | `npm`, `docker`, `github` | Restrict this run to just these target(s) (repeatable). Default: whatever each package is configured for. `--target docker` on a package that opts in without a `publish.docker` config errors clearly instead of being silently skipped. |
+| `--target <name>` | - | array | `npm`, `docker` | Restrict this run to just these target(s) (repeatable). Default: whatever each package is configured for. `--target docker` on a package that opts in without a `publish.docker` config errors clearly instead of being silently skipped. |
 | `--ignore-dirty` | - | boolean | - | Exclude a package with uncommitted local changes instead of aborting the whole run. |
 | `--package-manager <name>` | - | string | `npm`, `yarn`, `pnpm`, `bun` | Package manager to publish with. Default: `npm`, or `.rmanrc "packageManager"`. |
 | `--access <level>` | - | string | `public`, `restricted` | `npm publish --access <level>` - required by the registry for a *new* scoped package. |
@@ -52,7 +54,6 @@ options, in addition to:
 | `--userconfig <path>` | - | string | - | Path to a custom `.npmrc` for both the registry check and the actual publish. |
 | `--contents <dir>` | - | string | - | Subdirectory to publish from, relative to each package's own directory - only consulted when a package has no `publishConfig.directory` of its own (that always wins when present). |
 | `--docker-namespace <ns>` | - | string | - | Prefixed onto a bare (no `/`) `publish.docker.image`. Default: the `DOCKERHUB_NAMESPACE` environment variable. |
-| `--github-repository <owner/repo>` | - | string | - | Where GitHub Releases are created. Default: each package's own `publish.github.repository`, falling back to the `origin` remote's URL. |
 
 ## Examples
 
@@ -147,58 +148,15 @@ rman publish --docker-namespace myorg
 
 See [`DockerPublishService`](../api.md#dockerpublishservice) for the full mechanics.
 
-## GitHub Releases (`publish.github`)
+## The GitHub Release is not a target
 
-The third target, for code with no package registry of its own: a standalone app shipped as release
-assets, or one deployed somewhere else entirely with the GitHub Release just recording that it
-shipped.
+A repository's GitHub Release used to be a third `publish.target`, and that was wrong twice over:
+it isn't a registry a package ships to, and it isn't optional. It now has its own command, which
+needs no configuration and no opt-in - see [`rman github-release`](github-release.md).
 
-Unlike the other two this target is **repository-level**: a release's tag covers the whole source
-tree, so a run produces **one** release and its body describes every package that shipped under it -
-not just the ones naming `"github"`. Declare it in the **root** `.rmanrc` alongside `"npm"`; it's
-honored as soon as any package resolves it. The config block itself is optional, since every fact it
-needs already has a sensible default:
-
-```jsonc
-// .rmanrc at the repository root
-{
-  "publish": {
-    "target": ["npm", "github"],
-    "github": {
-      "assets": ["dist/*.tar.gz"], // globs, relative to each package's own directory
-      "repository": "panates/my-repo" // default: parsed from the "origin" remote
-    }
-  }
-}
-```
-
-The release is identified by the repository's own version (the monorepo root's - see
-[`rman version`](version.md#the-repositorys-own-version)): its release tag (`.rmanrc
-"version.releaseTagPattern"`, default `release-*`) when that version is a calendar one, and
-otherwise the tag of the single shared version. Whether a release already exists for that tag
-decides `'publish'` vs `'up-to-date'`. Requires a `GITHUB_TOKEN` (or `GH_TOKEN`) environment
-variable; a lookup that fails for any other reason than "no such release" (a bad token, a typo'd
-repository) is a plan `'error'`, never a silent "not published yet".
-
-Release notes come from [`changelog`](changelog.md) itself, one section per package, each bounded by
-the **previous repository release** and headed with that package's own version - so a repo whose
-packages sit on different version lines still reads correctly. A package with nothing in that range
-contributes no section, which is also how one that didn't ship this time is left out. The boundary
-is deliberately not the usual auto-detection, which would resolve to the very tag being released and
-correctly find nothing new. An existing release is updated rather than failed, so a re-run after a
-partial failure converges.
-
-Because both the release tag and that boundary are read from git, **the tags have to be present**: a
-bump made locally and pushed with a plain `git push` leaves them behind (`rman version --push` sends
-them), and a CI checkout has to fetch them. A release tag that isn't there is a plan `'error'` -
-without it the notes would silently cover the entire history instead of what actually shipped.
-
-```bash
-rman publish --target github              # only the GitHub Release side of it
-rman publish --github-repository panates/my-repo
-```
-
-See [`GithubReleaseService`](../api.md#githubreleaseservice) for the full mechanics.
+`"github"` as a `publish.target` value is therefore free for what it actually reads as: publishing
+to **GitHub Packages** (`npm.pkg.github.com`). That works today through npm's own
+`publishConfig.registry`, or `--registry`, rather than a target of its own.
 
 ## Excluding a package entirely (`.rmanrc "publish.skip"`)
 
@@ -216,4 +174,5 @@ actually reached the registry. Unrelated packages elsewhere in the plan are unaf
 ## See also
 
 - [`rman version`](version.md) - typically run right before `publish`.
-- [`PublishService`](../api.md#publishservice) / [`DockerPublishService`](../api.md#dockerpublishservice) / [`GithubReleaseService`](../api.md#githubreleaseservice) - the underlying services.
+- [`rman github-release`](github-release.md) - the repository's own release record, cut separately.
+- [`PublishService`](../api.md#publishservice) / [`DockerPublishService`](../api.md#dockerpublishservice) - the underlying services.

@@ -11,6 +11,7 @@ import * as ciCommand from './commands/ci.command.js';
 import * as cleanCommand from './commands/clean.command.js';
 import * as diffCommand from './commands/diff.command.js';
 import * as execCommand from './commands/exec.command.js';
+import * as githubReleaseCommand from './commands/github-release.command.js';
 import * as importCommand from './commands/import.command.js';
 import * as infoCommand from './commands/info.command.js';
 import * as listCommand from './commands/list.command.js';
@@ -63,6 +64,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     testCommand.initCli(repository, program);
     versionCommand.initCli(repository, program);
     publishCommand.initCli(repository, program);
+    githubReleaseCommand.initCli(repository, program);
     execCommand.initCli(repository, program);
     changedCommand.initCli(repository, program);
     diffCommand.initCli(repository, program);
