@@ -99,7 +99,7 @@ export class Repository extends Package {
     const withVars = (pkg: Package, config: any) =>
       interpolateConfig(config, {
         name: pkg.name,
-        dirname: path.basename(pkg.dirname),
+        basename: path.basename(pkg.dirname),
         version: pkg.version ?? '',
       });
     this.config = withVars(this.rootPackage, await resolveConfig(this.dirname, this.dirname, cache));

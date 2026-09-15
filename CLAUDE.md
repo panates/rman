@@ -50,9 +50,9 @@ repo-wide bookend run once at the repository root. One declaration feeding both 
   unmarked config. Directory levels closer to the package still win.
 - **Trap: in YAML the quotes are mandatory.** A bare `[*]` is a flow sequence and `*` an alias
   indicator - the file fails to load. Write `"[*]":`.
-- Any string value is interpolated with `{{name}}` / `{{dirname}}` / `{{version}}` for the package
+- Any string value is interpolated with `{{name}}` / `{{basename}}` / `{{version}}` for the package
   it resolved for (`interpolateConfig`) - **every** string, so there is no list of "interpolated
-  keys" to memorize. `{{dirname}}` is the directory (`builder`), `{{name}}` the package name
+  keys" to memorize. `{{basename}}` is the directory (`builder`), `{{name}}` the package name
   (`@sqb/builder`); they differ for a scoped package.
 - Script hooks are `before` / `exec` / `after` (not `preScript`/`script`/`postScript`), in both
   `run.<script>` and `version`. A bare string in place of a whole `run.<script>` object is

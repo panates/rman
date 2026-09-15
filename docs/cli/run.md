@@ -73,8 +73,8 @@ names - so at the repository root, package-facing script config goes under `"[*]
       if: changed # only actually runs when the package has changed since the last publish
 ```
 
-Values may use `{{name}}`, `{{dirname}}` and `{{version}}`, substituted per package - so one
-declaration can still say something package-specific (`../../coverage/{{dirname}}`).
+Values may use `{{name}}`, `{{basename}}` and `{{version}}`, substituted per package - so one
+declaration can still say something package-specific (`../../coverage/{{basename}}`).
 
 **Precedence** for `topo`/`progress`/`concurrency`/`logLevel`: explicit CLI flag > package's own
 resolved `.rmanrc` > built-in fallback. **`bail` is the one exception:** a package's own `.rmanrc

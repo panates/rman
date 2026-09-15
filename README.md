@@ -347,7 +347,7 @@ version:
     ignoreTypes: [chore, ci]
     tagPattern: 'v*'
   clean:
-    include: [build, '../../coverage/{{dirname}}'] # {{name}}/{{dirname}}/{{version}} are substituted
+    include: [build, '../../coverage/{{basename}}'] # {{name}}/{{basename}}/{{version}} are substituted
   run:
     test: mocha # a bare string is shorthand for { exec: mocha }
     build:

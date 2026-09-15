@@ -196,24 +196,24 @@ function dirChain(rootDir: string, targetDir: string): string[] {
 }
 
 /**
- * Substitutes `{{name}}`, `{{dirname}}` and `{{version}}` in **every** string value of a resolved
+ * Substitutes `{{name}}`, `{{basename}}` and `{{version}}` in **every** string value of a resolved
  * config, in place of the package it was resolved for - so one declaration at the root can still
  * say something package-specific:
  *
  * ```yaml
  * "[*]":
  *   clean:
- *     include: ["build", "../../coverage/{{dirname}}"]
+ *     include: ["build", "../../coverage/{{basename}}"]
  * ```
  *
  * Every string, with no list of "interpolated keys" to memorize - a rule with exceptions is a rule
- * nobody remembers. `{{dirname}}` is the package's directory name (`builder`), not its package name
+ * nobody remembers. `{{basename}}` is the package's directory name (`builder`), not its package name
  * (`@sqb/builder`); both are available, and they differ for a scoped package. An unknown `{{...}}`
  * is left alone rather than blanked, so a template meant for something else passes through intact.
  */
-export function interpolateConfig<T>(config: T, vars: { name: string; dirname: string; version: string }): T {
+export function interpolateConfig<T>(config: T, vars: { name: string; basename: string; version: string }): T {
   if (typeof config === 'string') {
-    return config.replace(/\{\{(name|dirname|version)\}\}/g, (_, key: keyof typeof vars) => vars[key]) as T;
+    return config.replace(/\{\{(name|basename|version)\}\}/g, (_, key: keyof typeof vars) => vars[key]) as T;
   }
   if (Array.isArray(config)) return config.map(item => interpolateConfig(item, vars)) as T;
   if (config && typeof config === 'object') {

@@ -256,16 +256,16 @@ Selector details:
 - A directory holding no package of its own (an intermediate `packages/`, say) has no package to
   speak for, so its unmarked config still cascades to everything below it.
 
-Any string value may use `{{name}}`, `{{dirname}}` and `{{version}}`, substituted for the package
+Any string value may use `{{name}}`, `{{basename}}` and `{{version}}`, substituted for the package
 the config was resolved for - which is what lets one root declaration stay package-specific:
 
 ```yaml
 "[*]":
   clean:
-    include: ["build", "../../coverage/{{dirname}}"]
+    include: ["build", "../../coverage/{{basename}}"]
 ```
 
-`{{dirname}}` is the package's directory name (`builder`), `{{name}}` its package name
+`{{basename}}` is the package's directory name (`builder`), `{{name}}` its package name
 (`@sqb/builder`) - they differ for a scoped package. An unknown `{{...}}` is left alone rather than
 blanked.
 

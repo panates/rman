@@ -267,17 +267,17 @@ describe('core/Repository', () => {
       expect(repo.getPackage('pkg-b')?.config).toEqual({ foo: 'all', bar: 'b-own' });
     });
 
-    it('substitutes {{name}}/{{dirname}}/{{version}} per package, in every string value', async () => {
+    it('substitutes {{name}}/{{basename}}/{{version}} per package, in every string value', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       fs.writeFileSync(
         path.join(dir, '.rmanrc'),
-        JSON.stringify({ '[*]': { clean: { include: ['build', '../../coverage/{{dirname}}'] } } }),
+        JSON.stringify({ '[*]': { clean: { include: ['build', '../../coverage/{{basename}}'] } } }),
       );
       writeJson(dir, 'packages/builder/package.json', { name: '@sqb/builder', version: '6.0.9' });
 
       const repo = await Repository.create(dir);
-      // {{dirname}} is the directory, not the package name - they differ for a scoped package.
+      // {{basename}} is the directory, not the package name - they differ for a scoped package.
       expect(repo.getPackage('@sqb/builder')?.config.clean?.include).toEqual(['build', '../../coverage/builder']);
     });
   });
