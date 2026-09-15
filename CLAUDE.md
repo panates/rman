@@ -145,7 +145,12 @@ touched package counts as changed.
   it, and a build-time rewrite leaves the edit uncommitted (`publish` then reads a dirty tree) and
   records a stale label in the commit that was actually tagged. Reads the same path
   `DockerPublishService` builds from (`publish.docker.dockerfile`), never a second guess at it.
-  Never *inserts* a label - which labels an image carries is the author's call.
+  Never *inserts* a label - which labels an image carries is the author's call. The same pass
+  rewrites the `version` constant in every file `.rmanrc "version.stamp"` lists
+  (`stampVersionConstant`). **Stamp the source, never the build output**: rewriting
+  `build/constants.js` from a build script leaves the checked-in file on a placeholder, so anything
+  running from source reports it, the tagged commit never records the released version, and the
+  rewrite has to be redone every build.
 - Also decides the **repository's own** release identity (the monorepo root's version) and, on a
   calendar version, creates the repository release tag alongside the per-group ones - see
   "Release identity" below.

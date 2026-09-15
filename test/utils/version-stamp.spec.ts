@@ -1,7 +1,7 @@
 import { expect } from 'expect';
-import { stampVersionLabel } from '../../src/utils/docker-label.js';
+import { stampVersionConstant, stampVersionLabel } from '../../src/utils/version-stamp.js';
 
-describe('utils/docker-label', () => {
+describe('utils/version-stamp', () => {
   describe('stampVersionLabel()', () => {
     it('rewrites the label to the given version', () => {
       const out = stampVersionLabel('FROM node:22\nLABEL org.opencontainers.image.version="0.0.4"\n', '1.2.0');
@@ -64,6 +64,43 @@ describe('utils/docker-label', () => {
     it('stops rewriting once a multi-line LABEL ends', () => {
       const before = ['LABEL foo=bar \\', '      baz=qux', 'ENV org.opencontainers.image.version=0.0.4'].join('\n');
       expect(stampVersionLabel(before, '1.2.0')).toBeUndefined();
+    });
+  });
+
+  describe('stampVersionConstant()', () => {
+    it('rewrites the string assigned to a version constant', () => {
+      expect(stampVersionConstant("export const version = '1';\n", '6.0.10')).toBe(
+        "export const version = '6.0.10';\n",
+      );
+    });
+
+    it('matches an object property too, and keeps the quoting style', () => {
+      expect(stampVersionConstant('{ name: "app", version: "1" }', '6.0.10')).toBe(
+        '{ name: "app", version: "6.0.10" }',
+      );
+      expect(stampVersionConstant('export const version = `1`;', '6.0.10')).toBe('export const version = `6.0.10`;');
+    });
+
+    it('leaves the rest of the file untouched', () => {
+      const before = ["import x from 'y';", "export const version = '1';", 'export const other = 42;'].join('\n');
+      expect(stampVersionConstant(before, '6.0.10')).toBe(before.replace("'1'", "'6.0.10'"));
+    });
+
+    it('returns undefined when there is nothing to change', () => {
+      expect(stampVersionConstant("export const version = '6.0.10';", '6.0.10')).toBeUndefined();
+      expect(stampVersionConstant('export const other = 42;', '6.0.10')).toBeUndefined();
+    });
+
+    it('only matches the whole identifier, never the tail of a longer one', () => {
+      // Someone else's constant that merely ends in the same letters.
+      expect(stampVersionConstant("export const myversion = '1';", '6.0.10')).toBeUndefined();
+      expect(stampVersionConstant("export const version2 = '1';", '6.0.10')).toBeUndefined();
+    });
+
+    it('accepts a different constant name', () => {
+      expect(stampVersionConstant("export const appVersion = '1';", '6.0.10', 'appVersion')).toBe(
+        "export const appVersion = '6.0.10';",
+      );
     });
   });
 });

@@ -790,6 +790,43 @@ describe('services/version', () => {
       expect(fs.readFileSync(dockerfile, 'utf-8')).toContain('org.opencontainers.image.version="1.0.0"');
     });
 
+    it('stamps a .rmanrc "version.stamp" source constant into the same commit', async () => {
+      // The source, not the build output: a build-time rewrite leaves the checked-in file claiming
+      // a placeholder, so anything running from source reports it and git never records the release.
+      const { dir } = fixtureWithOrigin();
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        rman: { version: { stamp: ['src/constants.ts'] } },
+      });
+      const constants = path.join(dir, 'packages/a/src/constants.ts');
+      fs.mkdirSync(path.dirname(constants), { recursive: true });
+      fs.writeFileSync(constants, "export const version = '1';\n");
+      commitAll(dir, 'chore: add constants');
+
+      const repo = await Repository.create(dir);
+      await VersionService.applyPlan(repo, await VersionService.getPlan(repo));
+
+      expect(fs.readFileSync(constants, 'utf-8')).toBe("export const version = '1.1.0';\n");
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+      expect(git(dir, 'show', '--name-only', '--format=', 'HEAD')).toContain('packages/a/src/constants.ts');
+    });
+
+    it('a listed file a package does not have is a silent no-op', async () => {
+      // So one "[*]" declaration covers a repo where only some packages carry one.
+      const { dir } = fixtureWithOrigin();
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        rman: { version: { stamp: ['src/constants.ts'] } },
+      });
+      commitAll(dir, 'chore: no constants file here');
+
+      const repo = await Repository.create(dir);
+      await VersionService.applyPlan(repo, await VersionService.getPlan(repo));
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+    });
+
     it('a package with no Dockerfile at all is unaffected', async () => {
       const { dir } = fixtureWithOrigin();
       const repo = await Repository.create(dir);

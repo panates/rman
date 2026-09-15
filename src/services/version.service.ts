@@ -10,7 +10,6 @@ import {
   parseConventionalCommit,
   parseReleaseAs,
 } from '../utils/conventional-commits.js';
-import { stampVersionLabel } from '../utils/docker-label.js';
 import { exec } from '../utils/exec.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
@@ -21,6 +20,7 @@ import {
   isCalendarVersion,
   usesCalendarVersion,
 } from '../utils/release-version.js';
+import { stampVersionConstant, stampVersionLabel } from '../utils/version-stamp.js';
 import { parseWorkspaceRange } from '../utils/workspace-range.js';
 import { ChangelogService } from './changelog.service.js';
 
@@ -214,9 +214,10 @@ export namespace VersionService {
     const isRealEntry = (e: Entry) => !(repository.monorepo && e.package === repository.rootPackage);
     const bumped = plan.filter(e => e.status === 'bump' && isRealEntry(e));
     const bumpedByName = new Map(bumped.map(e => [e.package.name, e]));
-    /** Repo-relative Dockerfile paths stamped below, so each lands in the same commit as the bump
-     *  that made it stale - keyed by package, the way `changelogFileByPackage` is. */
-    const dockerfileByPackage = new Map<string, string>();
+    /** Repo-relative paths of every file stamped with the new version below (a Dockerfile label, a
+     *  source constant), so each lands in the same commit as the bump that made it stale - keyed by
+     *  package, the way `changelogFileByPackage` is. */
+    const stampedByPackage = new Map<string, string[]>();
 
     for (const entry of bumped) {
       const pkg = entry.package;
@@ -242,8 +243,15 @@ export namespace VersionService {
       await runVersionScript(pkg, 'exec', 'version');
       pkg.writeJson();
       // Before `postversion`, so a script that reacts to the bump sees the whole new state.
-      const dockerfile = stampDockerfile(pkg, entry.to!);
-      if (dockerfile) dockerfileByPackage.set(pkg.name, path.relative(repository.dirname, dockerfile));
+      const stamped = [stampDockerfile(pkg, entry.to!), ...stampSourceFiles(pkg, entry.to!)].filter(
+        (f): f is string => !!f,
+      );
+      if (stamped.length) {
+        stampedByPackage.set(
+          pkg.name,
+          stamped.map(f => path.relative(repository.dirname, f)),
+        );
+      }
       await runVersionScript(pkg, 'after', 'postversion');
     }
 
@@ -310,8 +318,7 @@ export namespace VersionService {
       for (const e of groupEntries) {
         const changelogFile = changelogFileByPackage.get(e.package.name);
         if (changelogFile) files.push(changelogFile);
-        const dockerfile = dockerfileByPackage.get(e.package.name);
-        if (dockerfile) files.push(dockerfile);
+        files.push(...(stampedByPackage.get(e.package.name) ?? []));
       }
       await git.commit(files, buildCommitMessage(repository, groupEntries, options.message));
       const tags = new Set(groupEntries.map(e => expandTag(e.package, e.to!)));
@@ -626,4 +633,28 @@ function stampDockerfile(pkg: Package, version: string): string | undefined {
   if (stamped === undefined) return undefined;
   fs.writeFileSync(file, stamped, 'utf-8');
   return file;
+}
+
+/**
+ * Keeps every `.rmanrc "version.stamp"` source file's `version` constant in step with the version
+ * just written, returning the absolute paths of the ones that actually changed.
+ *
+ * Explicitly listed rather than discovered: unlike the OCI Dockerfile label there is no standard
+ * saying "this file holds the version", and the assignment this matches is deliberately broad. A
+ * listed file a package doesn't have is a silent no-op, which is what lets one `"[*]"` declaration
+ * cover a repo where only some packages carry one.
+ */
+function stampSourceFiles(pkg: Package, version: string): string[] {
+  const configured = pkg.config?.version?.stamp;
+  const patterns = typeof configured === 'string' ? [configured] : (configured ?? []);
+  const stamped: string[] = [];
+  for (const rel of patterns) {
+    const file = path.resolve(pkg.dirname, rel);
+    if (!fs.existsSync(file)) continue;
+    const next = stampVersionConstant(fs.readFileSync(file, 'utf-8'), version);
+    if (next === undefined) continue;
+    fs.writeFileSync(file, next, 'utf-8');
+    stamped.push(file);
+  }
+  return stamped;
 }

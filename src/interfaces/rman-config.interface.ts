@@ -73,6 +73,15 @@ export namespace RmanConfig {
      *  already declares (never inserts one), and reads the same path `publish --target docker`
      *  builds from (`publish.docker.dockerfile`), so a package without one is a no-op. */
     stampDockerfile?: boolean;
+    /** Source files whose `version` constant is rewritten to the version being written, in the same
+     *  commit as the bump - paths relative to the package's own directory (e.g.
+     *  `["src/constants.ts"]`). Per-package cascaded; a listed file a package doesn't have is a
+     *  silent no-op, so one `"[*]"` declaration covers a repo where only some packages carry one.
+     *
+     *  Stamping the source, not the build output: a build-time rewrite leaves the checked-in file
+     *  claiming a placeholder, so anything running from source reports that placeholder, git never
+     *  records the released version, and the rewrite has to be redone on every build. */
+    stamp?: string | string[];
     /** Command(s) run as this package's own `version` npm-lifecycle step, when its `package.json`
      *  doesn't define one itself. An array runs them in sequence. */
     exec?: string | string[];
