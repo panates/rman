@@ -119,6 +119,32 @@ a single version line the group's own tag already is the release, so no second n
 The release tag pattern must never match a package's own `changelog.tagPattern` - a release tag
 matching `v*` would be picked up as some package's last release and throw off its changelog.
 
+## The Dockerfile version label
+
+A bumped package's Dockerfile has its `org.opencontainers.image.version` label rewritten to the new
+version, in the **same commit** as the bump:
+
+```dockerfile
+LABEL org.opencontainers.image.version="1.2.0"   # was "1.1.0"
+```
+
+It belongs here rather than in a build script: the label is by specification *the version of the
+packaged software*, so there is only ever one correct value for it and `version` is what knows it.
+Doing it at build time instead is both later than necessary and invisible to git - it leaves the
+edit uncommitted (which [`publish`](publish.md) then trips over as a dirty tree) and records a stale
+label in the commit that was actually tagged.
+
+- Read from the same path [`publish --target docker`](publish.md#docker-publishing-publishdocker)
+  builds from - `.rmanrc "publish.docker.dockerfile"`, default `Dockerfile`, relative to the
+  package's own directory - so the two can never disagree about which file this is.
+- Only ever **rewrites** a label the Dockerfile already declares; one is never inserted. Which
+  labels an image carries is the author's decision. A package with no Dockerfile, or one that
+  doesn't declare the label, is a no-op.
+- The existing quoting style is kept, so the diff is the version and nothing else. Labels sharing a
+  line, and `LABEL` instructions split across `\` continuations, are both handled; the same key
+  outside a `LABEL` (in an `ENV`, or a comment) is left alone.
+- Turn it off with `.rmanrc "version": { "stampDockerfile": false }` (per-package cascaded).
+
 ## Severity auto-detection
 
 With no explicit `bump`, each package's severity comes from its own commits since its last release -

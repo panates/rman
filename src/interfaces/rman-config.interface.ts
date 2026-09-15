@@ -37,6 +37,13 @@ export namespace RmanConfig {
      *  any package's own `changelog.tagPattern`, or that package's changelog boundary will resolve
      *  to the repository release instead of its own last release. */
     releaseTagPattern?: string;
+    /** Keep this package's Dockerfile `org.opencontainers.image.version` label in step with the
+     *  version being written. Per-package cascaded. Default `true` - the label's value is, by
+     *  specification, the version of the packaged software, so there is only ever one correct
+     *  value for it, and `version` is what knows it. Only ever *rewrites* a label the Dockerfile
+     *  already declares (never inserts one), and reads the same path `publish --target docker`
+     *  builds from (`publish.docker.dockerfile`), so a package without one is a no-op. */
+    stampDockerfile?: boolean;
     script?: string | string[];
     preScript?: string | string[];
     postScript?: string | string[];

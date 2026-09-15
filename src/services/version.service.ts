@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import semver from 'semver';
 import type { Package } from '../core/package.js';
@@ -9,6 +10,7 @@ import {
   parseConventionalCommit,
   parseReleaseAs,
 } from '../utils/conventional-commits.js';
+import { stampVersionLabel } from '../utils/docker-label.js';
 import { exec } from '../utils/exec.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
@@ -212,6 +214,9 @@ export namespace VersionService {
     const isRealEntry = (e: Entry) => !(repository.monorepo && e.package === repository.rootPackage);
     const bumped = plan.filter(e => e.status === 'bump' && isRealEntry(e));
     const bumpedByName = new Map(bumped.map(e => [e.package.name, e]));
+    /** Repo-relative Dockerfile paths stamped below, so each lands in the same commit as the bump
+     *  that made it stale - keyed by package, the way `changelogFileByPackage` is. */
+    const dockerfileByPackage = new Map<string, string>();
 
     for (const entry of bumped) {
       const pkg = entry.package;
@@ -236,6 +241,9 @@ export namespace VersionService {
       }
       await runVersionScript(pkg, 'script', 'version');
       pkg.writeJson();
+      // Before `postversion`, so a script that reacts to the bump sees the whole new state.
+      const dockerfile = stampDockerfile(pkg, entry.to!);
+      if (dockerfile) dockerfileByPackage.set(pkg.name, path.relative(repository.dirname, dockerfile));
       await runVersionScript(pkg, 'postScript', 'postversion');
     }
 
@@ -302,6 +310,8 @@ export namespace VersionService {
       for (const e of groupEntries) {
         const changelogFile = changelogFileByPackage.get(e.package.name);
         if (changelogFile) files.push(changelogFile);
+        const dockerfile = dockerfileByPackage.get(e.package.name);
+        if (dockerfile) files.push(dockerfile);
       }
       await git.commit(files, buildCommitMessage(repository, groupEntries, options.message));
       const tags = new Set(groupEntries.map(e => expandTag(e.package, e.to!)));
@@ -591,4 +601,29 @@ async function runVersionScript(
   const own = pkg.json.scripts?.[npmScriptName];
   const command = typeof own === 'string' && own ? own : normalizeScriptValue(pkg.config?.version?.[cfgKey]);
   if (command) await exec(command, { cwd: pkg.dirname, stdio: 'inherit' });
+}
+
+/**
+ * Keeps a package's Dockerfile `org.opencontainers.image.version` label in step with the version
+ * just written, returning the absolute path when it actually changed (so the caller can fold it
+ * into the same commit) and `undefined` otherwise.
+ *
+ * Here rather than in a build script: the label is a *statement of the package's version*, so it
+ * belongs to whatever writes that version - which keeps it in the bump commit, leaves the tree
+ * clean, and makes it right for anyone building the Dockerfile by hand. A build-time rewrite is
+ * both later than it needs to be and invisible to git.
+ *
+ * The same path `publish --target docker` builds from (`publish.docker.dockerfile`, default
+ * `Dockerfile`), so the two can never disagree about which file this is. Opt out with `.rmanrc
+ * "version": { "stampDockerfile": false }`; a package with no Dockerfile, or one that doesn't
+ * declare the label, is a no-op either way.
+ */
+function stampDockerfile(pkg: Package, version: string): string | undefined {
+  if (pkg.config?.version?.stampDockerfile === false) return undefined;
+  const file = path.resolve(pkg.dirname, pkg.config?.publish?.docker?.dockerfile || 'Dockerfile');
+  if (!fs.existsSync(file)) return undefined;
+  const stamped = stampVersionLabel(fs.readFileSync(file, 'utf-8'), version);
+  if (stamped === undefined) return undefined;
+  fs.writeFileSync(file, stamped, 'utf-8');
+  return file;
 }

@@ -327,6 +327,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `version.commitMessage` | `string` | `"chore(release): v{version}"` | Root-level only. `{version}` substituted when a commit's group shares one version. |
 | `version.changelog` | `boolean` | `false` | Root-level only. Default for `version --changelog` when the CLI flag isn't given - `--no-changelog` still overrides it off for one run. |
 | `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
+| `version.stampDockerfile` | `boolean` | `true` | Per-package cascaded. Rewrite this package's Dockerfile `org.opencontainers.image.version` label to the version being written, in the same commit as the bump. Only ever rewrites a label already declared; reads `publish.docker.dockerfile`. |
 | `version.script` / `.preScript` / `.postScript` | `string \| string[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). |
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
 | `changelog.template` | `string` (a file **path**, relative to repo root) | built-in template | Per-package cascaded. Throws if the path doesn't exist. |
@@ -616,6 +617,20 @@ A pnpm/yarn `"workspace:"` range is handled specially:
   range only at publish time (see [`PublishService`](#publishservice) below).
 - An **explicit** `"workspace:<range>"` (e.g. `"workspace:^1.0.0"`) *is* bumped, the same way a
   plain range would be: `"workspace:^1.0.0"` → `"workspace:^2.0.0"`.
+
+#### The Dockerfile version label
+
+`applyPlan` also rewrites a bumped package's `org.opencontainers.image.version` label to the new
+version and folds that file into the same commit as the bump (`stampVersionLabel`, in
+[`src/utils/docker-label.ts`](../src/utils/docker-label.ts)). The label is by specification *the
+version of the packaged software*, so there is exactly one correct value for it and this is what
+knows it; doing it from a build script instead leaves the edit uncommitted and records a stale label
+in the commit that was tagged.
+
+The file is the one `DockerPublishService` builds from (`publish.docker.dockerfile`, default
+`Dockerfile`, relative to the package's own directory), so the two can never disagree. A label the
+Dockerfile doesn't already declare is never inserted, the existing quoting style is preserved, and
+the same key outside a `LABEL` instruction is ignored. Opt out with `version.stampDockerfile: false`.
 
 #### Dirty packages
 

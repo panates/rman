@@ -100,6 +100,14 @@ touched package counts as changed.
 - When folding the changelog into the bump commit (`--changelog`, or `.rmanrc "version.changelog"`)
   it passes `ChangelogService` an **explicit** boundary: the pre-bump tag (`expandTag(pkg,
   entry.from)`). It cannot be left to auto-detection - see the trap below.
+- Writes more than `package.json`: a bumped package's Dockerfile
+  `org.opencontainers.image.version` label is rewritten to the new version and folded into the
+  **same commit** (`stampVersionLabel`). Keep it here, not in a build script - the label is by
+  specification the version of the packaged software, so `version` is the only thing that knows
+  it, and a build-time rewrite leaves the edit uncommitted (`publish` then reads a dirty tree) and
+  records a stale label in the commit that was actually tagged. Reads the same path
+  `DockerPublishService` builds from (`publish.docker.dockerfile`), never a second guess at it.
+  Never *inserts* a label - which labels an image carries is the author's call.
 - Also decides the **repository's own** release identity (the monorepo root's version) and, on a
   calendar version, creates the repository release tag alongside the per-group ones - see
   "Release identity" below.
