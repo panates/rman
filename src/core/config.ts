@@ -3,7 +3,9 @@ import * as yaml from 'js-yaml';
 import { createRequire } from 'module';
 import path from 'path';
 import merge from 'putil-merge';
+import semver from 'semver';
 import { pathToFileURL } from 'url';
+import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 
 /**
@@ -195,31 +197,111 @@ function dirChain(rootDir: string, targetDir: string): string[] {
   return dirs;
 }
 
+/** What a `${{ ... }}` expression can see - the bindings of the fresh global it is evaluated in.
+ *  Everything here describes the *package the config was resolved for*, which is what lets one
+ *  declaration at the root still say something package-specific. */
+export interface ConfigScope {
+  /** The package's own name, scope included (`@sqb/builder`). */
+  name: string;
+  /** Its directory's last segment (`builder`) - different from `name` for a scoped package, and
+   *  usually what a sibling path (`../../coverage/builder`) is keyed on. */
+  basename: string;
+  version: string;
+  /** Absolute path to the package's own directory. */
+  dir: string;
+  /** The package's whole `package.json`, as a copy - so an expression can reach a field rman
+   *  itself has no opinion about. */
+  pkg: Record<string, unknown>;
+  repo: { name: string; version: string; dir: string };
+  env: Record<string, string | undefined>;
+  /** rman's own `semver`, for the arithmetic every release config eventually wants
+   *  (`semver.major(version)`). */
+  semver: typeof semver;
+}
+
 /**
- * Substitutes `{{name}}`, `{{basename}}` and `{{version}}` in **every** string value of a resolved
- * config, in place of the package it was resolved for - so one declaration at the root can still
- * say something package-specific:
+ * Evaluates every `${{ ... }}` expression in **every** string value of a resolved config, against
+ * the package it was resolved for:
  *
  * ```yaml
  * "[*]":
  *   clean:
- *     include: ["build", "../../coverage/{{basename}}"]
+ *     include: ["build", "../../coverage/${{ basename }}"]
+ *   publish:
+ *     docker:
+ *       image: "panates/${{ basename }}:${{ semver.major(version) }}"
  * ```
  *
  * Every string, with no list of "interpolated keys" to memorize - a rule with exceptions is a rule
- * nobody remembers. `{{basename}}` is the package's directory name (`builder`), not its package name
- * (`@sqb/builder`); both are available, and they differ for a scoped package. An unknown `{{...}}`
- * is left alone rather than blanked, so a template meant for something else passes through intact.
+ * nobody remembers.
+ *
+ * The contents are **real JavaScript**, not a template mini-language, so there is no growing list
+ * of substitutions to keep adding (`{{major}}`, `{{scope}}`, `{{unscopedName}}`, ...) - see
+ * `ConfigScope` for what is in scope.
+ *
+ * **`${{ }}`, deliberately not `{{ }}`.** A config value may legitimately carry `{{...}}` meant for
+ * something else entirely (`helm template --set tag={{.Values.tag}}`); with the plainer delimiter
+ * rman would try to evaluate it. To emit a literal, let an expression produce it, the way GitHub
+ * Actions does: `${{ '${{' }}`.
+ *
+ * A string that is *nothing but* one expression keeps the value's own type (`"${{ pkg.private }}"`
+ * -> a boolean), since otherwise this could only ever produce strings and settings like
+ * `run.<script>.skip` would be unreachable. Embedded in surrounding text it is stringified.
+ *
+ * Evaluation happens in a fresh V8 context holding only the scope's bindings. That is a clean
+ * scope, **not a sandbox** - `node:vm` is explicitly not a security mechanism, and no sandbox is
+ * called for here anyway: a `.rmanrc` that can say `exec: "..."` already runs arbitrary shell, so
+ * the expression evaluator adds no trust boundary that wasn't already wide open.
+ *
+ * A failing expression throws with the config path that holds it, rather than being left in place:
+ * silently passing through a mistake is how a config ends up quietly doing nothing.
  */
-export function interpolateConfig<T>(config: T, vars: { name: string; basename: string; version: string }): T {
-  if (typeof config === 'string') {
-    return config.replace(/\{\{(name|basename|version)\}\}/g, (_, key: keyof typeof vars) => vars[key]) as T;
-  }
-  if (Array.isArray(config)) return config.map(item => interpolateConfig(item, vars)) as T;
-  if (config && typeof config === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(config)) result[key] = interpolateConfig(value, vars);
-    return result as T;
-  }
-  return config;
+export function interpolateConfig<T>(config: T, scope: ConfigScope): T {
+  const context = vm.createContext({ ...scope });
+  return walk(config, scope, context, []);
 }
+
+/** One `${{ ... }}`, and nothing but that (surrounding whitespace aside) - the case that keeps the
+ *  expression's own value type instead of stringifying it. */
+const WHOLE_EXPRESSION = /^\s*\$\{\{([\s\S]*?)\}\}\s*$/;
+const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
+
+function walk(value: unknown, scope: ConfigScope, context: vm.Context, at: (string | number)[]): any {
+  if (typeof value === 'string') return interpolateString(value, context, at);
+  if (Array.isArray(value)) return value.map((item, i) => walk(item, scope, context, [...at, i]));
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) result[key] = walk(item, scope, context, [...at, key]);
+    return result;
+  }
+  return value;
+}
+
+function interpolateString(value: string, context: vm.Context, at: (string | number)[]): unknown {
+  const whole = WHOLE_EXPRESSION.exec(value);
+  if (whole) return evaluate(whole[1], value, context, at);
+  if (!value.includes('${{')) return value;
+  return value.replace(EXPRESSION, (_, expr: string) => String(evaluate(expr, value, context, at)));
+}
+
+/** Names the config path as well as the expression: an error saying only "x is not defined" sends
+ *  the reader hunting through a file that may hold dozens of them. */
+function evaluate(expr: string, source: string, context: vm.Context, at: (string | number)[]): unknown {
+  try {
+    return vm.runInContext(expr, context, { timeout: EXPRESSION_TIMEOUT });
+  } catch (e: any) {
+    const where = at.length ? formatPath(at) : 'the config root';
+    throw new Error(`Invalid expression in "${where}": ${source.trim()}\n  ${e?.message ?? e}`);
+  }
+}
+
+function formatPath(at: (string | number)[]): string {
+  return at.reduce<string>(
+    (acc, part) => (typeof part === 'number' ? `${acc}[${part}]` : acc ? `${acc}.${part}` : String(part)),
+    '',
+  );
+}
+
+/** Guards against an expression that never returns (`while(true)`) taking the whole command with
+ *  it - a typo, not an attack, but the failure mode is identical. */
+const EXPRESSION_TIMEOUT = 1000;

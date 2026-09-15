@@ -267,18 +267,71 @@ describe('core/Repository', () => {
       expect(repo.getPackage('pkg-b')?.config).toEqual({ foo: 'all', bar: 'b-own' });
     });
 
-    it('substitutes {{name}}/{{basename}}/{{version}} per package, in every string value', async () => {
+    it('evaluates ${{ ... }} per package, in every string value', async () => {
       const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'package.json', { name: 'root', private: true, version: '2.0.0', workspaces: ['packages/*'] });
       fs.writeFileSync(
         path.join(dir, '.rmanrc'),
-        JSON.stringify({ '[*]': { clean: { include: ['build', '../../coverage/{{basename}}'] } } }),
+        JSON.stringify({
+          '[*]': {
+            clean: { include: ['build', '../../coverage/${{ basename }}'] },
+            changelog: { filePath: '${{ name.split("/")[1] }}-v${{ semver.major(version) }}.md' },
+          },
+        }),
       );
       writeJson(dir, 'packages/builder/package.json', { name: '@sqb/builder', version: '6.0.9' });
 
       const repo = await Repository.create(dir);
-      // {{basename}} is the directory, not the package name - they differ for a scoped package.
+      // `basename` is the directory, not the package name - they differ for a scoped package.
       expect(repo.getPackage('@sqb/builder')?.config.clean?.include).toEqual(['build', '../../coverage/builder']);
+      // Real JavaScript, so there is no list of substitutions to keep growing.
+      expect(repo.getPackage('@sqb/builder')?.config.changelog?.filePath).toBe('builder-v6.md');
+    });
+
+    it("a string that is nothing but one expression keeps the value's own type", async () => {
+      // Otherwise this could only ever produce strings, and a boolean setting like
+      // run.<script>.skip would be unreachable from an expression.
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({
+          '[*]': { run: { build: { skip: '${{ pkg.private === true }}', concurrency: '${{ 2 + 2 }}' } } },
+        }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0', private: true });
+
+      const repo = await Repository.create(dir);
+      const cfg = repo.getPackage('pkg-a')?.config.run?.build as Record<string, unknown>;
+      expect(cfg.skip).toBe(true);
+      expect(cfg.concurrency).toBe(4);
+    });
+
+    it('leaves a bare {{...}} alone - it belongs to whatever else reads the command', async () => {
+      // `helm template --set tag={{.Values.tag}}` must survive untouched; that is why the
+      // delimiter is ${{ }} and not {{ }}.
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { run: { deploy: 'helm template --set tag={{.Values.tag}}' } } }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.run?.deploy).toBe('helm template --set tag={{.Values.tag}}');
+    });
+
+    it('a failing expression names the config path holding it, instead of passing through', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { run: { build: { after: ['ok', '${{ nope.split("/") }}'] } } } }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      await expect(Repository.create(dir)).rejects.toThrow(/run\.build\.after\[1\]/);
     });
   });
 

@@ -1,6 +1,7 @@
 import glob from 'fast-glob';
 import fs from 'fs';
 import path from 'path';
+import semver from 'semver';
 import { GitHelper } from '../utils/git.js';
 import { interpolateConfig, resolveConfig } from './config.js';
 import { Package } from './package.js';
@@ -101,6 +102,16 @@ export class Repository extends Package {
         name: pkg.name,
         basename: path.basename(pkg.dirname),
         version: pkg.version ?? '',
+        dir: pkg.dirname,
+        // A copy: an expression has no business mutating the package rman is about to act on.
+        pkg: { ...pkg.json },
+        repo: {
+          name: this.rootPackage.name,
+          version: this.rootPackage.version ?? '',
+          dir: this.dirname,
+        },
+        env: { ...process.env },
+        semver,
       });
     this.config = withVars(this.rootPackage, await resolveConfig(this.dirname, this.dirname, cache));
     for (const pkg of this.packages) {
