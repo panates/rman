@@ -1,4 +1,4 @@
-<!-- verified against commit 3ddad4b3332ca412426780f3db0d4ee62c5c4898 - see ../cli.md for the baseline convention -->
+<!-- verified against commit 4bc7934 - see ../cli.md for the baseline convention -->
 
 # `rman changed`
 

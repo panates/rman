@@ -1,4 +1,4 @@
-<!-- verified against commit HEAD - see ../cli.md for the baseline convention -->
+<!-- verified against commit 4bc7934 - see ../cli.md for the baseline convention -->
 
 # `rman github-release`
 
