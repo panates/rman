@@ -4,6 +4,7 @@
   "title": "rman configuration",
   "description": "Schema for rman's .rmanrc (JSON) and .rmanrc.yml (YAML) config files, and the \"rman\" key in package.json. See docs/api.md#configuration-rmanrc-rmanrcyml for the full reference. Any string value may embed ${{ ... }} expressions - real JavaScript, evaluated per package against pkg, repository, env and semver - so one declaration at the root can still say something package-specific (\"../../coverage/${{ pkg.basename }}\", \"panates/${{ pkg.basename }}:${{ semver.major(pkg.version) }}\"). A string that is nothing but one expression keeps that value's own type. A bare {{ ... }} is left alone, so a command carrying someone else's template survives untouched.",
   "type": "object",
+  "additionalProperties": false,
   "patternProperties": {
     "^\\[.+\\]$": {
       "$ref": "#",
@@ -78,12 +79,8 @@
           "description": "Per-package cascaded. Keep this package's Dockerfile \"org.opencontainers.image.version\" label in step with the version being written, in the same commit as the bump. The label's value is by specification the version of the packaged software, so there is only one correct value for it. Only ever rewrites a label the Dockerfile already declares (never inserts one), and reads the same path \"publish --target docker\" builds from (\"publish.docker.dockerfile\")."
         },
         "stamp": {
-          "description": "Source files whose \"version\" constant is rewritten to the version being written, in the same commit as the bump - paths relative to the package's own directory (e.g. [\"src/constants.ts\"]). Per-package cascaded; a listed file a package doesn't have is a silent no-op. Stamps the source rather than the build output, so anything running from source reports the real version and git records it.",
-          "oneOf": [
-            {
-              "$ref": "#/definitions/stringOrStringArray"
-            }
-          ]
+          "$ref": "#/definitions/stringOrStringArray",
+          "description": "Source files whose \"version\" constant is rewritten to the version being written, in the same commit as the bump - paths relative to the package's own directory (e.g. [\"src/constants.ts\"]). Per-package cascaded; a listed file a package doesn't have is a silent no-op. Stamps the source rather than the build output, so anything running from source reports the real version and git records it."
         },
         "before": {
           "$ref": "#/definitions/stringOrStringArray",

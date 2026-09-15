@@ -48,8 +48,13 @@ export interface RmanConfig {
    * In YAML the quotes are **required**: a bare `[*]` parses as a flow sequence, and `*` as an
    * alias indicator. Precedence, lowest first: `"[*]"`, then other selectors in declaration order,
    * then the package's own unmarked config.
+   *
+   * Recursive, mirroring the schema's own `"$ref": "#"`: whatever a `.rmanrc` may say about its own
+   * package it may say here about the ones it names - nested selectors included. Typed as
+   * `RmanConfig` rather than `unknown` so the contents are actually checked; `unknown` let any
+   * shape through, which is the opposite of the point.
    */
-  [selector: `[${string}]`]: unknown;
+  [selector: `[${string}]`]: RmanConfig;
 }
 
 export namespace RmanConfig {
