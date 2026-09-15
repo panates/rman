@@ -256,18 +256,73 @@ Selector details:
 - A directory holding no package of its own (an intermediate `packages/`, say) has no package to
   speak for, so its unmarked config still cascades to everything below it.
 
-Any string value may use `{{name}}`, `{{basename}}` and `{{version}}`, substituted for the package
-the config was resolved for - which is what lets one root declaration stay package-specific:
+### Expressions (`${{ ... }}`)
+
+Any string value may embed `${{ ... }}`, evaluated per package - which is what lets one root
+declaration stay package-specific:
 
 ```yaml
 "[*]":
   clean:
-    include: ["build", "../../coverage/{{basename}}"]
+    include: ["build", "../../coverage/${{ pkg.basename }}"]
+  publish:
+    docker:
+      image: "panates/${{ pkg.basename }}:${{ semver.major(pkg.version) }}"
+  run:
+    build:
+      exec: "tsc -b ${{ pkg.json.tsconfig ?? 'tsconfig-build.json' }}"
 ```
 
-`{{basename}}` is the package's directory name (`builder`), `{{name}}` its package name
-(`@sqb/builder`) - they differ for a scoped package. An unknown `{{...}}` is left alone rather than
-blanked.
+The contents are **real JavaScript**, not a template mini-language, so there is no growing list of
+substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
+
+| | |
+| --- | --- |
+| `pkg` | the package the config was resolved for |
+| `repository` | the repository - the root package's own fields, plus repo-level ones |
+| `env` | a copy of `process.env` |
+| `semver` | rman's own `semver`, for `semver.major(pkg.version)` and friends |
+
+`pkg` and `repository` share one shape, since the repository root *is* a package:
+
+| | |
+| --- | --- |
+| `.name` | the package's own name, scope included (`@sqb/builder`) |
+| `.scope` / `.unscopedName` | `@sqb` / `builder` - `scope` is `undefined` when unscoped |
+| `.version` | its `package.json` version |
+| `.basename` | its directory's last segment - **not** the same as `name`: sqb's root is named `sqb.v4` in a directory called `sqb` |
+| `.dirname` / `.relativeDir` | absolute path / path from the repository root (`packages/builder`) |
+| `.json` | the whole `package.json`, as a copy (`pkg.json.engines.node`) |
+
+`repository` adds:
+
+| | |
+| --- | --- |
+| `.monorepo` | boolean |
+| `.packages` | every package, each in the shape above |
+| `.package(name)` | one of them by name, or `undefined` - for reaching a sibling's directory |
+| `.git.branch` / `.sha` / `.shortSha` / `.dirty` | read from git **only if an expression asks**, then remembered - so a repository that never mentions them spawns no git, and every command resolves config. All `undefined` outside a git checkout; `branch` is `undefined` on a detached HEAD. |
+
+- **`${{ }}`, deliberately not `{{ }}`.** A config value may legitimately carry `{{...}}` meant for
+  something else (`helm template --set tag={{.Values.tag}}`), and with the plainer delimiter rman
+  would try to evaluate it. A bare `{{...}}` is therefore left alone. To emit a literal `${{`, let
+  an expression produce it, as in GitHub Actions: `${{ '${{' }}`.
+- A string that is **nothing but** one expression keeps that value's own type
+  (`skip: "${{ pkg.json.private === true }}"` → a boolean); embedded in surrounding text it is
+  stringified. Without this, expressions could only ever produce strings and a setting like
+  `run.<script>.skip` would be unreachable from one.
+- A **nullish** result is fine standing alone (it just means "unset") but an **error** embedded in
+  text: splicing in the word `undefined` yields an `app:undefined` that looks plausible and is
+  wrong. Say what was meant with `?? 'fallback'`.
+- Evaluation happens in a fresh V8 context holding only those bindings. That is a clean scope,
+  **not a sandbox** - `node:vm` is [explicitly not a security
+  mechanism](https://nodejs.org/api/vm.html), and none is called for: a `.rmanrc` that can say
+  `exec: "..."` already runs arbitrary shell, so expressions add no trust boundary that wasn't
+  already wide open.
+- A failing expression throws, naming the config path that holds it (`run.build.after[1]`) -
+  passing a mistake through silently is how a config ends up quietly doing nothing.
+- Unrelated to this: a **changelog template file's** `{{package}}`/`{{version}}` placeholders are
+  that file's own content, not config values, and are never touched here.
 
 For a single directory, up to six sources merge together in **increasing precedence**:
 

@@ -50,10 +50,30 @@ repo-wide bookend run once at the repository root. One declaration feeding both 
   unmarked config. Directory levels closer to the package still win.
 - **Trap: in YAML the quotes are mandatory.** A bare `[*]` is a flow sequence and `*` an alias
   indicator - the file fails to load. Write `"[*]":`.
-- Any string value is interpolated with `{{name}}` / `{{basename}}` / `{{version}}` for the package
-  it resolved for (`interpolateConfig`) - **every** string, so there is no list of "interpolated
-  keys" to memorize. `{{basename}}` is the directory (`builder`), `{{name}}` the package name
-  (`@sqb/builder`); they differ for a scoped package.
+- Any string value may embed `${{ ... }}` - **real JavaScript**, evaluated per package
+  (`interpolateConfig`), in **every** string, so there is neither a list of "interpolated keys" nor
+  a growing list of substitutions to memorize. Scope: `pkg`, `repository`, `env`, `semver`.
+  - `pkg` and `repository` share one shape, because the repository root **is** a package: `name`,
+    `scope`, `unscopedName`, `version`, `basename`, `dirname`, `relativeDir`, `json`. `basename` is
+    the *directory*, `name` the package - sqb's root is `sqb.v4` in a directory called `sqb`.
+  - `repository` adds `monorepo`, `packages`, `package(name)`, and `git.{branch,sha,shortSha,dirty}`
+    - the last **lazily**, since every command resolves config and most never mention git.
+  - **`${{ }}`, never `{{ }}`**: a config value may carry `{{...}}` for something else entirely
+    (`helm template --set tag={{.Values.tag}}`). A bare `{{...}}` is left alone. A literal `${{`
+    comes from an expression producing it (`${{ '${{' }}`), as in GitHub Actions.
+  - A string that is *nothing but* one expression keeps that value's own type - otherwise a boolean
+    setting like `run.<script>.skip` would be unreachable from an expression.
+  - Detect that "sole expression" case by **counting matches**, never with an anchored `^...$`
+    regex: a lazy quantifier still backtracks to reach the end anchor, so `"${{ a }} and ${{ b }}"`
+    parsed as one expression running from `a` to `b` (measured, `Unexpected token '}'`).
+  - `vm.createContext` here is a clean scope, **not a sandbox** (`node:vm` is explicitly not a
+    security mechanism). None is needed: `exec: "..."` already runs arbitrary shell, so the config
+    was never a trust boundary. Don't reach for `isolated-vm`.
+  - A failing expression throws with the config path holding it. Never pass a mistake through. A
+    nullish result is allowed standing alone ("unset") but refused **inside a string**: splicing in
+    the word `undefined` yields an `app:undefined` that looks plausible and is wrong.
+  - A **changelog template file's** `{{package}}`/`{{version}}` are that file's content, not config
+    values - a different system, untouched by this.
 - Script hooks are `before` / `exec` / `after` (not `preScript`/`script`/`postScript`), in both
   `run.<script>` and `version`. A bare string in place of a whole `run.<script>` object is
   shorthand for `exec`.

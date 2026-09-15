@@ -197,25 +197,64 @@ function dirChain(rootDir: string, targetDir: string): string[] {
   return dirs;
 }
 
-/** What a `${{ ... }}` expression can see - the bindings of the fresh global it is evaluated in.
- *  Everything here describes the *package the config was resolved for*, which is what lets one
- *  declaration at the root still say something package-specific. */
-export interface ConfigScope {
+/** One package, as an expression sees it - the same shape for the package the config belongs to
+ *  and for the repository itself, so `${{ repository.basename }}` reads the way `${{ pkg.basename }}` does. */
+export interface PackageScope {
   /** The package's own name, scope included (`@sqb/builder`). */
   name: string;
-  /** Its directory's last segment (`builder`) - different from `name` for a scoped package, and
-   *  usually what a sibling path (`../../coverage/builder`) is keyed on. */
-  basename: string;
+  /** Just the scope (`@sqb`), or `undefined` for an unscoped package. */
+  scope: string | undefined;
+  /** The name with its scope stripped (`builder`). */
+  unscopedName: string;
   version: string;
-  /** Absolute path to the package's own directory. */
-  dir: string;
-  /** The package's whole `package.json`, as a copy - so an expression can reach a field rman
-   *  itself has no opinion about. */
-  pkg: Record<string, unknown>;
-  repo: { name: string; version: string; dir: string };
+  /** The package directory's last segment (`builder`) - not always the same as `unscopedName`,
+   *  which is why both exist, and usually what a sibling path (`../../coverage/builder`) is keyed on. */
+  basename: string;
+  /** Absolute path to the package's own directory - named as rman's own `Package.dirname` is. */
+  dirname: string;
+  /** That directory relative to the repository root (`packages/builder`), which is what a command
+   *  addressing another package from the root usually needs. Empty string for the root itself. */
+  relativeDir: string;
+  /** The whole `package.json`, as a copy - so an expression can reach a field rman itself has no
+   *  opinion about (`pkg.json.engines.node`). */
+  json: Record<string, unknown>;
+}
+
+/** Facts about the repository, on top of the root package's own - because the repository root *is*
+ *  a package (`repository.name` is what its `package.json` says, `repository.basename` the directory
+ *  it sits in, and the two genuinely differ). Sharing `PackageScope`'s shape is what makes
+ *  `repository.version` read the way `pkg.version` does. */
+export interface RepositoryScope extends PackageScope {
+  monorepo: boolean;
+  /** Every package in the repository - the root included only when it *is* the one package. */
+  packages: PackageScope[];
+  /** One package by name, or `undefined` - for reaching a sibling's directory. */
+  package(name: string): PackageScope | undefined;
+  /** Read from git only if an expression actually asks for it, then remembered: a repository that
+   *  never mentions these pays nothing, and every command resolves config. All `undefined` outside
+   *  a git checkout, which is a legitimate state rather than an error. */
+  git: GitScope;
+}
+
+export interface GitScope {
+  branch: string | undefined;
+  sha: string | undefined;
+  shortSha: string | undefined;
+  /** Whether the working tree has uncommitted changes. */
+  dirty: boolean | undefined;
+}
+
+/** What a `${{ ... }}` expression can see - the bindings of the fresh global it is evaluated in.
+ *  Namespaced rather than a flat bag of loose names: one obvious place per fact, and room to add
+ *  helpers to `pkg`/`repository` later without crowding the global. */
+export interface ConfigScope {
+  /** The package the config was resolved for - which is what lets one declaration at the root
+   *  still say something package-specific. */
+  pkg: PackageScope;
+  repository: RepositoryScope;
   env: Record<string, string | undefined>;
   /** rman's own `semver`, for the arithmetic every release config eventually wants
-   *  (`semver.major(version)`). */
+   *  (`semver.major(pkg.version)`). */
   semver: typeof semver;
 }
 
@@ -226,18 +265,18 @@ export interface ConfigScope {
  * ```yaml
  * "[*]":
  *   clean:
- *     include: ["build", "../../coverage/${{ basename }}"]
+ *     include: ["build", "../../coverage/${{ pkg.basename }}"]
  *   publish:
  *     docker:
- *       image: "panates/${{ basename }}:${{ semver.major(version) }}"
+ *       image: "panates/${{ pkg.basename }}:${{ semver.major(pkg.version) }}"
  * ```
  *
  * Every string, with no list of "interpolated keys" to memorize - a rule with exceptions is a rule
  * nobody remembers.
  *
  * The contents are **real JavaScript**, not a template mini-language, so there is no growing list
- * of substitutions to keep adding (`{{major}}`, `{{scope}}`, `{{unscopedName}}`, ...) - see
- * `ConfigScope` for what is in scope.
+ * of substitutions to keep adding (`{{major}}`, `{{scope}}`, ...) - see `ConfigScope` for what is
+ * in scope.
  *
  * **`${{ }}`, deliberately not `{{ }}`.** A config value may legitimately carry `{{...}}` meant for
  * something else entirely (`helm template --set tag={{.Values.tag}}`); with the plainer delimiter
@@ -261,9 +300,6 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope): T {
   return walk(config, scope, context, []);
 }
 
-/** One `${{ ... }}`, and nothing but that (surrounding whitespace aside) - the case that keeps the
- *  expression's own value type instead of stringifying it. */
-const WHOLE_EXPRESSION = /^\s*\$\{\{([\s\S]*?)\}\}\s*$/;
 const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
 
 function walk(value: unknown, scope: ConfigScope, context: vm.Context, at: (string | number)[]): any {
@@ -278,10 +314,29 @@ function walk(value: unknown, scope: ConfigScope, context: vm.Context, at: (stri
 }
 
 function interpolateString(value: string, context: vm.Context, at: (string | number)[]): unknown {
-  const whole = WHOLE_EXPRESSION.exec(value);
-  if (whole) return evaluate(whole[1], value, context, at);
   if (!value.includes('${{')) return value;
-  return value.replace(EXPRESSION, (_, expr: string) => String(evaluate(expr, value, context, at)));
+  const found = [...value.matchAll(EXPRESSION)];
+  if (!found.length) return value;
+  /** Counted rather than matched with an anchored `^...$` regex: a lazy quantifier still backtracks
+   *  to satisfy an end anchor, so `"${{ a }} and ${{ b }}"` looked like *one* expression whose body
+   *  ran from `a` to `b`, brace-ends and all - invalid JavaScript. */
+  const soleExpression = found.length === 1 && found[0][0] === value.trim();
+  // Alone, a nullish result is just "this setting is unset" - a legitimate answer.
+  if (soleExpression) return evaluate(found[0][1], value, context, at);
+  return value.replace(EXPRESSION, (_, expr: string) => {
+    const result = evaluate(expr, value, context, at);
+    /** Embedded in text, though, it never is: splicing in the word "undefined" produces a path or
+     *  tag like `app:undefined` that looks plausible and is wrong - the exact silent-mistake shape
+     *  this evaluator exists to avoid. `?? 'fallback'` says what was meant. */
+    if (result === undefined || result === null) {
+      const where = at.length ? formatPath(at) : 'the config root';
+      throw new Error(
+        `Expression in "${where}" is ${result} inside a string: ${value.trim()}\n` +
+          `  \${{${expr}}} has no value here - give it a fallback (\${{${expr.trim()} ?? '...'}}).`,
+      );
+    }
+    return String(result);
+  });
 }
 
 /** Names the config path as well as the expression: an error saying only "x is not defined" sends
@@ -291,7 +346,7 @@ function evaluate(expr: string, source: string, context: vm.Context, at: (string
     return vm.runInContext(expr, context, { timeout: EXPRESSION_TIMEOUT });
   } catch (e: any) {
     const where = at.length ? formatPath(at) : 'the config root';
-    throw new Error(`Invalid expression in "${where}": ${source.trim()}\n  ${e?.message ?? e}`);
+    throw new Error(`Invalid expression in "${where}": ${source.trim()}\n  ${e?.message ?? e}`, { cause: e });
   }
 }
 

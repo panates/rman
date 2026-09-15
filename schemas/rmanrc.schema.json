@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/panates/rman/main/schemas/rmanrc.schema.json",
   "title": "rman configuration",
-  "description": "Schema for rman's .rmanrc (JSON) and .rmanrc.yml (YAML) config files, and the \"rman\" key in package.json. See docs/api.md#configuration-rmanrc-rmanrcyml for the full reference. Any string value may use {{name}} / {{basename}} / {{version}}, substituted per package - so a single declaration at the root can still say something package-specific (e.g. \"../../coverage/{{basename}}\").",
+  "description": "Schema for rman's .rmanrc (JSON) and .rmanrc.yml (YAML) config files, and the \"rman\" key in package.json. See docs/api.md#configuration-rmanrc-rmanrcyml for the full reference. Any string value may embed ${{ ... }} expressions - real JavaScript, evaluated per package against pkg, repository, env and semver - so one declaration at the root can still say something package-specific (\"../../coverage/${{ pkg.basename }}\", \"panates/${{ pkg.basename }}:${{ semver.major(pkg.version) }}\"). A string that is nothing but one expression keeps that value's own type. A bare {{ ... }} is left alone, so a command carrying someone else's template survives untouched.",
   "type": "object",
   "patternProperties": {
     "^\\[.+\\]$": {

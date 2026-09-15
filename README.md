@@ -347,7 +347,7 @@ version:
     ignoreTypes: [chore, ci]
     tagPattern: 'v*'
   clean:
-    include: [build, '../../coverage/{{basename}}'] # {{name}}/{{basename}}/{{version}} are substituted
+    include: [build, '../../coverage/${{ pkg.basename }}'] # any string may embed a JS expression
   run:
     test: mocha # a bare string is shorthand for { exec: mocha }
     build:
