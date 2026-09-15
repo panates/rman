@@ -1,4 +1,4 @@
-<!-- verified against commit 3ddad4b3332ca412426780f3db0d4ee62c5c4898 - see ../cli.md for the baseline convention -->
+<!-- verified against commit 58fe59aa3d3d8dcd8a5d116c306f6c9f5cb5519e - see ../cli.md for the baseline convention -->
 
 # `rman publish`
 

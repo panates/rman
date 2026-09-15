@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 3ddad4b3332ca412426780f3db0d4ee62c5c4898
+git-commit: 58fe59aa3d3d8dcd8a5d116c306f6c9f5cb5519e
 package-version: 1.0.8
 date: 2026-09-15
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff 3ddad4b3332ca412426780f3db0d4ee62c5c4898..HEAD -- src/
+  git diff 58fe59aa3d3d8dcd8a5d116c306f6c9f5cb5519e..HEAD -- src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/

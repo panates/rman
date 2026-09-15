@@ -100,6 +100,9 @@ touched package counts as changed.
 - When folding the changelog into the bump commit (`--changelog`, or `.rmanrc "version.changelog"`)
   it passes `ChangelogService` an **explicit** boundary: the pre-bump tag (`expandTag(pkg,
   entry.from)`). It cannot be left to auto-detection - see the trap below.
+- Also decides the **repository's own** release identity (the monorepo root's version) and, on a
+  calendar version, creates the repository release tag alongside the per-group ones - see
+  "Release identity" below.
 
 ### `changelog`
 
@@ -119,7 +122,7 @@ touched package counts as changed.
   | --- | --- | --- | --- |
   | **b-1** npm-targeted packages | `npm view <name> version` == local `package.json` version | No (opt out via `private`/`target`) | `PublishService` |
   | **b-2** docker-targeted packages | `docker manifest inspect <image>:<version>` | Yes | `DockerPublishService` |
-  | **b-3** github-targeted packages | a GitHub Release exists for that version's tag | Yes | `GithubReleaseService` |
+  | **b-3** the repository, when anything opts into `github` | a GitHub Release exists for the repository's release tag | Yes | `GithubReleaseService` |
 
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
@@ -128,8 +131,12 @@ touched package counts as changed.
   "already there?" check, `getPlan`/`applyPlan`, and an injectable `Deps` check so tests stay offline.
 - `.rmanrc "publish.skip"` excludes a package from **every** target.
 - The one A-flavored part: `--target github`'s `applyPlan` builds the release body via
-  `ChangelogService`. The split is clean - B decides *which package ships*, A decides *what the notes
-  say*.
+  `ChangelogService`. The split is clean - B decides *what ships*, A decides *what the notes say*.
+- `github` is a **repository-level** target, unlike the other two: one release per run, named after
+  the repository's release tag, its body covering every package that shipped under it - not just
+  the ones naming `"github"`. A per-package release would have to invent a tag no package owns.
+  Declare it in the root `.rmanrc` alongside `"npm"` (`"target": ["npm", "github"]`); it is honored
+  as soon as any package resolves it.
 
 ### `list` / `run`
 
@@ -138,6 +145,45 @@ touched package counts as changed.
 - Meant for the development loop ("only build/test what I touched").
 - **Never use it for release decisions.** After a push `git cherry` is empty and everything reads
   `clean`, which does not mean there is nothing to publish.
+
+### Release identity (repo-level)
+
+A GitHub Release belongs to the repository - the tag covers the whole source tree - so a run
+produces **one**, named after the monorepo root's version. That version is **derived, never
+configured** (`usesCalendarVersion`, `src/utils/release-version.ts`):
+
+```
+calendar = the last repository release tag is a calendar version   (authoritative: tags record
+        || the root's current version is a calendar version         what actually shipped)
+        || group count > 1                                          (the first-time decision)
+```
+
+- The decision is **structural** (group count), not value-based. Two independent groups can sit on
+  the same version today and diverge tomorrow; keying off the values would move the scheme under
+  the repo's feet.
+- With one group the root simply follows it, so repo and packages share one number - unchanged
+  behavior for every existing repo.
+- With several groups there is no shared number to report. The old "highest among the groups" rule
+  is the bug this replaces: a *lower* line releasing left the root standing still (measured:
+  `root 3.4.0 -> 3.4.0` while `pkg-api` went 1.2.0 → 1.3.0), so a release had no identity at all.
+  A semver-looking identity would anyway claim something untrue about packages on other lines.
+- The last two clauses make it **sticky**, and that is not optional: `1.3.0 → 2026.9.15-1430`
+  increases, but `2026.9.15-1430 → 1.4.0` **decreases**. Once calendar, always calendar.
+
+**Format: `YYYY.M.D-HHmm`, nothing padded** (`2026.9.5-930`). This is not a style choice - semver
+forbids leading zeroes in numeric identifiers, so `2026.09.15-1430` and `2026.9.15-0930` are both
+invalid, and the root's `package.json` has to hold a valid version. Do not "tidy" it with padding.
+
+**Trap: the release tag pattern must never match a package's.** `.rmanrc "version.releaseTagPattern"`
+defaults to `release-*` precisely because the default *package* pattern is `v*` and `findLatestTag`
+resolves a repo-wide pattern with `git describe --match`. A release tag matching `v*` would be
+picked up as some package's own last release, corrupting both its changelog boundary and the
+version its entry is headed with.
+
+**Trap: `git tag --points-at HEAD` returns the wrong tag in a multi-group repo.** Each group gets
+its own commit and tag, so whichever group was committed last owns HEAD (measured: `pkg-lib@3.4.1`
+on HEAD with `v1.3.0` one commit behind). Read a release tag with `git describe --match <pattern>`,
+never by what happens to sit on HEAD.
 
 ## API docs baseline (docs/api.md, docs/api/*.md)
 
