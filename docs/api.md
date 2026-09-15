@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 4bc7934
-package-version: 1.0.9
-date: 2026-09-15
+git-commit: 0e33a0a
+package-version: 1.0.11
+date: 2026-09-16
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff 4bc7934..HEAD -- src/
+  git diff 0e33a0a..HEAD -- src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -442,6 +442,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |
 | `clean.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of `clean` entirely. |
 | `publish.target` | `'npm' \| 'docker'` or an array of them | `['npm']` | Per-package cascaded. Which **registry** `publish` ships this package to. Each target has its own "already published?" check: npm via `npm view`, docker via `docker manifest inspect`. The repository's GitHub Release is not a target here - see `githubRelease`. |
+| `publish.directory` | `string` | none (the package's own directory) | Per-package cascaded. Where the publishable output lives, relative to the package's own directory. A package's own `publishConfig.directory` wins over it; `--contents` is the last fallback. Publishing from such a directory means **`publish` generates the manifest there** - see below. |
 | `publish.docker.image` | `string` | none (required once `"docker"` is a target) | A bare name is prefixed with `--docker-namespace`/`DOCKERHUB_NAMESPACE`; one already containing `/` is used verbatim. |
 | `publish.docker.dockerfile` | `string` | `'Dockerfile'` | Relative to the package's own directory. |
 | `publish.docker.platforms` | `string[]` | `['linux/amd64']` | `docker buildx build --platform` targets. |
@@ -779,7 +780,7 @@ namespace PublishService {
     access?: 'public' | 'restricted';
     tag?: string;
     otp?: string;
-    contents?: string; // subdirectory to publish from
+    contents?: string; // subdirectory to publish from - lowest precedence, see below
   }
 
   interface Entry {
@@ -836,6 +837,32 @@ await PublishService.applyPlan(repository, plan);
 // -> "npm publish" for pkg-b saw {"pkg-a": "1.2.3"} (pkg-a's real current version)
 // -> packages/b/package.json is back to "workspace:*" once applyPlan returns
 ```
+
+#### Where it publishes from, and the manifest it finds there
+
+Most specific first: the package's own `publishConfig.directory`, then `.rmanrc
+"publish.directory"` (one `"[*]"` line for a repository instead of a copy in every `package.json`),
+then `ApplyOptions.contents` for a single run. Absent all three, the package's own directory.
+
+When that resolves to a **subdirectory**, `applyPlan` writes the `package.json` `npm publish` will
+read there, derived from the package's own, and removes it again afterwards - it is a publish-time
+artifact, not a build output. There is nothing to configure about the derivation, because each field
+has one right answer:
+
+| Removed from the copy | Why |
+| --- | --- |
+| `devDependencies` | npm never installs a dependency's own. |
+| `scripts`, except `preinstall`/`install`/`postinstall` | Those three are the only ones a consumer's install runs; dropping them would silently break every package that builds a native module. The rest never reach a consumer (`prepare` runs for a *git* dependency, which builds from the repository, not from this tarball). |
+| `private` | `publish` refuses a private package outright, so the flag can only be wrong in a manifest being published. |
+| `publishConfig.directory` | It pointed *here*; kept, it would point one level deeper again. |
+
+`"workspace:"` ranges are resolved in it too. Publishing the package directory itself instead, that
+same resolution happens in place on its own `package.json`, restored verbatim afterwards.
+
+Generating it here rather than from a build script is what keeps it honest: a script writes it when
+the *build* runs, so bumping the version afterwards publishes a manifest that disagrees with the
+package - and the `"workspace:"` rewrite, which only ever touched the package's own file, never
+reached the copy npm actually reads.
 
 ### `DockerPublishService`
 
@@ -1118,7 +1145,18 @@ await RunService.runScript(repository, 'test', { changed: true, parallel: false,
 
 `runScript` throws an `Error` with `.logged = true` (see [below](#the-logged-error-convention)) if
 any package's steps failed - `await` it inside a `try`/`catch` if you want to keep going
-programmatically instead of letting the process exit.
+programmatically instead of letting the process exit. "Any" is counted from the per-package
+outcomes, not from whether the underlying task tree rejected: a package's own `bail` aborts that
+tree, whose promise then settles while the packages already in flight keep running, so reading the
+run off it used to resolve on a failed run - and inconsistently, depending on which siblings
+happened to still be going.
+
+It also throws when **nothing defines the script at all** - a typo, or a script that was removed,
+which `npm run` fails on too. A monorepo root's own `<script>` doesn't count as defining it, since
+the root only ever contributes `pre`/`post` bookends; a script living solely there runs nothing, and
+treating it as "defined" is what let a CI step report success for months while doing nothing. Every
+package being **filtered out** instead (`scope`/`changed`/`run.<script>.skip`/a non-matching `if`)
+resolves normally: zero is the right answer to what was asked.
 
 #### Per-script config (`.rmanrc run.<script>`)
 

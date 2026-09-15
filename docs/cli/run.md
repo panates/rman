@@ -1,4 +1,4 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli.md for the baseline convention -->
+<!-- verified against commit 0e33a0a - see ../cli.md for the baseline convention -->
 
 # `rman run <script>`
 
