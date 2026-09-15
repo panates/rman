@@ -1,0 +1,2 @@
+#!/bin/sh
+exec node /Users/ehanoglu/dev/oslib/rman/build/cli.js "$@"

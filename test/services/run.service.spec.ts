@@ -196,6 +196,38 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('pkg-b-ran'))).toBe(false);
     });
 
+    it('one failed package fails the command, even with siblings still in flight', async () => {
+      // The bug this guards: a package's own bail aborts the root task, whose promise then settles
+      // immediately while the packages already running carry on. Reading the run's outcome off
+      // that promise made the command exit 0 on a failed run - and non-deterministically, since it
+      // came down to which siblings happened to still be running (measured: 1 0 1 1 0 across five
+      // identical runs). The per-package tallies are the authority instead.
+      const repo = await fixture({
+        'pkg-a': { scripts: { build: 'exit 1' } },
+        // Slow enough to still be running when pkg-a fails - a plain `sleep` would be flakier.
+        'pkg-slow': {
+          scripts: { build: quiet('node -e "const t=Date.now();while(Date.now()-t<300);"') },
+        },
+        'pkg-c': { scripts: { build: quiet('echo pkg-c-ran') } },
+      });
+      const { lines, error } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('failed');
+      // And the summary describes a finished run, not a snapshot of one still going: it used to
+      // print the sibling as "skipped" and then let it succeed afterwards.
+      expect(lines.some(l => /2 succeeded, 1 failed/.test(l))).toBe(true);
+    });
+
+    it('a clean run still resolves', async () => {
+      const repo = await fixture({
+        'pkg-a': { scripts: { build: quiet('echo pkg-a-ran') } },
+        'pkg-b': { scripts: { build: quiet('echo pkg-b-ran') } },
+      });
+      const { error } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      expect(error).toBeUndefined();
+    });
+
     it('bail=false: an independent package still runs after an earlier failure', async () => {
       const repo = await fixture({
         'pkg-a': { scripts: { build: 'exit 1' } },

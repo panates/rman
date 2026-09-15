@@ -341,21 +341,32 @@ export namespace RunService {
 
     panel.start();
 
-    let failed = false;
     try {
       /** bail:false here - each package's own resolved bail setting decides whether to call
        *  `rootTask.abort()` itself (see `runSteps`), since power-tasks' own `bail` can't vary per package. */
       rootTask = new Task(children, { concurrency, bail: false });
       await rootTask.toPromise();
     } catch {
-      failed = true;
+      // Swallowed on purpose: whether the root promise rejected says nothing reliable about the
+      // run - see below. The per-package tallies are what decide.
     } finally {
+      /** A package's own `bail` aborts the root task, which settles its promise *immediately* while
+       *  the packages already in flight keep running. Waiting for every child here is what makes
+       *  the summary below describe a finished run rather than a snapshot of one still going -
+       *  measured: it printed "0 succeeded, 1 failed, 3 skipped" and then three of those "skipped"
+       *  packages went on to succeed. */
+      await Promise.allSettled(children.map(child => child.toPromise()));
       panel.stop();
     }
 
-    panel.printSummary();
+    const summary = panel.printSummary();
 
-    if (failed) {
+    /** The tallies, never `rootTask.toPromise()`'s own outcome: with a sibling still in flight at
+     *  the moment one package failed, that promise *resolves*, and this command used to exit 0 on a
+     *  run it had just reported as failed - non-deterministically, since it came down to which
+     *  packages happened to still be running (measured: `1 0 1 1 0` across five identical runs).
+     *  A single failed package must fail the command, every time. */
+    if (summary.failedCount > 0) {
       const err: any = new Error(`"${script}" failed`);
       err.logged = true;
       throw err;
