@@ -149,37 +149,49 @@ See [`DockerPublishService`](../api.md#dockerpublishservice) for the full mechan
 
 ## GitHub Releases (`publish.github`)
 
-The third target, for a package that has no package registry of its own: a standalone app shipped as
-release assets, or one deployed somewhere else entirely with the GitHub Release just recording that
-it shipped. Opt in with `"github"` in `publish.target` - unlike docker, the config block itself is
-optional, since every fact it needs already has a sensible default:
+The third target, for code with no package registry of its own: a standalone app shipped as release
+assets, or one deployed somewhere else entirely with the GitHub Release just recording that it
+shipped.
+
+Unlike the other two this target is **repository-level**: a release's tag covers the whole source
+tree, so a run produces **one** release and its body describes every package that shipped under it -
+not just the ones naming `"github"`. Declare it in the **root** `.rmanrc` alongside `"npm"`; it's
+honored as soon as any package resolves it. The config block itself is optional, since every fact it
+needs already has a sensible default:
 
 ```jsonc
-// packages/my-app/.rmanrc - typically "private": true in package.json too
+// .rmanrc at the repository root
 {
   "publish": {
-    "target": ["github"],
+    "target": ["npm", "github"],
     "github": {
-      "assets": ["dist/*.tar.gz"], // globs, relative to the package's own directory
+      "assets": ["dist/*.tar.gz"], // globs, relative to each package's own directory
       "repository": "panates/my-repo" // default: parsed from the "origin" remote
     }
   }
 }
 ```
 
-The release is identified by the version's own git tag - the very same name
-[`version`](version.md) creates and [`changelog`](changelog.md) reads back, via `.rmanrc
-"changelog.tagPattern"`. Whether a release already exists for that tag decides `'publish'` vs
-`'up-to-date'`. Requires a `GITHUB_TOKEN` (or `GH_TOKEN`) environment variable; a lookup that fails
-for any other reason than "no such release" (a bad token, a typo'd repository) is a plan `'error'`,
-never a silent "not published yet".
+The release is identified by the repository's own version (the monorepo root's - see
+[`rman version`](version.md#the-repositorys-own-version)): its release tag (`.rmanrc
+"version.releaseTagPattern"`, default `release-*`) when that version is a calendar one, and
+otherwise the tag of the single shared version. Whether a release already exists for that tag
+decides `'publish'` vs `'up-to-date'`. Requires a `GITHUB_TOKEN` (or `GH_TOKEN`) environment
+variable; a lookup that fails for any other reason than "no such release" (a bad token, a typo'd
+repository) is a plan `'error'`, never a silent "not published yet".
 
-Release notes come from [`changelog`](changelog.md) itself, bounded by the tag immediately *before*
-the one being released - not its usual auto-detection, which would resolve to the very tag being
-released and correctly find nothing new. Packages sharing one tag (the default repo-wide `v*`
-scheme) produce a single release between them, with every sharer's notes in its body; `{name}@*`
-independent versioning gives each its own. An existing release is updated rather than failed, so a
-re-run after a partial failure converges.
+Release notes come from [`changelog`](changelog.md) itself, one section per package, each bounded by
+the **previous repository release** and headed with that package's own version - so a repo whose
+packages sit on different version lines still reads correctly. A package with nothing in that range
+contributes no section, which is also how one that didn't ship this time is left out. The boundary
+is deliberately not the usual auto-detection, which would resolve to the very tag being released and
+correctly find nothing new. An existing release is updated rather than failed, so a re-run after a
+partial failure converges.
+
+Because both the release tag and that boundary are read from git, **the tags have to be present**: a
+bump made locally and pushed with a plain `git push` leaves them behind (`rman version --push` sends
+them), and a CI checkout has to fetch them. A release tag that isn't there is a plan `'error'` -
+without it the notes would silently cover the entire history instead of what actually shipped.
 
 ```bash
 rman publish --target github              # only the GitHub Release side of it

@@ -96,6 +96,22 @@ export namespace GithubReleaseService {
       ];
     }
 
+    // The tag is `version`'s to create, so a missing one means either it never ran or this clone
+    // simply doesn't have the tags. Both are refused rather than released: the notes are bounded by
+    // the *previous* release tag, which can't be found without it either, so the release would
+    // silently come out covering the entire history instead of what actually shipped.
+    if (!(await git.tagExists(tag))) {
+      return [
+        {
+          ...base,
+          tag,
+          repository: repo,
+          status: 'error',
+          reason: `release tag "${tag}" does not exist here - run "version" first, or fetch tags into this clone`,
+        },
+      ];
+    }
+
     const releaseExists = deps.releaseExists ?? defaultReleaseExists;
     try {
       const exists = await releaseExists(repo, tag);

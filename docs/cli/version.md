@@ -98,6 +98,27 @@ A package depending on another group's bumped package always gets exactly a **pa
 own (a cross-group ripple, never inheriting the source's severity) - this can itself ripple into a
 third group, and so on.
 
+## The repository's own version
+
+A monorepo root is never published, but its version is the **repository's release identity** - what
+a [GitHub Release](publish.md#github-releases-publishgithub) is named after. It isn't configured;
+it follows from how many version lines the repo has:
+
+- **One group** - the root follows it, so the repository and its packages share one number.
+- **Several groups** - a calendar version, `YYYY.M.D-HHmm` with nothing padded (`2026.9.5-930`).
+  With several lines there is no shared number to report: whichever is highest would stand still
+  whenever a *lower* line released, leaving that release with no identity at all. The unpadded shape
+  isn't cosmetic - semver forbids leading zeroes in numeric identifiers, and the root's
+  `package.json` has to stay valid.
+
+The choice is sticky: once the repository is on a calendar version it stays there, since going back
+would *lower* the root version. On a calendar version, `version` also creates a repository release
+tag (`.rmanrc "version.releaseTagPattern"`, default `release-*`) alongside the per-group ones. With
+a single version line the group's own tag already is the release, so no second name is created.
+
+The release tag pattern must never match a package's own `changelog.tagPattern` - a release tag
+matching `v*` would be picked up as some package's last release and throw off its changelog.
+
 ## Severity auto-detection
 
 With no explicit `bump`, each package's severity comes from its own commits since its last release -

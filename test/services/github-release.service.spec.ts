@@ -43,19 +43,26 @@ describe('services/github-release', () => {
     return { releaseExists: async () => exists };
   }
 
-  /** A monorepo whose root opts the repository into GitHub Releases, as a consumer would. */
-  function fixture(options: { rootVersion?: string; rootRman?: unknown; remote?: string } = {}): string {
+  /** A monorepo whose root opts the repository into GitHub Releases, as a consumer would - already
+   *  tagged for its current version, the state `version` leaves behind and `publish` expects. */
+  function fixture(
+    options: { rootVersion?: string; rootRman?: unknown; remote?: string; tagged?: boolean } = {},
+  ): string {
     const dir = tmp();
+    const rootVersion = options.rootVersion ?? '1.2.0';
     writeJson(dir, 'package.json', {
       name: 'root',
       private: true,
-      version: options.rootVersion ?? '1.2.0',
+      version: rootVersion,
       workspaces: ['packages/*'],
       rman: options.rootRman ?? { publish: { target: ['npm', 'github'] } },
     });
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.2.0' });
     writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.2.0' });
     initGit(dir, options.remote ?? 'git@github.com:panates/example.git');
+    if (options.tagged !== false) {
+      git(dir, 'tag', rootVersion.startsWith('20') ? `release-${rootVersion}` : `v${rootVersion}`);
+    }
     return dir;
   }
 
@@ -107,6 +114,7 @@ describe('services/github-release', () => {
         rman: { publish: { target: ['github'] } },
       });
       initGit(dir);
+      git(dir, 'tag', 'v1.2.0');
 
       const repo = await Repository.create(dir);
       const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
@@ -151,6 +159,17 @@ describe('services/github-release', () => {
         },
       );
       expect(plan[0]).toMatchObject({ status: 'error', reason: '401 Unauthorized' });
+    });
+
+    it('a release tag that does not exist here is an error, not a release off the whole history', async () => {
+      // Either `version` never ran, or this clone has no tags. Releasing anyway would look fine and
+      // silently produce notes covering everything ever, since the *previous* release tag needed to
+      // bound them can't be found either.
+      const dir = fixture({ tagged: false });
+      const repo = await Repository.create(dir);
+      const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
+      expect(plan[0]).toMatchObject({ status: 'error' });
+      expect(plan[0].reason).toMatch(/does not exist here/);
     });
 
     it('uncommitted changes abort the plan, unless ignoreDirty downgrades it to a skip', async () => {

@@ -826,7 +826,9 @@ single shared version, which is the group's own tag - so a repo with one version
 name for the release it already has. `owner/repo` comes from `options.repository`, then the root's
 `publish.github.repository`, then the `origin` remote's URL (SSH and HTTPS forms both parse); an
 unresolvable one is `'error'`, not a silent skip. Uncommitted changes anywhere are `'error'` unless
-`ignoreDirty` downgrades them to `'skip'`. Otherwise `GET /repos/{owner}/{repo}/releases/tags/{tag}`
+`ignoreDirty` downgrades them to `'skip'`, and so is a release tag that doesn't exist in this clone -
+either `version` never ran or the tags weren't fetched, and releasing anyway would silently produce
+notes covering the entire history (the previous release tag that bounds them can't be found either). Otherwise `GET /repos/{owner}/{repo}/releases/tags/{tag}`
 decides `'up-to-date'` vs `'publish'` - a genuine 404 is the only "not released yet"; every other
 failure (missing/invalid `GITHUB_TOKEN`, typo'd repository) surfaces as `'error'` at plan time
 rather than as a publish that fails much later.
