@@ -91,7 +91,7 @@ export interface DetectChangeHashOptions {
  * also cover anything that file hasn't caught up on yet (see its doc comment). Returns `undefined`
  * when nothing can be resolved at all (never tagged *and* never published, no catch-up file - a
  * genuinely first-ever release) - callers should fall back to their own default in that case (e.g.
- * `GitHelper.listCommits`'s "not yet pushed" default when no hash is given).
+ * the whole history, since nothing has ever been released).
  */
 export async function detectChangeHash(
   git: GitHelper,

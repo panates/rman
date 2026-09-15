@@ -17,20 +17,21 @@ Accepts [package filtering](../cli.md#package-filtering) options, in addition to
 
 | Option | Alias | Type | Description |
 | --- | --- | --- | --- |
-| `--from <hash>` | - | string | Generate the changelog since this commit/hash, applied the same way to every package. Default (also `"npm"` explicitly): auto-detect per package from its own most recent release tag - the same one `version`/`changed` use, so they never disagree; failing that (no tag yet), from its currently-published npm version; failing that too, commits not yet pushed to the current branch's upstream. |
+| `--from <hash>` | - | string | Generate the changelog since this commit/hash, applied the same way to every package. Default (also `"npm"` explicitly): auto-detect per package from its own most recent release tag - the same one `version`/`changed` use, so they never disagree; failing that (no tag yet), from its currently-published npm version; failing that too (never released at all), the package's whole history. |
 | `--write` | - | boolean | Prepend the generated entry into each package's own changelog file instead of printing it. |
 | `--file-path <path>` | - | string | With `--write`, the file to prepend into, relative to each package's own directory. Default `"CHANGELOG.md"`, or `.rmanrc "changelog.filePath"`. |
 | `--root` | `-r` | boolean | Generate for the whole repository even when standing inside one package's own directory (which otherwise scopes it to just that package). No effect elsewhere. |
 | `--include-skipped` | - | boolean | Also generate for a package with `.rmanrc "publish.skip"` - excluded by default. |
+| `--release-version <v>` | - | string | The version these notes are **for** - what the entry heading shows. Default: read back from each package's own latest release tag, which is only right once that release is tagged. Pass it when generating notes ahead of the bump (e.g. from `changed --json`), otherwise the heading shows the *previous* release. |
 
 ## Examples
 
 ```bash
-rman changelog                              # auto-detects each package's last published npm version
+rman changelog                              # auto-detects each package's own last release
 ```
 
 ```
-Checking published npm versions...
+Detecting each package's last release...
 ## pkg-a 1.3.0 (2026-09-12)
 
 ### ✨ Features
@@ -78,5 +79,5 @@ generate it anyway.
 
 - [`rman version --changelog`](version.md) - folds the same changelog generation into a version
   bump's own commit, bounded by each package's *pre-bump* tag rather than this command's own
-  npm-registry auto-detection.
+  auto-detection, and headed with the version being released rather than the previous one.
 - [`rman diff`](diff.md) - the raw, ungrouped git diff instead.

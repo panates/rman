@@ -472,6 +472,11 @@ for (const entry of plan) {
 const applied = await VersionService.applyPlan(repository, plan, { push: true, changelog: true });
 ```
 
+A tagged group release commit is always the **last** commit `applyPlan` makes: a monorepo root's
+own informational version-sync commit goes in ahead of the group commits, so the release tag lands
+on `HEAD` rather than one commit behind it (which would leave `git tag --points-at HEAD` empty for
+anything reading back the tag it just released).
+
 #### Explicit bump keyword or version
 
 ```ts
@@ -824,12 +829,13 @@ namespace ChangelogService {
     root?: boolean; // whole repository even when standing inside one package
     filePath?: string; // relative to each package's own directory, default "CHANGELOG.md"
     includeSkipped?: boolean; // include a .rmanrc "publish.skip" package too - excluded by default
+    version?: string; // the version these entries are FOR - default: read back from git tags
   }
 
   interface Entry {
     package: Package;
     label: string; // "<repo dir name> repository" for root, its own name otherwise
-    version: string; // resolved from git tags, not package.json
+    version: string; // options.version, else resolved from git tags (not package.json)
     features: string[];
     fixes: string[];
     other: string[];
@@ -861,8 +867,8 @@ By default (`from` omitted, or `"npm"`), the boundary is auto-detected per packa
 most recent release tag first - the same one `version`/`changed` themselves use, so all three
 agree on "since when" - falling back to its currently-published npm version only when it has no
 tag at all yet (via [`detectChangeHash`](#detectchangehash)); a package that can't be resolved
-either way (never tagged *and* never published) falls back to its own commits not yet pushed to
-the current branch's upstream.
+either way (never tagged *and* never published) has no boundary at all, so its whole history
+counts as unreleased - the same view `version` takes.
 
 A commit touching a package's files is attributed to that package's changelog entry - unless it's
 broad enough (touches at least 3 packages *and* more than half of all packages) to count as a
@@ -871,6 +877,17 @@ it's attributed to the root alone instead of being repeated verbatim across most
 
 A package with `.rmanrc "publish.skip"` gets no entry at all by default - there's little point
 changelogging something that's never actually released - unless `includeSkipped` is set.
+
+Release markers never appear in an entry: a bare version-bump commit (`"6.0.1"`), the message
+`version` commits a bump with (`.rmanrc "version.commitMessage"`, or the built-in `chore(release):
+v{version}`), and the monorepo root's own version-sync commit are all dropped regardless of
+`ignoreTypes`.
+
+`{{version}}` is read back from git tags rather than `package.json` (which can drift from what was
+actually released) - so a caller generating notes for a release that **isn't tagged yet** has to
+pass `version` itself, or every entry ends up labelled with the previous release's number.
+`VersionService.applyPlan` does exactly that when folding the changelog into a bump commit, and
+`GithubReleaseService` passes the version it's releasing.
 
 Formatting comes from `.rmanrc changelog.template` - a **path** to a template file (not the
 template text itself), supporting `{{package}}`/`{{version}}`/`{{date}}`/`{{commits}}` (the full

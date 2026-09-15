@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import { detectChangeHash, extractVersion, findLatestTag, tagPattern } from '../utils/change-hash.js';
-import { parseConventionalCommit, VERSION_BUMP_PATTERN } from '../utils/conventional-commits.js';
+import { isReleaseCommit, parseConventionalCommit } from '../utils/conventional-commits.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 
@@ -21,8 +21,8 @@ export namespace ChangelogService {
      *  own most recent release tag first - the same lookup `VersionService`/`changed` use, so this
      *  never disagrees with them - falling back to its currently-published npm version only when
      *  it has no tag yet (see `detectChangeHash`); a package this can't be resolved for either way
-     *  (never tagged, unpublished, no network) falls back to its own commits not yet pushed to the
-     *  current branch's upstream (same reference point `--changed`/`--changed-since` use). */
+     *  (never tagged, unpublished, no network) has never been released at all, so its whole
+     *  history counts as unreleased - the same view `version` takes. */
     from?: string;
     /** Generate for the whole repository even when the current directory is inside a single
      *  package (which otherwise scopes it to just that package) - see `Repository.currentPackage`. */
@@ -39,6 +39,14 @@ export namespace ChangelogService {
     /** A package with `.rmanrc "publish.skip"` is excluded by default - little point changelogging
      *  something that's never actually released. Set true to generate for it anyway. */
     includeSkipped?: boolean;
+    /** The version these entries are being generated *for* - what `{{version}}` renders as.
+     *  Without it the version is read back from git tags (see `resolveVersion`), which is only
+     *  correct once the release being described has actually been tagged. A caller generating
+     *  notes for a release that doesn't exist yet - `version --changelog` writing the entry before
+     *  it commits and tags, or a CI step producing release notes ahead of the bump - already knows
+     *  the number and has to say so, otherwise every entry ends up labelled with the *previous*
+     *  release's version. */
+    version?: string;
   }
 
   /** One package's (root included) generated changelog entry - what `getEntries`/`generate`
@@ -48,7 +56,8 @@ export namespace ChangelogService {
     /** Display name for this entry's heading - `"<repo dir name> repository"` for the root
      *  package, its own name otherwise (see `getEntries`'s doc comment on `{{package}}`). */
     label: string;
-    /** Resolved from git tags, not package.json - see `resolveVersion`. */
+    /** `options.version` when the caller gave one, otherwise resolved from git tags rather than
+     *  package.json - see `resolveVersion`. */
     version: string;
     features: string[];
     fixes: string[];
@@ -90,16 +99,15 @@ export namespace ChangelogService {
    * Fixes/🔧 Other Changes on a best-effort Conventional Commits read; anything that doesn't parse
    * just lands in Other Changes as-is, so a repo that doesn't follow that convention still gets a
    * usable list. `.rmanrc changelog.ignoreTypes` (cascaded, e.g. `[chore, dev]`) drops commits of
-   * those types entirely instead - see `ignoreTypesConfig`. A bare version-bump commit
-   * (`"6.0.1"`) is always dropped outright, regardless of `ignoreTypes` - see
-   * `VERSION_BUMP_PATTERN`.
+   * those types entirely instead - see `ignoreTypesConfig`. A release marker - a bare version-bump
+   * commit (`"6.0.1"`), or any of the messages `version` itself writes - is always dropped
+   * outright, regardless of `ignoreTypes`; see `isReleaseCommit`.
    *
    * By default (or with `--from npm` explicitly), the boundary is auto-detected per package
    * instead of one shared one - see `detectChangeHash`. A package that can't be resolved this way
-   * (unpublished, no network, no matching tag) falls back to its own commits not yet pushed to
-   * the current branch's upstream (the same reference point `--changed`/`--changed-since` use
-   * elsewhere, via `GitHelper.listCommits`) - so the command still produces something useful even
-   * for a repo that's never been published or tagged at all. Packages that end up resolving to
+   * (unpublished, no network, no matching tag) has never been released at all, so its whole
+   * history counts as unreleased - the same view `version` takes, so a first-ever release still
+   * produces a real changelog. Packages that end up resolving to
    * the same hash (an explicit one, or several packages sharing one tag under fixed versioning)
    * only have their commits fetched once, not once per package.
    *
@@ -125,9 +133,10 @@ export namespace ChangelogService {
     );
 
     const git = new GitHelper({ cwd: repository.dirname });
-    // dropped up front, not just while grouping - a package whose only commits are version bumps
+    const commitMessage = repository.rootPackage.config?.version?.commitMessage;
+    // dropped up front, not just while grouping - a package whose only commits are release markers
     // should get no entry at all, rather than a heading with nothing real underneath it.
-    const dropVersionBumps = (commits: CommitInfo[]) => commits.filter(c => !VERSION_BUMP_PATTERN.test(c.subject));
+    const dropVersionBumps = (commits: CommitInfo[]) => commits.filter(c => !isReleaseCommit(c.subject, commitMessage));
 
     // Several packages often resolve to the identical hash (an explicit --from <hash> applies to
     // all of them the same way; under fixed versioning, npm auto-detection usually does too) - so
@@ -137,7 +146,10 @@ export namespace ChangelogService {
       const key = hash ?? '';
       let promise = commitsByHash.get(key);
       if (!promise) {
-        promise = git.listCommits({ hash }).then(dropVersionBumps);
+        // No boundary at all means nothing has ever been released, so everything so far is
+        // unreleased - the same fallback `VersionService` makes. (Not "not yet pushed": that reads
+        // as empty the moment a first release is pushed, and for a repo with no remote at all.)
+        promise = (hash ? git.listCommits({ hash }) : git.listAllCommits()).then(dropVersionBumps);
         commitsByHash.set(key, promise);
       }
       return promise;
@@ -169,7 +181,7 @@ export namespace ChangelogService {
       if (!grouped.features.length && !grouped.fixes.length && !grouped.other.length) continue;
 
       const label = pkg === repository.rootPackage ? `${path.basename(repository.dirname)} repository` : pkg.name;
-      const { version, content } = await renderEntry(repository, pkg, label, grouped, git);
+      const { version, content } = await renderEntry(repository, pkg, label, grouped, git, options.version);
       entries.push({
         package: pkg,
         label,
@@ -203,7 +215,6 @@ function ignoreTypesConfig(pkg: Package): Set<string> {
 function groupCommits(subjects: string[], ignoreTypes: Set<string> = new Set()): GroupedCommits {
   const grouped: GroupedCommits = { features: [], fixes: [], other: [] };
   for (const subject of subjects) {
-    if (VERSION_BUMP_PATTERN.test(subject)) continue;
     const parsed = parseConventionalCommit(subject);
     if (!parsed) {
       grouped.other.push(subject);
@@ -328,9 +339,10 @@ async function renderEntry(
   label: string,
   grouped: GroupedCommits,
   git: GitHelper,
+  versionOverride: string | undefined,
 ): Promise<{ version: string; content: string }> {
   const template = resolveTemplate(repository, pkg);
-  const version = await resolveVersion(git, pkg);
+  const version = versionOverride ?? (await resolveVersion(git, pkg));
   const content = render(template, {
     package: label,
     version,

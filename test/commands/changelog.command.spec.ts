@@ -180,10 +180,10 @@ describe('commands/changelog', () => {
       }
     }
 
-    it('prints "Checking published npm versions..." before generating, when --from is omitted', async () => {
+    it('narrates the boundary detection before generating, when --from is omitted', async () => {
       const { dir } = fixtureWithOneFeature();
       const lines = await withFakeNpmOnPath(() => captureLogs(() => runCli({ cwd: dir, argv: ['changelog'] })));
-      expect(lines.some(l => l.includes('Checking published npm versions...'))).toBe(true);
+      expect(lines.some(l => l.includes("Detecting each package's last release..."))).toBe(true);
       // the fake npm reports nothing published, so it still falls back to "not yet pushed" and
       // finds the same real commit.
       expect(lines.some(l => l.includes('a shiny new feature'))).toBe(true);

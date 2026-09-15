@@ -222,7 +222,7 @@ Generates a changelog per package from unreleased commits, grouped into ✨ Feat
 / 🔧 Other Changes.
 
 ```bash
-rman changelog                          # auto-detects each package's last published npm version
+rman changelog                          # auto-detects each package's own last release
 rman changelog --from a1b2c3d           # since a specific commit, for every package
 rman changelog --write                  # prepend into each package's own CHANGELOG.md
 rman changelog --write --file-path docs/CHANGELOG.md

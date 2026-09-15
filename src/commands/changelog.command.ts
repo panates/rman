@@ -18,7 +18,7 @@ export function initCli(repository: Repository, program: Argv) {
             'Generate the changelog since this commit/hash, applied the same way to every package. ' +
             'Default (also "npm" explicitly): auto-detect per package from its own most recent release ' +
             'tag - same as "version"/"changed" - falling back to its published npm version (no tag yet), ' +
-            "then to not-yet-pushed commits for a package that can't be resolved either way",
+            "then to its whole history for a package that's never been released at all",
           type: 'string',
         })
         .option('write', {
@@ -41,6 +41,14 @@ export function initCli(repository: Repository, program: Argv) {
         .option('include-skipped', {
           describe: 'Also generate for a package with .rmanrc "publish.skip" - excluded by default',
           type: 'boolean',
+        })
+        .option('release-version', {
+          describe:
+            'The version these notes are for - what the entry heading shows. Default: read back from ' +
+            "each package's own latest release tag, which is only right once that release is tagged. " +
+            'Pass it when generating notes ahead of the bump (e.g. from "changed --json" in CI), ' +
+            'otherwise the heading shows the previous release.',
+          type: 'string',
         }),
     handler: async args => {
       const from = args.from as string | undefined;
@@ -48,9 +56,10 @@ export function initCli(repository: Repository, program: Argv) {
       const logger = new Logger((args.logLevel as LogLevel | undefined) ?? resolveRootLogLevel(repository));
 
       if (!from || from === 'npm') {
-        // A network round trip per package, even run concurrently, can still take a visible
-        // moment - without this, the command looks hung for that stretch instead of just busy.
-        logger.info(colors.gray('Checking published npm versions...'));
+        // Auto-detection is mostly local git work, but the npm fallback it can reach for (only
+        // when a package has no tag at all) is a network round trip per package - without this,
+        // the command looks hung for that stretch instead of just busy.
+        logger.info(colors.gray("Detecting each package's last release..."));
       }
 
       const options = {
@@ -59,6 +68,7 @@ export function initCli(repository: Repository, program: Argv) {
         filePath: args.filePath as string | undefined,
         root: args.root as boolean | undefined,
         includeSkipped: args.includeSkipped as boolean | undefined,
+        version: args.releaseVersion as string | undefined,
       };
       const entries = args.write
         ? await ChangelogService.generateToFile(repository, options)

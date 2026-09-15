@@ -68,8 +68,10 @@ command reimplements its own tag lookup. In order, first match wins:
    file's own last-modifying commit, **widening** the boundary backwards. Purpose: if the changelog
    stalled at 1.1.0 while 1.5.0 shipped, the versions in between aren't silently skipped. With no
    tag, the file's commit is used alone.
-5. **Nothing matched → `undefined`** → the caller falls back to its own default (see "Known
-   inconsistency" below).
+5. **Nothing matched → `undefined`** → nothing has ever been released, so callers treat the whole
+   history as unreleased (`listAllCommits`). `version` and `changelog` agree here deliberately -
+   "not yet pushed" would read as empty the moment a first release is pushed, and for a repo with
+   no remote at all.
 
 Tag naming also has a single source: `expandTag` (forward: version → tag name) and `findLatestTag`
 (backward), both in that same file. Don't build a tag name anywhere else.
@@ -136,15 +138,6 @@ touched package counts as changed.
 - Meant for the development loop ("only build/test what I touched").
 - **Never use it for release decisions.** After a push `git cherry` is empty and everything reads
   `clean`, which does not mean there is nothing to publish.
-
-### Known inconsistency
-
-When `detectChangeHash` returns `undefined` (no tag, npm fallback didn't resolve either), callers
-fall back differently: `VersionService` to the **entire history** (`listAllCommits`),
-`ChangelogService` to **not-yet-pushed commits** (`git cherry`). So in the "never tagged, never
-published" scenario `version` and `changelog` don't see the same thing - and once everything is
-pushed, `changelog` comes out empty. This is the same class of trap as the "changelog empty after
-tagging" bug fixed in CI. Consider aligning them when working in this area.
 
 ## API docs baseline (docs/api.md, docs/api/*.md)
 

@@ -5,9 +5,9 @@ import type { Repository } from '../core/repository.js';
 import { detectChangeHash, expandTag } from '../utils/change-hash.js';
 import {
   hasBreakingChangeFooter,
+  isReleaseCommit,
   parseConventionalCommit,
   parseReleaseAs,
-  VERSION_BUMP_PATTERN,
 } from '../utils/conventional-commits.js';
 import { exec } from '../utils/exec.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
@@ -137,6 +137,7 @@ export namespace VersionService {
       eligible.push(pkg);
     }
 
+    const commitMessage = repository.rootPackage.config?.version?.commitMessage;
     const changeByPackage = new Map<string, { severity?: BumpKeyword; reason: string }>();
     await Promise.all(
       eligible.map(async pkg => {
@@ -147,7 +148,7 @@ export namespace VersionService {
         const since = await detectChangeHash(git, pkg, { npmViewVersion: options.npmViewVersion });
         const commits = since ? await git.listCommits({ hash: since }) : await git.listAllCommits();
         const belongsToPkg = (c: CommitInfo) => c.files.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
-        const real = commits.filter(c => belongsToPkg(c) && !VERSION_BUMP_PATTERN.test(c.subject));
+        const real = commits.filter(c => belongsToPkg(c) && !isReleaseCommit(c.subject, commitMessage));
         if (!real.length) return;
         changeByPackage.set(pkg.name, {
           severity: explicitSeverity ?? detectSeverity(real),
@@ -242,6 +243,9 @@ export namespace VersionService {
           scope: entry.package.name,
           root: true,
           from,
+          // The tag for this release doesn't exist yet (it's created below), so changelog's own
+          // tag-derived version would resolve to the *previous* release and label the entry with it.
+          version: entry.to,
           // version doesn't consult "publish.skip" at all (a package can still be meaningfully
           // versioned/changelogged without ever being published) - this entry was already decided
           // to bump, so its folded-in changelog shouldn't then be silently dropped by that flag.
@@ -254,6 +258,18 @@ export namespace VersionService {
           );
         }
       }
+    }
+
+    /** The root's own informational version write isn't part of any group's release, but still
+     *  needs to land in *some* commit rather than being left as an uncommitted local edit. Committed
+     *  *before* the group commits, so the last commit this makes is always a tagged release commit -
+     *  otherwise the tag sits one commit behind HEAD and every `git tag --points-at HEAD` consumer
+     *  (CI capturing the tag it just released, say) comes up empty in a monorepo. */
+    if (rootEntry?.status === 'bump') {
+      await git.commit(
+        [path.relative(repository.dirname, repository.rootPackage.jsonFileName)],
+        `chore: sync root version to ${rootEntry.to}`,
+      );
     }
 
     const byGroup = new Map<string, Entry[]>();
@@ -271,15 +287,6 @@ export namespace VersionService {
       await git.commit(files, buildCommitMessage(repository, groupEntries, options.message));
       const tags = new Set(groupEntries.map(e => expandTag(e.package, e.to!)));
       for (const tag of tags) if (!(await git.tagExists(tag))) await git.createTag(tag);
-    }
-
-    /** The root's own informational version write isn't part of any group's release, but still
-     *  needs to land in *some* commit rather than being left as an uncommitted local edit. */
-    if (rootEntry?.status === 'bump') {
-      await git.commit(
-        [path.relative(repository.dirname, repository.rootPackage.jsonFileName)],
-        `chore: sync root version to ${rootEntry.to}`,
-      );
     }
 
     if (options.push && bumped.length) await git.push();
