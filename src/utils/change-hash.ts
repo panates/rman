@@ -25,6 +25,24 @@ export async function findLatestTag(git: GitHelper, pkg: Package): Promise<strin
   return pattern.includes('{name}') ? (await git.listTags(expanded))[0] : await git.describeTag(expanded);
 }
 
+/** The forward direction of `findLatestTag`: expands `pkg`'s (cascaded) `.rmanrc
+ *  changelog.tagPattern` into the concrete tag name `version` belongs under - `{name}` becomes the
+ *  package's own name, `*` becomes `version`. Shared by `version` (creating the tag), `publish
+ *  --target github` (finding the release that tag belongs to), and `detectChangeHash`'s own npm
+ *  fallback (mapping a published version back onto a tag), so all three name tags identically. */
+export function expandTag(pkg: Package, version: string): string {
+  return applyTagPattern(tagPattern(pkg), pkg.name, version);
+}
+
+/** The pattern expansion `expandTag` performs, on any pattern - `{name}` becomes `name`, `*` becomes
+ *  `version`. Shared with the repository's own release tag, which uses a different pattern (see
+ *  `releaseTagPattern`) but names tags the same way. */
+export function applyTagPattern(pattern: string, name: string, version: string): string {
+  const expanded = pattern.replace('{name}', name);
+  const starIdx = expanded.indexOf('*');
+  return starIdx === -1 ? expanded : expanded.slice(0, starIdx) + version + expanded.slice(starIdx + 1);
+}
+
 /** Strips the pattern's literal prefix (everything before its first `*`) from `tag` to get just
  *  the version part - e.g. tag `@sqb/builder@1.2.3` against pattern `@sqb/builder@*` -> `1.2.3`.
  *  A pattern with no `*` is returned as its own "version" verbatim (an exact tag, nothing to strip). */
@@ -70,18 +88,17 @@ export interface DetectChangeHashOptions {
  * Resolves the commit/hash a package's changes should be measured "since" - the boundary
  * `changelog --from` uses, but reusable anywhere a command wants to answer "what changed for this
  * package". An explicit `options.from` (anything but `"npm"`) is returned as-is, applying the same
- * way to every package. Otherwise, it's auto-detected in order: (1) the package's
- * currently-published npm version - looked up via `npmViewVersion`, then mapped to a git tag using
- * `.rmanrc changelog.tagPattern` (so independent and fixed monorepo versioning schemes both work -
- * see `tagPattern`); (2) failing that (never published, private, no network, ...), this package's
- * own most recent release tag directly - the same `findLatestTag` lookup `version` itself uses, so
- * a package that's never been on npm (e.g. Docker-only) but has real tags from a previous `version`
- * run still gets a correct boundary, not just "everything ever". Either way, if `catchUpFile` is
- * given and exists, the result is widened to also cover anything that file hasn't caught up on yet
- * (see its doc comment). Returns `undefined` when nothing can be resolved at all (never published
- * *and* never tagged, no catch-up file - a genuinely first-ever release) - callers should fall back
- * to their own default in that case (e.g. `GitHelper.listCommits`'s "not yet pushed" default when
- * no hash is given).
+ * way to every package. Otherwise, it's auto-detected in order: (1) this package's own most recent
+ * release tag - the same network-free `findLatestTag` lookup `version`/`changed` themselves use,
+ * so all three commands agree on "since when" for any repo whose tags are the ones `rman version`
+ * actually created; (2) failing that (no tag at all yet - e.g. onboarding `rman` onto a repo with
+ * real npm history but no `rman`-created tags), the package's currently-published npm version -
+ * looked up via `npmViewVersion`, then mapped to a git tag using `.rmanrc changelog.tagPattern`
+ * (see `tagPattern`). Either way, if `catchUpFile` is given and exists, the result is widened to
+ * also cover anything that file hasn't caught up on yet (see its doc comment). Returns `undefined`
+ * when nothing can be resolved at all (never tagged *and* never published, no catch-up file - a
+ * genuinely first-ever release) - callers should fall back to their own default in that case (e.g.
+ * the whole history, since nothing has ever been released).
  */
 export async function detectChangeHash(
   git: GitHelper,
@@ -90,22 +107,20 @@ export async function detectChangeHash(
 ): Promise<string | undefined> {
   if (options.from && options.from !== 'npm') return options.from;
 
-  const npmViewVersion = options.npmViewVersion ?? defaultNpmViewVersion;
-  const publishedVersion = await npmViewVersion(pkg.name, git.cwd);
-  let npmHash: string | undefined;
-  if (publishedVersion) {
-    const pattern = tagPattern(pkg);
-    const expanded = pattern.replace('{name}', pkg.name);
-    const starIdx = expanded.indexOf('*');
-    const tag = starIdx === -1 ? expanded : expanded.slice(0, starIdx) + publishedVersion + expanded.slice(starIdx + 1);
-    npmHash = (await git.tagExists(tag)) ? tag : undefined;
+  let tagHash = await findLatestTag(git, pkg);
+  if (!tagHash) {
+    const npmViewVersion = options.npmViewVersion ?? defaultNpmViewVersion;
+    const publishedVersion = await npmViewVersion(pkg.name, git.cwd);
+    if (publishedVersion) {
+      const tag = expandTag(pkg, publishedVersion);
+      tagHash = (await git.tagExists(tag)) ? tag : undefined;
+    }
   }
-  if (!npmHash) npmHash = await findLatestTag(git, pkg);
 
   const fileHash = options.catchUpFile ? await git.lastCommitTouching(options.catchUpFile) : undefined;
-  if (!fileHash) return npmHash;
-  if (!npmHash) return fileHash;
-  return (await git.mergeBase(npmHash, fileHash)) ?? npmHash;
+  if (!fileHash) return tagHash;
+  if (!tagHash) return fileHash;
+  return (await git.mergeBase(tagHash, fileHash)) ?? tagHash;
 }
 
 const execFileAsync = promisify(execFile);

@@ -412,6 +412,7 @@ describe('services/changelog', () => {
     run('config', 'user.name', 't');
     run('add', '-A');
     run('commit', '-q', '-m', 'init');
+    run('tag', 'v1.0.0'); // released right here - so there is genuinely nothing since
 
     const repo = await Repository.create(dir);
     const entries = await ChangelogService.getEntries(repo, {}, noNpm);
@@ -862,7 +863,9 @@ describe('services/changelog', () => {
 
       const root = entries.find(e => e.label === `${path.basename(dir)} repository`);
       expect(root).toBeDefined();
-      expect(root!.other).toEqual(['docs: update readme']);
+      // nothing has ever been released here (no tag, nothing on npm), so the boundary-free view
+      // reaches all the way back to the first commit.
+      expect(root!.other).toEqual(['init', 'docs: update readme']);
     });
 
     it('returns [] when there is nothing unreleased', async () => {
@@ -874,10 +877,30 @@ describe('services/changelog', () => {
       run('config', 'user.name', 't');
       run('add', '-A');
       run('commit', '-q', '-m', 'init');
+      run('tag', 'v1.0.0'); // released right here - so there is genuinely nothing since
 
       const repo = await Repository.create(dir);
       const entries = await ChangelogService.getEntries(repo, {}, noNpm);
       expect(entries).toEqual([]);
+    });
+
+    it('a never-released repository reports its whole history, not nothing', async () => {
+      // No tag, nothing on npm: there is no boundary, so everything so far is unreleased - the
+      // same view "version" takes. Reading this as "nothing changed" would leave a first-ever
+      // release with an empty changelog the moment its commits had been pushed.
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat(pkg-a): the very first feature');
+
+      const repo = await Repository.create(dir);
+      const output = content(await ChangelogService.getEntries(repo, {}, noNpm));
+      expect(output).toContain('the very first feature');
     });
   });
 

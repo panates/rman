@@ -540,9 +540,11 @@ describe('services/version', () => {
       expect(entryFor(plan, 'root')).toMatchObject({ status: 'bump', to: '1.0.1' });
     });
 
-    it('reflects the overall highest version when groups diverge', async () => {
+    it('switches to a calendar version once groups diverge - the highest would stand still', async () => {
+      // pkg-b sits on a higher line and doesn't move, so "highest version among the groups" would
+      // report 9.0.0 both before and after: a release with no identity of its own to be named after.
       const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'package.json', { name: 'root', private: true, version: '9.0.0', workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '9.0.0' });
       fs.writeFileSync(path.join(dir, 'packages/b/.rmanrc'), JSON.stringify({ group: 'other' }));
@@ -553,10 +555,30 @@ describe('services/version', () => {
       commitAll(dir, 'fix: only pkg-a changes');
 
       const repo = await Repository.create(dir);
-      const plan = await VersionService.getPlan(repo);
+      const plan = await VersionService.getPlan(repo, { now: () => new Date(2026, 8, 15, 14, 30) });
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ to: '1.0.1' });
       expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'no-change' });
-      expect(entryFor(plan, 'root')).toMatchObject({ status: 'bump', to: '9.0.0' });
+      expect(entryFor(plan, 'root')).toMatchObject({ status: 'bump', to: '2026.9.15-1430' });
+    });
+
+    it('stays on calendar once it is there, even if the repo falls back to a single group', async () => {
+      // Going back would *lower* the root version (2026.9.15-1430 -> 1.0.1 compares as a decrease).
+      const dir = tmp();
+      writeJson(dir, 'package.json', {
+        name: 'root',
+        private: true,
+        version: '2026.9.15-1430',
+        workspaces: ['packages/*'],
+      });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      commitAll(dir, 'fix: a bug');
+
+      const repo = await Repository.create(dir);
+      const plan = await VersionService.getPlan(repo, { now: () => new Date(2026, 8, 16, 9, 5) });
+      expect(entryFor(plan, 'root')).toMatchObject({ status: 'bump', to: '2026.9.16-905' });
     });
 
     it('is never included for a non-monorepo (single-package) repository', async () => {
@@ -631,6 +653,47 @@ describe('services/version', () => {
       const repo = await Repository.create(dir);
       const plan = await VersionService.getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
+    });
+  });
+
+  describe('boundary detection - the same detectChangeHash "changelog" measures from', () => {
+    it("prefers the package's own reachable tag, without ever reaching for the npm registry", async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'feat: initial');
+      git(dir, 'tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+      commitAll(dir, 'fix: a bug');
+
+      const repo = await Repository.create(dir);
+      const plan = await VersionService.getPlan(repo, {
+        npmViewVersion: async () => {
+          throw new Error('npm must not be consulted when a tag resolves');
+        },
+      });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1', reason: 'changed since v1.0.0' });
+    });
+
+    it('falls back to the npm-published version when no tag is reachable from HEAD', async () => {
+      // The tag exists but sits off HEAD's own ancestry (a release cut on another branch, history
+      // rewritten since, ...) - so "git describe" finds nothing. Without the npm fallback the whole
+      // history would read as unreleased, inflating this patch into a minor off the "feat:" below.
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'feat: initial');
+      git(dir, 'checkout', '-q', '-b', 'side');
+      fs.writeFileSync(path.join(dir, 'side.txt'), 's');
+      commitAll(dir, 'chore: side work');
+      git(dir, 'tag', 'v1.0.0');
+      git(dir, 'checkout', '-q', '-');
+      fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+      commitAll(dir, 'fix: a bug');
+
+      const repo = await Repository.create(dir);
+      const plan = await VersionService.getPlan(repo, { npmViewVersion: async () => '1.0.0' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1', reason: 'changed since v1.0.0' });
     });
   });
 

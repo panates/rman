@@ -63,7 +63,8 @@ export function initCli(repository: Repository, program: Argv) {
         .option('changelog', {
           describe:
             "Also write each bumped package's CHANGELOG.md (same as running changelog --write " +
-            'separately) and fold it into the same commit as its version bump',
+            'separately) and fold it into the same commit as its version bump. Default: .rmanrc ' +
+            '"version.changelog", or false - --no-changelog forces it off even when that\'s true.',
           type: 'boolean',
         })
         .option('preid', {
@@ -114,10 +115,11 @@ export function initCli(repository: Repository, program: Argv) {
       }
       if (!apply) return;
 
+      const changelog = (args.changelog as boolean | undefined) ?? repository.config?.version?.changelog ?? false;
       const applied = await VersionService.applyPlan(repository, plan, {
         push: args.push as boolean | undefined,
         message: args.message as string | undefined,
-        changelog: args.changelog as boolean | undefined,
+        changelog,
       });
       for (const entry of applied) {
         if (entry.status === 'bump') {

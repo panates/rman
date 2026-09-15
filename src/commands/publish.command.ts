@@ -1,11 +1,12 @@
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
 import type { Argv } from 'yargs';
-import type { RmanConfig } from '../core/config.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
+import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { CiService } from '../services/ci.service.js';
 import { DockerPublishService } from '../services/docker-publish.service.js';
+import { GithubReleaseService } from '../services/github-release.service.js';
 import { PublishService } from '../services/publish.service.js';
 import { applyBranchGuardOptions, assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
@@ -20,6 +21,7 @@ export function initCli(repository: Repository, program: Argv) {
         .example('$0 publish --yes', '# Publish immediately, no confirmation')
         .example('$0 publish --dry-run', '# Only show the plan, never publish')
         .example('$0 publish --target docker', '# Only the packages configured for the "docker" target')
+        .example('$0 publish --target github', '# Only the GitHub Release side of it')
         .option('yes', {
           alias: 'y',
           describe: 'Skip the confirmation prompt and publish immediately',
@@ -29,14 +31,21 @@ export function initCli(repository: Repository, program: Argv) {
           describe: 'Only show the plan - never publishes, regardless of --yes',
           type: 'boolean',
         })
+        .option('json', {
+          alias: 'j',
+          describe:
+            'Print the plan as JSON instead of text - one entry per package and target. Combine with ' +
+            '--dry-run to ask "is there anything to publish?" without publishing (e.g. a CI release gate).',
+          type: 'boolean',
+        })
         .option('target', {
           describe:
-            'Restrict this run to just these publish target(s) ("npm"/"docker", repeatable) - default: ' +
+            'Restrict this run to just these publish target(s) ("npm"/"docker"/"github", repeatable) - default: ' +
             'every target each package itself is configured for (.rmanrc "publish.target", "npm" when unset). ' +
             'A package that opts into "docker" but has no "publish.docker" config errors clearly instead of ' +
             'being silently skipped.',
           type: 'array',
-          choices: ['npm', 'docker'],
+          choices: ['npm', 'docker', 'github'],
         })
         .option('ignore-dirty', {
           describe: 'Exclude a package with uncommitted local changes instead of aborting the whole run',
@@ -77,11 +86,19 @@ export function initCli(repository: Repository, program: Argv) {
             'Prefixed onto a bare (no "/") "publish.docker.image" - default: the DOCKERHUB_NAMESPACE ' +
             'environment variable.',
           type: 'string',
+        })
+        .option('github-repository', {
+          describe:
+            'The "owner/repo" GitHub Releases are created in - default: each package\'s own ' +
+            '"publish.github.repository", falling back to the "origin" remote.',
+          type: 'string',
         }),
     handler: async args => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));
       const targets = resolveTargets(args.target as string[] | undefined);
-      const explicitDockerTarget = !!(args.target as string[] | undefined)?.length && targets.has('docker');
+      const explicitTargets = !!(args.target as string[] | undefined)?.length;
+      const explicitDockerTarget = explicitTargets && targets.has('docker');
+      const explicitGithubTarget = explicitTargets && targets.has('github');
       const ignoreDirty = args.ignoreDirty as boolean | undefined;
 
       const npmOptions = {
@@ -95,12 +112,31 @@ export function initCli(repository: Repository, program: Argv) {
         ignoreDirty,
         namespace: args.dockerNamespace as string | undefined,
       };
+      // No package filtering: a GitHub Release belongs to the repository, not to a package, so
+      // there is nothing for --scope/--ignore to narrow down.
+      const githubOptions = { ignoreDirty, repository: args.githubRepository as string | undefined };
 
       const npmPlan = targets.has('npm') ? await PublishService.getPlan(repository, npmOptions) : [];
       const dockerPlan = targets.has('docker') ? await DockerPublishService.getPlan(repository, dockerOptions) : [];
+      const githubPlan = targets.has('github') ? await GithubReleaseService.getPlan(repository, githubOptions) : [];
 
-      printPlan(npmPlan);
-      printPlan(dockerPlan, 'docker');
+      if (args.json) {
+        console.log(
+          JSON.stringify(
+            [
+              ...npmPlan.map(e => jsonEntry(e, 'npm')),
+              ...dockerPlan.map(e => jsonEntry(e, 'docker')),
+              ...githubPlan.map(e => jsonEntry(e, 'github')),
+            ],
+            undefined,
+            2,
+          ),
+        );
+      } else {
+        printPlan(npmPlan);
+        printPlan(dockerPlan, 'docker');
+        printPlan(githubPlan, 'github');
+      }
 
       if (explicitDockerTarget && !dockerPlan.length) {
         const message = '--target docker was given, but no package\'s .rmanrc configures "publish.docker".';
@@ -110,7 +146,15 @@ export function initCli(repository: Repository, program: Argv) {
         throw err;
       }
 
-      const errors = [...npmPlan, ...dockerPlan].filter(e => e.status === 'error');
+      if (explicitGithubTarget && !githubPlan.length) {
+        const message = '--target github was given, but nothing in .rmanrc opts into the "github" target.';
+        console.log(colors.red(message));
+        const err: any = new Error(message);
+        err.logged = true;
+        throw err;
+      }
+
+      const errors = [...npmPlan, ...dockerPlan, ...githubPlan].filter(e => e.status === 'error');
       if (errors.length) {
         const allDirty = errors.every(e => e.reason === 'uncommitted local changes');
         const message = allDirty
@@ -123,8 +167,8 @@ export function initCli(repository: Repository, program: Argv) {
         throw err;
       }
 
-      if (!npmPlan.some(e => e.status === 'publish') && !dockerPlan.some(e => e.status === 'publish')) {
-        console.log(colors.gray('Nothing to publish.'));
+      if (![...npmPlan, ...dockerPlan, ...githubPlan].some(e => e.status === 'publish')) {
+        if (!args.json) console.log(colors.gray('Nothing to publish.'));
         return;
       }
 
@@ -151,6 +195,7 @@ export function initCli(repository: Repository, program: Argv) {
           })
         : [];
       const appliedDocker = targets.has('docker') ? await DockerPublishService.applyPlan(repository, dockerPlan) : [];
+      const appliedGithub = targets.has('github') ? await GithubReleaseService.applyPlan(repository, githubPlan) : [];
 
       let failed = false;
       for (const entry of appliedNpm) {
@@ -177,6 +222,22 @@ export function initCli(repository: Repository, program: Argv) {
           );
         }
       }
+      for (const entry of appliedGithub) {
+        if (entry.status === 'publish') {
+          console.log(colors.green('released'), colors.gray('[github]'), colors.cyan(entry.tag ?? ''));
+        } else if (
+          entry.status === 'error' &&
+          githubPlan.find(e => e.package === entry.package)?.status === 'publish'
+        ) {
+          failed = true;
+          console.log(
+            colors.red('failed'),
+            colors.gray('[github]'),
+            colors.cyan(entry.package.name),
+            colors.red(entry.reason ?? ''),
+          );
+        }
+      }
       if (failed) {
         const err: any = new Error('"publish" failed');
         err.logged = true;
@@ -187,7 +248,7 @@ export function initCli(repository: Repository, program: Argv) {
 }
 
 function resolveTargets(input: string[] | undefined): Set<RmanConfig.PublishTarget> {
-  if (!input?.length) return new Set(['npm', 'docker']);
+  if (!input?.length) return new Set(['npm', 'docker', 'github']);
   return new Set(input as RmanConfig.PublishTarget[]);
 }
 
@@ -198,6 +259,18 @@ interface PrintableEntry {
   version: string;
   status: 'publish' | 'skip' | 'up-to-date' | 'error';
   reason?: string;
+}
+
+/** One `--json` row. `target` is what distinguishes otherwise-identical rows for a package that
+ *  ships to several targets at once, so a consumer can tell which one still needs publishing. */
+function jsonEntry(entry: PrintableEntry, target: RmanConfig.PublishTarget) {
+  return {
+    name: entry.package.name,
+    target,
+    status: entry.status,
+    version: entry.version,
+    reason: entry.reason,
+  };
 }
 
 function printPlan(entries: PrintableEntry[], label?: string): void {

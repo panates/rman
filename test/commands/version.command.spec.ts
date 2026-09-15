@@ -277,18 +277,24 @@ describe('commands/version', () => {
   });
 
   describe('-m / --message', () => {
-    // the fixture is a monorepo, so HEAD is always the root's own trailing informational-sync
-    // commit ("chore: sync root version to ...") - the actual group release commit is right below it.
+    // the group release commit is always the last one made - the monorepo root's own informational
+    // version-sync commit goes in ahead of it, so the release tag lands on HEAD.
     it('overrides the default commit message, with {version} substituted', async () => {
       const dir = fixture();
       await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--message', 'release: v{version}'] }));
-      expect(git(dir, 'log', '-1', '--format=%s', 'HEAD~1')).toBe('release: v1.0.1');
+      expect(git(dir, 'log', '-1', '--format=%s')).toBe('release: v1.0.1');
     });
 
     it('without it, falls back to the built-in default commit message', async () => {
       const dir = fixture();
       await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
-      expect(git(dir, 'log', '-1', '--format=%s', 'HEAD~1')).toBe('chore(release): v1.0.1');
+      expect(git(dir, 'log', '-1', '--format=%s')).toBe('chore(release): v1.0.1');
+    });
+
+    it('leaves the release tag on HEAD, not behind the root version-sync commit', async () => {
+      const dir = fixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+      expect(git(dir, 'tag', '--points-at', 'HEAD')).toBe('v1.0.1');
     });
   });
 
@@ -299,10 +305,14 @@ describe('commands/version', () => {
 
       const changelog = fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf-8');
       expect(changelog).toContain('a bug');
+      // headed with the version being released, not the one it's replacing - the tag for this
+      // release doesn't exist yet at the point the entry is rendered.
+      expect(changelog).toContain('1.0.1');
+      expect(changelog).not.toContain('1.0.0');
 
       // the changelog file was committed together with the version bump, not left uncommitted.
       expect(git(dir, 'status', '--porcelain')).toBe('');
-      const committedFiles = git(dir, 'show', '--name-only', '--pretty=format:', 'HEAD~1');
+      const committedFiles = git(dir, 'show', '--name-only', '--pretty=format:', 'HEAD');
       expect(committedFiles).toContain('packages/a/CHANGELOG.md');
       expect(committedFiles).toContain('packages/a/package.json');
     });
@@ -310,6 +320,22 @@ describe('commands/version', () => {
     it('without it, no CHANGELOG.md is written at all', async () => {
       const dir = fixture();
       await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+      expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
+    });
+
+    it('.rmanrc "version.changelog": true makes it the default - no --changelog flag needed', async () => {
+      const dir = fixture();
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ version: { changelog: true } }));
+      commitAll(dir, 'chore: add .rmanrc');
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+      expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(true);
+    });
+
+    it('--no-changelog overrides .rmanrc "version.changelog": true back off for one run', async () => {
+      const dir = fixture();
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ version: { changelog: true } }));
+      commitAll(dir, 'chore: add .rmanrc');
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--no-changelog'] }));
       expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
     });
   });

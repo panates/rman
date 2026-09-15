@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: b6924c69810870582f615a81c97b587e4057910d
-package-version: 1.0.3
-date: 2026-09-13
+git-commit: 58fe59aa3d3d8dcd8a5d116c306f6c9f5cb5519e
+package-version: 1.0.8
+date: 2026-09-15
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff b6924c69810870582f615a81c97b587e4057910d..HEAD -- src/
+  git diff 58fe59aa3d3d8dcd8a5d116c306f6c9f5cb5519e..HEAD -- src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -51,6 +51,7 @@ standalone utilities (`detectChangeHash`, `Logger`). For the CLI itself (command
   - [`VersionService`](#versionservice)
   - [`PublishService`](#publishservice)
   - [`DockerPublishService`](#dockerpublishservice)
+  - [`GithubReleaseService`](#githubreleaseservice)
   - [`ChangelogService`](#changelogservice)
   - [`RunService`](#runservice)
   - [`CiService`](#ciservice)
@@ -324,6 +325,8 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `ignoreBranch` | `string \| string[]` | none (no restriction) | Same as `allowBranch`. |
 | `group` | `true \| false \| string` | `true` | Per-package cascaded. See [`VersionService`](#grouping-rmanrc-group) below. |
 | `version.commitMessage` | `string` | `"chore(release): v{version}"` | Root-level only. `{version}` substituted when a commit's group shares one version. |
+| `version.changelog` | `boolean` | `false` | Root-level only. Default for `version --changelog` when the CLI flag isn't given - `--no-changelog` still overrides it off for one run. |
+| `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
 | `version.script` / `.preScript` / `.postScript` | `string \| string[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). |
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
 | `changelog.template` | `string` (a file **path**, relative to repo root) | built-in template | Per-package cascaded. Throws if the path doesn't exist. |
@@ -331,7 +334,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `changelog.tagPattern` | `string` (glob, may contain `{name}`) | `'v*'` | Per-package cascaded. `{name}` → independent per-package tags (`{name}@*`); no `{name}` → one shared repo-wide tag scheme. |
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |
 | `clean.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of `clean` entirely. |
-| `publish.target` | `'npm' \| 'docker'` or an array of either | `['npm']` | Per-package cascaded. Which registries `publish` targets for this package. |
+| `publish.target` | `'npm' \| 'docker' \| 'github'` or an array of them | `['npm']` | Per-package cascaded. Where `publish` releases this package to. Each target has its own "already published?" check: npm via `npm view`, docker via `docker manifest inspect`, github via the release for that version's tag. |
 | `publish.docker.image` | `string` | none (required once `"docker"` is a target) | A bare name is prefixed with `--docker-namespace`/`DOCKERHUB_NAMESPACE`; one already containing `/` is used verbatim. |
 | `publish.docker.dockerfile` | `string` | `'Dockerfile'` | Relative to the package's own directory. |
 | `publish.docker.platforms` | `string[]` | `['linux/amd64']` | `docker buildx build --platform` targets. |
@@ -339,7 +342,11 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `publish.docker.buildContexts` | `Record<string, string>` | `{}` | Named `--build-context <name>=<path>` entries, each path relative to the package's own directory. |
 | `publish.docker.buildArgs` | `Record<string, string>` | `{}` | `--build-arg <name>=<value>` entries. A value of exactly `"$NAME"` expands from `process.env.NAME`. |
 | `publish.docker.readme` | `string` | `'DOCKER_README.md'` | Relative to the package's own directory - becomes the DockerHub repo's description, if present. |
-| `publish.skip` | `boolean` | `false` | Per-package cascaded - excludes this package from `publish` entirely (npm and docker), regardless of `target`/`"private"`. `changelog` also skips it by default (its own `--include-skipped` overrides). `version` never consults this. |
+| `publish.github.assets` | `string[]` | `[]` | Globs (relative to the package's own directory) uploaded onto the release. A release with no assets is still valid. |
+| `publish.github.repository` | `string` | parsed from the `origin` remote | `owner/repo` the release is created in. |
+| `publish.github.draft` | `boolean` | `false` | Create the release as an unpublished draft. |
+| `publish.github.prerelease` | `boolean` | whether the version is a semver prerelease | Mark the release as a prerelease. |
+| `publish.skip` | `boolean` | `false` | Per-package cascaded - excludes this package from `publish` entirely (every target), regardless of `target`/`"private"`. `changelog` also skips it by default (its own `--include-skipped` overrides). `version` never consults this. |
 | `run.<script>.concurrency` | `number` | CPU count | See [`RunService`](#runservice) below. |
 | `run.<script>.topo` | `boolean` | `true` | Precedence: CLI flag > package config > fallback. |
 | `run.<script>.bail` | `boolean` | `true` | **Unusual precedence:** package config > CLI flag > fallback (see below). |
@@ -405,6 +412,13 @@ Computes and applies version bumps across the repository, with `.rmanrc group`-b
 grouping (fixed or independent versioning), Conventional Commits-based severity auto-detection,
 cross-group dependency-range propagation, and prerelease (`--preid`) support.
 
+"Since the last release" is resolved by the shared [`detectChangeHash`](#detectchangehash) - the very
+same boundary `ChangelogService` measures from, so `changed`/`version`/`changelog` never disagree
+about which commits are unreleased. This is deliberately a *commit*-driven question, independent of
+what any registry currently holds: only commits can say how big a bump is warranted, and why. The
+mirror-image question ("is this version already out there?") belongs to `PublishService`/
+`DockerPublishService`/`GithubReleaseService`, which each answer it against their own registry.
+
 ```ts
 namespace VersionService {
   type BumpKeyword = 'patch' | 'minor' | 'major';
@@ -414,6 +428,7 @@ namespace VersionService {
     bump?: string; // a BumpKeyword, or an explicit semver version - omit to auto-detect
     ignoreDirty?: boolean; // default false
     preid?: string; // e.g. "beta" -> prerelease bumps
+    npmViewVersion?: (name: string, cwd: string) => Promise<string | undefined>; // for tests
   }
 
   interface ApplyOptions {
@@ -457,6 +472,31 @@ for (const entry of plan) {
 // 2. Apply it - writes package.json, commits, tags (once per group).
 const applied = await VersionService.applyPlan(repository, plan, { push: true, changelog: true });
 ```
+
+A tagged group release commit is always the **last** commit `applyPlan` makes: a monorepo root's
+own version-sync commit goes in ahead of the group commits, so the release tag lands on `HEAD`
+rather than one commit behind it (which would leave `git tag --points-at HEAD` empty for anything
+reading back the tag it just released).
+
+#### The repository's own version (monorepo root)
+
+A monorepo root is never published, but its version is the **repository's release identity** - what
+a GitHub Release is named after. How it's computed is derived from the repo, never configured:
+
+- **One group** - the root follows it, so repo and packages share one number. Unchanged behavior.
+- **Several groups** - a calendar version, `YYYY.M.D-HHmm` with nothing padded (`2026.9.5-930`;
+  semver forbids leading zeroes in numeric identifiers, and the root's `package.json` must stay
+  valid). With several version lines there is no shared number to report: the older "highest among
+  the groups" rule left the root standing still whenever a *lower* line released, so a release had
+  no identity of its own.
+
+The choice is sticky - once the repo (or its last release tag) is on a calendar version it stays
+there, because going back would *lower* the root version (`2026.9.15-1430` → `1.4.0` compares as a
+decrease). On a calendar version `applyPlan` also creates a repository release tag
+(`version.releaseTagPattern`, default `release-*`) alongside the per-group ones; with a single
+version line the group's own tag already is the release, so no second name is created.
+
+`Options.now` injects the clock behind that version, so tests are deterministic.
 
 #### Explicit bump keyword or version
 
@@ -730,6 +770,79 @@ whose own `COPY`/`ADD` paths expect something other than the package's own direc
 `publish.docker.readme` file (default `"DOCKER_README.md"`, relative to the package's own
 directory), if present, updates the DockerHub repository's description afterward.
 
+### `GithubReleaseService`
+
+Computes and applies the repository's GitHub Release - the third answer to the same question
+`PublishService` and `DockerPublishService` ask ("is this exact version already out there?"), for
+code with no package registry of its own: a standalone app shipped as release assets, or one
+deployed elsewhere with the release only recording that it shipped.
+
+Unlike the other two targets this one is **repository-level**: a release's tag covers the whole
+source tree, so a run produces **one** release, and its body covers every package that shipped
+under it - not just the ones naming `"github"`. A per-package release would have to invent a tag no
+package owns. Declare it in the root `.rmanrc` alongside `"npm"` (`"target": ["npm", "github"]`);
+it's honored as soon as any package resolves it. The `"publish.github"` config block is optional -
+every fact it needs already has a default source - and `"private": true` is irrelevant here (it
+only ever excluded npm candidates).
+
+```ts
+namespace GithubReleaseService {
+  interface Deps {
+    releaseExists?: (repository: string, tag: string) => Promise<boolean>; // for tests
+  }
+
+  interface Options {
+    ignoreDirty?: boolean;
+    repository?: string; // "owner/repo" override - no package filtering: this is repo-level
+  }
+
+  interface Entry {
+    package: Package; // always the repository root
+    version: string; // the repository's own release version
+    status: 'publish' | 'skip' | 'up-to-date' | 'error';
+    tag?: string; // the repository's release tag
+    repository?: string; // "owner/repo" this release lands in
+    reason?: string;
+  }
+
+  function getPlan(repository: Repository, options?: Options, deps?: Deps): Promise<Entry[]>;
+  function applyPlan(repository: Repository, plan: Entry[]): Promise<Entry[]>;
+}
+```
+
+```ts
+import { GithubReleaseService } from 'rman';
+
+const plan = await GithubReleaseService.getPlan(repository);
+for (const entry of plan) console.log(entry.status, entry.package.name, entry.tag, entry.reason);
+
+await GithubReleaseService.applyPlan(repository, plan);
+```
+
+The release is identified by the repository's own version (the root's - see
+[The repository's own version](#the-repositorys-own-version-monorepo-root)): its release tag
+(`version.releaseTagPattern`) when that version is a calendar one, and otherwise the tag of the
+single shared version, which is the group's own tag - so a repo with one version line gets no second
+name for the release it already has. `owner/repo` comes from `options.repository`, then the root's
+`publish.github.repository`, then the `origin` remote's URL (SSH and HTTPS forms both parse); an
+unresolvable one is `'error'`, not a silent skip. Uncommitted changes anywhere are `'error'` unless
+`ignoreDirty` downgrades them to `'skip'`, and so is a release tag that doesn't exist in this clone -
+either `version` never ran or the tags weren't fetched, and releasing anyway would silently produce
+notes covering the entire history (the previous release tag that bounds them can't be found either). Otherwise `GET /repos/{owner}/{repo}/releases/tags/{tag}`
+decides `'up-to-date'` vs `'publish'` - a genuine 404 is the only "not released yet"; every other
+failure (missing/invalid `GITHUB_TOKEN`, typo'd repository) surfaces as `'error'` at plan time
+rather than as a publish that fails much later.
+
+`applyPlan` builds the body from `ChangelogService`, one section per package, each bounded by the
+*previous repository release* and headed with that package's own version - so a repo whose packages
+sit on different version lines still reads correctly. A package with nothing in that range
+contributes no section, which is also how a package that didn't ship this time is left out. The
+boundary is deliberately not `detectChangeHash`'s auto-detection, which would resolve to the very
+tag being released and correctly find nothing. An existing release for the tag (HTTP 422) is updated
+rather than failed, so a re-run after a partial failure converges. Every package's
+`publish.github.assets` globs (resolved against its own directory) are uploaded onto the one
+release.
+
 ### `ChangelogService`
 
 Generates (and optionally writes) a Markdown changelog per package from real commits, grouped into
@@ -746,12 +859,13 @@ namespace ChangelogService {
     root?: boolean; // whole repository even when standing inside one package
     filePath?: string; // relative to each package's own directory, default "CHANGELOG.md"
     includeSkipped?: boolean; // include a .rmanrc "publish.skip" package too - excluded by default
+    version?: string; // the version these entries are FOR - default: read back from git tags
   }
 
   interface Entry {
     package: Package;
     label: string; // "<repo dir name> repository" for root, its own name otherwise
-    version: string; // resolved from git tags, not package.json
+    version: string; // options.version, else resolved from git tags (not package.json)
     features: string[];
     fixes: string[];
     other: string[];
@@ -779,10 +893,12 @@ const written = await ChangelogService.generateToFile(repository, { root: true }
 for (const entry of written) console.log('wrote', entry.filePath, 'for', entry.package.name);
 ```
 
-By default (`from` omitted, or `"npm"`), the boundary is auto-detected per package from its
-currently-published npm version (via [`detectChangeHash`](#detectchangehash)) - a package that
-can't be resolved this way (never published, no network, no matching tag) falls back to its own
-commits not yet pushed to the current branch's upstream.
+By default (`from` omitted, or `"npm"`), the boundary is auto-detected per package from its own
+most recent release tag first - the same one `version`/`changed` themselves use, so all three
+agree on "since when" - falling back to its currently-published npm version only when it has no
+tag at all yet (via [`detectChangeHash`](#detectchangehash)); a package that can't be resolved
+either way (never tagged *and* never published) has no boundary at all, so its whole history
+counts as unreleased - the same view `version` takes.
 
 A commit touching a package's files is attributed to that package's changelog entry - unless it's
 broad enough (touches at least 3 packages *and* more than half of all packages) to count as a
@@ -791,6 +907,17 @@ it's attributed to the root alone instead of being repeated verbatim across most
 
 A package with `.rmanrc "publish.skip"` gets no entry at all by default - there's little point
 changelogging something that's never actually released - unless `includeSkipped` is set.
+
+Release markers never appear in an entry: a bare version-bump commit (`"6.0.1"`), the message
+`version` commits a bump with (`.rmanrc "version.commitMessage"`, or the built-in `chore(release):
+v{version}`), and the monorepo root's own version-sync commit are all dropped regardless of
+`ignoreTypes`.
+
+`{{version}}` is read back from git tags rather than `package.json` (which can drift from what was
+actually released) - so a caller generating notes for a release that **isn't tagged yet** has to
+pass `version` itself, or every entry ends up labelled with the previous release's number.
+`VersionService.applyPlan` does exactly that when folding the changelog into a bump commit, and
+`GithubReleaseService` passes the version it's releasing.
 
 Formatting comes from `.rmanrc changelog.template` - a **path** to a template file (not the
 template text itself), supporting `{{package}}`/`{{version}}`/`{{date}}`/`{{commits}}` (the full
@@ -1129,17 +1256,17 @@ console.log(`${repo.type} "${repo.name}" - ${repo.packageCount} package(s)`);
 
 ### `detectChangeHash`
 
-Resolves the commit/hash a package's changes should be measured "since" - the same boundary
-`ChangelogService` and (indirectly, via each package's own last release tag) `VersionService` use.
-Exported directly since it's broadly useful anywhere you want to answer "what changed for this
-package" without re-implementing the npm-registry-to-git-tag mapping yourself.
+Resolves the commit/hash a package's changes should be measured "since" - the single boundary
+`ChangelogService` **and** `VersionService` (so `changed`/`version` too) both call, rather than each
+deciding for itself. Exported directly since it's broadly useful anywhere you want to answer "what
+changed for this package" without re-implementing the npm-registry-to-git-tag mapping yourself.
 
-Auto-detection order: (1) the package's currently-published npm version, mapped to a git tag; (2)
-failing that (never published, private, no network, ...), the package's own most recent release
-tag directly - the same lookup `VersionService` itself uses, so a package that's never been on npm
-(e.g. Docker-only) but does have real tags from a previous `version` run still gets a correct
-boundary, not just "everything not yet pushed". Either way, `catchUpFile` (if given and existing)
-still widens the result the same way.
+Auto-detection order: (1) the package's own most recent release tag - the network-free
+`findLatestTag` lookup; (2) failing that (no tag reachable from HEAD - a release cut on another
+branch, a rewritten history, onboarding `rman` onto a repo with real npm history), the package's
+currently-published npm version, mapped onto a tag name via `.rmanrc "changelog.tagPattern"` and
+used only if that tag actually exists. Either way, `catchUpFile` (if given and existing) still
+widens the result the same way.
 
 ```ts
 interface DetectChangeHashOptions {

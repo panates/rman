@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import expect from 'expect';
-import type { RmanConfig } from '../../src/core/config.js';
 import { defineConfig, readDirConfig, resolveConfig } from '../../src/core/config.js';
+import type { RmanConfig } from '../../src/interfaces/rman-config.interface.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-config-test-'));

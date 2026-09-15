@@ -91,7 +91,7 @@ worked examples of every single command, see **[docs/cli.md](docs/cli.md)**.
 | [`diff [package]`](#rman-diff-package) | Shows the git diff since a package's (or the repo's) last release tag. |
 | [`changelog`](#rman-changelog) | Generates a changelog per package from unreleased commits. |
 | [`version [bump]`](#rman-version-bump) | Bumps versions of changed packages (and their dependents). |
-| [`publish`](#rman-publish) | Publishes every package to its configured target(s) - npm and/or Docker. |
+| [`publish`](#rman-publish) | Publishes every package to its configured target(s) - npm, Docker and/or GitHub Releases. |
 | [`import <path>`](#rman-import-path) | Imports an external git repository as a new package, with history. |
 
 Options shared across several commands:
@@ -222,7 +222,7 @@ Generates a changelog per package from unreleased commits, grouped into ✨ Feat
 / 🔧 Other Changes.
 
 ```bash
-rman changelog                          # auto-detects each package's last published npm version
+rman changelog                          # auto-detects each package's own last release
 rman changelog --from a1b2c3d           # since a specific commit, for every package
 rman changelog --write                  # prepend into each package's own CHANGELOG.md
 rman changelog --write --file-path docs/CHANGELOG.md
@@ -266,7 +266,10 @@ algorithm, prerelease semantics, and `"workspace:"` dependency-range handling.
 ### `rman publish`
 
 Publishes every package to its configured target(s) - `npm` by default, or whatever each package's
-own `.rmanrc "publish.target"` says (`"npm"`, `"docker"`, or both).
+own `.rmanrc "publish.target"` says (`"npm"`, `"docker"`, `"github"`, or any combination). Each
+target decides for itself whether the current version is already out there: `npm view` on the npm
+side, `docker manifest inspect` on the docker side, and the GitHub Release for that version's own
+tag on the github side.
 
 ```bash
 rman publish                              # show the plan, then ask for confirmation
@@ -278,6 +281,7 @@ rman publish --otp 123456
 rman publish --registry https://registry.example.com --userconfig ./ci.npmrc
 rman publish --package-manager pnpm
 rman publish --target docker              # only the packages configured for the "docker" target
+rman publish --target github              # only the GitHub Release side of it
 ```
 
 A `"workspace:*"`/`"workspace:^"`/`"workspace:~"` dependency range is automatically rewritten to a
@@ -287,6 +291,11 @@ after - see [docs/api.md#publishservice](docs/api.md#publishservice).
 A package opts into building/pushing a Docker image via `.rmanrc "publish.target": ["docker"]` plus
 a `"publish.docker"` block (`image`, `platforms`, `buildContexts`, `buildArgs`, ...) - see
 [docs/cli/publish.md#docker-publishing-publishdocker](docs/cli/publish.md#docker-publishing-publishdocker).
+
+A package with no package registry of its own - a standalone app shipped as release assets, or one
+deployed elsewhere with the release just recording that it shipped - opts into
+`"publish.target": ["github"]` instead, optionally with `"publish.github": { "assets": [...] }` -
+see [docs/cli/publish.md#github-releases-publishgithub](docs/cli/publish.md#github-releases-publishgithub).
 
 ### `rman import <path>`
 
