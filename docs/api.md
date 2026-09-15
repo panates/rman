@@ -326,6 +326,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `group` | `true \| false \| string` | `true` | Per-package cascaded. See [`VersionService`](#grouping-rmanrc-group) below. |
 | `version.commitMessage` | `string` | `"chore(release): v{version}"` | Root-level only. `{version}` substituted when a commit's group shares one version. |
 | `version.changelog` | `boolean` | `false` | Root-level only. Default for `version --changelog` when the CLI flag isn't given - `--no-changelog` still overrides it off for one run. |
+| `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
 | `version.script` / `.preScript` / `.postScript` | `string \| string[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). |
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
 | `changelog.template` | `string` (a file **path**, relative to repo root) | built-in template | Per-package cascaded. Throws if the path doesn't exist. |
@@ -473,9 +474,29 @@ const applied = await VersionService.applyPlan(repository, plan, { push: true, c
 ```
 
 A tagged group release commit is always the **last** commit `applyPlan` makes: a monorepo root's
-own informational version-sync commit goes in ahead of the group commits, so the release tag lands
-on `HEAD` rather than one commit behind it (which would leave `git tag --points-at HEAD` empty for
-anything reading back the tag it just released).
+own version-sync commit goes in ahead of the group commits, so the release tag lands on `HEAD`
+rather than one commit behind it (which would leave `git tag --points-at HEAD` empty for anything
+reading back the tag it just released).
+
+#### The repository's own version (monorepo root)
+
+A monorepo root is never published, but its version is the **repository's release identity** - what
+a GitHub Release is named after. How it's computed is derived from the repo, never configured:
+
+- **One group** - the root follows it, so repo and packages share one number. Unchanged behavior.
+- **Several groups** - a calendar version, `YYYY.M.D-HHmm` with nothing padded (`2026.9.5-930`;
+  semver forbids leading zeroes in numeric identifiers, and the root's `package.json` must stay
+  valid). With several version lines there is no shared number to report: the older "highest among
+  the groups" rule left the root standing still whenever a *lower* line released, so a release had
+  no identity of its own.
+
+The choice is sticky - once the repo (or its last release tag) is on a calendar version it stays
+there, because going back would *lower* the root version (`2026.9.15-1430` → `1.4.0` compares as a
+decrease). On a calendar version `applyPlan` also creates a repository release tag
+(`version.releaseTagPattern`, default `release-*`) alongside the per-group ones; with a single
+version line the group's own tag already is the release, so no second name is created.
+
+`Options.now` injects the clock behind that version, so tests are deterministic.
 
 #### Explicit bump keyword or version
 
@@ -751,13 +772,18 @@ directory), if present, updates the DockerHub repository's description afterward
 
 ### `GithubReleaseService`
 
-Computes and applies GitHub Releases across every package that opts into the `"github"` publish
-target - the third answer to the same question `PublishService` and `DockerPublishService` ask ("is
-this exact version already out there?"), for a package with no package registry of its own: a
-standalone app shipped as release assets, or one deployed elsewhere with the release only recording
-that it shipped. Opt-in like the docker target; `.rmanrc "publish.skip"` excludes it regardless.
-Unlike docker, a `"publish.github"` config block is **optional** - every fact it needs already has a
-default source. `"private": true` is irrelevant here (it only ever excluded npm candidates).
+Computes and applies the repository's GitHub Release - the third answer to the same question
+`PublishService` and `DockerPublishService` ask ("is this exact version already out there?"), for
+code with no package registry of its own: a standalone app shipped as release assets, or one
+deployed elsewhere with the release only recording that it shipped.
+
+Unlike the other two targets this one is **repository-level**: a release's tag covers the whole
+source tree, so a run produces **one** release, and its body covers every package that shipped
+under it - not just the ones naming `"github"`. A per-package release would have to invent a tag no
+package owns. Declare it in the root `.rmanrc` alongside `"npm"` (`"target": ["npm", "github"]`);
+it's honored as soon as any package resolves it. The `"publish.github"` config block is optional -
+every fact it needs already has a default source - and `"private": true` is irrelevant here (it
+only ever excluded npm candidates).
 
 ```ts
 namespace GithubReleaseService {
@@ -765,16 +791,16 @@ namespace GithubReleaseService {
     releaseExists?: (repository: string, tag: string) => Promise<boolean>; // for tests
   }
 
-  interface Options extends PackageFilterOptions {
+  interface Options {
     ignoreDirty?: boolean;
-    repository?: string; // "owner/repo" override for every package this run
+    repository?: string; // "owner/repo" override - no package filtering: this is repo-level
   }
 
   interface Entry {
-    package: Package;
-    version: string;
+    package: Package; // always the repository root
+    version: string; // the repository's own release version
     status: 'publish' | 'skip' | 'up-to-date' | 'error';
-    tag?: string; // the same tag name "version" creates for this version
+    tag?: string; // the repository's release tag
     repository?: string; // "owner/repo" this release lands in
     reason?: string;
   }
@@ -793,25 +819,27 @@ for (const entry of plan) console.log(entry.status, entry.package.name, entry.ta
 await GithubReleaseService.applyPlan(repository, plan);
 ```
 
-The release is identified by `expandTag(pkg, pkg.version)` - the same `.rmanrc
-"changelog.tagPattern"` name `version` creates and `findLatestTag` reads back, so all three agree on
-which tag a version belongs to. `owner/repo` comes from `options.repository`, then the package's own
-`publish.github.repository`, then the `origin` remote's URL (SSH and HTTPS forms both parse); a
-package it can't be resolved for at all is `'error'`, not a silent skip. A dirty package is `'error'`
-unless `ignoreDirty` downgrades it to `'skip'`. Otherwise `GET /repos/{owner}/{repo}/releases/tags/
-{tag}` decides `'up-to-date'` vs `'publish'` - a genuine 404 is the only "not released yet"; every
-other failure (missing/invalid `GITHUB_TOKEN`, typo'd repository) surfaces as `'error'` at plan time
+The release is identified by the repository's own version (the root's - see
+[The repository's own version](#the-repositorys-own-version-monorepo-root)): its release tag
+(`version.releaseTagPattern`) when that version is a calendar one, and otherwise the tag of the
+single shared version, which is the group's own tag - so a repo with one version line gets no second
+name for the release it already has. `owner/repo` comes from `options.repository`, then the root's
+`publish.github.repository`, then the `origin` remote's URL (SSH and HTTPS forms both parse); an
+unresolvable one is `'error'`, not a silent skip. Uncommitted changes anywhere are `'error'` unless
+`ignoreDirty` downgrades them to `'skip'`. Otherwise `GET /repos/{owner}/{repo}/releases/tags/{tag}`
+decides `'up-to-date'` vs `'publish'` - a genuine 404 is the only "not released yet"; every other
+failure (missing/invalid `GITHUB_TOKEN`, typo'd repository) surfaces as `'error'` at plan time
 rather than as a publish that fails much later.
 
-`applyPlan` groups `'publish'` entries by tag - the default repo-wide `v*` scheme has a whole group
-release under one tag, so they produce **one** release between them, with every sharer's notes in
-its body (`{name}@*` independent versioning gives each its own). Notes come from `ChangelogService`
-itself, bounded by the tag immediately *before* the one being released (or the repository's root
-commit for a first-ever release) - deliberately not `detectChangeHash`'s auto-detection, which would
-resolve to the very tag being released and correctly find nothing. An existing release for the tag
-(HTTP 422) is updated rather than failed, so a re-run after a partial failure converges.
-`publish.github.assets` globs (relative to the package's own directory) are uploaded onto the
-release afterward.
+`applyPlan` builds the body from `ChangelogService`, one section per package, each bounded by the
+*previous repository release* and headed with that package's own version - so a repo whose packages
+sit on different version lines still reads correctly. A package with nothing in that range
+contributes no section, which is also how a package that didn't ship this time is left out. The
+boundary is deliberately not `detectChangeHash`'s auto-detection, which would resolve to the very
+tag being released and correctly find nothing. An existing release for the tag (HTTP 422) is updated
+rather than failed, so a re-run after a partial failure converges. Every package's
+`publish.github.assets` globs (resolved against its own directory) are uploaded onto the one
+release.
 
 ### `ChangelogService`
 

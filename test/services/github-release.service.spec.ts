@@ -39,70 +39,69 @@ describe('services/github-release', () => {
     git(dir, 'commit', '-q', '-m', 'init');
   }
 
-  function entryFor(plan: GithubReleaseService.Entry[], name: string): GithubReleaseService.Entry {
-    const e = plan.find(p => p.package.name === name);
-    if (!e) throw new Error(`no plan entry for "${name}"`);
-    return e;
-  }
-
   function releases(exists: boolean): GithubReleaseService.Deps {
     return { releaseExists: async () => exists };
   }
 
-  describe('getPlan()', () => {
-    it('a package not targeting "github" at all is left out of the plan entirely', async () => {
-      const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      initGit(dir);
+  /** A monorepo whose root opts the repository into GitHub Releases, as a consumer would. */
+  function fixture(options: { rootVersion?: string; rootRman?: unknown; remote?: string } = {}): string {
+    const dir = tmp();
+    writeJson(dir, 'package.json', {
+      name: 'root',
+      private: true,
+      version: options.rootVersion ?? '1.2.0',
+      workspaces: ['packages/*'],
+      rman: options.rootRman ?? { publish: { target: ['npm', 'github'] } },
+    });
+    writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.2.0' });
+    writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.2.0' });
+    initGit(dir, options.remote ?? 'git@github.com:panates/example.git');
+    return dir;
+  }
 
+  describe('getPlan()', () => {
+    it('a repository that never opts into "github" gets no plan at all', async () => {
+      const dir = fixture({ rootRman: {} });
       const repo = await Repository.create(dir);
-      const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
-      expect(plan).toEqual([]);
+      expect(await GithubReleaseService.getPlan(repo, {}, releases(false))).toEqual([]);
     });
 
-    it('no release for the version\'s tag yet -> "publish", against the origin remote\'s repo', async () => {
-      const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', {
-        name: 'pkg-a',
-        version: '1.2.0',
-        rman: { publish: { target: ['github'] } },
-      });
-      initGit(dir);
-
+    it('produces exactly one entry - a release belongs to the repository, not a package', async () => {
+      const dir = fixture();
       const repo = await Repository.create(dir);
       const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({
+      expect(plan).toHaveLength(1);
+      expect(plan[0]).toMatchObject({
         status: 'publish',
         tag: 'v1.2.0',
         repository: 'panates/example',
         reason: 'never released',
       });
+      expect(plan[0].package.name).toBe('root');
     });
 
-    it('a release already exists for that tag -> "up-to-date", nothing to do', async () => {
-      const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', {
-        name: 'pkg-a',
-        version: '1.2.0',
-        rman: { publish: { target: ['github'] } },
-      });
-      initGit(dir);
-
+    it('a release already exists for that tag -> "up-to-date"', async () => {
+      const dir = fixture();
       const repo = await Repository.create(dir);
       const plan = await GithubReleaseService.getPlan(repo, {}, releases(true));
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'up-to-date' });
+      expect(plan[0]).toMatchObject({ status: 'up-to-date' });
     });
 
-    it('a package private to npm is still a perfectly normal github-target candidate', async () => {
-      // The whole point of this target: an app that ships as release assets (or deploys elsewhere)
-      // is never an npm package, so "private" must not exclude it the way it does on the npm side.
+    it('names the release after the repository release tag once the root is on a calendar version', async () => {
+      // Several version lines mean no shared number, so the release needs a name of its own - and
+      // one that can't be mistaken for a package tag (see releaseTagPattern).
+      const dir = fixture({ rootVersion: '2026.9.15-1430' });
+      const repo = await Repository.create(dir);
+      const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
+      expect(plan[0]).toMatchObject({ tag: 'release-2026.9.15-1430', version: '2026.9.15-1430' });
+    });
+
+    it('a single opted-in package is enough, and still yields one repository release', async () => {
       const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', {
-        name: 'pkg-a',
+      writeJson(dir, 'package.json', { name: 'root', private: true, version: '1.2.0', workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.2.0' });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
         version: '1.2.0',
         private: true,
         rman: { publish: { target: ['github'] } },
@@ -111,80 +110,36 @@ describe('services/github-release', () => {
 
       const repo = await Repository.create(dir);
       const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish' });
+      expect(plan).toHaveLength(1);
+      expect(plan[0]).toMatchObject({ status: 'publish', tag: 'v1.2.0' });
     });
 
-    it('.rmanrc "publish.skip" leaves a github-targeted package out entirely', async () => {
-      const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', {
-        name: 'pkg-a',
-        version: '1.2.0',
-        rman: { publish: { target: ['github'], skip: true } },
+    it('root "publish.github.repository" wins over whatever the origin remote says', async () => {
+      const dir = fixture({
+        rootRman: { publish: { target: ['github'], github: { repository: 'panates/elsewhere' } } },
       });
-      initGit(dir);
-
       const repo = await Repository.create(dir);
       const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
-      expect(plan).toEqual([]);
-    });
-
-    it('"publish.github.repository" wins over whatever the origin remote says', async () => {
-      const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', {
-        name: 'pkg-a',
-        version: '1.2.0',
-        rman: { publish: { target: ['github'], github: { repository: 'panates/elsewhere' } } },
-      });
-      initGit(dir);
-
-      const repo = await Repository.create(dir);
-      const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ repository: 'panates/elsewhere' });
+      expect(plan[0]).toMatchObject({ repository: 'panates/elsewhere' });
     });
 
     it('an https remote resolves to the same "owner/repo" an ssh one does', async () => {
-      const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', {
-        name: 'pkg-a',
-        version: '1.2.0',
-        rman: { publish: { target: ['github'] } },
-      });
-      initGit(dir, 'https://github.com/panates/example.git');
-
+      const dir = fixture({ remote: 'https://github.com/panates/example.git' });
       const repo = await Repository.create(dir);
       const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ repository: 'panates/example' });
+      expect(plan[0]).toMatchObject({ repository: 'panates/example' });
     });
 
     it('no resolvable "owner/repo" at all is an error, not a silent skip', async () => {
-      const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', {
-        name: 'pkg-a',
-        version: '1.2.0',
-        rman: { publish: { target: ['github'] } },
-      });
-      initGit(dir, '');
-
+      const dir = fixture({ remote: '' });
       const repo = await Repository.create(dir);
       const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'error' });
-      expect(entryFor(plan, 'pkg-a').reason).toMatch(/owner\/repo/);
+      expect(plan[0]).toMatchObject({ status: 'error' });
+      expect(plan[0].reason).toMatch(/owner\/repo/);
     });
 
     it('a failing release lookup (bad token, typo\'d repo) is an error, never "never released"', async () => {
-      const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', {
-        name: 'pkg-a',
-        version: '1.2.0',
-        rman: { publish: { target: ['github'] } },
-      });
-      initGit(dir);
-
+      const dir = fixture();
       const repo = await Repository.create(dir);
       const plan = await GithubReleaseService.getPlan(
         repo,
@@ -195,43 +150,21 @@ describe('services/github-release', () => {
           },
         },
       );
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'error', reason: '401 Unauthorized' });
+      expect(plan[0]).toMatchObject({ status: 'error', reason: '401 Unauthorized' });
     });
 
-    it("uses the package's own tag pattern, so independent versioning gets its own release", async () => {
-      const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', {
-        name: 'pkg-a',
-        version: '1.2.0',
-        rman: { changelog: { tagPattern: '{name}@*' }, publish: { target: ['github'] } },
-      });
-      initGit(dir);
-
-      const repo = await Repository.create(dir);
-      const plan = await GithubReleaseService.getPlan(repo, {}, releases(false));
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ tag: 'pkg-a@1.2.0' });
-    });
-
-    it('a dirty package aborts the plan, unless ignoreDirty downgrades it to a skip', async () => {
-      const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      writeJson(dir, 'packages/a/package.json', {
-        name: 'pkg-a',
-        version: '1.2.0',
-        rman: { publish: { target: ['github'] } },
-      });
-      initGit(dir);
+    it('uncommitted changes abort the plan, unless ignoreDirty downgrades it to a skip', async () => {
+      const dir = fixture();
       fs.writeFileSync(path.join(dir, 'packages/a/dirty.txt'), 'uncommitted');
-
       const repo = await Repository.create(dir);
-      expect(entryFor(await GithubReleaseService.getPlan(repo, {}, releases(false)), 'pkg-a')).toMatchObject({
+
+      expect((await GithubReleaseService.getPlan(repo, {}, releases(false)))[0]).toMatchObject({
         status: 'error',
         reason: 'uncommitted local changes',
       });
-      expect(
-        entryFor(await GithubReleaseService.getPlan(repo, { ignoreDirty: true }, releases(false)), 'pkg-a'),
-      ).toMatchObject({ status: 'skip' });
+      expect((await GithubReleaseService.getPlan(repo, { ignoreDirty: true }, releases(false)))[0]).toMatchObject({
+        status: 'skip',
+      });
     });
   });
 });

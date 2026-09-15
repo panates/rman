@@ -12,6 +12,13 @@ import {
 import { exec } from '../utils/exec.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
+import {
+  expandReleaseTag,
+  findLastReleaseVersion,
+  formatCalendarVersion,
+  isCalendarVersion,
+  usesCalendarVersion,
+} from '../utils/release-version.js';
 import { parseWorkspaceRange } from '../utils/workspace-range.js';
 import { ChangelogService } from './changelog.service.js';
 
@@ -42,6 +49,9 @@ export namespace VersionService {
      *  no release tag yet - mainly for tests, so they don't depend on network access or a real
      *  published package. Same shape as `ChangelogService.Deps`/`PublishService.Deps`' own. */
     npmViewVersion?: (name: string, cwd: string) => Promise<string | undefined>;
+    /** Clock behind a monorepo root's calendar release version - injectable so tests are
+     *  deterministic. Default `() => new Date()`. */
+    now?: () => Date;
   }
 
   export interface ApplyOptions {
@@ -100,8 +110,9 @@ export namespace VersionService {
    * on, until nothing new is affected - see `rippleCrossGroup`.
    *
    * A monorepo's root package is never a real member of any group (it's never published on its
-   * own) - it gets one trailing informational entry instead, always `'bump'`ed to whatever single
-   * version every group ended up sharing, or the overall highest version when groups diverged.
+   * own) - it gets one trailing entry instead, carrying the repository's own release identity: the
+   * single group's version when there is one, a calendar version once there are several - see
+   * `buildRootEntry`.
    *
    * "Since its own last release" is resolved by the shared `detectChangeHash` - the same boundary
    * `changelog` measures from, so the two never disagree about which commits are unreleased.
@@ -172,7 +183,15 @@ export namespace VersionService {
     rippleCrossGroup(packages, entries, options.preid);
 
     const result = packages.map(pkg => entries.get(pkg.name)!);
-    if (repository.monorepo) result.push(buildRootEntry(repository, result));
+    if (repository.monorepo) {
+      result.push(
+        buildRootEntry(repository, result, {
+          groupCount: groups.size,
+          lastReleaseVersion: await findLastReleaseVersion(git, repository.rootPackage),
+          now: options.now ?? (() => new Date()),
+        }),
+      );
+    }
     return result;
   }
 
@@ -287,6 +306,22 @@ export namespace VersionService {
       await git.commit(files, buildCommitMessage(repository, groupEntries, options.message));
       const tags = new Set(groupEntries.map(e => expandTag(e.package, e.to!)));
       for (const tag of tags) if (!(await git.tagExists(tag))) await git.createTag(tag);
+    }
+
+    /** A repository release tag, on top of the per-group ones - but only once the root is on a
+     *  calendar version. With a single version line the group's own tag already *is* the release
+     *  (same version, same commit), and a second name for it would only add noise to every existing
+     *  repo's tag space. Created last, so it lands on HEAD rather than behind whichever group
+     *  happened to be committed last. */
+    if (rootEntry?.status === 'bump' && isCalendarVersion(rootEntry.to!)) {
+      const releaseTag = expandReleaseTag(repository.rootPackage, rootEntry.to!);
+      if (await git.tagExists(releaseTag)) {
+        throw new Error(
+          `Release tag "${releaseTag}" already exists - a second release within the same minute. ` +
+            'Wait a moment and run again.',
+        );
+      }
+      await git.createTag(releaseTag);
     }
 
     if (options.push && bumped.length) await git.push();
@@ -471,19 +506,37 @@ function rippleCrossGroup(
   }
 }
 
-/** The root's own `version` field is purely informational in a monorepo (it's never published on
- *  its own) - it always reflects whatever single version every group ended up sharing, or the
- *  overall highest version when groups diverged onto different numbers. Reports `'no-change'`
- *  (not `'bump'`) when nothing in the repository changed at all. */
-function buildRootEntry(repository: Repository, memberEntries: VersionService.Entry[]): VersionService.Entry {
+/**
+ * A monorepo root is never published on its own, but its version is still the repository's release
+ * identity - what a GitHub Release is named after. How it's computed depends on how many version
+ * lines the repo has, derived rather than configured (see `usesCalendarVersion`):
+ *
+ * - **One group**: the root simply follows it, so the repo and its packages share one number.
+ * - **Several groups** (or a repo already on calendar): a calendar version (`2026.9.15-1430`).
+ *   There is no meaningful shared number to report - the old "highest version among the groups"
+ *   rule would leave the root standing still whenever a *lower* line released, so a release could
+ *   happen with no identity of its own, and a semver-looking identity would anyway claim something
+ *   untrue about packages sitting on entirely different lines.
+ *
+ * Reports `'no-change'` (not `'bump'`) when nothing in the repository changed at all.
+ */
+function buildRootEntry(
+  repository: Repository,
+  memberEntries: VersionService.Entry[],
+  context: { groupCount: number; lastReleaseVersion?: string; now: () => Date },
+): VersionService.Entry {
   const root = repository.rootPackage;
   const anyBumped = memberEntries.some(e => e.status === 'bump');
   if (!anyBumped) {
     return { package: root, groupKey: '__root__', group: 'root', status: 'no-change', from: root.version };
   }
+  const calendar = usesCalendarVersion({
+    groupCount: context.groupCount,
+    rootVersion: root.version,
+    lastReleaseVersion: context.lastReleaseVersion,
+  });
   const finalVersions = memberEntries.map(e => e.to ?? e.from);
-  const unique = new Set(finalVersions);
-  const to = unique.size === 1 ? finalVersions[0] : maxVersion(finalVersions);
+  const to = calendar ? formatCalendarVersion(context.now()) : maxVersion(finalVersions);
   return {
     package: root,
     groupKey: '__root__',
@@ -491,7 +544,9 @@ function buildRootEntry(repository: Repository, memberEntries: VersionService.En
     status: 'bump',
     from: root.version,
     to,
-    reason: 'informational - monorepo root is never published on its own',
+    reason: calendar
+      ? 'repository release identity - several version lines, so no shared number to report'
+      : 'informational - monorepo root is never published on its own',
   };
 }
 

@@ -61,6 +61,11 @@
           "default": false,
           "description": "Default for \"version --changelog\" when the CLI flag isn't given - an explicit --changelog/--no-changelog still wins. Root-level only."
         },
+        "releaseTagPattern": {
+          "type": "string",
+          "default": "release-*",
+          "description": "Root-level. Tag naming the repository's own release, as opposed to the per-package/group tags \"changelog.tagPattern\" names - only created when the root is on a calendar version (a repo with more than one version line). Must NOT match any package's \"changelog.tagPattern\", or that package's changelog boundary resolves to the repository release instead of its own."
+        },
         "script": {
           "$ref": "#/definitions/stringOrStringArray",
           "description": "Command(s) to run as this package's own \"version\" npm-lifecycle step, when its package.json does not define one itself."

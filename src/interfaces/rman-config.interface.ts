@@ -30,6 +30,12 @@ export namespace RmanConfig {
      *  differently on the one run someone forgets to pass `--changelog`. An explicit `--changelog`/
      *  `--no-changelog` on the command line still wins either way. Root-level only. Default `false`. */
     changelog?: boolean;
+    /** Tag naming the repository's own release, as opposed to the per-package/group tags
+     *  `changelog.tagPattern` names - only created when the root is on a calendar version (a repo
+     *  with more than one version line). Root-level only. Default `"release-*"`. Must **not** match
+     *  any package's own `changelog.tagPattern`, or that package's changelog boundary will resolve
+     *  to the repository release instead of its own last release. */
+    releaseTagPattern?: string;
     script?: string | string[];
     preScript?: string | string[];
     postScript?: string | string[];

@@ -112,11 +112,9 @@ export function initCli(repository: Repository, program: Argv) {
         ignoreDirty,
         namespace: args.dockerNamespace as string | undefined,
       };
-      const githubOptions = {
-        ...readPackageFilterOptions(args),
-        ignoreDirty,
-        repository: args.githubRepository as string | undefined,
-      };
+      // No package filtering: a GitHub Release belongs to the repository, not to a package, so
+      // there is nothing for --scope/--ignore to narrow down.
+      const githubOptions = { ignoreDirty, repository: args.githubRepository as string | undefined };
 
       const npmPlan = targets.has('npm') ? await PublishService.getPlan(repository, npmOptions) : [];
       const dockerPlan = targets.has('docker') ? await DockerPublishService.getPlan(repository, dockerOptions) : [];
@@ -149,7 +147,7 @@ export function initCli(repository: Repository, program: Argv) {
       }
 
       if (explicitGithubTarget && !githubPlan.length) {
-        const message = '--target github was given, but no package\'s .rmanrc opts into the "github" target.';
+        const message = '--target github was given, but nothing in .rmanrc opts into the "github" target.';
         console.log(colors.red(message));
         const err: any = new Error(message);
         err.logged = true;
@@ -226,7 +224,7 @@ export function initCli(repository: Repository, program: Argv) {
       }
       for (const entry of appliedGithub) {
         if (entry.status === 'publish') {
-          console.log(colors.green('released'), colors.gray('[github]'), colors.cyan(entry.package.name), entry.tag);
+          console.log(colors.green('released'), colors.gray('[github]'), colors.cyan(entry.tag ?? ''));
         } else if (
           entry.status === 'error' &&
           githubPlan.find(e => e.package === entry.package)?.status === 'publish'

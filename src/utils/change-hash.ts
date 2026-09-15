@@ -31,9 +31,16 @@ export async function findLatestTag(git: GitHelper, pkg: Package): Promise<strin
  *  --target github` (finding the release that tag belongs to), and `detectChangeHash`'s own npm
  *  fallback (mapping a published version back onto a tag), so all three name tags identically. */
 export function expandTag(pkg: Package, version: string): string {
-  const pattern = tagPattern(pkg).replace('{name}', pkg.name);
-  const starIdx = pattern.indexOf('*');
-  return starIdx === -1 ? pattern : pattern.slice(0, starIdx) + version + pattern.slice(starIdx + 1);
+  return applyTagPattern(tagPattern(pkg), pkg.name, version);
+}
+
+/** The pattern expansion `expandTag` performs, on any pattern - `{name}` becomes `name`, `*` becomes
+ *  `version`. Shared with the repository's own release tag, which uses a different pattern (see
+ *  `releaseTagPattern`) but names tags the same way. */
+export function applyTagPattern(pattern: string, name: string, version: string): string {
+  const expanded = pattern.replace('{name}', name);
+  const starIdx = expanded.indexOf('*');
+  return starIdx === -1 ? expanded : expanded.slice(0, starIdx) + version + expanded.slice(starIdx + 1);
 }
 
 /** Strips the pattern's literal prefix (everything before its first `*`) from `tag` to get just
