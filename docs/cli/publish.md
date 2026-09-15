@@ -41,6 +41,7 @@ options, in addition to:
 | --- | --- | --- | --- | --- |
 | `--yes` | `-y` | boolean | - | Skip the confirmation prompt and publish immediately. |
 | `--dry-run` | - | boolean | - | Only show the plan - never publishes, regardless of `--yes`. |
+| `--json` | `-j` | boolean | - | Print the plan as JSON (one row per package **and** target: `name`, `target`, `status`, `version`, `reason`) instead of text. |
 | `--target <name>` | - | array | `npm`, `docker`, `github` | Restrict this run to just these target(s) (repeatable). Default: whatever each package is configured for. `--target docker` on a package that opts in without a `publish.docker` config errors clearly instead of being silently skipped. |
 | `--ignore-dirty` | - | boolean | - | Exclude a package with uncommitted local changes instead of aborting the whole run. |
 | `--package-manager <name>` | - | string | `npm`, `yarn`, `pnpm`, `bun` | Package manager to publish with. Default: `npm`, or `.rmanrc "packageManager"`. |
@@ -84,6 +85,19 @@ Any dirty package aborts the whole plan (`N package(s) have uncommitted local ch
 `getPlan` is decoupled from [`version`](version.md) - it only ever compares the current
 `package.json` version against the registry (via `npm view`, queried concurrently), so it works
 equally well right after a version bump or standing alone days later.
+
+### Asking "is there anything to release?" in CI
+
+`--dry-run --json` answers exactly that, without publishing anything:
+
+```bash
+rman publish --dry-run --json | jq '[.[] | select(.status == "publish")] | length'
+```
+
+This is the right gate for a release pipeline - not [`rman changed`](changed.md), which answers the
+*other* question ("does anything need a new version number?") and correctly reports nothing when a
+version was bumped in an earlier run, or bumped locally and merged in, or when a previous publish
+failed after the tag was already pushed.
 
 ## `"workspace:"` protocol at publish time
 

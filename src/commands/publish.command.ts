@@ -31,6 +31,13 @@ export function initCli(repository: Repository, program: Argv) {
           describe: 'Only show the plan - never publishes, regardless of --yes',
           type: 'boolean',
         })
+        .option('json', {
+          alias: 'j',
+          describe:
+            'Print the plan as JSON instead of text - one entry per package and target. Combine with ' +
+            '--dry-run to ask "is there anything to publish?" without publishing (e.g. a CI release gate).',
+          type: 'boolean',
+        })
         .option('target', {
           describe:
             'Restrict this run to just these publish target(s) ("npm"/"docker"/"github", repeatable) - default: ' +
@@ -115,9 +122,23 @@ export function initCli(repository: Repository, program: Argv) {
       const dockerPlan = targets.has('docker') ? await DockerPublishService.getPlan(repository, dockerOptions) : [];
       const githubPlan = targets.has('github') ? await GithubReleaseService.getPlan(repository, githubOptions) : [];
 
-      printPlan(npmPlan);
-      printPlan(dockerPlan, 'docker');
-      printPlan(githubPlan, 'github');
+      if (args.json) {
+        console.log(
+          JSON.stringify(
+            [
+              ...npmPlan.map(e => jsonEntry(e, 'npm')),
+              ...dockerPlan.map(e => jsonEntry(e, 'docker')),
+              ...githubPlan.map(e => jsonEntry(e, 'github')),
+            ],
+            undefined,
+            2,
+          ),
+        );
+      } else {
+        printPlan(npmPlan);
+        printPlan(dockerPlan, 'docker');
+        printPlan(githubPlan, 'github');
+      }
 
       if (explicitDockerTarget && !dockerPlan.length) {
         const message = '--target docker was given, but no package\'s .rmanrc configures "publish.docker".';
@@ -149,7 +170,7 @@ export function initCli(repository: Repository, program: Argv) {
       }
 
       if (![...npmPlan, ...dockerPlan, ...githubPlan].some(e => e.status === 'publish')) {
-        console.log(colors.gray('Nothing to publish.'));
+        if (!args.json) console.log(colors.gray('Nothing to publish.'));
         return;
       }
 
@@ -240,6 +261,18 @@ interface PrintableEntry {
   version: string;
   status: 'publish' | 'skip' | 'up-to-date' | 'error';
   reason?: string;
+}
+
+/** One `--json` row. `target` is what distinguishes otherwise-identical rows for a package that
+ *  ships to several targets at once, so a consumer can tell which one still needs publishing. */
+function jsonEntry(entry: PrintableEntry, target: RmanConfig.PublishTarget) {
+  return {
+    name: entry.package.name,
+    target,
+    status: entry.status,
+    version: entry.version,
+    reason: entry.reason,
+  };
 }
 
 function printPlan(entries: PrintableEntry[], label?: string): void {
