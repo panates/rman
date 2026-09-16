@@ -827,6 +827,41 @@ describe('services/version', () => {
       expect(git(dir, 'status', '--porcelain')).toBe('');
     });
 
+    it('binds ${{ pkg.targetVersion }} in a version hook, and only there', async () => {
+      // The version being written does not exist until the plan is computed, long after the config
+      // was resolved - so these three paths are left raw at load and evaluated here.
+      const { dir } = fixtureWithOrigin();
+      const marker = path.join(dir, 'hook.txt');
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        rman: {
+          version: {
+            after: `node -e "require('fs').writeFileSync('${marker.replace(/\\/g, '/')}', 'app:\${{ pkg.targetVersion }} was \${{ pkg.version }}')"`,
+          },
+        },
+      });
+      commitAll(dir, 'chore: add a hook');
+
+      const repo = await Repository.create(dir);
+      await VersionService.applyPlan(repo, await VersionService.getPlan(repo));
+      expect(fs.readFileSync(marker, 'utf-8')).toBe('app:1.1.0 was 1.0.0');
+    });
+
+    it('a config that names it outside a version hook fails to load at all', async () => {
+      // Loudly, rather than evaluating to "undefined" and producing an `app:undefined` that looks
+      // plausible - no other command has a target version to name.
+      const { dir } = fixtureWithOrigin();
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        rman: { run: { deploy: 'echo ${{ pkg.targetVersion }}' } },
+      });
+      commitAll(dir, 'chore: misplace it');
+
+      await expect(Repository.create(dir)).rejects.toThrow(/targetVersion is only available while "version"/);
+    });
+
     it('a package with no Dockerfile at all is unaffected', async () => {
       const { dir } = fixtureWithOrigin();
       const repo = await Repository.create(dir);

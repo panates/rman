@@ -4,11 +4,20 @@ import fs from 'fs';
 import path from 'path';
 import semver from 'semver';
 import { GitHelper } from '../utils/git.js';
-import { type GitScope, interpolateConfig, type PackageScope, type RepositoryScope, resolveConfig } from './config.js';
+import {
+  type ConfigScope,
+  DEFERRED_PATHS,
+  type GitScope,
+  interpolateConfig,
+  type PackageScope,
+  type RepositoryScope,
+  resolveConfig,
+} from './config.js';
 import { Package } from './package.js';
 
 export class Repository extends Package {
   readonly rootPackage: Package;
+  private _repoScope?: RepositoryScope;
 
   protected constructor(
     readonly dirname: string,
@@ -98,44 +107,92 @@ export class Repository extends Package {
    */
   protected async _resolveConfigs(): Promise<void> {
     const cache = new Map<string, any>();
-    const repoDir = this.dirname;
-    const scopeOf = (pkg: Package): PackageScope => {
-      // A package.json without a "name" is unusual but legal, and `info` prints such a package
-      // rather than refusing it - so the scope has to survive one too.
-      const name = pkg.name ?? '';
-      const at = name.lastIndexOf('/');
-      return {
-        name,
-        scope: at > 0 ? name.slice(0, at) : undefined,
-        unscopedName: at > 0 ? name.slice(at + 1) : name,
-        version: pkg.version ?? '',
-        basename: path.basename(pkg.dirname),
-        dirname: pkg.dirname,
-        relativeDir: path.relative(this.dirname, pkg.dirname),
-        // A copy: an expression has no business mutating the package rman is about to act on.
-        json: { ...pkg.json },
-      };
+    this.rawConfig = await resolveConfig(this.dirname, this.dirname, cache);
+    this.config = interpolateConfig(this.rawConfig, this.configScope(this.rootPackage), { skip: DEFERRED_PATHS });
+    for (const pkg of this.packages) {
+      pkg.rawConfig = await resolveConfig(this.dirname, pkg.dirname, cache, pkg.name);
+      pkg.config = interpolateConfig(pkg.rawConfig, this.configScope(pkg), { skip: DEFERRED_PATHS });
+    }
+    if (this.monorepo) {
+      this.rootPackage.rawConfig = this.rawConfig;
+      this.rootPackage.config = this.config;
+    }
+  }
+
+  /**
+   * The scope a `${{ ... }}` expression is evaluated against for `pkg`, optionally with the version
+   * a run is about to write bound into it.
+   *
+   * `version` is the only caller that passes one, and it has to: the config was resolved before its
+   * plan existed, so `pkg.targetVersion` had nothing to be. Re-evaluating `pkg.rawConfig` against
+   * this is how that one binding gets filled in, without every other command paying for it - or
+   * seeing a value that means nothing to them.
+   */
+  configScope(pkg: Package, options?: { targetVersion?: string }): ConfigScope {
+    return {
+      pkg: this._packageScope(pkg, options?.targetVersion),
+      repository: this._repositoryScope(),
+      env: { ...process.env },
+      semver,
     };
-    const packageScopes = this.packages.map(scopeOf);
+  }
+
+  protected _packageScope(pkg: Package, targetVersion?: string): PackageScope {
+    // A package.json without a "name" is unusual but legal, and `info` prints such a package
+    // rather than refusing it - so the scope has to survive one too.
+    const name = pkg.name ?? '';
+    const at = name.lastIndexOf('/');
+    const scope = {
+      name,
+      scope: at > 0 ? name.slice(0, at) : undefined,
+      unscopedName: at > 0 ? name.slice(at + 1) : name,
+      version: pkg.version ?? '',
+      basename: path.basename(pkg.dirname),
+      dirname: pkg.dirname,
+      relativeDir: path.relative(this.dirname, pkg.dirname),
+      // A copy: an expression has no business mutating the package rman is about to act on.
+      json: { ...pkg.json },
+    } as PackageScope;
+
+    if (targetVersion !== undefined) {
+      scope.targetVersion = targetVersion;
+      return scope;
+    }
+    /** Otherwise a getter that *throws*, rather than a missing key handing back `undefined` and
+     *  letting a tag come out as "app:undefined". Defined rather than assigned because there is no
+     *  value to assign - outside a `version` run there is no target version to name.
+     *
+     *  Non-enumerable, and that is load-bearing: spreading an object runs its enumerable getters,
+     *  so an enumerable one threw the moment `_repositoryScope` spread the root's scope - which is
+     *  every `configScope()` call, for every command. Property access still triggers it, which is
+     *  the only thing it exists for. */
+    Object.defineProperty(scope, 'targetVersion', {
+      enumerable: false,
+      get(): never {
+        throw new Error(
+          'pkg.targetVersion is only available while "version" is running - no other command has a target version',
+        );
+      },
+    });
+    return scope;
+  }
+
+  /** Built once and reused: it is the same for every package, and its `git` getter caches too, so a
+   *  repository whose config never mentions git spawns none. */
+  protected _repositoryScope(): RepositoryScope {
+    if (this._repoScope) return this._repoScope;
+    const packageScopes = this.packages.map(p => this._packageScope(p));
+    const repoDir = this.dirname;
     let gitScope: GitScope | undefined;
-    const repository: RepositoryScope = {
-      ...scopeOf(this.rootPackage),
+    return (this._repoScope = {
+      ...this._packageScope(this.rootPackage),
       monorepo: this.monorepo,
       packages: packageScopes,
       package: (name: string) => packageScopes.find(p => p.name === name),
-      // A getter, so a repository whose config never mentions git spawns no git at all - and every
-      // command resolves config, not just the ones that care.
       get git(): GitScope {
         return (gitScope ??= readGitScope(repoDir));
       },
-    };
-    const withVars = (pkg: Package, config: any) =>
-      interpolateConfig(config, { pkg: scopeOf(pkg), repository, env: { ...process.env }, semver });
-    this.config = withVars(this.rootPackage, await resolveConfig(this.dirname, this.dirname, cache));
-    for (const pkg of this.packages) {
-      pkg.config = withVars(pkg, await resolveConfig(this.dirname, pkg.dirname, cache, pkg.name));
-    }
-    if (this.monorepo) this.rootPackage.config = this.config;
+    });
   }
 
   protected _updateDependencies() {

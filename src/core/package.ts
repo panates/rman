@@ -5,8 +5,14 @@ import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 export class Package {
   private _json: any;
   dependencies: string[] = [];
-  /** Effective rman config for this package, cascaded from the repository root. */
+  /** Effective rman config for this package, cascaded from the repository root, with every
+   *  `${{ ... }}` expression already evaluated. */
   config: RmanConfig = {};
+  /** The same config before those expressions ran - kept so a command that learns something new
+   *  about the package mid-run can evaluate them again against it. Only `version` does: the version
+   *  it is about to write (`pkg.targetVersion`) does not exist until its plan is computed, so the
+   *  config was resolved without it - see `Repository.configScope`. */
+  rawConfig: RmanConfig = {};
 
   constructor(readonly dirname: string) {
     this.reloadJson();

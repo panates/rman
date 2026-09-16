@@ -174,6 +174,24 @@ leaves the checked-in file claiming a placeholder: anything running from source 
 dev loop) reports that placeholder, the tagged commit never records the released version, and the
 rewrite has to be redone on every build.
 
+## Hooks, and the version being written
+
+`.rmanrc "version"`'s `before`/`exec`/`after` run around the bump as this package's
+`preversion`/`version`/`postversion` (a real npm script of that name in `package.json` still wins).
+They are the one place [`${{ pkg.targetVersion }}`](../api.md#expressions--) means anything:
+
+```yaml
+"[*]":
+  version:
+    after: "docker tag app:latest app:${{ pkg.targetVersion }}"
+```
+
+The version doesn't exist until `version` has computed its plan - long after the config was
+resolved - so these three keys are left unevaluated at load and evaluated here, with it bound.
+Naming `pkg.targetVersion` in any other key fails when the repository loads, which is deliberate:
+no other command has a target version, and evaluating it to `undefined` would quietly produce an
+`app:undefined`.
+
 ## Severity auto-detection
 
 With no explicit `bump`, each package's severity comes from its own commits since its last release -

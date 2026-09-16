@@ -69,6 +69,14 @@ repo-wide bookend run once at the repository root. One declaration feeding both 
   - `vm.createContext` here is a clean scope, **not a sandbox** (`node:vm` is explicitly not a
     security mechanism). None is needed: `exec: "..."` already runs arbitrary shell, so the config
     was never a trust boundary. Don't reach for `isolated-vm`.
+  - **`pkg.targetVersion` is bound only inside `version.before`/`.exec`/`.after`.** The version a
+    run writes doesn't exist until `version`'s plan is computed, so those three paths are listed in
+    `DEFERRED_PATHS` and left *unevaluated* when the repository loads - `version` evaluates them
+    itself from `pkg.rawConfig` with it bound. Naming it elsewhere fails at load, on purpose.
+    - **Trap: the unbound binding is a non-enumerable throwing getter, and both words matter.**
+      Enumerable, it fired on the `{...}` spread inside `_repositoryScope` - so *every* command
+      died building its scope (measured). Not a getter at all, it would hand back `undefined` and
+      put an `app:undefined` somewhere plausible.
   - A failing expression throws with the config path holding it. Never pass a mistake through. A
     nullish result is allowed standing alone ("unset") but refused **inside a string**: splicing in
     the word `undefined` yields an `app:undefined` that looks plausible and is wrong.

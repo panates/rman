@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import semver from 'semver';
+import { type ConfigScope, interpolateConfig } from '../core/config.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import { detectChangeHash, expandTag } from '../utils/change-hash.js';
@@ -221,7 +222,10 @@ export namespace VersionService {
 
     for (const entry of bumped) {
       const pkg = entry.package;
-      await runVersionScript(pkg, 'before', 'preversion');
+      /** The scope these hooks are evaluated against - the only place `${{ pkg.targetVersion }}`
+       *  can mean anything, and the reason `DEFERRED_PATHS` left them raw until now. */
+      const scope = repository.configScope(pkg, { targetVersion: entry.to! });
+      await runVersionScript(pkg, 'before', 'preversion', scope);
       pkg.json.version = entry.to;
       for (const depKey of DEPENDENCY_KEYS) {
         const deps = pkg.json[depKey];
@@ -240,7 +244,7 @@ export namespace VersionService {
           deps[depName] = '^' + depEntry.to;
         }
       }
-      await runVersionScript(pkg, 'exec', 'version');
+      await runVersionScript(pkg, 'exec', 'version', scope);
       pkg.writeJson();
       // Before `postversion`, so a script that reacts to the bump sees the whole new state.
       const stamped = [stampDockerfile(pkg, entry.to!), ...stampSourceFiles(pkg, entry.to!)].filter(
@@ -252,7 +256,7 @@ export namespace VersionService {
           stamped.map(f => path.relative(repository.dirname, f)),
         );
       }
-      await runVersionScript(pkg, 'after', 'postversion');
+      await runVersionScript(pkg, 'after', 'postversion', scope);
     }
 
     const rootEntry = repository.monorepo ? plan.find(e => e.package === repository.rootPackage) : undefined;
@@ -604,9 +608,14 @@ async function runVersionScript(
   pkg: Package,
   cfgKey: 'before' | 'exec' | 'after',
   npmScriptName: 'preversion' | 'version' | 'postversion',
+  scope: ConfigScope,
 ): Promise<void> {
   const own = pkg.json.scripts?.[npmScriptName];
-  const command = typeof own === 'string' && own ? own : normalizeScriptValue(pkg.config?.version?.[cfgKey]);
+  /** Read from `rawConfig` and evaluated here: these three paths are in `DEFERRED_PATHS`, left
+   *  alone when the repository loaded because `pkg.targetVersion` did not exist yet. `scope` has it
+   *  bound, so a hook can name the version about to be written. */
+  const configured = interpolateConfig(pkg.rawConfig?.version?.[cfgKey], scope);
+  const command = typeof own === 'string' && own ? own : normalizeScriptValue(configured);
   if (command) await exec(command, { cwd: pkg.dirname, stdio: 'inherit' });
 }
 

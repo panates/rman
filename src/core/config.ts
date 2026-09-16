@@ -218,6 +218,14 @@ export interface PackageScope {
   /** The whole `package.json`, as a copy - so an expression can reach a field rman itself has no
    *  opinion about (`pkg.json.engines.node`). */
   json: Record<string, unknown>;
+  /**
+   * The version this run is about to write - **bound only during `version`**, and only once its
+   * plan is computed. Reading it anywhere else throws rather than yielding `undefined`: no other
+   * command has a target version, so an expression asking for one has been put in the wrong place,
+   * and a config that quietly evaluates to "undefined" is the failure this evaluator exists to
+   * prevent.
+   */
+  targetVersion: string;
 }
 
 /** Facts about the repository, on top of the root package's own - because the repository root *is*
@@ -295,19 +303,33 @@ export interface ConfigScope {
  * A failing expression throws with the config path that holds it, rather than being left in place:
  * silently passing through a mistake is how a config ends up quietly doing nothing.
  */
-export function interpolateConfig<T>(config: T, scope: ConfigScope): T {
+export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: { skip?: string[] }): T {
   const context = vm.createContext({ ...scope });
-  return walk(config, scope, context, []);
+  return walk(config, scope, context, [], options?.skip ?? []);
 }
+
+/**
+ * Config paths left untouched when a repository's config is first resolved, and evaluated only by
+ * the command that runs them.
+ *
+ * `version`'s own hooks are the one place `${{ pkg.targetVersion }}` makes sense, and the version
+ * being written is not known until `version` has computed its plan - long after the config was
+ * resolved. Evaluating these eagerly would throw while merely *loading* the repository, so any
+ * command at all would fail on a config that mentions it.
+ */
+export const DEFERRED_PATHS = ['version.before', 'version.exec', 'version.after'];
 
 const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
 
-function walk(value: unknown, scope: ConfigScope, context: vm.Context, at: (string | number)[]): any {
+function walk(value: unknown, scope: ConfigScope, context: vm.Context, at: (string | number)[], skip: string[]): any {
+  /** Compared on the key path rather than the value, so a deferred key's whole subtree - a single
+   *  command or an array of them - is handed on untouched. */
+  if (at.length && skip.includes(at.filter(p => typeof p === 'string').join('.'))) return value;
   if (typeof value === 'string') return interpolateString(value, context, at);
-  if (Array.isArray(value)) return value.map((item, i) => walk(item, scope, context, [...at, i]));
+  if (Array.isArray(value)) return value.map((item, i) => walk(item, scope, context, [...at, i], skip));
   if (value && typeof value === 'object') {
     const result: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) result[key] = walk(item, scope, context, [...at, key]);
+    for (const [key, item] of Object.entries(value)) result[key] = walk(item, scope, context, [...at, key], skip);
     return result;
   }
   return value;

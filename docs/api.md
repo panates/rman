@@ -293,6 +293,7 @@ substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
 | `.basename` | its directory's last segment - **not** the same as `name`: sqb's root is named `sqb.v4` in a directory called `sqb` |
 | `.dirname` / `.relativeDir` | absolute path / path from the repository root (`packages/builder`) |
 | `.json` | the whole `package.json`, as a copy (`pkg.json.engines.node`) |
+| `pkg.targetVersion` | the version this run is about to write - **only inside a `version.before`/`.exec`/`.after` hook**; anywhere else, reading it throws |
 
 `repository` adds:
 
@@ -321,6 +322,12 @@ substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
   already wide open.
 - A failing expression throws, naming the config path that holds it (`run.build.after[1]`) -
   passing a mistake through silently is how a config ends up quietly doing nothing.
+- **`pkg.targetVersion`** is the one binding that isn't available everywhere. The version a run is
+  about to write doesn't exist until `version` has computed its plan, long after the config was
+  resolved - so `version.before`/`.exec`/`.after` are left *unevaluated* at load and evaluated by
+  `version` itself, with it bound (`DEFERRED_PATHS`). That is also why naming it anywhere else
+  fails when the repository loads: no other command has a target version, and letting it evaluate
+  to `undefined` would put an `app:undefined` somewhere it looks plausible.
 - Unrelated to this: a **changelog template file's** `{{package}}`/`{{version}}` placeholders are
   that file's own content, not config values, and are never touched here.
 
