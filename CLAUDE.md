@@ -292,6 +292,32 @@ its own commit and tag, so whichever group was committed last owns HEAD (measure
 on HEAD with `v1.3.0` one commit behind). Read a release tag with `git describe --match <pattern>`,
 never by what happens to sit on HEAD.
 
+## A repository's own commands (`.rman/*.mjs`)
+
+[`src/core/custom-command.ts`](src/core/custom-command.ts). A module there becomes `rman <its file
+name>`, built with `defineCommand` (the `defineConfig` pattern again). `handler(context, args)` -
+`context` is an **object** (`repository`, `package`) precisely so later additions don't break
+commands already written against it; `context.package` is `Repository.currentPackage`, so
+`undefined` at the root.
+
+- **Scope boundary, and state it when documenting either side:** `.rman/*.mjs` is for *one*
+  repository-level operation with logic of its own; a shell step across every package is
+  `run.<script>`, which already owns the scheduling, topological order, `bail` and progress panel.
+  A loop over packages written inside a command module reimplements all of that and loses it.
+- **A broken module warns and is skipped; a name clash throws.** Not an inconsistency: a module
+  that fails to load affects only itself, while `rman publish` resolving to two different things
+  has no safe guess. Both name the file and the reason.
+- `BUILT_IN_COMMANDS` in [`src/cli.ts`](src/cli.ts) is hand-maintained (yargs exposes no such list)
+  and pinned by a test against the `command:` strings in `src/commands/*.command.ts` - so adding a
+  command can't quietly leave a repository's own able to shadow it.
+- No `.rman` directory means no scan and no imports. Every `rman` invocation runs this, `info`
+  included, so that has to stay true.
+
+**Trap: a setup failure used to exit 0.** `runCli`'s top-level catch printed the message and
+swallowed it, so `rman info` in a directory with no `package.json` reported failure on stdout and
+success to the shell (measured, and true of the published 1.0.10 too). It rethrows now, and the
+entry point exits 1. Any new throw path before `parseAsync` inherits that - keep it that way.
+
 ## API docs baseline (docs/api.md, docs/api/*.md)
 
 `docs/api.md` starts with an HTML comment block (`docs-baseline`) recording the git commit,

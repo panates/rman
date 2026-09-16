@@ -77,7 +77,10 @@ describe('commands/run', () => {
 
   it('requires the <script> positional - "run" alone is rejected', async () => {
     const dir = fixture({ 'pkg-a': { build: quiet('echo hi') } });
-    const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['run'] }));
+    // Bad argv prints the reason *and* fails - it used to print and resolve, so a shell saw 0.
+    const lines = await captureLogs(async () => {
+      await expect(runCli({ cwd: dir, argv: ['run'] })).rejects.toThrow(/Not enough non-option arguments/);
+    });
     expect(lines.some(l => l.includes('Not enough non-option arguments'))).toBe(true);
   });
 

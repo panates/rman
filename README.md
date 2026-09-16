@@ -318,6 +318,32 @@ rman import ../my-old-standalone-repo --dest libs   # under libs/ instead of pac
 already. After importing, add the new directory to your `workspaces` glob if it isn't already
 covered, then run `rman ci` to install it.
 
+## Your own commands
+
+A module in `.rman/` at the repository root becomes an `rman` command:
+
+```js
+// .rman/deploy.mjs
+import { defineCommand, PublishService } from 'rman';
+
+export default defineCommand({
+  describe: 'Ships what was just published to the staging cluster',
+  builder: y => y.option('stage', { choices: ['dev', 'prod'], demandOption: true }),
+  async handler({ repository }, args) {
+    const plan = await PublishService.getPlan(repository);
+    console.log(plan.filter(e => e.status === 'publish').length, '->', args.stage);
+  },
+});
+```
+
+```bash
+rman deploy --stage prod
+```
+
+It gets its own `--help` entry, its own options, and the `Repository` handed to it. For a shell step
+across every package, reach for `.rmanrc "run.<script>"` instead - see
+[docs/cli/custom-commands.md](docs/cli/custom-commands.md) for where the line falls.
+
 ## Configuration
 
 `rman` reads config cascaded from the repository root down to each package's own directory (the

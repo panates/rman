@@ -45,6 +45,7 @@ rman <command> --help   # full option list for that one command
 | `version [bump]` | [`docs/cli/version.md`](cli/version.md) | Bumps versions of changed packages (and their dependents). |
 | `publish` | [`docs/cli/publish.md`](cli/publish.md) | Publishes every package to its configured registry - npm and/or Docker. |
 | `github-release` | [`docs/cli/github-release.md`](cli/github-release.md) | Creates the repository's GitHub Release for the version that just shipped. |
+| *(your own)* | [`docs/cli/custom-commands.md`](cli/custom-commands.md) | A module in `.rman/` becomes an `rman` command of its own. |
 | `import <path>` | [`docs/cli/import.md`](cli/import.md) | Imports an external git repository as a new package, with history. |
 
 ## Global options

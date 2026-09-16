@@ -116,7 +116,9 @@ describe('commands/list', () => {
   describe('option conflicts', () => {
     it('rejects --graph combined with --json instead of silently picking one', async () => {
       const dir = monorepoFixture();
-      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['list', '--graph', '--json'] }));
+      const lines = await captureLogs(async () => {
+        await expect(runCli({ cwd: dir, argv: ['list', '--graph', '--json'] })).rejects.toThrow(/mutually exclusive/);
+      });
       expect(lines.some(l => l.includes('graph') && l.includes('json') && l.includes('mutually exclusive'))).toBe(true);
       // neither output mode's own rendering ran once the conflict was caught.
       expect(lines.some(l => l.trim().startsWith('{'))).toBe(false);

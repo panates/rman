@@ -9,6 +9,8 @@
  * `cli.ts` and the individual `commands/*.command.ts` modules, which are not exported here.
  */
 export { defineConfig } from './core/config.js';
+export type { CommandContext, CustomCommand } from './core/custom-command.js';
+export { defineCommand } from './core/custom-command.js';
 export { Package } from './core/package.js';
 export { Repository } from './core/repository.js';
 export * from './interfaces/rman-config.interface.js';

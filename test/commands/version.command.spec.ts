@@ -142,7 +142,13 @@ describe('commands/version', () => {
 
     it('rejects being combined with --interactive', async () => {
       const dir = fixture();
-      await withStubbedExit(() => captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--show', '-i'] })));
+      await withStubbedExit(() =>
+        captureLogs(async () => {
+          await expect(runCli({ cwd: dir, argv: ['version', 'patch', '--show', '-i'] })).rejects.toThrow(
+            /mutually exclusive/,
+          );
+        }),
+      );
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
       expect(pkg.version).toBe('1.0.0'); // never got far enough to apply anything
     });
@@ -161,7 +167,11 @@ describe('commands/version', () => {
 
     it('rejects being combined with --interactive', async () => {
       const dir = fixture();
-      await withStubbedExit(() => captureLogs(() => runCli({ cwd: dir, argv: ['version', '--yes', '-i'] })));
+      await withStubbedExit(() =>
+        captureLogs(async () => {
+          await expect(runCli({ cwd: dir, argv: ['version', '--yes', '-i'] })).rejects.toThrow(/mutually exclusive/);
+        }),
+      );
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
       expect(pkg.version).toBe('1.0.0'); // never got far enough to apply anything
     });

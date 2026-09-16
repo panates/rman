@@ -129,7 +129,9 @@ describe('commands/ci', () => {
 
   it('rejects a --package-manager outside the known choices before ever touching the filesystem', async () => {
     const dir = fixtureNoRootScript();
-    const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['ci', '--package-manager', 'rush'] }));
+    const lines = await captureLogs(async () => {
+      await expect(runCli({ cwd: dir, argv: ['ci', '--package-manager', 'rush'] })).rejects.toThrow(/package-manager/);
+    });
     expect(lines.some(l => l.includes('package-manager'))).toBe(true);
     // validation failed before the handler ran at all - nothing was touched.
     expect(fs.existsSync(path.join(dir, 'node_modules'))).toBe(true);

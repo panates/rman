@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { realpathSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import colors from 'ansi-colors';
 import yargs from 'yargs';
@@ -20,6 +21,7 @@ import * as runCommand from './commands/run.command.js';
 import * as testCommand from './commands/test.command.js';
 import * as versionCommand from './commands/version.command.js';
 import { version } from './constants.js';
+import { assertNoBuiltinShadowing, type CommandContext, loadCustomCommands } from './core/custom-command.js';
 import { Repository } from './core/repository.js';
 import { LOG_LEVELS } from './utils/logger.js';
 
@@ -50,7 +52,14 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
               ? err.message
               : '';
           console.log('\n' + colors.red(text));
-          throw msg;
+          /** A real `Error`, marked `logged` since the text above just went out: yargs hands the
+           *  reason over as a bare string, and rethrowing that raw made bad argv indistinguishable
+           *  from success to anything holding the promise - or the shell. */
+          const failure: any = new Error(
+            typeof msg === 'string' && msg ? msg : typeof err?.message === 'string' ? err.message : 'invalid arguments',
+          );
+          failure.logged = true;
+          throw failure;
         } else process.exit(1);
       });
 
@@ -70,12 +79,40 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     diffCommand.initCli(repository, program);
     importCommand.initCli(repository, program);
 
+    /** A repository's own commands, from `.rman/*.mjs` - registered after the built-ins so the
+     *  clash check below has the full list to compare against. */
+    const { commands, errors } = await loadCustomCommands(repository.dirname);
+    assertNoBuiltinShadowing(commands, BUILT_IN_COMMANDS);
+    for (const custom of commands) {
+      program.command({
+        command: custom.command!,
+        describe: custom.describe,
+        builder: custom.builder ?? (y => y),
+        handler: args => {
+          const context: CommandContext = { repository, package: repository.currentPackage };
+          return custom.handler(context, args);
+        },
+      });
+    }
+    /** Warned about, not thrown: one unparseable file must not take the other commands with it.
+     *  Loud enough not to be mistaken for success, and it names the file and the reason - "my
+     *  command isn't there" is otherwise a long afternoon. */
+    for (const { file, reason } of errors) {
+      console.error(colors.yellow(`Skipped "${path.relative(process.cwd(), file)}": ${reason}`));
+    }
+
     program.demandCommand(1).strict().recommendCommands().completion();
 
     if (!_argv.length) program.showHelp();
     else await program.parseAsync().catch(() => process.exit(1));
   } catch (e: any) {
-    console.error(colors.red(e.message));
+    /** Setup failures - no `package.json` to be found, a `.rman` command shadowing a built-in -
+     *  used to be printed and then swallowed, so the shell saw success: `rman info` in the wrong
+     *  directory reported failure on stdout and 0 to whatever called it. Printed once (unless the
+     *  thrower already did, per the `logged` convention) and rethrown, so the exit code agrees
+     *  with the message. */
+    if (!e?.logged) console.error(colors.red(e.message));
+    throw e;
   }
 }
 
@@ -87,4 +124,27 @@ function isMain(): boolean {
   }
 }
 
-if (isMain()) runCli().catch(() => 0);
+if (isMain()) runCli().catch(() => process.exit(1));
+
+/** Every name a built-in command answers to - what a `.rman/*.mjs` command may not take. Kept here
+ *  rather than read back out of yargs (which exposes no such list) and pinned by a test against the
+ *  `command:` strings in `src/commands/*.command.ts`, so adding a command can't quietly leave a
+ *  repository's own able to shadow it. */
+const BUILT_IN_COMMANDS = [
+  'build',
+  'changed',
+  'changelog',
+  'ci',
+  'clean',
+  'completion',
+  'diff',
+  'exec',
+  'github-release',
+  'import',
+  'info',
+  'list',
+  'publish',
+  'run',
+  'test',
+  'version',
+] as const;
