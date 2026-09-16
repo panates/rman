@@ -2,11 +2,11 @@ import fs from 'fs';
 import * as yaml from 'js-yaml';
 import { createRequire } from 'module';
 import path from 'path';
-import merge from 'putil-merge';
 import semver from 'semver';
 import { pathToFileURL } from 'url';
 import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
+import { finalizeConfig, mergeConfig } from './merge-config.js';
 
 /**
  * Identity helper for authoring a `.rmanrc.cjs`/`.mjs`/`.js` config with full type-checking and
@@ -66,26 +66,26 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
   const pkgJsonFile = path.join(dirname, 'package.json');
   if (fs.existsSync(pkgJsonFile)) {
     const pkgJson = JSON.parse(fs.readFileSync(pkgJsonFile, 'utf-8'));
-    if (pkgJson && typeof pkgJson.rman === 'object') merge(result, pkgJson.rman, { deep: true });
+    if (pkgJson && typeof pkgJson.rman === 'object') mergeConfig(result, pkgJson.rman);
   }
 
   const ymlFile = path.join(dirname, '.rmanrc.yml');
   if (fs.existsSync(ymlFile)) {
     const obj = yaml.load(fs.readFileSync(ymlFile, 'utf-8'));
-    if (obj && typeof obj === 'object') merge(result, obj, { deep: true });
+    if (obj && typeof obj === 'object') mergeConfig(result, obj as Record<string, any>);
   }
 
   const rcFile = path.join(dirname, '.rmanrc');
   if (fs.existsSync(rcFile)) {
     const obj = JSON.parse(fs.readFileSync(rcFile, 'utf-8'));
-    if (obj && typeof obj === 'object') merge(result, obj, { deep: true });
+    if (obj && typeof obj === 'object') mergeConfig(result, obj);
   }
 
   for (const jsFileName of JS_CONFIG_FILES) {
     const jsFile = path.join(dirname, jsFileName);
     if (fs.existsSync(jsFile)) {
       const obj = await loadJsConfig(jsFile);
-      if (obj && typeof obj === 'object') merge(result, obj, { deep: true });
+      if (obj && typeof obj === 'object') mergeConfig(result, obj);
     }
   }
 
@@ -133,16 +133,19 @@ export async function resolveConfig(
     // Selectors first, so a directory's own unmarked config still wins over a selector declared
     // alongside it - "this package" is a more specific statement than "packages matching a glob".
     if (packageName) {
-      for (const block of matchingSelectors(local, packageName)) merge(result, block, { deep: true });
+      for (const block of matchingSelectors(local, packageName)) mergeConfig(result, block);
     }
     // A directory holding a package speaks for that package only - which is what keeps the root's
     // own config off every package under it. A directory that holds none (an intermediate
     // `packages/`, say) has no package to speak for, so its unmarked config can only mean
     // "everything below" and still cascades.
     const ownsAPackage = fs.existsSync(path.join(dir, 'package.json'));
-    if (!ownsAPackage || path.resolve(dir) === target) merge(result, stripSelectors(local), { deep: true });
+    if (!ownsAPackage || path.resolve(dir) === target) mergeConfig(result, stripSelectors(local));
   }
-  return result;
+  /** Every layer has had its turn, so an append still outstanding has nothing left to attach to
+   *  and becomes the value itself. Done here rather than per layer: until the chain is finished,
+   *  the key it appends to may still be coming. */
+  return finalizeConfig(result);
 }
 
 /** A config key naming packages rather than settings: `"[*]"`, `"[*-dialect]"`, `"[pkg-a]"`. The
