@@ -256,6 +256,55 @@ Selector details:
 - A directory holding no package of its own (an intermediate `packages/`, say) has no package to
   speak for, so its unmarked config still cascades to everything below it.
 
+### Inheriting a shared config (`extends`)
+
+```yaml
+extends: "@panates/rman-monorepo"
+# or a list, applied in declaration order - later entries win
+extends: ["@panates/rman-monorepo", "./local-overrides.yml"]
+```
+
+Everything named is merged **underneath** the config that names it, so the declaring file always
+wins. A bare name resolves through *that file's* own `node_modules`, which is where a repository's
+shared config lives - so a subpath works too (`"@panates/rman-monorepo/strict"`). The target may be
+YAML, JSON, or a module exporting a config through `defineConfig`, and may itself `extends` another;
+a cycle is reported rather than recursed into.
+
+Resolution happens per directory, once that directory's own file forms are combined - `extends` is
+the base they sit on, and the directory chain then layers on top exactly as before. `extends` is
+**top level only**: naming one inside a `"[selector]"` block is an error rather than a no-op, since
+inheritance is a statement about the config and not about the packages a selector names.
+
+An inherited **unmarked** key configures the package of the directory that inherited it, not every
+package under it - the rule doesn't bend for a base. A shared config meant to reach the packages
+puts its settings in `"[*]"`, the same as any other config would.
+
+### Appending instead of replacing (`+key`)
+
+```yaml
+# the root says          before: "rm ./build"
+# a package adds        +before: "rm ./cache"
+# it resolves to         before: ["rm ./build", "rm ./cache"]
+```
+
+`+key` adds to whatever `key` already resolved to - from a parent directory, a `"[selector]"` block,
+or an `extends` base - instead of taking its place. It is what makes a shared config liveable: a
+base declaring `before: ["rm ./build"]` would otherwise force every repository wanting one more step
+to restate the whole list, and a restated list is a copy of the base, frozen at the version it was
+copied from.
+
+- Scalars are promoted to lists on the way, so neither side has to be written as an array. With
+  nothing inherited anywhere, `+key` simply becomes the value.
+- On an **object** the prefix is ignored, because there the two spellings already coincide: objects
+  merge whether or not you asked them to.
+- `key` and `+key` in the same object both apply, the replacement first.
+- Appends accumulate in merge order: `extends` base → parent directories → `"[*]"` → more specific
+  selectors → the package's own config.
+
+In the JSON Schema this costs something worth knowing: `+key` is matched by pattern, so the schema
+cannot tell `+befor` from `+before`. The TypeScript type can, and does - `WithAppend` generates an
+append form for every key, so `defineConfig` catches the typo even though the schema won't.
+
 ### Expressions (`${{ ... }}`)
 
 Any string value may embed `${{ ... }}`, evaluated per package - which is what lets one root
@@ -472,6 +521,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `run.<script>.if` | `string` (small expression grammar) | none (always runs) | Per-package cascaded. See [`RunService`'s conditional execution](#conditional-execution-if). |
 | `run.<script>.before` / `.exec` / `.after` | `string \| string[]` | none | Per-package cascaded - supplies the command(s) to run when the package's own `package.json` doesn't define this script slot. A bare string in place of the whole `run.<script>` object is shorthand for `exec`. |
 | `run.<script>.override` | `boolean` | `false` | Per-package cascaded - when `true`, the config's script replaces the package's own definition even when it has one. |
+| `extends` | `string \| string[]` | none | Root of each file only. Configs to inherit from - see [above](#inheriting-a-shared-config-extends). |
 | `dependencies` | `string[] \| Record<string, string>` | none | Extra in-repo "dependencies" not present in the package's real `package.json`, purely for rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s task scheduling). Declared from the root through a selector (`"[pkg-a]": { dependencies: [...] }`) or in the package's own `.rmanrc`. |
 
 `run.<script>.bail`'s precedence is worth calling out explicitly, since it's the one exception to

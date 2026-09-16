@@ -9,12 +9,19 @@
     "^\\[.+\\]$": {
       "$ref": "#",
       "description": "Config for the packages this selector names, rather than for the package of the directory declaring it - \"[*]\" for every package in the repository, \"[*-dialect]\" for a glob over package names, \"[pkg-a]\" for one. In YAML the quotes are REQUIRED: a bare [*] parses as a flow sequence and * as an alias indicator. Precedence, lowest first: \"[*]\", then other selectors in declaration order, then the package's own unmarked config."
+    },
+    "^\\+.+$": {
+      "description": "An append: `+key` adds to whatever `key` already resolved to - a parent directory, a \"[selector]\" block, or an `extends` base - instead of replacing it. Scalars are promoted to lists, so neither side has to be written as an array. On an object the prefix is ignored, since objects merge either way."
     }
   },
   "properties": {
     "$schema": {
       "type": "string",
       "description": "Path/URL to this schema - not read by rman itself, purely for editor tooling."
+    },
+    "extends": {
+      "description": "Configs to inherit from, merged UNDERNEATH this one - a shared package (\"@panates/rman-monorepo\"), a relative path, or an array applied in declaration order. A bare name resolves through this file's own node_modules, so a subpath works too. The target may be YAML, JSON or a module exporting a config, and may itself \"extends\" another. Top level only: naming one inside a \"[selector]\" block is an error rather than a no-op.",
+      "$ref": "#/definitions/stringOrStringArray"
     },
     "packageManager": {
       "type": "string",
@@ -94,6 +101,11 @@
           "$ref": "#/definitions/stringOrStringArray",
           "description": "Command(s) to run as this package's own \"postversion\" step, when its package.json does not define one itself."
         }
+      },
+      "patternProperties": {
+        "^\\+.+$": {
+          "description": "An append: `+key` adds to whatever `key` already resolved to - a parent directory, a \"[selector]\" block, or an `extends` base - instead of replacing it. Scalars are promoted to lists, so neither side has to be written as an array. On an object the prefix is ignored, since objects merge either way."
+        }
       }
     },
     "changelog": {
@@ -123,6 +135,11 @@
           "default": "v*",
           "description": "Glob for this package's release tags. Include \"{name}\" for independent per-package tags (e.g. \"{name}@*\"); omit it for one shared repo-wide tag scheme. Per-package cascaded."
         }
+      },
+      "patternProperties": {
+        "^\\+.+$": {
+          "description": "An append: `+key` adds to whatever `key` already resolved to - a parent directory, a \"[selector]\" block, or an `extends` base - instead of replacing it. Scalars are promoted to lists, so neither side has to be written as an array. On an object the prefix is ignored, since objects merge either way."
+        }
       }
     },
     "clean": {
@@ -142,6 +159,11 @@
           "type": "boolean",
           "default": false,
           "description": "Opts this package out of \"clean\" entirely. Per-package cascaded."
+        }
+      },
+      "patternProperties": {
+        "^\\+.+$": {
+          "description": "An append: `+key` adds to whatever `key` already resolved to - a parent directory, a \"[selector]\" block, or an `extends` base - instead of replacing it. Scalars are promoted to lists, so neither side has to be written as an array. On an object the prefix is ignored, since objects merge either way."
         }
       }
     },
@@ -179,6 +201,11 @@
           "type": "boolean",
           "default": false,
           "description": "Excludes this package from \"publish\" entirely (every target), regardless of \"target\"/\"private\" - a single, explicit \"never published\" statement. \"changelog\" also skips it by default (see its own --include-skipped). Independent of \"version\", which never consults this."
+        }
+      },
+      "patternProperties": {
+        "^\\+.+$": {
+          "description": "An append: `+key` adds to whatever `key` already resolved to - a parent directory, a \"[selector]\" block, or an `extends` base - instead of replacing it. Scalars are promoted to lists, so neither side has to be written as an array. On an object the prefix is ignored, since objects merge either way."
         }
       }
     },
@@ -300,6 +327,11 @@
           "default": "DOCKER_README.md",
           "description": "A file (relative to the package's own directory) whose contents become the DockerHub repo's full description, if present."
         }
+      },
+      "patternProperties": {
+        "^\\+.+$": {
+          "description": "An append: `+key` adds to whatever `key` already resolved to - a parent directory, a \"[selector]\" block, or an `extends` base - instead of replacing it. Scalars are promoted to lists, so neither side has to be written as an array. On an object the prefix is ignored, since objects merge either way."
+        }
       }
     },
     "githubReleaseConfig": {
@@ -325,6 +357,11 @@
         "prerelease": {
           "type": "boolean",
           "description": "Default: whether the version being released is itself a semver prerelease."
+        }
+      },
+      "patternProperties": {
+        "^\\+.+$": {
+          "description": "An append: `+key` adds to whatever `key` already resolved to - a parent directory, a \"[selector]\" block, or an `extends` base - instead of replacing it. Scalars are promoted to lists, so neither side has to be written as an array. On an object the prefix is ignored, since objects merge either way."
         }
       }
     },
@@ -385,6 +422,11 @@
           "type": "boolean",
           "default": false,
           "description": "When true, \"before\"/\"exec\"/\"after\" above replace the package's own package.json definition even when it already has one."
+        }
+      },
+      "patternProperties": {
+        "^\\+.+$": {
+          "description": "An append: `+key` adds to whatever `key` already resolved to - a parent directory, a \"[selector]\" block, or an `extends` base - instead of replacing it. Scalars are promoted to lists, so neither side has to be written as an array. On an object the prefix is ignored, since objects merge either way."
         }
       }
     }

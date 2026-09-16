@@ -36,25 +36,36 @@ function propertiesOf(node: any): Record<string, unknown> {
 
 describe('schemas/rmanrc.schema.json', () => {
   const cases: [string, string, Record<string, unknown>][] = [
-    ['RmanConfig', 'export interface RmanConfig {', schema.properties],
-    ['version', 'export interface VersionOptions {', propertiesOf(schema.properties.version)],
-    ['changelog', 'export interface ChangelogOptions {', propertiesOf(schema.properties.changelog)],
-    ['clean', 'export interface CleanOptions {', propertiesOf(schema.properties.clean)],
-    ['publish', 'export interface PublishOptions {', propertiesOf(schema.properties.publish)],
-    ['publish.docker', 'export interface DockerPublishOptions {', propertiesOf(schema.definitions.dockerPublishConfig)],
-    ['githubRelease', 'export interface GithubReleaseOptions {', propertiesOf(schema.definitions.githubReleaseConfig)],
-    ['run.<script>', 'export interface RunScriptOptions {', propertiesOf(schema.definitions.runScriptConfig)],
+    ['RmanConfig', 'export interface RmanConfigKeys {', schema.properties],
+    ['version', 'export interface VersionOptionsKeys {', propertiesOf(schema.properties.version)],
+    ['changelog', 'export interface ChangelogOptionsKeys {', propertiesOf(schema.properties.changelog)],
+    ['clean', 'export interface CleanOptionsKeys {', propertiesOf(schema.properties.clean)],
+    ['publish', 'export interface PublishOptionsKeys {', propertiesOf(schema.properties.publish)],
+    [
+      'publish.docker',
+      'export interface DockerPublishOptionsKeys {',
+      propertiesOf(schema.definitions.dockerPublishConfig),
+    ],
+    [
+      'githubRelease',
+      'export interface GithubReleaseOptionsKeys {',
+      propertiesOf(schema.definitions.githubReleaseConfig),
+    ],
+    ['run.<script>', 'export interface RunScriptOptionsKeys {', propertiesOf(schema.definitions.runScriptConfig)],
   ];
 
   for (const [label, block, schemaProps] of cases) {
     it(`describes exactly the keys \`${label}\` declares`, () => {
       const declared = interfaceKeys(block).sort();
       expect(declared.length).toBeGreaterThan(0); // a regex that stopped matching must not pass
-      // "$schema" exists for editor tooling only - rman never reads it, so the interface has no
-      // business declaring it.
+      /** The interfaces compared here are the `*Keys` ones - the plain settings, before
+       *  `WithAppend` adds a `+key` for each. Two schema keys have no place among them: `$schema`
+       *  is editor tooling rman never reads, and `extends` lives on `RmanConfig` itself, being
+       *  about inheritance rather than a setting. */
+      const extras = ['$schema', 'extends'];
       expect(
         Object.keys(schemaProps)
-          .filter(k => k !== '$schema')
+          .filter(k => !extras.includes(k))
           .sort(),
       ).toEqual(declared);
     });
@@ -77,14 +88,33 @@ describe('schemas/rmanrc.schema.json', () => {
   });
 
   it('routes a `"[selector]"` key back through the whole schema, so its contents are checked too', () => {
-    const pattern = Object.keys(schema.patternProperties ?? {});
-    expect(pattern).toEqual(['^\\[.+\\]$']);
-    expect(schema.patternProperties[pattern[0]].$ref).toBe('#');
+    const pattern = '^\\[.+\\]$';
+    expect(Object.keys(schema.patternProperties ?? {})).toContain(pattern);
+    expect(schema.patternProperties[pattern].$ref).toBe('#');
     // And a real selector matches it while a plain config key does not.
-    const re = new RegExp(pattern[0]);
+    const re = new RegExp(pattern);
     expect(re.test('[*]')).toBe(true);
     expect(re.test('[*-dialect]')).toBe(true);
     expect(re.test('publish')).toBe(false);
+  });
+
+  it('allows `+key` beside the declared keys of every closed object', () => {
+    // `additionalProperties: false` is what makes a typo surface, so every object that has it also
+    // needs the append pattern - or `+before` reads as a typo itself. Collected, so a failure names
+    // the objects that were missed.
+    const missing: string[] = [];
+    const visit = (node: any, label: string) => {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'object' && node.properties && node.additionalProperties === false) {
+        if (!node.patternProperties?.['^\\+.+$']) missing.push(label);
+      }
+      for (const [key, value] of Object.entries<any>(node)) visit(value, `${label}.${key}`);
+    };
+    for (const [name, def] of Object.entries<any>(schema.definitions)) visit(def, `definitions.${name}`);
+    for (const [name, prop] of Object.entries<any>(schema.properties)) visit(prop, `properties.${name}`);
+    expect(missing).toEqual([]);
+    // And at the root, beside the selector pattern.
+    expect(Object.keys(schema.patternProperties)).toContain('^\\+.+$');
   });
 
   it('accepts a bare string for `run.<script>`, the shorthand for `exec`', () => {

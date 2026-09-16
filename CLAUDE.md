@@ -90,6 +90,36 @@ repo-wide bookend run once at the repository root. One declaration feeding both 
 running its own pre/post hooks in the same directory - `RunService` must keep skipping the bookend
 when `!repository.monorepo`, or every hook runs twice (measured).
 
+## Config inheritance: `extends` and `+key`
+
+[`src/core/extends-config.ts`](src/core/extends-config.ts),
+[`src/core/merge-config.ts`](src/core/merge-config.ts).
+
+- **`extends`** names configs merged *underneath* the file naming them (a package, a path, or a list
+  in declaration order). Resolved **per directory**, after that directory's own forms combine, so
+  the directory chain still layers on top unchanged. A bare name resolves through **that file's**
+  `node_modules` - `createRequire` must be based on the config file, not on rman's own location, or
+  it searches rman's dependencies instead of the repository's.
+  - Top level only. `extends` inside a `"[selector]"` block **throws**: the recursive type makes it
+    look valid and it would simply never resolve, and each form is checked against *its own* path so
+    the error names the file that holds it.
+  - An inherited unmarked key still configures the inheriting directory's package, not the packages
+    below. The rule doesn't bend for a base; a shared config aimed at packages writes `"[*]"`.
+- **`+key`** appends instead of replacing, through the single `mergeConfig` every layer uses.
+  Scalars promote to lists; on an object the prefix is ignored (objects already merge); `key` and
+  `+key` together apply replacement first.
+  - **Trap: an append must stay outstanding until something to append to exists.** Resolving it
+    eagerly passes unit tests and is wrong: a directory's own file forms merge into an *empty*
+    object long before the selector blocks and parent directories they append to, so collapsing
+    `+key` there silently discarded them (measured - a package appending to both `"[*]"` and
+    `"[*-dialect]"` kept only its own step). `finalizeConfig` collapses whatever is still
+    outstanding once the chain ends, and only then.
+- **The schema cannot spell "declared keys plus an append"**, so `+key` is allowed by a
+  `^\+.+$` pattern and `+befor` validates. The TS side covers it: `WithAppend<T>` generates the
+  append form for every key by remapping, so nothing drifts and typos are caught there. Both are
+  pinned by [`test/schemas/rmanrc.schema.spec.ts`](test/schemas/rmanrc.schema.spec.ts), which also
+  asserts every closed object carries the append pattern.
+
 ## Change and release detection
 
 Three separate questions in rman look like "what changed". They are answered from different

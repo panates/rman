@@ -6,6 +6,7 @@ import semver from 'semver';
 import { pathToFileURL } from 'url';
 import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
+import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
 import { finalizeConfig, mergeConfig } from './merge-config.js';
 
 /**
@@ -62,34 +63,57 @@ async function loadJsConfig(file: string): Promise<any> {
  */
 export async function readDirConfig(dirname: string): Promise<RmanConfig> {
   const result: RmanConfig = {};
+  /** The file an `extends` in this directory resolves relative to. The last form that actually
+   *  declared one wins, which matters only for the unusual directory holding several. */
+  let extendsFrom = path.join(dirname, '.rmanrc');
 
   const pkgJsonFile = path.join(dirname, 'package.json');
   if (fs.existsSync(pkgJsonFile)) {
     const pkgJson = JSON.parse(fs.readFileSync(pkgJsonFile, 'utf-8'));
-    if (pkgJson && typeof pkgJson.rman === 'object') mergeConfig(result, pkgJson.rman);
+    if (pkgJson && typeof pkgJson.rman === 'object') {
+      assertNoSelectorExtends(pkgJson.rman, pkgJsonFile);
+      if (EXTENDS_KEY in pkgJson.rman) extendsFrom = pkgJsonFile;
+      mergeConfig(result, pkgJson.rman);
+    }
   }
 
   const ymlFile = path.join(dirname, '.rmanrc.yml');
   if (fs.existsSync(ymlFile)) {
     const obj = yaml.load(fs.readFileSync(ymlFile, 'utf-8'));
-    if (obj && typeof obj === 'object') mergeConfig(result, obj as Record<string, any>);
+    if (obj && typeof obj === 'object') {
+      assertNoSelectorExtends(obj as RmanConfig, ymlFile);
+      if (EXTENDS_KEY in obj) extendsFrom = ymlFile;
+      mergeConfig(result, obj as Record<string, any>);
+    }
   }
 
   const rcFile = path.join(dirname, '.rmanrc');
   if (fs.existsSync(rcFile)) {
     const obj = JSON.parse(fs.readFileSync(rcFile, 'utf-8'));
-    if (obj && typeof obj === 'object') mergeConfig(result, obj);
+    if (obj && typeof obj === 'object') {
+      assertNoSelectorExtends(obj, rcFile);
+      if (EXTENDS_KEY in obj) extendsFrom = rcFile;
+      mergeConfig(result, obj);
+    }
   }
 
   for (const jsFileName of JS_CONFIG_FILES) {
     const jsFile = path.join(dirname, jsFileName);
     if (fs.existsSync(jsFile)) {
       const obj = await loadJsConfig(jsFile);
-      if (obj && typeof obj === 'object') mergeConfig(result, obj);
+      if (obj && typeof obj === 'object') {
+        assertNoSelectorExtends(obj, jsFile);
+        if (EXTENDS_KEY in obj) extendsFrom = jsFile;
+        mergeConfig(result, obj);
+      }
     }
   }
 
-  return result;
+  /** Resolved per directory, once its own forms have been combined: `extends` is the base every
+   *  one of them sits on, and the directory chain then layers on top as it always did. Each form
+   *  was checked for a misplaced `extends` as it was read, so that error can name the file holding
+   *  it rather than whichever form happened to declare the real one. */
+  return resolveExtends(result, extendsFrom);
 }
 
 /**

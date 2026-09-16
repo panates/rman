@@ -318,6 +318,25 @@ rman import ../my-old-standalone-repo --dest libs   # under libs/ instead of pac
 already. After importing, add the new directory to your `workspaces` glob if it isn't already
 covered, then run `rman ci` to install it.
 
+## Shared config (`extends`) and appending (`+key`)
+
+House rules live in one package, and a repository names it:
+
+```yaml
+# .rmanrc.yml
+extends: '@panates/rman-monorepo'
+
+'[*]':
+  run:
+    build:
+      +before: 'rm -rf ./cache' # adds to the base's step, rather than replacing it
+```
+
+`extends` merges underneath the file naming it (a package, a path, or a list), and may itself be
+chained. `+key` appends to whatever the key already resolved to - from the base, a parent directory,
+or a selector - which is what lets a repository add one step without restating a list it doesn't
+own. See [docs/api.md](docs/api.md#inheriting-a-shared-config-extends).
+
 ## Your own commands
 
 A module in `.rman/` at the repository root becomes an `rman` command:
