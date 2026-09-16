@@ -43,3 +43,6 @@ lerna-debug.log*
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
+# Local-only dev shim - an absolute path into this checkout, never part of the package.
+.devbin/

@@ -51,14 +51,20 @@ export namespace RunService {
    * `getScriptSteps`:
    *   run:
    *     build:
-   *       script: tsc -b
-   *       preScript: [node ./generate.js, node ./validate.js]
-   *       postScript: node ./copy-assets.js
+   *       before: [node ./generate.js, node ./validate.js]
+   *       exec: tsc -b
+   *       after: node ./copy-assets.js
    *       override: true   # use these even if the package *does* define its own
+   *
+   * A bare string is shorthand for `exec`, which is by far the common case - a script that is just
+   * a command, with nothing to configure about how it runs:
+   *   run:
+   *     test: mocha          # same as   test: { exec: mocha }
    */
   export function getConfig(pkg: Package, script: string): Record<string, unknown> {
     const runCfg = pkg.config?.run;
     const cfg = runCfg && typeof runCfg === 'object' ? (runCfg as Record<string, unknown>)[script] : undefined;
+    if (typeof cfg === 'string' || Array.isArray(cfg)) return { exec: cfg };
     return cfg && typeof cfg === 'object' ? (cfg as Record<string, unknown>) : {};
   }
 
@@ -261,10 +267,14 @@ export namespace RunService {
 
     /** Repo-wide bookend: root's own pre/post hooks run once each, exclusively, around every package
      *  (unless root itself opts out via `run.<script>.skip`, fails its own `run.<script>.if`, or the
-     *  run is scoped to a single package by `cwdScope` - a repo-wide bookend has no place there). */
-    const rootIf = !cwdScope && parseIfExpr(rootCfg.if);
+     *  run is scoped to a single package by `cwdScope` - a repo-wide bookend has no place there).
+     *
+     *  Only in a monorepo. Without one the root *is* the single package, already in the loop below
+     *  with the same hooks and the same directory - a bookend would simply run each of them a
+     *  second time. */
+    const rootIf = !cwdScope && repository.monorepo && parseIfExpr(rootCfg.if);
     const rootIfPasses = rootIf ? await evaluateIf(repository, repository.rootPackage, rootIf, ifStatusCache) : true;
-    const rootSkipped = !!cwdScope || rootCfg.skip === true || !rootIfPasses;
+    const rootSkipped = !!cwdScope || !repository.monorepo || rootCfg.skip === true || !rootIfPasses;
     const rootSteps = rootSkipped ? [] : getScriptSteps(repository.rootPackage, script);
     const rootPre = rootSteps.filter(s => s.name === 'pre' + script);
     const rootPost = rootSteps.filter(s => s.name === 'post' + script);
@@ -325,27 +335,64 @@ export namespace RunService {
     }
 
     if (!children.length) {
-      console.log(colors.gray(`No package defines a "${script}" script.`));
-      return;
+      /**
+       * Two different nothings, and only one of them is fine.
+       *
+       * Nobody in the repository defines this script at all: the name is a mistake - a typo, or a
+       * script that used to exist - and `npm run` fails on exactly this. Staying silent is how
+       * `rman run qc` sat in a CI pipeline for months reporting success while running nothing, with
+       * `qc` defined only on the root (whose own scripts a monorepo never runs, only its
+       * `pre`/`post` bookends).
+       *
+       * Everything was filtered out instead - `--scope`, `--changed`, `run.<script>.skip`, an
+       * `if:` that didn't match: zero is the correct answer to what was asked, and asking "build
+       * only what changed" when nothing changed must not fail a pipeline.
+       */
+      /** `getPackages()` and nothing else - in a monorepo that excludes the root, which is the
+       *  point: the root contributes only `pre`/`post` bookends, never the script itself, so a
+       *  `qc` defined *only* there is exactly the mistake above rather than an excuse for it. (And
+       *  had the root contributed a bookend, `children` wouldn't be empty.) In a single-package
+       *  repository the root *is* the one package, and is covered. */
+      const definedSomewhere = repository.getPackages().some(pkg => getScriptSteps(pkg, script).length > 0);
+      if (definedSomewhere) {
+        console.log(colors.gray(`Nothing to run - every package was filtered out of "${script}".`));
+        return;
+      }
+      const message = `No package defines a "${script}" script.`;
+      console.log(colors.red(message));
+      const err: any = new Error(message);
+      err.logged = true;
+      throw err;
     }
 
     panel.start();
 
-    let failed = false;
     try {
       /** bail:false here - each package's own resolved bail setting decides whether to call
        *  `rootTask.abort()` itself (see `runSteps`), since power-tasks' own `bail` can't vary per package. */
       rootTask = new Task(children, { concurrency, bail: false });
       await rootTask.toPromise();
     } catch {
-      failed = true;
+      // Swallowed on purpose: whether the root promise rejected says nothing reliable about the
+      // run - see below. The per-package tallies are what decide.
     } finally {
+      /** A package's own `bail` aborts the root task, which settles its promise *immediately* while
+       *  the packages already in flight keep running. Waiting for every child here is what makes
+       *  the summary below describe a finished run rather than a snapshot of one still going -
+       *  measured: it printed "0 succeeded, 1 failed, 3 skipped" and then three of those "skipped"
+       *  packages went on to succeed. */
+      await Promise.allSettled(children.map(child => child.toPromise()));
       panel.stop();
     }
 
-    panel.printSummary();
+    const summary = panel.printSummary();
 
-    if (failed) {
+    /** The tallies, never `rootTask.toPromise()`'s own outcome: with a sibling still in flight at
+     *  the moment one package failed, that promise *resolves*, and this command used to exit 0 on a
+     *  run it had just reported as failed - non-deterministically, since it came down to which
+     *  packages happened to still be running (measured: `1 0 1 1 0` across five identical runs).
+     *  A single failed package must fail the command, every time. */
+    if (summary.failedCount > 0) {
       const err: any = new Error(`"${script}" failed`);
       err.logged = true;
       throw err;
@@ -436,9 +483,9 @@ function getScriptSteps(pkg: Package, script: string): ScriptStep[] {
     const hasOwn = typeof json.scripts[key] === 'string' && json.scripts[key];
     if (cfg.override === true || !hasOwn) json.scripts[key] = value;
   };
-  applyConfigScript(script, cfg.script);
-  applyConfigScript('pre' + script, cfg.preScript);
-  applyConfigScript('post' + script, cfg.postScript);
+  applyConfigScript(script, cfg.exec);
+  applyConfigScript('pre' + script, cfg.before);
+  applyConfigScript('post' + script, cfg.after);
   json.scripts[script] = json.scripts[script] || '#';
   const info = parseNpmScript(json, 'npm run ' + script);
   if (!info?.raw?.length) return [];

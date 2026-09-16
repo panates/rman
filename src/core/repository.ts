@@ -1,8 +1,10 @@
+import { execFileSync } from 'node:child_process';
 import glob from 'fast-glob';
 import fs from 'fs';
 import path from 'path';
+import semver from 'semver';
 import { GitHelper } from '../utils/git.js';
-import { resolveConfig } from './config.js';
+import { type GitScope, interpolateConfig, type PackageScope, type RepositoryScope, resolveConfig } from './config.js';
 import { Package } from './package.js';
 
 export class Repository extends Package {
@@ -85,19 +87,55 @@ export class Repository extends Package {
   }
 
   /**
-   * Resolves the effective rman config for the repository root and every
-   * package, cascading root -> intermediate directories -> package directory,
-   * so a `.rmanrc` placed anywhere along that path overrides the levels above it.
+   * Resolves the effective rman config for the repository root and every package, cascading
+   * root -> intermediate directories -> package directory, so a `.rmanrc` placed anywhere along
+   * that path overrides the levels above it.
+   *
+   * Each package is resolved *by name* as well as by directory, since that is what a `"[selector]"`
+   * block matches against - see `resolveConfig`. The root package is resolved by name too: in a
+   * single-package repository it *is* the one package, so `"[*]"` has to reach it; in a monorepo
+   * nothing under `getPackages()` is the root, so only its own unmarked config applies.
    */
   protected async _resolveConfigs(): Promise<void> {
     const cache = new Map<string, any>();
-    const rootConfig = await resolveConfig(this.dirname, this.dirname, cache);
-    this.config = rootConfig;
-    this.rootPackage.config = rootConfig;
+    const repoDir = this.dirname;
+    const scopeOf = (pkg: Package): PackageScope => {
+      // A package.json without a "name" is unusual but legal, and `info` prints such a package
+      // rather than refusing it - so the scope has to survive one too.
+      const name = pkg.name ?? '';
+      const at = name.lastIndexOf('/');
+      return {
+        name,
+        scope: at > 0 ? name.slice(0, at) : undefined,
+        unscopedName: at > 0 ? name.slice(at + 1) : name,
+        version: pkg.version ?? '',
+        basename: path.basename(pkg.dirname),
+        dirname: pkg.dirname,
+        relativeDir: path.relative(this.dirname, pkg.dirname),
+        // A copy: an expression has no business mutating the package rman is about to act on.
+        json: { ...pkg.json },
+      };
+    };
+    const packageScopes = this.packages.map(scopeOf);
+    let gitScope: GitScope | undefined;
+    const repository: RepositoryScope = {
+      ...scopeOf(this.rootPackage),
+      monorepo: this.monorepo,
+      packages: packageScopes,
+      package: (name: string) => packageScopes.find(p => p.name === name),
+      // A getter, so a repository whose config never mentions git spawns no git at all - and every
+      // command resolves config, not just the ones that care.
+      get git(): GitScope {
+        return (gitScope ??= readGitScope(repoDir));
+      },
+    };
+    const withVars = (pkg: Package, config: any) =>
+      interpolateConfig(config, { pkg: scopeOf(pkg), repository, env: { ...process.env }, semver });
+    this.config = withVars(this.rootPackage, await resolveConfig(this.dirname, this.dirname, cache));
     for (const pkg of this.packages) {
-      if (pkg === this.rootPackage) continue;
-      pkg.config = await resolveConfig(this.dirname, pkg.dirname, cache);
+      pkg.config = withVars(pkg, await resolveConfig(this.dirname, pkg.dirname, cache, pkg.name));
     }
+    if (this.monorepo) this.rootPackage.config = this.config;
   }
 
   protected _updateDependencies() {
@@ -109,7 +147,7 @@ export class Repository extends Package {
         ...pkg.json.peerDependencies,
         ...pkg.json.optionalDependencies,
       };
-      const configDeps = pkg.config.packages?.[pkg.name]?.dependencies;
+      const configDeps = pkg.config.dependencies;
       if (configDeps) {
         if (Array.isArray(configDeps)) configDeps.forEach(x => (o[x] = o[x] || '*'));
         else Object.assign(o, configDeps);
@@ -202,4 +240,30 @@ function topoSortPackages(packages: Package[]): void {
     if (a.dependencies.includes(b.name)) return 1;
     return 0;
   });
+}
+
+/** `git` facts for a `${{ repository.git.* }}` expression. Synchronous on purpose: it backs a lazy
+ *  getter, and a getter cannot await. Everything is `undefined` outside a git checkout - not an
+ *  error, just a repository without one. */
+function readGitScope(dirname: string): GitScope {
+  const run = (args: string[]): string | undefined => {
+    try {
+      return execFileSync('git', args, { cwd: dirname, stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString()
+        .trim();
+    } catch {
+      return undefined;
+    }
+  };
+  const sha = run(['rev-parse', 'HEAD']);
+  if (sha === undefined) return { branch: undefined, sha: undefined, shortSha: undefined, dirty: undefined };
+  const status = run(['status', '--porcelain']);
+  return {
+    // Empty on a detached HEAD, which is what a CI checkout often is - reported as undefined
+    // rather than an empty string, so `?? 'detached'` in an expression works.
+    branch: run(['branch', '--show-current']) || undefined,
+    sha,
+    shortSha: sha.slice(0, 7),
+    dirty: status === undefined ? undefined : status.length > 0,
+  };
 }

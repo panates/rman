@@ -1,4 +1,4 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli.md for the baseline convention -->
+<!-- verified against commit 0e33a0a - see ../cli.md for the baseline convention -->
 
 # `rman run <script>`
 
@@ -43,30 +43,47 @@ rman run build --root                 # whole repo, even run from inside one pac
 rman run build --log-level verbose    # also print each step's "executing" line before it runs
 ```
 
-If no package (and no root pre/post hook) defines the given script at all, `rman` prints
-`No package defines a "<script>" script.` and exits successfully - it's not an error to ask for a
-script nothing implements.
+A run with nothing in it ends two different ways, and the difference matters to a CI gate:
+
+- **Nothing defines the script** (no package, and no root `pre`/`post` bookend): `No package defines
+  a "<script>" script.` and a **non-zero exit**. The name is a mistake - a typo, or a script that
+  used to exist - and `npm run` fails on exactly this. Note a monorepo root's own `<script>` does
+  *not* count: the root contributes only its `pre`/`post` hooks, so a `qc` defined only there is
+  this case, not an excuse for it.
+- **Every package was filtered out** by `--scope`/`--changed`, a `run.<script>.skip`, or an `if:`
+  that didn't match: `Nothing to run - every package was filtered out of "<script>".` and a
+  **successful exit**. Zero is the right answer to what was asked; "build only what changed" must
+  not fail a pipeline on a run where nothing changed.
 
 ## Per-package/script configuration (`.rmanrc run.<script>.*`)
 
-Every option above has a matching `.rmanrc` key, cascaded per package, so you rarely need to repeat
-flags on every invocation:
+Every option above has a matching `.rmanrc` key, so you rarely need to repeat flags on every
+invocation. **Who a block is about follows the one config rule** (see
+[the config reference](../api.md#configuration-rmanrc-rmanrcyml)): unmarked keys configure the
+package of the directory declaring them, and a `"[selector]"` block configures the packages it
+names - so at the repository root, package-facing script config goes under `"[*]"`:
 
 ```yaml
-run:
-  build:
-    concurrency: 2
-    script: tsc -b # used only if the package's own package.json has no "build" script at all
-    preScript: [node ./generate.js, node ./validate.js] # array -> run in sequence
-    postScript: node ./copy-assets.js
-    override: true # use these even if the package DOES already define build/prebuild/postbuild
-  lint:
-    topo: false # independent packages - alphabetical order, no dependency waiting
-    bail: false # one package's lint failure doesn't stop the others
-  test:
-    skip: true # this package opts out of "test" entirely
-    if: changed # only actually runs when this package has changed since the last publish
+"[*]":
+  run:
+    test: mocha # a bare string is shorthand for { exec: mocha }
+    build:
+      concurrency: 2
+      before: [node ./generate.js, node ./validate.js] # array -> run in sequence
+      exec: tsc -b # used only if the package's own package.json has no "build" script at all
+      after: node ./copy-assets.js
+      override: true # use these even if the package DOES already define build/prebuild/postbuild
+    lint:
+      topo: false # independent packages - alphabetical order, no dependency waiting
+      bail: false # one package's lint failure doesn't stop the others
+    coverage:
+      skip: true # these packages opt out of "coverage" entirely
+      if: changed # only actually runs when the package has changed since the last publish
 ```
+
+Values may embed [`${{ ... }}` expressions](../api.md#expressions--), evaluated per package - so one
+declaration can still say something package-specific (`../../coverage/${{ pkg.basename }}`,
+`app:${{ repository.git.shortSha ?? 'local' }}`).
 
 **Precedence** for `topo`/`progress`/`concurrency`/`logLevel`: explicit CLI flag > package's own
 resolved `.rmanrc` > built-in fallback. **`bail` is the one exception:** a package's own `.rmanrc
@@ -98,10 +115,16 @@ runs) rather than failing the whole command over a typo in the expression.
 ### Root pre/post hooks
 
 If the repository root defines a `prebuild`/`postbuild` (matching `pre<script>`/`post<script>`)
-npm script, or `.rmanrc run.<script>.preScript`/`.postScript`, it runs once each - exclusively,
-before/after every package's own script - unless the root opts out via `run.<script>.skip`, fails
-its own `run.<script>.if`, or the run is scoped to a single package (`--root` not given while
-standing inside one package's own directory - a repo-wide bookend has no place there).
+npm script, or an **unmarked** `.rmanrc run.<script>.before`/`.after`, it runs once each -
+exclusively, before/after every package's own script - unless the root opts out via
+`run.<script>.skip`, fails its own `run.<script>.if`, or the run is scoped to a single package
+(`--root` not given while standing inside one package's own directory - a repo-wide bookend has no
+place there).
+
+Unmarked is the operative word: a bookend command is run at the repository root, so a
+package-relative one (`node ../../support/postbuild.cjs`) belongs under `"[*]"`, not here. There is
+no bookend in a single-package repository - the root *is* the one package, already running these
+hooks in the same directory, so a bookend would simply run each of them twice.
 
 ## See also
 

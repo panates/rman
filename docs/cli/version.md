@@ -1,4 +1,4 @@
-<!-- verified against commit 4bc7934 - see ../cli.md for the baseline convention -->
+<!-- verified against commit 0e33a0a - see ../cli.md for the baseline convention -->
 
 # `rman version [bump]`
 
@@ -118,6 +118,61 @@ a single version line the group's own tag already is the release, so no second n
 
 The release tag pattern must never match a package's own `changelog.tagPattern` - a release tag
 matching `v*` would be picked up as some package's last release and throw off its changelog.
+
+## Stamping the version where the package declares it
+
+### The Dockerfile label
+
+A bumped package's Dockerfile has its `org.opencontainers.image.version` label rewritten to the new
+version, in the **same commit** as the bump:
+
+```dockerfile
+LABEL org.opencontainers.image.version="1.2.0"   # was "1.1.0"
+```
+
+It belongs here rather than in a build script: the label is by specification *the version of the
+packaged software*, so there is only ever one correct value for it and `version` is what knows it.
+Doing it at build time instead is both later than necessary and invisible to git - it leaves the
+edit uncommitted (which [`publish`](publish.md) then trips over as a dirty tree) and records a stale
+label in the commit that was actually tagged.
+
+- Read from the same path [`publish --target docker`](publish.md#docker-publishing-publishdocker)
+  builds from - `.rmanrc "publish.docker.dockerfile"`, default `Dockerfile`, relative to the
+  package's own directory - so the two can never disagree about which file this is.
+- Only ever **rewrites** a label the Dockerfile already declares; one is never inserted. Which
+  labels an image carries is the author's decision. A package with no Dockerfile, or one that
+  doesn't declare the label, is a no-op.
+- The existing quoting style is kept, so the diff is the version and nothing else. Labels sharing a
+  line, and `LABEL` instructions split across `\` continuations, are both handled; the same key
+  outside a `LABEL` (in an `ENV`, or a comment) is left alone.
+- Turn it off with `.rmanrc "version": { "stampDockerfile": false }` (per-package cascaded).
+
+### Source constants (`.rmanrc "version.stamp"`)
+
+A package that hard-codes its own version in source has it rewritten the same way, in the same
+commit:
+
+```yaml
+"[*]":
+  version:
+    stamp: ["src/constants.ts"]
+```
+
+```ts
+export const version = '6.0.10'; // was '1'
+```
+
+- Paths are relative to the package's own directory. A listed file a package doesn't have is a
+  silent no-op, so one `"[*]"` declaration covers a repo where only some packages carry one.
+- Both `version = '...'` and `version: '...'` are matched, quoting style preserved. Only the whole
+  identifier - `myversion` and `version2` are somebody else's constants.
+- Explicitly listed rather than discovered: unlike the OCI label there is no standard saying "this
+  file holds the version", which is also what keeps a match this broad safe.
+
+**Stamp the source, not the build output.** Rewriting `build/constants.js` from a build script
+leaves the checked-in file claiming a placeholder: anything running from source (tests, ts-node, the
+dev loop) reports that placeholder, the tagged commit never records the released version, and the
+rewrite has to be redone on every build.
 
 ## Severity auto-detection
 

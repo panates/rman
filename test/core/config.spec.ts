@@ -131,6 +131,88 @@ describe('core/config', () => {
       expect(await resolveConfig(root, outside)).toEqual({ a: 1 });
     });
 
+    it("a package directory's unmarked config speaks for that package only, never the ones below it", async () => {
+      // The whole point of the split: the root has a package.json, so its unmarked config is the
+      // ROOT package's - not a silent default for every package under it.
+      const root = tmp();
+      const pkg = path.join(root, 'packages', 'a');
+      fs.mkdirSync(pkg, { recursive: true });
+      fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'root' }));
+      fs.writeFileSync(path.join(root, '.rmanrc'), JSON.stringify({ a: 'root-only' }));
+      fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'pkg-a' }));
+
+      expect(await resolveConfig(root, pkg, undefined, 'pkg-a')).toEqual({});
+      expect(await resolveConfig(root, root, undefined, 'root')).toEqual({ a: 'root-only' });
+    });
+
+    it('a directory holding no package still cascades - it has no package to speak for', async () => {
+      const root = tmp();
+      const mid = path.join(root, 'packages');
+      const pkg = path.join(mid, 'a');
+      fs.mkdirSync(pkg, { recursive: true });
+      fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'root' }));
+      fs.writeFileSync(path.join(mid, '.rmanrc'), JSON.stringify({ a: 'from-mid' }));
+      fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'pkg-a' }));
+
+      expect(await resolveConfig(root, pkg, undefined, 'pkg-a')).toEqual({ a: 'from-mid' });
+    });
+
+    it('a "[selector]" block reaches the packages it names', async () => {
+      const root = tmp();
+      const a = path.join(root, 'packages', 'a');
+      const dialect = path.join(root, 'packages', 'mysql-dialect');
+      fs.mkdirSync(a, { recursive: true });
+      fs.mkdirSync(dialect, { recursive: true });
+      fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'root' }));
+      fs.writeFileSync(
+        path.join(root, '.rmanrc'),
+        JSON.stringify({ '[*]': { a: 'all' }, '[*-dialect]': { a: 'dialects', b: 'only-dialects' } }),
+      );
+
+      expect(await resolveConfig(root, a, undefined, 'pkg-a')).toEqual({ a: 'all' });
+      expect(await resolveConfig(root, dialect, undefined, 'mysql-dialect')).toEqual({
+        a: 'dialects',
+        b: 'only-dialects',
+      });
+    });
+
+    it('a selector glob is anchored at both ends', async () => {
+      const root = tmp();
+      const pkg = path.join(root, 'packages', 'a');
+      fs.mkdirSync(pkg, { recursive: true });
+      fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'root' }));
+      fs.writeFileSync(path.join(root, '.rmanrc'), JSON.stringify({ '[*-dialect]': { a: 1 } }));
+
+      expect(await resolveConfig(root, pkg, undefined, 'my-dialect-helper')).toEqual({});
+      expect(await resolveConfig(root, pkg, undefined, 'mysql-dialect')).toEqual({ a: 1 });
+    });
+
+    it('precedence: "[*]" < a more specific selector < the package\'s own config', async () => {
+      const root = tmp();
+      const pkg = path.join(root, 'packages', 'mysql-dialect');
+      fs.mkdirSync(pkg, { recursive: true });
+      fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'root' }));
+      fs.writeFileSync(
+        path.join(root, '.rmanrc'),
+        // "[*]" written last on purpose - it always loses regardless of declaration order.
+        JSON.stringify({ '[*-dialect]': { a: 'specific', b: 'specific' }, '[*]': { a: 'all', c: 'all' } }),
+      );
+      fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'mysql-dialect' }));
+      fs.writeFileSync(path.join(pkg, '.rmanrc'), JSON.stringify({ a: 'own' }));
+
+      expect(await resolveConfig(root, pkg, undefined, 'mysql-dialect')).toEqual({
+        a: 'own',
+        b: 'specific',
+        c: 'all',
+      });
+    });
+
+    it('without a package name, selector blocks contribute nothing at all', async () => {
+      const root = tmp();
+      fs.writeFileSync(path.join(root, '.rmanrc'), JSON.stringify({ a: 1, '[*]': { b: 2 } }));
+      expect(await resolveConfig(root, root)).toEqual({ a: 1 });
+    });
+
     it('reuses a shared cache across calls instead of re-reading a common ancestor', async () => {
       const root = tmp();
       const pkgA = path.join(root, 'packages', 'a');

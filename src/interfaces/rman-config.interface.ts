@@ -17,10 +17,44 @@ export interface RmanConfig {
   clean?: RmanConfig.CleanOptions;
   publish?: RmanConfig.PublishOptions;
   githubRelease?: RmanConfig.GithubReleaseOptions;
-  /** Keyed by npm script name (e.g. `"build"`, `"lint"`, `"test"`). */
-  run?: Record<string, RmanConfig.RunScriptOptions>;
-  /** Keyed by the in-repo package's own name. */
-  packages?: Record<string, RmanConfig.PackageOptions>;
+  /** Keyed by npm script name (e.g. `"build"`, `"lint"`, `"test"`). A bare string (or array of
+   *  them) is shorthand for `{ exec: ... }` - `test: "mocha"` and `test: { exec: "mocha" }` mean
+   *  exactly the same thing. */
+  run?: Record<string, string | string[] | RmanConfig.RunScriptOptions>;
+  /** In-repo packages this one depends on beyond what its real `package.json` declares - purely
+   *  for rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s scheduling). An
+   *  array defaults each entry's range to `"*"`; an object gives an explicit name -> range map.
+   *  Declared from the root via a selector (`"[pkg-a]": { dependencies: [...] }`) or in the
+   *  package's own `.rmanrc`. */
+  dependencies?: string[] | Record<string, string>;
+  /**
+   * Config for **other** packages, keyed by a `"[selector]"` naming them - `"[*]"` for every
+   * package in the repository, `"[*-dialect]"` for a glob over package names, `"[pkg-a]"` for one.
+   * Everything else in this object configures the package of the directory declaring it, so this
+   * is the only way a `.rmanrc` speaks about anything but its own package - most usefully the
+   * repository root's, which otherwise configures the root package alone.
+   *
+   * ```yaml
+   * # the repository root's own .rmanrc.yml
+   * run:
+   *   build:
+   *     before: node support/generate.cjs   # a repo-wide bookend, run once at the root
+   * "[*]":
+   *   run:
+   *     build:
+   *       after: node ../../support/postbuild.cjs   # run in each package's own directory
+   * ```
+   *
+   * In YAML the quotes are **required**: a bare `[*]` parses as a flow sequence, and `*` as an
+   * alias indicator. Precedence, lowest first: `"[*]"`, then other selectors in declaration order,
+   * then the package's own unmarked config.
+   *
+   * Recursive, mirroring the schema's own `"$ref": "#"`: whatever a `.rmanrc` may say about its own
+   * package it may say here about the ones it names - nested selectors included. Typed as
+   * `RmanConfig` rather than `unknown` so the contents are actually checked; `unknown` let any
+   * shape through, which is the opposite of the point.
+   */
+  [selector: `[${string}]`]: RmanConfig;
 }
 
 export namespace RmanConfig {
@@ -37,9 +71,29 @@ export namespace RmanConfig {
      *  any package's own `changelog.tagPattern`, or that package's changelog boundary will resolve
      *  to the repository release instead of its own last release. */
     releaseTagPattern?: string;
-    script?: string | string[];
-    preScript?: string | string[];
-    postScript?: string | string[];
+    /** Keep this package's Dockerfile `org.opencontainers.image.version` label in step with the
+     *  version being written. Per-package cascaded. Default `true` - the label's value is, by
+     *  specification, the version of the packaged software, so there is only ever one correct
+     *  value for it, and `version` is what knows it. Only ever *rewrites* a label the Dockerfile
+     *  already declares (never inserts one), and reads the same path `publish --target docker`
+     *  builds from (`publish.docker.dockerfile`), so a package without one is a no-op. */
+    stampDockerfile?: boolean;
+    /** Source files whose `version` constant is rewritten to the version being written, in the same
+     *  commit as the bump - paths relative to the package's own directory (e.g.
+     *  `["src/constants.ts"]`). Per-package cascaded; a listed file a package doesn't have is a
+     *  silent no-op, so one `"[*]"` declaration covers a repo where only some packages carry one.
+     *
+     *  Stamping the source, not the build output: a build-time rewrite leaves the checked-in file
+     *  claiming a placeholder, so anything running from source reports that placeholder, git never
+     *  records the released version, and the rewrite has to be redone on every build. */
+    stamp?: string | string[];
+    /** Command(s) run as this package's own `version` npm-lifecycle step, when its `package.json`
+     *  doesn't define one itself. An array runs them in sequence. */
+    exec?: string | string[];
+    /** Same, for `preversion`. */
+    before?: string | string[];
+    /** Same, for `postversion`. */
+    after?: string | string[];
   }
 
   export interface ChangelogOptions {
@@ -64,14 +118,14 @@ export namespace RmanConfig {
     changedSince?: string;
     skip?: boolean;
     if?: string;
-    script?: string | string[];
-    preScript?: string | string[];
-    postScript?: string | string[];
+    /** Command(s) to run as this script itself, when the package's `package.json` doesn't define
+     *  it. An array runs them in sequence. */
+    exec?: string | string[];
+    /** Same, for this script's `pre<script>` hook. */
+    before?: string | string[];
+    /** Same, for its `post<script>` hook. */
+    after?: string | string[];
     override?: boolean;
-  }
-
-  export interface PackageOptions {
-    dependencies?: string[] | Record<string, string>;
   }
 
   export interface PublishOptions {
@@ -86,6 +140,14 @@ export namespace RmanConfig {
      *  a release happened, and it is never opted into: see `githubRelease` and the
      *  `github-release` command. */
     target?: PublishTarget | PublishTarget[];
+    /** Where this package's publishable output lives, relative to its own directory (e.g.
+     *  `"build"`). Per-package cascaded, so a root `"[*]"` block can say it once for the whole
+     *  repository instead of repeating `publishConfig.directory` in every `package.json` - which
+     *  still wins when a package declares it, being the more specific statement.
+     *
+     *  Publishing from such a directory means the manifest there is **generated by `publish`**,
+     *  from the package's own - see `PublishService`. There is nothing to configure about it. */
+    directory?: string;
     docker?: DockerPublishOptions;
     /** Excludes this package from `publish` entirely (every target), regardless of
      *  `target`/`"private"` - a single, explicit "never published" statement, e.g. for a package

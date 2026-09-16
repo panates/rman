@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 4bc7934
-package-version: 1.0.9
-date: 2026-09-15
+git-commit: 0e33a0a
+package-version: 1.0.11
+date: 2026-09-16
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff 4bc7934..HEAD -- src/
+  git diff 0e33a0a..HEAD -- src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -200,7 +200,7 @@ class Package {
 `pkg.dependencies` is **not** just what's declared in `package.json` - `Repository` computes the
 full transitive closure across every in-repo package (guarding against cycles), which is what
 powers topological sort, `--deps`/`--dependents` filtering, and `RunService`'s task scheduling.
-It also folds in anything declared under `.rmanrc packages.<name>.dependencies` (see the
+It also folds in anything declared under `.rmanrc dependencies` (see the
 [config reference](#configuration-rmanrc-rmanrcyml)) - a way to tell rman about an in-repo
 dependency relationship that isn't expressed as a real `package.json` dependency.
 
@@ -215,9 +215,114 @@ pkgA.writeJson();
 Every directory between the repository root and a package can carry its own config, cascaded the
 same way a `tsconfig.json` `extends` chain works: a value set closer to a package overrides
 (replaces, not merges - for scalars/arrays; objects merge recursively) the same key set further up
-toward the root. Root-only keys are only ever consulted from the *root's* own resolved config in
-the current implementation (see the table below), even though nothing stops you from setting them
-deeper.
+toward the root.
+
+**Who a declaration is about is decided by one rule:** unmarked keys configure the package of the
+directory that declares them; a `"[selector]"` block configures the packages it names. So the
+repository root's own `.rmanrc` configures the **root package** - which is where repo-wide settings
+are read from anyway - and reaches the other packages only through a selector:
+
+```yaml
+# the repository root's own .rmanrc.yml
+packageManager: pnpm            # repo-wide, read from the root
+run:
+  build:
+    before: node support/generate.cjs        # a repo-wide bookend, run once at the root
+
+"[*]":                                        # every package in the repository
+  run:
+    build:
+      after: node ../../support/postbuild.cjs # run in each package's own directory
+"[*-dialect]":                                # a glob over package names
+  publish: { skip: true }
+"[pkg-a]":                                    # exactly one
+  dependencies: [pkg-b]
+```
+
+The split exists because the same key means different things to the two audiences. `run.build.after`
+on a package is that package's build hook, run in its own directory; on the root it is a repo-wide
+bookend run once at the repository root. One declaration feeding both ran a package-relative command
+(`node ../../support/postbuild.cjs`) at the root, where it cannot resolve.
+
+Selector details:
+
+- The pattern is a **glob over package names**, anchored at both ends - `"[*-dialect]"` matches
+  `mysql-dialect`, not `my-dialect-helper`. `"[*]"` matches every package `getPackages()` returns:
+  in a monorepo that excludes the root, in a single-package repository it *is* the root.
+- In YAML the quotes are **required**. A bare `[*]` parses as a flow sequence, and `*` as an alias
+  indicator - the file won't load at all.
+- Precedence, lowest first: `"[*]"`, then other selectors in declaration order, then the package's
+  own unmarked config. Levels closer to the package still win over levels above them.
+- A directory holding no package of its own (an intermediate `packages/`, say) has no package to
+  speak for, so its unmarked config still cascades to everything below it.
+
+### Expressions (`${{ ... }}`)
+
+Any string value may embed `${{ ... }}`, evaluated per package - which is what lets one root
+declaration stay package-specific:
+
+```yaml
+"[*]":
+  clean:
+    include: ["build", "../../coverage/${{ pkg.basename }}"]
+  publish:
+    docker:
+      image: "panates/${{ pkg.basename }}:${{ semver.major(pkg.version) }}"
+  run:
+    build:
+      exec: "tsc -b ${{ pkg.json.tsconfig ?? 'tsconfig-build.json' }}"
+```
+
+The contents are **real JavaScript**, not a template mini-language, so there is no growing list of
+substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
+
+| | |
+| --- | --- |
+| `pkg` | the package the config was resolved for |
+| `repository` | the repository - the root package's own fields, plus repo-level ones |
+| `env` | a copy of `process.env` |
+| `semver` | rman's own `semver`, for `semver.major(pkg.version)` and friends |
+
+`pkg` and `repository` share one shape, since the repository root *is* a package:
+
+| | |
+| --- | --- |
+| `.name` | the package's own name, scope included (`@sqb/builder`) |
+| `.scope` / `.unscopedName` | `@sqb` / `builder` - `scope` is `undefined` when unscoped |
+| `.version` | its `package.json` version |
+| `.basename` | its directory's last segment - **not** the same as `name`: sqb's root is named `sqb.v4` in a directory called `sqb` |
+| `.dirname` / `.relativeDir` | absolute path / path from the repository root (`packages/builder`) |
+| `.json` | the whole `package.json`, as a copy (`pkg.json.engines.node`) |
+
+`repository` adds:
+
+| | |
+| --- | --- |
+| `.monorepo` | boolean |
+| `.packages` | every package, each in the shape above |
+| `.package(name)` | one of them by name, or `undefined` - for reaching a sibling's directory |
+| `.git.branch` / `.sha` / `.shortSha` / `.dirty` | read from git **only if an expression asks**, then remembered - so a repository that never mentions them spawns no git, and every command resolves config. All `undefined` outside a git checkout; `branch` is `undefined` on a detached HEAD. |
+
+- **`${{ }}`, deliberately not `{{ }}`.** A config value may legitimately carry `{{...}}` meant for
+  something else (`helm template --set tag={{.Values.tag}}`), and with the plainer delimiter rman
+  would try to evaluate it. A bare `{{...}}` is therefore left alone. To emit a literal `${{`, let
+  an expression produce it, as in GitHub Actions: `${{ '${{' }}`.
+- A string that is **nothing but** one expression keeps that value's own type
+  (`skip: "${{ pkg.json.private === true }}"` → a boolean); embedded in surrounding text it is
+  stringified. Without this, expressions could only ever produce strings and a setting like
+  `run.<script>.skip` would be unreachable from one.
+- A **nullish** result is fine standing alone (it just means "unset") but an **error** embedded in
+  text: splicing in the word `undefined` yields an `app:undefined` that looks plausible and is
+  wrong. Say what was meant with `?? 'fallback'`.
+- Evaluation happens in a fresh V8 context holding only those bindings. That is a clean scope,
+  **not a sandbox** - `node:vm` is [explicitly not a security
+  mechanism](https://nodejs.org/api/vm.html), and none is called for: a `.rmanrc` that can say
+  `exec: "..."` already runs arbitrary shell, so expressions add no trust boundary that wasn't
+  already wide open.
+- A failing expression throws, naming the config path that holds it (`run.build.after[1]`) -
+  passing a mistake through silently is how a config ends up quietly doing nothing.
+- Unrelated to this: a **changelog template file's** `{{package}}`/`{{version}}` placeholders are
+  that file's own content, not config values, and are never touched here.
 
 For a single directory, up to six sources merge together in **increasing precedence**:
 
@@ -327,7 +432,9 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `version.commitMessage` | `string` | `"chore(release): v{version}"` | Root-level only. `{version}` substituted when a commit's group shares one version. |
 | `version.changelog` | `boolean` | `false` | Root-level only. Default for `version --changelog` when the CLI flag isn't given - `--no-changelog` still overrides it off for one run. |
 | `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
-| `version.script` / `.preScript` / `.postScript` | `string \| string[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). |
+| `version.stampDockerfile` | `boolean` | `true` | Per-package cascaded. Rewrite this package's Dockerfile `org.opencontainers.image.version` label to the version being written, in the same commit as the bump. Only ever rewrites a label already declared; reads `publish.docker.dockerfile`. |
+| `version.stamp` | `string \| string[]` | none | Per-package cascaded. Source files (relative to the package's own directory) whose `version` constant is rewritten to the version being written, in the same commit. A listed file a package doesn't have is a silent no-op. |
+| `version.before` / `.exec` / `.after` | `string \| string[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). |
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
 | `changelog.template` | `string` (a file **path**, relative to repo root) | built-in template | Per-package cascaded. Throws if the path doesn't exist. |
 | `changelog.filePath` | `string` | `'CHANGELOG.md'` | Per-package cascaded, relative to that package's own directory. CLI `--file-path` wins when given. |
@@ -335,6 +442,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |
 | `clean.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of `clean` entirely. |
 | `publish.target` | `'npm' \| 'docker'` or an array of them | `['npm']` | Per-package cascaded. Which **registry** `publish` ships this package to. Each target has its own "already published?" check: npm via `npm view`, docker via `docker manifest inspect`. The repository's GitHub Release is not a target here - see `githubRelease`. |
+| `publish.directory` | `string` | none (the package's own directory) | Per-package cascaded. Where the publishable output lives, relative to the package's own directory. A package's own `publishConfig.directory` wins over it; `--contents` is the last fallback. Publishing from such a directory means **`publish` generates the manifest there** - see below. |
 | `publish.docker.image` | `string` | none (required once `"docker"` is a target) | A bare name is prefixed with `--docker-namespace`/`DOCKERHUB_NAMESPACE`; one already containing `/` is used verbatim. |
 | `publish.docker.dockerfile` | `string` | `'Dockerfile'` | Relative to the package's own directory. |
 | `publish.docker.platforms` | `string[]` | `['linux/amd64']` | `docker buildx build --platform` targets. |
@@ -355,9 +463,9 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `run.<script>.changedSince` | `string` | none | Root-level fallback, used only when CLI `--changed-since` isn't given. |
 | `run.<script>.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of running this script entirely. |
 | `run.<script>.if` | `string` (small expression grammar) | none (always runs) | Per-package cascaded. See [`RunService`'s conditional execution](#conditional-execution-if). |
-| `run.<script>.script` / `.preScript` / `.postScript` | `string \| string[]` | none | Per-package cascaded - supplies the command(s) to run when the package's own `package.json` doesn't define this script slot. |
+| `run.<script>.before` / `.exec` / `.after` | `string \| string[]` | none | Per-package cascaded - supplies the command(s) to run when the package's own `package.json` doesn't define this script slot. A bare string in place of the whole `run.<script>` object is shorthand for `exec`. |
 | `run.<script>.override` | `boolean` | `false` | Per-package cascaded - when `true`, the config's script replaces the package's own definition even when it has one. |
-| `packages.<pkgName>.dependencies` | `string[] \| Record<string, string>` | none | Declares extra in-repo "dependencies" not present in the package's real `package.json`, purely for rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s task scheduling). |
+| `dependencies` | `string[] \| Record<string, string>` | none | Extra in-repo "dependencies" not present in the package's real `package.json`, purely for rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s task scheduling). Declared from the root through a selector (`"[pkg-a]": { dependencies: [...] }`) or in the package's own `.rmanrc`. |
 
 `run.<script>.bail`'s precedence is worth calling out explicitly, since it's the one exception to
 "CLI always wins": a package's own `.rmanrc bail: true/false` outranks even an explicit
@@ -617,6 +725,26 @@ A pnpm/yarn `"workspace:"` range is handled specially:
 - An **explicit** `"workspace:<range>"` (e.g. `"workspace:^1.0.0"`) *is* bumped, the same way a
   plain range would be: `"workspace:^1.0.0"` → `"workspace:^2.0.0"`.
 
+#### Stamping the version where the package declares it
+
+`applyPlan` also rewrites a bumped package's `org.opencontainers.image.version` Dockerfile label to
+the new version and folds that file into the same commit as the bump (`stampVersionLabel`, in
+[`src/utils/version-stamp.ts`](../src/utils/version-stamp.ts)). The label is by specification *the
+version of the packaged software*, so there is exactly one correct value for it and this is what
+knows it; doing it from a build script instead leaves the edit uncommitted and records a stale label
+in the commit that was tagged.
+
+The file is the one `DockerPublishService` builds from (`publish.docker.dockerfile`, default
+`Dockerfile`, relative to the package's own directory), so the two can never disagree. A label the
+Dockerfile doesn't already declare is never inserted, the existing quoting style is preserved, and
+the same key outside a `LABEL` instruction is ignored. Opt out with `version.stampDockerfile: false`.
+
+The same pass rewrites the `version` constant in every file `version.stamp` lists
+(`stampVersionConstant`) - `export const version = '1'` → the new version, matching an object
+property (`version: '...'`) too, only on the whole identifier, quoting preserved. Explicitly listed
+rather than discovered, since no standard says a given file holds the version; a listed file a
+package doesn't have is a silent no-op.
+
 #### Dirty packages
 
 ```ts
@@ -652,7 +780,7 @@ namespace PublishService {
     access?: 'public' | 'restricted';
     tag?: string;
     otp?: string;
-    contents?: string; // subdirectory to publish from
+    contents?: string; // subdirectory to publish from - lowest precedence, see below
   }
 
   interface Entry {
@@ -709,6 +837,32 @@ await PublishService.applyPlan(repository, plan);
 // -> "npm publish" for pkg-b saw {"pkg-a": "1.2.3"} (pkg-a's real current version)
 // -> packages/b/package.json is back to "workspace:*" once applyPlan returns
 ```
+
+#### Where it publishes from, and the manifest it finds there
+
+Most specific first: the package's own `publishConfig.directory`, then `.rmanrc
+"publish.directory"` (one `"[*]"` line for a repository instead of a copy in every `package.json`),
+then `ApplyOptions.contents` for a single run. Absent all three, the package's own directory.
+
+When that resolves to a **subdirectory**, `applyPlan` writes the `package.json` `npm publish` will
+read there, derived from the package's own, and removes it again afterwards - it is a publish-time
+artifact, not a build output. There is nothing to configure about the derivation, because each field
+has one right answer:
+
+| Removed from the copy | Why |
+| --- | --- |
+| `devDependencies` | npm never installs a dependency's own. |
+| `scripts`, except `preinstall`/`install`/`postinstall` | Those three are the only ones a consumer's install runs; dropping them would silently break every package that builds a native module. The rest never reach a consumer (`prepare` runs for a *git* dependency, which builds from the repository, not from this tarball). |
+| `private` | `publish` refuses a private package outright, so the flag can only be wrong in a manifest being published. |
+| `publishConfig.directory` | It pointed *here*; kept, it would point one level deeper again. |
+
+`"workspace:"` ranges are resolved in it too. Publishing the package directory itself instead, that
+same resolution happens in place on its own `package.json`, restored verbatim afterwards.
+
+Generating it here rather than from a build script is what keeps it honest: a script writes it when
+the *build* runs, so bumping the version afterwards publishes a manifest that disagrees with the
+package - and the `"workspace:"` rewrite, which only ever touched the package's own file, never
+reached the copy npm actually reads.
 
 ### `DockerPublishService`
 
@@ -991,17 +1145,29 @@ await RunService.runScript(repository, 'test', { changed: true, parallel: false,
 
 `runScript` throws an `Error` with `.logged = true` (see [below](#the-logged-error-convention)) if
 any package's steps failed - `await` it inside a `try`/`catch` if you want to keep going
-programmatically instead of letting the process exit.
+programmatically instead of letting the process exit. "Any" is counted from the per-package
+outcomes, not from whether the underlying task tree rejected: a package's own `bail` aborts that
+tree, whose promise then settles while the packages already in flight keep running, so reading the
+run off it used to resolve on a failed run - and inconsistently, depending on which siblings
+happened to still be going.
+
+It also throws when **nothing defines the script at all** - a typo, or a script that was removed,
+which `npm run` fails on too. A monorepo root's own `<script>` doesn't count as defining it, since
+the root only ever contributes `pre`/`post` bookends; a script living solely there runs nothing, and
+treating it as "defined" is what let a CI step report success for months while doing nothing. Every
+package being **filtered out** instead (`scope`/`changed`/`run.<script>.skip`/a non-matching `if`)
+resolves normally: zero is the right answer to what was asked.
 
 #### Per-script config (`.rmanrc run.<script>`)
 
 ```yaml
 run:
+  test: mocha # a bare string is shorthand for { exec: mocha }
   build:
     concurrency: 2
-    script: tsc -b # used only if the package's own package.json has no "build" script
-    preScript: [node ./generate.js, node ./validate.js]
-    postScript: node ./copy-assets.js
+    before: [node ./generate.js, node ./validate.js]
+    exec: tsc -b # used only if the package's own package.json has no "build" script
+    after: node ./copy-assets.js
     override: true # use these even if the package DOES define its own build/prebuild/postbuild
   lint:
     topo: false # lint scripts are independent - alphabetical order, no dependency waiting

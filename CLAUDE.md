@@ -24,6 +24,64 @@ or between exported declarations.
 - When adding a new private helper to an existing file, append it after the last exported
   declaration rather than near whichever exported function happens to call it.
 
+## Config: who a declaration is about
+
+[`src/core/config.ts`](src/core/config.ts). One rule decides it, and it is not the usual cascade:
+
+- **Unmarked keys configure the package of the directory that declares them.** The repository
+  root's own `.rmanrc` therefore configures the *root package* - which is where every repo-wide
+  setting is read from anyway (`packageManager`, `allowBranch`, `version.*`, `githubRelease.*`).
+- **A `"[selector]"` block configures the packages it names** - `"[*]"`, `"[*-dialect]"`,
+  `"[pkg-a]"`. This is the only way a directory speaks about anything but its own package.
+- A directory holding no package (an intermediate `packages/`) has none to speak for, so its
+  unmarked config still cascades to everything below.
+
+**Never restore the old "root config is every package's baseline" cascade.** The same key means
+different things to the two audiences, and conflating them is a measured bug, not a hypothetical:
+`run.build.after` on a package is that package's hook, run in its own directory; on the root it is a
+repo-wide bookend run once at the repository root. One declaration feeding both ran
+`node ../../support/postbuild.cjs` at the root, where it cannot resolve.
+
+- Selector patterns are **globs over package names**, anchored both ends (`"[*-dialect]"` does not
+  match `my-dialect-helper`) - glob, not regex, like every other pattern in rman. `"[*]"` is
+  whatever `getPackages()` returns: not the root in a monorepo, the root itself in a single-package
+  repo.
+- Precedence, lowest first: `"[*]"` → other selectors in declaration order → the package's own
+  unmarked config. Directory levels closer to the package still win.
+- **Trap: in YAML the quotes are mandatory.** A bare `[*]` is a flow sequence and `*` an alias
+  indicator - the file fails to load. Write `"[*]":`.
+- Any string value may embed `${{ ... }}` - **real JavaScript**, evaluated per package
+  (`interpolateConfig`), in **every** string, so there is neither a list of "interpolated keys" nor
+  a growing list of substitutions to memorize. Scope: `pkg`, `repository`, `env`, `semver`.
+  - `pkg` and `repository` share one shape, because the repository root **is** a package: `name`,
+    `scope`, `unscopedName`, `version`, `basename`, `dirname`, `relativeDir`, `json`. `basename` is
+    the *directory*, `name` the package - sqb's root is `sqb.v4` in a directory called `sqb`.
+  - `repository` adds `monorepo`, `packages`, `package(name)`, and `git.{branch,sha,shortSha,dirty}`
+    - the last **lazily**, since every command resolves config and most never mention git.
+  - **`${{ }}`, never `{{ }}`**: a config value may carry `{{...}}` for something else entirely
+    (`helm template --set tag={{.Values.tag}}`). A bare `{{...}}` is left alone. A literal `${{`
+    comes from an expression producing it (`${{ '${{' }}`), as in GitHub Actions.
+  - A string that is *nothing but* one expression keeps that value's own type - otherwise a boolean
+    setting like `run.<script>.skip` would be unreachable from an expression.
+  - Detect that "sole expression" case by **counting matches**, never with an anchored `^...$`
+    regex: a lazy quantifier still backtracks to reach the end anchor, so `"${{ a }} and ${{ b }}"`
+    parsed as one expression running from `a` to `b` (measured, `Unexpected token '}'`).
+  - `vm.createContext` here is a clean scope, **not a sandbox** (`node:vm` is explicitly not a
+    security mechanism). None is needed: `exec: "..."` already runs arbitrary shell, so the config
+    was never a trust boundary. Don't reach for `isolated-vm`.
+  - A failing expression throws with the config path holding it. Never pass a mistake through. A
+    nullish result is allowed standing alone ("unset") but refused **inside a string**: splicing in
+    the word `undefined` yields an `app:undefined` that looks plausible and is wrong.
+  - A **changelog template file's** `{{package}}`/`{{version}}` are that file's content, not config
+    values - a different system, untouched by this.
+- Script hooks are `before` / `exec` / `after` (not `preScript`/`script`/`postScript`), in both
+  `run.<script>` and `version`. A bare string in place of a whole `run.<script>` object is
+  shorthand for `exec`.
+
+**Trap: a single-package repository has no root bookend.** The root *is* the one package, already
+running its own pre/post hooks in the same directory - `RunService` must keep skipping the bookend
+when `!repository.monorepo`, or every hook runs twice (measured).
+
 ## Change and release detection
 
 Three separate questions in rman look like "what changed". They are answered from different
@@ -100,6 +158,19 @@ touched package counts as changed.
 - When folding the changelog into the bump commit (`--changelog`, or `.rmanrc "version.changelog"`)
   it passes `ChangelogService` an **explicit** boundary: the pre-bump tag (`expandTag(pkg,
   entry.from)`). It cannot be left to auto-detection - see the trap below.
+- Writes more than `package.json`: a bumped package's Dockerfile
+  `org.opencontainers.image.version` label is rewritten to the new version and folded into the
+  **same commit** (`stampVersionLabel`). Keep it here, not in a build script - the label is by
+  specification the version of the packaged software, so `version` is the only thing that knows
+  it, and a build-time rewrite leaves the edit uncommitted (`publish` then reads a dirty tree) and
+  records a stale label in the commit that was actually tagged. Reads the same path
+  `DockerPublishService` builds from (`publish.docker.dockerfile`), never a second guess at it.
+  Never *inserts* a label - which labels an image carries is the author's call. The same pass
+  rewrites the `version` constant in every file `.rmanrc "version.stamp"` lists
+  (`stampVersionConstant`). **Stamp the source, never the build output**: rewriting
+  `build/constants.js` from a build script leaves the checked-in file on a placeholder, so anything
+  running from source reports it, the tagged commit never records the released version, and the
+  rewrite has to be redone every build.
 - Also decides the **repository's own** release identity (the monorepo root's version) and, on a
   calendar version, creates the repository release tag alongside the per-group ones - see
   "Release identity" below.
@@ -134,6 +205,18 @@ touched package counts as changed.
   goes to. `"github"` as a value would read as *GitHub Packages* (`npm.pkg.github.com`), which is
   what it will mean if it is ever added; it must never again mean the repository's GitHub Release.
 
+- **Publishing from a build directory** (`publishConfig.directory` > `.rmanrc "publish.directory"` >
+  `--contents`): the manifest in that directory is **generated by `publish`**, at publish time, and
+  is deliberately unconfigurable. Removed from the copy: `devDependencies`; every `scripts` entry
+  except `preinstall`/`install`/`postinstall` (the only ones a consumer's install runs - dropping
+  those would silently break every native-module package); `private` (publish refuses a private
+  package anyway); `publishConfig.directory` (it pointed *here*). `"workspace:"` ranges are resolved
+  in it, and it is deleted again afterwards.
+  - Generated here, not by a build script, for the same reason the Dockerfile label moved into
+    `version`: a build script writes it when the *build* runs, so a later bump publishes a manifest
+    that disagrees with the package. And the `"workspace:"` rewrite only ever touched the package's
+    own file, so it never reached the copy npm actually reads.
+
 ### `github-release`
 
 - **Question B, at the repository level**: does a GitHub Release already exist for the repository's
@@ -156,6 +239,13 @@ touched package counts as changed.
   release tag, so releasing without one would quietly produce notes covering the entire history.
 
 ### `list` / `run`
+
+- **An empty run has two endings, and conflating them hid a broken CI step for months.** Nothing
+  defining the script at all is a mistake - `npm run` fails on it, so does `rman` (non-zero). Every
+  package being *filtered out* (`--scope`/`--changed`/`skip`/`if:`) is the correct answer to what
+  was asked, and exits zero. The monorepo root's own `<script>` never counts toward "defined": the
+  root contributes only `pre`/`post` bookends, which is exactly why a `qc` defined solely there ran
+  nothing while reporting success.
 
 - **Question C** (`Repository.listStatus`): `dirty` (uncommitted) / `committed` (`git cherry` -
   committed but not pushed) / `clean`.

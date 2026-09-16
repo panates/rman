@@ -237,15 +237,12 @@ describe('core/Repository', () => {
       expect(repo.getPackage('pkg-c')?.dependencies.sort()).toEqual(['pkg-a', 'pkg-b']);
     });
 
-    it('adds extra dependencies declared via .rmanrc packages.<name>.dependencies', async () => {
+    it('adds extra dependencies declared via a root .rmanrc selector', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-      fs.writeFileSync(
-        path.join(dir, '.rmanrc'),
-        JSON.stringify({ packages: { 'pkg-b': { dependencies: ['pkg-a'] } } }),
-      );
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[pkg-b]': { dependencies: ['pkg-a'] } }));
 
       const repo = await Repository.create(dir);
       expect(repo.getPackage('pkg-b')?.dependencies).toEqual(['pkg-a']);
@@ -253,18 +250,174 @@ describe('core/Repository', () => {
   });
 
   describe('config cascading (pkg.config)', () => {
-    it('every package inherits the root config, overridable by its own .rmanrc', async () => {
+    it('the root\'s own config stays the root\'s; a "[*]" block is what reaches the packages', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ foo: 'root', bar: 'root' }));
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ foo: 'root-only', '[*]': { foo: 'all', bar: 'all' } }),
+      );
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
       fs.writeFileSync(path.join(dir, 'packages/b/.rmanrc'), JSON.stringify({ bar: 'b-own' }));
 
       const repo = await Repository.create(dir);
-      expect(repo.config).toEqual({ foo: 'root', bar: 'root' });
-      expect(repo.getPackage('pkg-a')?.config).toEqual({ foo: 'root', bar: 'root' });
-      expect(repo.getPackage('pkg-b')?.config).toEqual({ foo: 'root', bar: 'b-own' });
+      expect(repo.config).toEqual({ foo: 'root-only' });
+      expect(repo.getPackage('pkg-a')?.config).toEqual({ foo: 'all', bar: 'all' });
+      expect(repo.getPackage('pkg-b')?.config).toEqual({ foo: 'all', bar: 'b-own' });
+    });
+
+    it('evaluates ${{ ... }} per package, in every string value', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, version: '2.0.0', workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({
+          '[*]': {
+            clean: { include: ['build', '../../coverage/${{ pkg.basename }}'] },
+            changelog: { filePath: '${{ pkg.unscopedName }}-v${{ semver.major(pkg.version) }}.md' },
+          },
+        }),
+      );
+      writeJson(dir, 'packages/builder/package.json', { name: '@sqb/builder', version: '6.0.9' });
+
+      const repo = await Repository.create(dir);
+      // `pkg.basename` is the directory, not the package name - they differ for a scoped package.
+      expect(repo.getPackage('@sqb/builder')?.config.clean?.include).toEqual(['build', '../../coverage/builder']);
+      // Real JavaScript, so there is no list of substitutions to keep growing.
+      expect(repo.getPackage('@sqb/builder')?.config.changelog?.filePath).toBe('builder-v6.md');
+    });
+
+    it("a string that is nothing but one expression keeps the value's own type", async () => {
+      // Otherwise this could only ever produce strings, and a boolean setting like
+      // run.<script>.skip would be unreachable from an expression.
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({
+          '[*]': { run: { build: { skip: '${{ pkg.json.private === true }}', concurrency: '${{ 2 + 2 }}' } } },
+        }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0', private: true });
+
+      const repo = await Repository.create(dir);
+      const cfg = repo.getPackage('pkg-a')?.config.run?.build as Record<string, unknown>;
+      expect(cfg.skip).toBe(true);
+      expect(cfg.concurrency).toBe(4);
+    });
+
+    it('handles several expressions in one string, and a literal ${{ produced by one', async () => {
+      // The regression this guards: detecting "nothing but one expression" with an anchored
+      // ^...$ regex, where a lazy quantifier still backtracks to reach the end anchor - so
+      // "${{ a }} and ${{ b }}" read as a single expression whose body ran from a to b.
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, version: '2.0.0', workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({
+          '[*]': {
+            run: {
+              many: '${{ repository.name }} -> ${{ pkg.name }} v${{ pkg.version }}',
+              // No escape syntax: an expression produces the literal, as in GitHub Actions.
+              literal: "keep ${{ '${{' }} here",
+            },
+          },
+        }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const repo = await Repository.create(dir);
+      const run = repo.getPackage('pkg-a')?.config.run as Record<string, unknown>;
+      expect(run.many).toBe('root -> pkg-a v1.0.0');
+      expect(run.literal).toBe('keep ${{ here');
+    });
+
+    it('exposes the repository as a package plus repo-level facts', async () => {
+      // The root *is* a package, so `repository` carries PackageScope's shape - and `name` (what
+      // its package.json says) genuinely differs from `basename` (the directory it sits in).
+      const dir = tmp();
+      fs.renameSync(dir, dir + '-sqb');
+      dirs.push(dir + '-sqb');
+      const root = dir + '-sqb';
+      writeJson(root, 'package.json', { name: 'sqb.v4', private: true, version: '4.0.8', workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(root, '.rmanrc'),
+        JSON.stringify({
+          '[*]': {
+            run: {
+              a: '${{ repository.name }} @ ${{ repository.version }} in ${{ repository.basename }}',
+              b: '${{ repository.monorepo }} / ${{ repository.packages.length }}',
+              c: '${{ repository.package("pkg-b")?.basename }}',
+              d: '${{ repository.json.workspaces[0] }}',
+            },
+          },
+        }),
+      );
+      writeJson(root, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(root, 'packages/bee/package.json', { name: 'pkg-b', version: '1.0.0' });
+
+      const repo = await Repository.create(root);
+      const run = repo.getPackage('pkg-a')?.config.run as Record<string, unknown>;
+      expect(run.a).toBe(`sqb.v4 @ 4.0.8 in ${path.basename(root)}`);
+      expect(run.b).toBe('true / 2');
+      // Reaches a sibling by name, whose directory need not match it.
+      expect(run.c).toBe('bee');
+      expect(run.d).toBe('packages/*');
+    });
+
+    it('refuses a nullish expression embedded in text, but allows one standing alone', async () => {
+      // Splicing the word "undefined" into a tag or path ("app:undefined") looks plausible and is
+      // wrong. Alone it just means "unset", which is a legitimate answer.
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { run: { tag: 'app:${{ pkg.json.missing }}' } } }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      await expect(Repository.create(dir)).rejects.toThrow(/run\.tag.*undefined inside a string/s);
+
+      const ok = tmp();
+      writeJson(ok, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(ok, '.rmanrc'),
+        JSON.stringify({
+          '[*]': { run: { build: { skip: '${{ pkg.json.missing }}' }, tag: 'app:${{ pkg.json.missing ?? "dev" }}' } },
+        }),
+      );
+      writeJson(ok, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      const repo = await Repository.create(ok);
+      const run = repo.getPackage('pkg-a')?.config.run as Record<string, any>;
+      expect(run.build.skip).toBeUndefined();
+      expect(run.tag).toBe('app:dev');
+    });
+
+    it('leaves a bare {{...}} alone - it belongs to whatever else reads the command', async () => {
+      // `helm template --set tag={{.Values.tag}}` must survive untouched; that is why the
+      // delimiter is ${{ }} and not {{ }}.
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { run: { deploy: 'helm template --set tag={{.Values.tag}}' } } }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.run?.deploy).toBe('helm template --set tag={{.Values.tag}}');
+    });
+
+    it('a failing expression names the config path holding it, instead of passing through', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { run: { build: { after: ['ok', '${{ pkg.nope.split("/") }}'] } } } }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      await expect(Repository.create(dir)).rejects.toThrow(/run\.build\.after\[1\]/);
     });
   });
 

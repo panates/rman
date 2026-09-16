@@ -740,6 +740,100 @@ describe('services/version', () => {
       expect(log).toContain('chore(release): v1.1.0');
     });
 
+    it("stamps each bumped package's Dockerfile version label into the same commit", async () => {
+      // Otherwise every repo shipping an image repeats the same rewrite in its own build script -
+      // and does it after the bump commit, leaving the tree dirty and git recording a stale label.
+      const { dir } = fixtureWithOrigin();
+      const dockerfile = path.join(dir, 'packages/a/Dockerfile');
+      fs.writeFileSync(dockerfile, 'FROM node:22\nLABEL org.opencontainers.image.version="1.0.0"\n');
+      commitAll(dir, 'chore: add a Dockerfile');
+
+      const repo = await Repository.create(dir);
+      await VersionService.applyPlan(repo, await VersionService.getPlan(repo));
+
+      expect(fs.readFileSync(dockerfile, 'utf-8')).toContain('org.opencontainers.image.version="1.1.0"');
+      // In the bump commit, not left behind as a local edit for "publish" to trip over.
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+      expect(git(dir, 'show', '--name-only', '--format=', 'HEAD')).toContain('packages/a/Dockerfile');
+    });
+
+    it('reads the same Dockerfile path "publish --target docker" builds from', async () => {
+      const { dir } = fixtureWithOrigin();
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        rman: { publish: { target: ['docker'], docker: { image: 'x', dockerfile: 'docker/Dockerfile.prod' } } },
+      });
+      const dockerfile = path.join(dir, 'packages/a/docker/Dockerfile.prod');
+      fs.mkdirSync(path.dirname(dockerfile), { recursive: true });
+      fs.writeFileSync(dockerfile, 'LABEL org.opencontainers.image.version="1.0.0"\n');
+      commitAll(dir, 'chore: add a Dockerfile');
+
+      const repo = await Repository.create(dir);
+      await VersionService.applyPlan(repo, await VersionService.getPlan(repo));
+      expect(fs.readFileSync(dockerfile, 'utf-8')).toContain('org.opencontainers.image.version="1.1.0"');
+    });
+
+    it('.rmanrc "version.stampDockerfile": false leaves the Dockerfile alone', async () => {
+      const { dir } = fixtureWithOrigin();
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        rman: { version: { stampDockerfile: false } },
+      });
+      const dockerfile = path.join(dir, 'packages/a/Dockerfile');
+      fs.writeFileSync(dockerfile, 'LABEL org.opencontainers.image.version="1.0.0"\n');
+      commitAll(dir, 'chore: add a Dockerfile');
+
+      const repo = await Repository.create(dir);
+      await VersionService.applyPlan(repo, await VersionService.getPlan(repo));
+      expect(fs.readFileSync(dockerfile, 'utf-8')).toContain('org.opencontainers.image.version="1.0.0"');
+    });
+
+    it('stamps a .rmanrc "version.stamp" source constant into the same commit', async () => {
+      // The source, not the build output: a build-time rewrite leaves the checked-in file claiming
+      // a placeholder, so anything running from source reports it and git never records the release.
+      const { dir } = fixtureWithOrigin();
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        rman: { version: { stamp: ['src/constants.ts'] } },
+      });
+      const constants = path.join(dir, 'packages/a/src/constants.ts');
+      fs.mkdirSync(path.dirname(constants), { recursive: true });
+      fs.writeFileSync(constants, "export const version = '1';\n");
+      commitAll(dir, 'chore: add constants');
+
+      const repo = await Repository.create(dir);
+      await VersionService.applyPlan(repo, await VersionService.getPlan(repo));
+
+      expect(fs.readFileSync(constants, 'utf-8')).toBe("export const version = '1.1.0';\n");
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+      expect(git(dir, 'show', '--name-only', '--format=', 'HEAD')).toContain('packages/a/src/constants.ts');
+    });
+
+    it('a listed file a package does not have is a silent no-op', async () => {
+      // So one "[*]" declaration covers a repo where only some packages carry one.
+      const { dir } = fixtureWithOrigin();
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        rman: { version: { stamp: ['src/constants.ts'] } },
+      });
+      commitAll(dir, 'chore: no constants file here');
+
+      const repo = await Repository.create(dir);
+      await VersionService.applyPlan(repo, await VersionService.getPlan(repo));
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+    });
+
+    it('a package with no Dockerfile at all is unaffected', async () => {
+      const { dir } = fixtureWithOrigin();
+      const repo = await Repository.create(dir);
+      await VersionService.applyPlan(repo, await VersionService.getPlan(repo));
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+    });
+
     it('never pushes unless options.push is set', async () => {
       const { dir, originDir } = fixtureWithOrigin();
       const repo = await Repository.create(dir);

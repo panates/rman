@@ -311,7 +311,10 @@ describe('services/changelog', () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { ignoreTypes: ['chore', 'dev'] } }));
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { changelog: { ignoreTypes: ['chore', 'dev'] } } }),
+      );
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       run('init', '-q');
       run('config', 'user.email', 't@t.com');
@@ -342,7 +345,7 @@ describe('services/changelog', () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { ignoreTypes: ['chore'] } }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { changelog: { ignoreTypes: ['chore'] } } }));
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       run('init', '-q');
       run('config', 'user.email', 't@t.com');
@@ -362,7 +365,7 @@ describe('services/changelog', () => {
     it('a package can override ignoreTypes for just itself, cascading from the root default', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { ignoreTypes: ['chore'] } }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { changelog: { ignoreTypes: ['chore'] } } }));
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
       // pkg-b wants to see "chore" commits in its own changelog, unlike the root default.
@@ -493,7 +496,7 @@ describe('services/changelog', () => {
 
     it('.rmanrc "changelog.filePath" sets a per-package default, cascading from the root', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { filePath: 'HISTORY.md' } }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { changelog: { filePath: 'HISTORY.md' } } }));
       // pkg-b wants to keep the default filename, unlike the root default.
       fs.writeFileSync(
         path.join(dir, 'packages/b/.rmanrc'),
@@ -509,7 +512,7 @@ describe('services/changelog', () => {
 
     it('an explicit option filePath wins over .rmanrc "changelog.filePath"', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { filePath: 'HISTORY.md' } }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { changelog: { filePath: 'HISTORY.md' } } }));
       const repo = await Repository.create(dir);
 
       await ChangelogService.generateToFile(repo, { filePath: 'NOTES.md' }, noNpm);
@@ -523,7 +526,10 @@ describe('services/changelog', () => {
     it('uses the referenced template file, substituting {{package}}/{{version}}/{{features}}', async () => {
       const { dir } = fixtureWithUnpushedCommits();
       fs.writeFileSync(path.join(dir, 'my-template.md'), 'Release notes for {{package}} v{{version}}\n{{features}}\n');
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { template: './my-template.md' } }));
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { changelog: { template: './my-template.md' } } }),
+      );
 
       const repo = await Repository.create(dir);
       const output = content(await ChangelogService.getEntries(repo, {}, noNpm));
@@ -535,7 +541,10 @@ describe('services/changelog', () => {
 
     it('throws a clear error when the referenced template file does not exist', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { template: './missing-template.md' } }));
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { changelog: { template: './missing-template.md' } } }),
+      );
       const repo = await Repository.create(dir);
       await expect(ChangelogService.getEntries(repo, {}, noNpm)).rejects.toThrow(/changelog\.template not found/);
     });
@@ -590,7 +599,7 @@ describe('services/changelog', () => {
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       run('tag', 'pkg-a@3.1.0');
       // pkg-b is never tagged - it should still fall back to its own package.json version.
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { tagPattern: '{name}@*' } }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { changelog: { tagPattern: '{name}@*' } } }));
 
       const repo = await Repository.create(dir);
       const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
@@ -602,7 +611,7 @@ describe('services/changelog', () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/builder/package.json', { name: '@sqb/builder', version: '1.0.0' });
-      fs.writeFileSync(dir + '/.rmanrc', JSON.stringify({ changelog: { tagPattern: '{name}@*' } }));
+      fs.writeFileSync(dir + '/.rmanrc', JSON.stringify({ '[*]': { changelog: { tagPattern: '{name}@*' } } }));
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       run('init', '-q');
       run('config', 'user.email', 't@t.com');
@@ -639,7 +648,7 @@ describe('services/changelog', () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { tagPattern: '{name}@*' } }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { changelog: { tagPattern: '{name}@*' } } }));
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       run('init', '-q');
       run('config', 'user.email', 't@t.com');
@@ -674,7 +683,7 @@ describe('services/changelog', () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { tagPattern: '{name}@*' } }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { changelog: { tagPattern: '{name}@*' } } }));
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       run('init', '-q');
       run('config', 'user.email', 't@t.com');
@@ -755,7 +764,7 @@ describe('services/changelog', () => {
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { tagPattern: '{name}@*' } }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { changelog: { tagPattern: '{name}@*' } } }));
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       run('init', '-q');
       run('config', 'user.email', 't@t.com');
@@ -825,7 +834,7 @@ describe('services/changelog', () => {
       run('commit', '-q', '-m', 'feat: released in 1.5.0');
       run('tag', 'pkg-a@1.5.0');
 
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { tagPattern: '{name}@*' } }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { changelog: { tagPattern: '{name}@*' } } }));
       run('add', '-A');
       run('commit', '-q', '-m', 'chore: add rmanrc');
 

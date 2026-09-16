@@ -186,6 +186,28 @@ describe('run: Run.runScript() integration', () => {
     });
   });
 
+  describe('an empty run', () => {
+    it('fails when no package defines the script - including one defined only on the root', async () => {
+      // How `rman run qc` sat in a CI pipeline reporting success while running nothing: `qc` lived
+      // on the root, whose own scripts a monorepo never runs - only its pre/post bookends. `npm
+      // run` fails on a script that doesn't exist; so does this.
+      const repo = await fixture({ 'pkg-a': { scripts: { build: quiet('echo a') } } }, { scripts: { qc: 'echo qc' } });
+      const { lines, error } = await captureLogs(() => RunService.runScript(repo, 'qc', { progress: false }));
+      expect(error).toBeDefined();
+      expect(lines.some(l => l.includes('No package defines a "qc" script'))).toBe(true);
+    });
+
+    it('succeeds when the script exists but every package was filtered out', async () => {
+      // "build only what changed" must not fail a pipeline on a run where nothing changed.
+      const repo = await fixture({ 'pkg-a': { scripts: { build: quiet('echo a') } } });
+      const { lines, error } = await captureLogs(() =>
+        RunService.runScript(repo, 'build', { progress: false, scope: ['no-such-package'] }),
+      );
+      expect(error).toBeUndefined();
+      expect(lines.some(l => l.includes('filtered out'))).toBe(true);
+    });
+  });
+
   describe('bail', () => {
     it('default (true): stops a not-yet-started independent package after a failure', async () => {
       const repo = await fixture({
@@ -194,6 +216,38 @@ describe('run: Run.runScript() integration', () => {
       });
       const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false, parallel: 1 }));
       expect(lines.some(l => l.includes('pkg-b-ran'))).toBe(false);
+    });
+
+    it('one failed package fails the command, even with siblings still in flight', async () => {
+      // The bug this guards: a package's own bail aborts the root task, whose promise then settles
+      // immediately while the packages already running carry on. Reading the run's outcome off
+      // that promise made the command exit 0 on a failed run - and non-deterministically, since it
+      // came down to which siblings happened to still be running (measured: 1 0 1 1 0 across five
+      // identical runs). The per-package tallies are the authority instead.
+      const repo = await fixture({
+        'pkg-a': { scripts: { build: 'exit 1' } },
+        // Slow enough to still be running when pkg-a fails - a plain `sleep` would be flakier.
+        'pkg-slow': {
+          scripts: { build: quiet('node -e "const t=Date.now();while(Date.now()-t<300);"') },
+        },
+        'pkg-c': { scripts: { build: quiet('echo pkg-c-ran') } },
+      });
+      const { lines, error } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('failed');
+      // And the summary describes a finished run, not a snapshot of one still going: it used to
+      // print the sibling as "skipped" and then let it succeed afterwards.
+      expect(lines.some(l => /2 succeeded, 1 failed/.test(l))).toBe(true);
+    });
+
+    it('a clean run still resolves', async () => {
+      const repo = await fixture({
+        'pkg-a': { scripts: { build: quiet('echo pkg-a-ran') } },
+        'pkg-b': { scripts: { build: quiet('echo pkg-b-ran') } },
+      });
+      const { error } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      expect(error).toBeUndefined();
     });
 
     it('bail=false: an independent package still runs after an earlier failure', async () => {
@@ -247,20 +301,29 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('ROOT-POST-RAN'))).toBe(false);
     });
 
-    it('a root-level skip cascades to packages too, since it is their config baseline', async () => {
-      const repo = await fixture(
+    it('a root-level skip is the root\'s own; a "[*]" one reaches the packages', async () => {
+      // The split in one test: the same key means "the repo-wide bookend" at the root and "this
+      // package" under a selector, so one declaration must never silently be read as the other.
+      const onlyRoot = await fixture(
         { 'pkg-a': { scripts: { build: quiet('echo pkg-a-ran') } } },
         { rmanrc: { run: { build: { skip: true } } } },
       );
-      const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
-      expect(lines.some(l => l.includes('pkg-a-ran'))).toBe(false);
+      const a = await captureLogs(() => RunService.runScript(onlyRoot, 'build', { progress: false }));
+      expect(a.lines.some(l => l.includes('pkg-a-ran'))).toBe(true);
+
+      const allPackages = await fixture(
+        { 'pkg-a': { scripts: { build: quiet('echo pkg-a-ran') } } },
+        { rmanrc: { '[*]': { run: { build: { skip: true } } } } },
+      );
+      const b = await captureLogs(() => RunService.runScript(allPackages, 'build', { progress: false }));
+      expect(b.lines.some(l => l.includes('pkg-a-ran'))).toBe(false);
     });
   });
 
-  describe('config-provided script/pre/post', () => {
-    it('run.<script>.script lets a package with no such script in package.json run it anyway', async () => {
+  describe('config-provided exec/before/after', () => {
+    it('run.<script>.exec lets a package with no such script in package.json run it anyway', async () => {
       const repo = await fixture({
-        'pkg-a': { rmanrc: { run: { build: { script: quiet('echo config-script-ran') } } } },
+        'pkg-a': { rmanrc: { run: { build: { exec: quiet('echo config-script-ran') } } } },
       });
       const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
       expect(lines.some(l => l.includes('config-script-ran'))).toBe(true);
@@ -270,7 +333,7 @@ describe('run: Run.runScript() integration', () => {
       const repo = await fixture({
         'pkg-a': {
           scripts: { build: quiet('echo own-script-ran') },
-          rmanrc: { run: { build: { script: quiet('echo config-script-ran') } } },
+          rmanrc: { run: { build: { exec: quiet('echo config-script-ran') } } },
         },
       });
       const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
@@ -282,7 +345,7 @@ describe('run: Run.runScript() integration', () => {
       const repo = await fixture({
         'pkg-a': {
           scripts: { build: quiet('echo own-script-ran') },
-          rmanrc: { run: { build: { script: quiet('echo config-script-ran'), override: true } } },
+          rmanrc: { run: { build: { exec: quiet('echo config-script-ran'), override: true } } },
         },
       });
       const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
@@ -290,13 +353,13 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('config-script-ran'))).toBe(true);
     });
 
-    it('run.<script>.preScript/.postScript fill in for missing pre/post hooks around the package.json script', async () => {
+    it('run.<script>.before/.after fill in for missing pre/post hooks around the package.json script', async () => {
       const repo = await fixture({
         'pkg-a': {
           scripts: { build: quiet('echo main-ran') },
           rmanrc: {
             run: {
-              build: { preScript: quiet('echo pre-ran'), postScript: quiet('echo post-ran') },
+              build: { before: quiet('echo pre-ran'), after: quiet('echo post-ran') },
             },
           },
         },
@@ -311,7 +374,7 @@ describe('run: Run.runScript() integration', () => {
       const repo = await fixture({
         'pkg-a': {
           scripts: { build: quiet('echo main-ran'), prebuild: quiet('echo own-pre-ran') },
-          rmanrc: { run: { build: { preScript: quiet('echo config-pre-ran'), override: true } } },
+          rmanrc: { run: { build: { before: quiet('echo config-pre-ran'), override: true } } },
         },
       });
       const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
@@ -319,22 +382,22 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('config-pre-ran'))).toBe(true);
     });
 
-    it('a root-level run.<script>.script cascades as the default for every package missing one', async () => {
+    it('a root-level "[*]" run.<script>.exec is the default for every package missing one', async () => {
       const repo = await fixture(
         { 'pkg-a': {}, 'pkg-b': { scripts: { build: quiet('echo pkg-b-own-ran') } } },
-        { rmanrc: { run: { build: { script: quiet('echo root-default-ran') } } } },
+        { rmanrc: { '[*]': { run: { build: { exec: quiet('echo root-default-ran') } } } } },
       );
       const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
       expect(lines.some(l => l.includes('root-default-ran'))).toBe(true);
       expect(lines.some(l => l.includes('pkg-b-own-ran'))).toBe(true);
     });
 
-    it('script/pre/post accept an array of commands, run in sequence', async () => {
+    it('exec/before/after accept an array of commands, run in sequence', async () => {
       const repo = await fixture({
         'pkg-a': {
           rmanrc: {
             run: {
-              build: { preScript: [quiet('echo pre-1-ran'), quiet('echo pre-2-ran')], script: quiet('echo main-ran') },
+              build: { before: [quiet('echo pre-1-ran'), quiet('echo pre-2-ran')], exec: quiet('echo main-ran') },
             },
           },
         },
@@ -353,7 +416,7 @@ describe('run: Run.runScript() integration', () => {
     it('an earlier failure in an array stops the later commands, same as "&&" in package.json', async () => {
       const repo = await fixture({
         'pkg-a': {
-          rmanrc: { run: { build: { preScript: ['exit 1', quiet('echo should-not-run')] } } },
+          rmanrc: { run: { build: { before: ['exit 1', quiet('echo should-not-run')] } } },
         },
       });
       const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false, bail: false }));
