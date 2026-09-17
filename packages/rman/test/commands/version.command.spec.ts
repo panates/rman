@@ -100,12 +100,24 @@ describe('commands/version', () => {
   }
 
   describe('an explicit bump keyword', () => {
-    it('applies immediately, printing the plan then an "updated" line per bumped package', async () => {
+    it('applies immediately, printing the plan and then what the run actually did', async () => {
       const dir = fixture();
       const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+      const out = lines.join('\n');
 
       expect(lines.some(l => l.includes('bump') && l.includes('pkg-a') && l.includes('1.0.1'))).toBe(true);
-      expect(lines.some(l => l.includes('updated') && l.includes('pkg-a'))).toBe(true);
+      /**
+       * **Not the table again.** A per-package `updated pkg-a 1.0.0 -> 1.0.1` roll-call used to
+       * follow, which could not have differed from the rows above it - `applyPlan` returned the
+       * plan untouched. What follows now is what the plan cannot say.
+       */
+      expect(out).toMatch(/updated \d+ package/);
+      expect(out).toContain('commit');
+      expect(out).toContain('tags');
+      expect(out).toContain('not pushed');
+      /** And the second listing is gone: the package name appears in the table, not after it. */
+      expect(lines.filter(l => l.includes('updated') && l.includes('pkg-a'))).toHaveLength(0);
+
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
       expect(pkg.version).toBe('1.0.1');
     });
@@ -172,7 +184,7 @@ describe('commands/version', () => {
       const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--yes'] }));
 
       expect(lines.some(l => l.includes('bump') && l.includes('pkg-a') && l.includes('1.0.1'))).toBe(true);
-      expect(lines.some(l => l.includes('updated') && l.includes('pkg-a'))).toBe(true);
+      expect(lines.join('\n')).toMatch(/updated \d+ package/);
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
       expect(pkg.version).toBe('1.0.1');
     });

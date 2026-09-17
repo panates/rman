@@ -71,6 +71,34 @@ Any package with uncommitted local changes aborts the whole run (`N package(s) h
 local changes (pass --ignore-dirty to exclude them instead of aborting)`) unless `--ignore-dirty`
 is given. With nothing to bump at all, prints `Nothing to version.`.
 
+## What it reports once applied
+
+The table above is the plan. Once a run applies, what follows is **what it did** - deliberately not
+the same list again:
+
+```
+updated 2 packages
+commit  f167ee2  chore: sync root version to 2026.9.17-1814
+commit  81fb42d  chore(release): v1.1.0
+commit  c9992f8  chore(release): v2.1.0
+tags    pkg-a@1.1.0, pkg-b@2.1.0
+tags    release-2026.9.17-1814 (repository release)
+push    not pushed - run with --push, or push it yourself
+```
+
+Each line is something the plan cannot tell you:
+
+- **`updated`** counts the packages whose manifest was written. In a monorepo that is *fewer* than
+  the plan's `bump` rows: the root's entry is informational and never written, which the old output
+  listed as `updated <root> 1.0.12 -> 1.1.1` - reading as a write that never happened.
+- **`commit`** - one per group, so independently-versioned lines get clean, separate commits, plus
+  the root's own version-sync commit ahead of them. Nothing reported these at all before.
+- **`tags`** - each group's tag, then the repository release tag on its own line (calendar versions
+  only, see [The repository's own version](#the-repositorys-own-version)). A tag that already
+  existed reads `(existing, left alone)` rather than being silently counted as created.
+- **`push`** - a release that is committed but not pushed looks identical to one that is, until
+  someone looks.
+
 ## Grouping (`.rmanrc group`)
 
 Packages are partitioned into **groups**, and severity/version decisions happen per group:

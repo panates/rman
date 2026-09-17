@@ -37,6 +37,45 @@ export namespace VersionService {
   }
 
   /**
+   * **What `applyPlan` actually did** - which is not derivable from the plan it was given.
+   *
+   * It used to return that plan, untouched, so the one caller could only re-print the table it had
+   * already shown while the commits, the tags and the push stayed silent - the three things a
+   * reader does not already know. A `version` run can produce several commits (one per group, plus
+   * the root's informational one), tag each group, add a repository release tag, and skip a tag that
+   * already existed; none of that is visible from the outside.
+   */
+  export interface ApplyResult {
+    /** The plan, as given - `'bump'` entries included, so a caller can still relate the rest to it. */
+    entries: VersionPlanService.Entry[];
+    /** The entries whose manifest was actually written. **Not every `'bump'` entry**: a monorepo
+     *  root's is informational, and `updated` is the number worth reporting. */
+    updated: VersionPlanService.Entry[];
+    commits: Commit[];
+    /** Every tag this run considered, in creation order. `created: false` means it was already
+     *  there and left alone - which is a different outcome from having made it. */
+    tags: Tag[];
+    /** Whether `git push` ran. `false` is the default and the common case, and saying so is the
+     *  point: a release that is committed but not pushed looks identical otherwise. */
+    pushed: boolean;
+  }
+
+  export interface Commit {
+    /** Short sha. */
+    sha: string;
+    message: string;
+    /** The packages whose version this commit carries - empty for the root's informational sync. */
+    packages: string[];
+  }
+
+  export interface Tag {
+    name: string;
+    created: boolean;
+    /** True for the repository's own release tag, which belongs to no single package. */
+    release?: boolean;
+  }
+
+  /**
    * Writes every `'bump'` entry's new version into its own manifest (and refreshes any other bumped
    * package's dependency range on it), runs that package's own version-lifecycle hooks or its
    * `.rmanrc version.before`/`.exec`/`.after` around the write - see the `hook` closure below -
@@ -48,7 +87,7 @@ export namespace VersionService {
     repository: Repository,
     plan: VersionPlanService.Entry[],
     options: ApplyOptions = {},
-  ): Promise<VersionPlanService.Entry[]> {
+  ): Promise<ApplyResult> {
     const git = new GitHelper({ cwd: repository.dirname });
     // The root's own entry is only ever a real package to write/commit like any other when this
     // *isn't* a monorepo (see `getPlan`) - in a monorepo it's the separate, purely informational
@@ -161,11 +200,18 @@ export namespace VersionService {
      *  *before* the group commits, so the last commit this makes is always a tagged release commit -
      *  otherwise the tag sits one commit behind HEAD and every `git tag --points-at HEAD` consumer
      *  (CI capturing the tag it just released, say) comes up empty in a monorepo. */
+    const commits: Commit[] = [];
+    const tagged: Tag[] = [];
+
     if (rootEntry?.status === 'bump') {
-      await git.commit(
+      const message = `chore: sync root version to ${rootEntry.to}`;
+      const sha = await git.commit(
         [path.relative(repository.dirname, repository.rootPackage.manifestFileName)],
-        `chore: sync root version to ${rootEntry.to}`,
+        message,
       );
+      /** No packages: this commit carries the root's informational version and nothing releasable,
+       *  which is why `updated` does not count it either. */
+      commits.push({ sha, message, packages: [] });
     }
 
     const byGroup = new Map<string, VersionPlanService.Entry[]>();
@@ -181,9 +227,15 @@ export namespace VersionService {
         if (changelogFile) files.push(changelogFile);
         files.push(...(stampedByPackage.get(e.package.name) ?? []));
       }
-      await git.commit(files, buildCommitMessage(repository, groupEntries, options.message));
+      const message = buildCommitMessage(repository, groupEntries, options.message);
+      const sha = await git.commit(files, message);
+      commits.push({ sha, message, packages: groupEntries.map(e => e.package.name) });
       const tags = new Set(groupEntries.map(e => ChangeHashService.expandTag(e.package, e.to!)));
-      for (const tag of tags) if (!(await git.tagExists(tag))) await git.createTag(tag);
+      for (const tag of tags) {
+        const exists = await git.tagExists(tag);
+        if (!exists) await git.createTag(tag);
+        tagged.push({ name: tag, created: !exists });
+      }
     }
 
     /** A repository release tag, on top of the per-group ones - but only once the root is on a
@@ -200,10 +252,12 @@ export namespace VersionService {
         );
       }
       await git.createTag(releaseTag);
+      tagged.push({ name: releaseTag, created: true, release: true });
     }
 
-    if (options.push && bumped.length) await git.push();
-    return plan;
+    const pushed = !!options.push && bumped.length > 0;
+    if (pushed) await git.push();
+    return { entries: plan, updated: bumped, commits, tags: tagged, pushed };
   }
 
   /** `.rmanrc version.commitMessage` (root-level; `{version}` is replaced when every bumped package

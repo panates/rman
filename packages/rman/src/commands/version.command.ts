@@ -137,19 +137,45 @@ export function initCli(repository: Repository, program: Argv) {
         message: args.message as string | undefined,
         changelog,
       });
-      for (const entry of applied) {
-        if (entry.status === 'bump') {
-          console.log(
-            colors.green('updated'),
-            colors.cyan(entry.package.name),
-            entry.from,
-            '->',
-            colors.yellow(entry.to!),
-          );
-        }
-      }
+      printApplied(applied);
     },
   });
+}
+
+/**
+ * What the run *did* - which is deliberately not the table again.
+ *
+ * The plan is printed above, so repeating `name from -> to` per package said nothing: `applyPlan`
+ * returned the same array it was handed, so the second list could not have differed. What it never
+ * reported is everything below - the commits (one per group, plus the root's informational sync),
+ * the tags, a tag that already existed and was left alone, and whether any of it was pushed. A
+ * release that is committed but not pushed looks identical to one that is, until someone looks.
+ */
+function printApplied(result: VersionService.ApplyResult): void {
+  const count = result.updated.length;
+  console.log(`\n${colors.green('updated')} ${count} package${count === 1 ? '' : 's'}`);
+
+  for (const commit of result.commits) {
+    console.log(
+      `${colors.green('commit')}  ${colors.yellow(commit.sha)}  ${colors.gray(commit.message.split('\n')[0])}`,
+    );
+  }
+  if (result.tags.length) {
+    const label = (tag: VersionService.Tag) =>
+      colors.cyan(tag.name) + (tag.created ? '' : colors.gray(' (existing, left alone)'));
+    const release = result.tags.filter(t => t.release);
+    const perPackage = result.tags.filter(t => !t.release);
+    if (perPackage.length) console.log(`${colors.green('tags')}    ${perPackage.map(label).join(', ')}`);
+    /** Listed on its own line: it belongs to the repository rather than to any package, which is
+     *  the whole reason it exists. */
+    if (release.length)
+      console.log(`${colors.green('tags')}    ${release.map(label).join(', ')} ${colors.gray('(repository release)')}`);
+  }
+  console.log(
+    result.pushed
+      ? `${colors.green('push')}    pushed, with tags`
+      : `${colors.gray('push')}    ${colors.gray('not pushed - run with --push, or push it yourself')}`,
+  );
 }
 
 function printPlan(entries: VersionPlanService.Entry[]): void {

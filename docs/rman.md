@@ -653,8 +653,17 @@ namespace VersionService {
     reason?: string;
   }
 
+  /** What `applyPlan` did - not the plan it was given. */
+  interface ApplyResult {
+    entries: Entry[]; // the plan, as given
+    updated: Entry[]; // the entries whose manifest was actually written
+    commits: { sha: string; message: string; packages: string[] }[];
+    tags: { name: string; created: boolean; release?: boolean }[];
+    pushed: boolean;
+  }
+
   function getPlan(repository: Repository, options?: Options): Promise<Entry[]>;
-  function applyPlan(repository: Repository, plan: Entry[], options?: ApplyOptions): Promise<Entry[]>;
+  function applyPlan(repository: Repository, plan: Entry[], options?: ApplyOptions): Promise<ApplyResult>;
 }
 
 // Also exported at module scope, shared with PublishService:
@@ -676,8 +685,20 @@ for (const entry of plan) {
 }
 
 // 2. Apply it - writes package.json, commits, tags (once per group).
-const applied = await VersionService.applyPlan(repository, plan, { push: true, changelog: true });
+const result = await VersionService.applyPlan(repository, plan, { push: true, changelog: true });
+
+console.log(`${result.updated.length} packages`);
+for (const c of result.commits) console.log(c.sha, c.message, c.packages);
+for (const t of result.tags) console.log(t.name, t.created ? 'created' : 'already existed');
+console.log(result.pushed ? 'pushed' : 'not pushed');
 ```
+
+**`applyPlan` reports what it did**, because none of it is derivable from the plan: a run makes one
+commit per group *plus* a monorepo root's informational sync, tags each group, may add a repository
+release tag, and leaves an already-existing tag alone. `updated` is deliberately narrower than the
+plan's `'bump'` entries - a monorepo root's entry is never written, so counting it said two writes
+where there was one. It returned the plan array untouched before, which is why `rman version`
+could only re-print the table it had already shown.
 
 A tagged group release commit is always the **last** commit `applyPlan` makes: a monorepo root's
 own version-sync commit goes in ahead of the group commits, so the release tag lands on `HEAD`

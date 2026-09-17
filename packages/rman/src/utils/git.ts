@@ -223,12 +223,20 @@ export class GitHelper {
     }
   }
 
-  /** Stages and commits exactly `files` (relative to `cwd`, or absolute) with `message` - never a
-   *  blanket `git add -A`, so the commit only ever contains what the caller explicitly asked for. */
-  async commit(files: string[], message: string): Promise<void> {
+  /**
+   * Stages and commits exactly `files` (relative to `cwd`, or absolute) with `message` - never a
+   * blanket `git add -A`, so the commit only ever contains what the caller explicitly asked for.
+   *
+   * Returns the **short sha** of the commit it made. It used to return nothing, which left every
+   * caller unable to say what it had just done: `version` made up to one commit per group and
+   * reported none of them.
+   */
+  async commit(files: string[], message: string): Promise<string> {
     try {
       await execFileAsync('git', ['add', '--', ...files], { cwd: this.cwd });
       await execFileAsync('git', ['commit', '-m', message], { cwd: this.cwd });
+      const { stdout } = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], { cwd: this.cwd });
+      return stdout.trim();
     } catch (e: any) {
       throw new Error(`Unable to commit ${files.join(', ')}: ${e.message}`, { cause: e });
     }

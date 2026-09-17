@@ -529,6 +529,21 @@ touched package counts as changed.
 - When folding the changelog into the bump commit (`--changelog`, or `.rmanrc "version.changelog"`)
   it passes `ChangelogService` an **explicit** boundary: the pre-bump tag (`expandTag(pkg,
   entry.from)`). It cannot be left to auto-detection - see the trap below.
+- **`applyPlan` returns what it did (`ApplyResult`), not the plan it was given.** It used to
+  `return plan` - the same array, never touched - so its one caller could only re-print the table it
+  had already printed, while the commits, the tags and the push stayed silent. Those are the three
+  things a reader does not already know: a run makes one commit per group **plus** a monorepo root's
+  informational sync, tags each group, may add a repository release tag, and leaves an
+  already-existing tag alone.
+  - `updated` is narrower than the plan's `'bump'` entries **on purpose**: a monorepo root's entry
+    is never written. The old per-package roll-call listed it as `updated <root> 1.0.12 -> 1.1.1`,
+    which reads as a write that did not happen.
+  - `tags` carries `created: false` for one that was already there. The case that guard exists for
+    is a tag **unreachable from HEAD** (a release cut on another branch) - putting the same tag *on*
+    HEAD instead empties the plan, since the boundary then has no commits after it, and nothing is
+    tagged at all. A spec written the obvious way tests nothing (measured).
+  - `GitHelper.commit` returns the new short sha for this, instead of `void`. A commit helper that
+    cannot say what it committed leaves every caller unable to report itself.
 - Writes more than `package.json`: a bumped package's Dockerfile
   `org.opencontainers.image.version` label is rewritten to the new version and folded into the
   **same commit** (`stampVersionLabel`). Keep it here, not in a build script - the label is by

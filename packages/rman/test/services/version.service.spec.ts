@@ -943,6 +943,84 @@ describe('services/version', () => {
       expect(remoteTags.split(/\s+/)).toContain('v1.1.0');
     });
 
+    /**
+     * **What it did, not the plan it was given.** `applyPlan` used to return that plan untouched,
+     * so its only caller could re-print the table it had already shown while the commits, the tags
+     * and the push stayed silent - the three things a reader does not already know.
+     */
+    describe('the result it reports', () => {
+      it('names every commit it made, the root sync included, with its sha', async () => {
+        const { dir } = fixtureWithOrigin();
+        const repo = await Repository.create(dir);
+        const result = await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+
+        /** Two: the root's informational sync, then the group's release - which is why `updated`
+         *  does not count the root. A single "updated 2 packages" line used to imply two writes. */
+        expect(result.commits).toHaveLength(2);
+        expect(result.commits[0].message).toContain('sync root version');
+        expect(result.commits[0].packages).toEqual([]);
+        /** Both, in one commit: they share a group, and `pkg-b` is here because it depends on
+         *  `pkg-a` - the commit carries whatever its group released. */
+        expect(result.commits[1].packages).toEqual(['pkg-a', 'pkg-b']);
+        for (const commit of result.commits) expect(commit.sha).toMatch(/^[0-9a-f]{7,}$/);
+      });
+
+      it('reports the tags it created, and says so when one was already there', async () => {
+        const { dir } = fixtureWithOrigin();
+        const repo0 = await Repository.create(dir);
+        const created = await VersionService.applyPlan(repo0, await VersionPlanService.getPlanner().getPlan(repo0));
+        expect(created.tags).toEqual([{ name: 'v1.1.0', created: true }]);
+
+        /**
+         * The case `applyPlan`'s `tagExists` check exists for: a tag that is **not reachable from
+         * HEAD**, so the boundary lookup does not see it (`git describe` for a repo-wide pattern)
+         * while `git tag` does - a release cut on another branch. Putting it on HEAD instead makes
+         * the *plan* empty, since the boundary then has no commits after it, and nothing is tagged
+         * at all (measured, on the first version of this spec).
+         */
+        const other = fixtureWithOrigin();
+        git(other.dir, 'checkout', '-q', '-b', 'side');
+        fs.writeFileSync(path.join(other.dir, 'packages/a/side.txt'), 'side');
+        commitAll(other.dir, 'chore: on the side');
+        git(other.dir, 'tag', '-a', 'v1.1.0', '-m', 'v1.1.0');
+        git(other.dir, 'checkout', '-q', 'main');
+
+        const repo = await Repository.create(other.dir);
+        const result = await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+        expect(result.tags).toEqual([{ name: 'v1.1.0', created: false }]);
+      });
+
+      it('says whether it pushed, which is otherwise indistinguishable', async () => {
+        const a = fixtureWithOrigin();
+        const repoA = await Repository.create(a.dir);
+        const quiet = await VersionService.applyPlan(repoA, await VersionPlanService.getPlanner().getPlan(repoA));
+        expect(quiet.pushed).toBe(false);
+
+        const b = fixtureWithOrigin();
+        const repoB = await Repository.create(b.dir);
+        const pushed = await VersionService.applyPlan(repoB, await VersionPlanService.getPlanner().getPlan(repoB), {
+          push: true,
+        });
+        expect(pushed.pushed).toBe(true);
+      });
+
+      it('counts only the packages actually written in "updated"', async () => {
+        const { dir } = fixtureWithOrigin();
+        const repo = await Repository.create(dir);
+        const result = await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+
+        /** The plan holds the monorepo root's `'bump'` entry too - informational, never written, so
+         *  three entries bump and two packages are updated. Reporting three was the old output's
+         *  mistake: it listed the root as `updated root 1.0.0 -> 1.1.0`, which reads as a write. */
+        expect(result.entries.filter(e => e.status === 'bump').map(e => e.package.name)).toEqual([
+          'pkg-a',
+          'pkg-b',
+          'root',
+        ]);
+        expect(result.updated.map(e => e.package.name)).toEqual(['pkg-a', 'pkg-b']);
+      });
+    });
+
     it('runs a package\'s own real "version" npm script alongside the write (not instead of it)', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
