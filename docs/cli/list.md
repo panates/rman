@@ -1,4 +1,4 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli.md for the baseline convention -->
+<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli-rman.md for the baseline convention -->
 
 # `rman list`
 
@@ -10,11 +10,11 @@ rman list [options...]
 
 Lists every package in the repository - version, location, private flag, and change status - as a
 table by default, or one of several other formats. Purely a *view* over
-[`ListService.getPackages`](../api.md#listservice); this command never writes anything.
+[`ListService.getPackages`](../rman.md#listservice); this command never writes anything.
 
 ## Options
 
-Accepts [package filtering](../cli.md#package-filtering) (`--scope`, `--ignore`, `--deps`,
+Accepts [package filtering](../cli-rman.md#package-filtering) (`--scope`, `--ignore`, `--deps`,
 `--dependents`) in addition to:
 
 | Option | Alias | Type | Description |
@@ -69,4 +69,4 @@ rman list --scope '@myorg/*' --ignore '*-internal'
 ## See also
 
 - [`rman changed`](changed.md) - similar idea, but scoped to what `version` would specifically bump.
-- [`ListService`](../api.md#listservice) - the underlying pure data function.
+- [`ListService`](../rman.md#listservice) - the underlying pure data function.

@@ -1,6 +1,9 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli.md for the baseline convention -->
+<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli-rman.md for the baseline convention -->
 
 # `rman ci`
+
+> Comes from **[`@rman/node`](../cli-node.md)**, not from rman's core - name it in `.rmanrc`
+> `plugins` (directly, or inherited through `extends`) or this command does not exist.
 
 ```
 rman ci [options]
@@ -13,7 +16,7 @@ Once every package is clean, installs **once** at the root with the configured p
 
 ## Options
 
-Accepts [package filtering](../cli.md#package-filtering) and [branch guard](../cli.md#branch-guard)
+Accepts [package filtering](../cli-rman.md#package-filtering) and [branch guard](../cli-rman.md#branch-guard)
 options, in addition to:
 
 | Option | Type | Choices | Description |
@@ -49,5 +52,5 @@ ci completed (4.2s)
 
 - [`rman clean`](clean.md) - removes *build output*, never touches `node_modules` (the opposite
   concern from `ci`).
-- [`CiService`](../api.md#ciservice) - the underlying service, including the standalone `wipe()`
+- [`CiService`](../node.md#ciservice) - the underlying service, including the standalone `wipe()`
   primitive for wiping one directory yourself.

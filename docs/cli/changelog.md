@@ -1,4 +1,4 @@
-<!-- verified against commit 3ddad4b3332ca412426780f3db0d4ee62c5c4898 - see ../cli.md for the baseline convention -->
+<!-- verified against commit 3ddad4b3332ca412426780f3db0d4ee62c5c4898 - see ../cli-rman.md for the baseline convention -->
 
 # `rman changelog`
 
@@ -13,7 +13,7 @@ instead.
 
 ## Options
 
-Accepts [package filtering](../cli.md#package-filtering) options, in addition to:
+Accepts [package filtering](../cli-rman.md#package-filtering) options, in addition to:
 
 | Option | Alias | Type | Description |
 | --- | --- | --- | --- |
@@ -68,7 +68,7 @@ changelog:
 A commit is attributed to every package its files fall under; one broad enough to touch at least 3
 packages *and* more than half of all packages (a repo-wide doc pass, a relicense, ...) is
 attributed to the root alone instead of being repeated in every package's own entry. See
-[`ChangelogService`](../api.md#changelogservice) for the full template placeholder reference
+[`ChangelogService`](../rman.md#changelogservice) for the full template placeholder reference
 (`{{package}}`/`{{version}}`/`{{date}}`/`{{commits}}`/`{{features}}`/`{{fixes}}`/`{{other}}`) and
 grouping algorithm. A package with `.rmanrc "publish": { "skip": true }` gets no entry at all by
 default, regardless of its own commits - see [`rman publish`'s own

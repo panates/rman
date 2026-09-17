@@ -1,0 +1,316 @@
+#!/usr/bin/env node
+import { realpathSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import colors from 'ansi-colors';
+import * as yaml from 'js-yaml';
+import yargs, { type Argv } from 'yargs';
+import { hideBin } from 'yargs/helpers';
+import * as buildCommand from './commands/build.command.js';
+import * as changedCommand from './commands/changed.command.js';
+import * as changelogCommand from './commands/changelog.command.js';
+import * as configCommand from './commands/config.command.js';
+import * as diffCommand from './commands/diff.command.js';
+import * as execCommand from './commands/exec.command.js';
+import * as githubReleaseCommand from './commands/github-release.command.js';
+import * as importCommand from './commands/import.command.js';
+import * as infoCommand from './commands/info.command.js';
+import * as listCommand from './commands/list.command.js';
+import * as runCommand from './commands/run.command.js';
+import * as testCommand from './commands/test.command.js';
+import * as versionCommand from './commands/version.command.js';
+import { version } from './constants.js';
+import { assertNoBuiltinShadowing, type CommandContext, loadCustomCommands } from './core/custom-command.js';
+import type { Package } from './core/package.js';
+import { Repository } from './core/repository.js';
+import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/logger.js';
+import { filterPackages, readPackageFilterOptions, readRootOption } from './utils/package-filter.js';
+import { runBin } from './utils/run-bin.js';
+
+export async function runCli(options?: { argv?: string[]; cwd?: string }) {
+  try {
+    const repository = await Repository.create(options?.cwd);
+    const _argv = options?.argv || hideBin(process.argv);
+
+    const program = yargs(_argv)
+      .scriptName('rman')
+      .version(version)
+      .alias('version', 'v')
+      .usage('$0 <cmd> [options...]')
+      .help('help')
+      .alias('help', 'h')
+      .option('log-level', {
+        describe:
+          'Default verbosity of the per-step log for run/build/ci (default: info, or .rmanrc "logLevel"; ' +
+          'overridable per-package via .rmanrc run.<script>.logLevel)',
+        choices: LOG_LEVELS,
+      })
+      .option('config', {
+        describe:
+          'Show what this command would run with - its resolved options, the packages it would act ' +
+          'on, and the .rmanrc keys it reads - and run nothing',
+        type: 'boolean',
+        default: false,
+      })
+      .showHelpOnFail(false, 'Run with --help for available options')
+      .fail((msg: any, err: any) => {
+        if (!err?.logged) {
+          const text = msg
+            ? msg + '\n\n' + colors.whiteBright('Run with --help for available options')
+            : err
+              ? err.message
+              : '';
+          console.log('\n' + colors.red(text));
+          /** A real `Error`, marked `logged` since the text above just went out: yargs hands the
+           *  reason over as a bare string, and rethrowing that raw made bad argv indistinguishable
+           *  from success to anything holding the promise - or the shell. */
+          const failure: any = new Error(
+            typeof msg === 'string' && msg ? msg : typeof err?.message === 'string' ? err.message : 'invalid arguments',
+          );
+          failure.logged = true;
+          throw failure;
+        }
+        /**
+         * Already printed by whoever threw it (the `logged` convention), so there is nothing to say
+         * - but it still has to **throw**, not exit.
+         *
+         * This branch called `process.exit(1)`, and `runCli` is a library entry point: rman's own
+         * bin calls it, so do `@rman/node`'s fixtures and every spec. Exiting from in here took the
+         * whole process down before any caller could see the rejection - which in mocha meant the
+         * first command that failed killed the run and the suite could not report a single result.
+         * The exit belongs to the bin entry alone (see `isMain()` at the bottom), which already does
+         * it; the shell sees the same code either way.
+         */
+        const failure: any = new Error(err?.message || 'command failed');
+        failure.logged = true;
+        throw failure;
+      });
+
+    /**
+     * **`--config` is applied here, once, rather than in every command.** Every command - built-in,
+     * a plugin's, a `.rman/*.mjs` one - reaches yargs through `program.command`, so wrapping that
+     * one method is what makes the flag genuinely global. Adding an option to each command instead
+     * would have meant twelve edits plus a rule for plugin authors to remember, and a flag that
+     * quietly does nothing on whichever command forgot it is worse than no flag.
+     */
+    interceptConfigFlag(repository, program);
+
+    infoCommand.initCli(repository, program);
+    listCommand.initCli(repository, program);
+    runCommand.initCli(repository, program);
+    buildCommand.initCli(repository, program);
+    changelogCommand.initCli(repository, program);
+    testCommand.initCli(repository, program);
+    versionCommand.initCli(repository, program);
+    githubReleaseCommand.initCli(repository, program);
+    execCommand.initCli(repository, program);
+    changedCommand.initCli(repository, program);
+    diffCommand.initCli(repository, program);
+    configCommand.initCli(repository, program);
+    importCommand.initCli(repository, program);
+
+    /**
+     * Commands that are not built in, from two places, registered after the built-ins so the clash
+     * check below has the full list to compare against:
+     *
+     * - **plugins** (`.rmanrc "plugins"`) - a *package* contributing commands, which is how
+     *   everything Node-specific lives outside rman's core;
+     * - **`.rman/*.mjs`** - this one repository's own commands.
+     *
+     * The repository wins a name clash with a plugin, and silently: it is the more specific
+     * statement, the same way its own `.rmanrc` overrides an `extends` base. A plugin taking a
+     * *built-in's* name is still refused outright.
+     */
+    /** Already loaded: `Repository.create` had to, because a plugin's workspace provider is what
+     *  finds the packages. This is just what it brought back. */
+    const pluginCommands = repository.pluginCommands;
+    const { commands: localCommands, errors } = await loadCustomCommands(repository.dirname);
+    const localNames = new Set(localCommands.map(c => c.name));
+    const commands = [...pluginCommands.filter(c => !localNames.has(c.name)), ...localCommands];
+    assertNoBuiltinShadowing(commands, BUILT_IN_COMMANDS);
+    for (const custom of commands) {
+      program.command({
+        command: custom.command!,
+        describe: custom.describe,
+        /** Forwarded, not dropped: this loop builds a *new* spec object, so anything the command
+         *  declared and is not copied here is silently lost - `--config` printed the whole config
+         *  for every plugin command until this line existed (measured, on `clean` and `ci`). */
+        configKeys: custom.configKeys,
+        builder: custom.builder ?? (y => y),
+        handler: args => {
+          /** Resolved per invocation, not once at registration: `--log-level` is only known now. */
+          const logLevel = (args.logLevel as LogLevel | undefined) ?? resolveRootLogLevel(repository);
+          const context: CommandContext = {
+            repository,
+            package: repository.currentPackage,
+            runBin: (bin, argv, opts) => runBin(bin, argv, { cwd: repository.dirname, logLevel, ...opts }),
+            logger: new Logger(logLevel),
+          };
+          return custom.handler(context, args);
+        },
+      });
+    }
+    /** Warned about, not thrown: one unparseable file must not take the other commands with it.
+     *  Loud enough not to be mistaken for success, and it names the file and the reason - "my
+     *  command isn't there" is otherwise a long afternoon. */
+    for (const { file, reason } of errors) {
+      console.error(colors.yellow(`Skipped "${path.relative(process.cwd(), file)}": ${reason}`));
+    }
+
+    program.demandCommand(1).strict().recommendCommands().completion();
+
+    if (!_argv.length) program.showHelp();
+    /** Rejects rather than exiting, for the reason the `fail` handler above does - the bin entry
+     *  turns the rejection into an exit code. */
+    else await program.parseAsync();
+  } catch (e: any) {
+    /** Setup failures - no `package.json` to be found, a `.rman` command shadowing a built-in -
+     *  used to be printed and then swallowed, so the shell saw success: `rman info` in the wrong
+     *  directory reported failure on stdout and 0 to whatever called it. Printed once (unless the
+     *  thrower already did, per the `logged` convention) and rethrown, so the exit code agrees
+     *  with the message. */
+    if (!e?.logged) console.error(colors.red(e.message));
+    throw e;
+  }
+}
+
+/**
+ * Replaces `program.command` with a version that wraps every handler: with `--config` it prints
+ * what the command would run with and returns, instead of running it.
+ *
+ * One interception point rather than an option per command - see the call site. It has to go in
+ * **before** any command is registered, since it only affects registrations that pass through it.
+ */
+function interceptConfigFlag(repository: Repository, program: Argv): void {
+  const register = program.command.bind(program) as (spec: any) => Argv;
+  (program as any).command = (spec: any) => {
+    if (!spec || typeof spec !== 'object' || typeof spec.handler !== 'function') return register(spec);
+    const run = spec.handler;
+    return register({
+      ...spec,
+      handler: (args: any) => (args.config ? printCommandConfig(repository, spec, args) : run(args)),
+    });
+  };
+}
+
+/**
+ * What a command would run with: its resolved options, the packages it would act on, and the
+ * `.rmanrc` those packages carry.
+ *
+ * The three parts answer the three ways a run surprises someone. **Options** is the parsed argv -
+ * what *this invocation* asked for, plus any default yargs itself declares. Most of rman's own
+ * defaults are not yargs defaults (`run`'s `bail`/`topo`/`progress` are resolved per package inside
+ * `RunService`, from `.rmanrc run.<script>.*`), so an option missing here means "not stated on the
+ * command line", and the `.rmanrc` section below is where its value comes from. **Packages** is the
+ * set after `--scope`/`--ignore`/
+ * `--deps`/`skip`, computed the way the command itself computes it, because a config that is
+ * perfect for a package the command never reaches explains nothing. **Config** is narrowed to the
+ * keys the command declares it reads (`configKeys` on the command object, which yargs ignores) and
+ * is the whole effective config otherwise - the honest answer when nobody has said which half
+ * matters.
+ */
+function printCommandConfig(repository: Repository, spec: any, args: any): void {
+  const name = String(spec.command).split(/\s+/)[0];
+  const comment = (text: string) => (process.stdout.isTTY ? colors.gray(text) : text);
+
+  console.log(comment(`# ${name} --config: nothing was run.`));
+  console.log(`command: ${name}`);
+  const options = readOptions(args);
+  console.log(
+    Object.keys(options).length
+      ? `options:\n${indent(yaml.dump(options, { noRefs: true }).trimEnd())}`
+      : `options: {}${comment('   # nothing but defaults')}`,
+  );
+
+  const targets = commandTargets(repository, args);
+  console.log(`packages: ${targets.length ? `[${targets.map(p => p.name).join(', ')}]` : '[]'}`);
+
+  const keys: string[] | undefined = typeof spec.configKeys === 'function' ? spec.configKeys(args) : spec.configKeys;
+  console.log(comment(`# .rmanrc${keys?.length ? `, the keys ${name} reads: ${keys.join(', ')}` : ', in full'}`));
+  /**
+   * **The root package is always listed, even when it is not a target.** A repo-wide setting is
+   * read off the root - `packageManager`, `allowBranch`, `version.*`, `githubRelease.*` - so
+   * showing only the targets answered `rman ci --config` with `pkg-a: {}`, which reads as "nothing
+   * is configured" about the one key `ci` actually reads (measured).
+   */
+  const shown = [...targets];
+  if (!shown.some(p => p === repository.rootPackage)) shown.push(repository.rootPackage);
+  const config: Record<string, unknown> = {};
+  for (const pkg of shown) config[pkg.name] = keys?.length ? pick(pkg.config, keys) : pkg.config;
+  console.log(indent(yaml.dump(config, { noRefs: true, lineWidth: 100 }).trimEnd()));
+  if (!targets.includes(repository.rootPackage)) {
+    console.log(
+      comment(`# "${repository.rootPackage.name}" is the root - listed because repo-wide keys are read there.`),
+    );
+  }
+}
+
+/** The parsed argv, minus what yargs adds and minus the camelCase twin of every dashed option -
+ *  both spellings are the same option, and printing both reads as two settings. */
+function readOptions(args: any): Record<string, unknown> {
+  const dashed = new Set(Object.keys(args).filter(k => k.includes('-')));
+  const camel = new Set([...dashed].map(k => k.replace(/-([a-z])/g, (_, c) => c.toUpperCase())));
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (key === '_' || key === '$0' || key === 'config' || camel.has(key)) continue;
+    result[key] = value;
+  }
+  return result;
+}
+
+/** The packages the command would act on - `filterPackages` with the command's own options, so
+ *  this is the same set the command will compute, `skip` included. Narrowed to the current package
+ *  for a command that scopes by directory, unless `--root` says otherwise. */
+function commandTargets(repository: Repository, args: any): Package[] {
+  const current = repository.currentPackage;
+  if (current && !readRootOption(args)) return [current];
+  return filterPackages(repository.getPackages(), readPackageFilterOptions(args));
+}
+
+/** The named config paths only - `"run.build"` keeps just that subtree, under that path. */
+function pick(config: any, keys: string[]): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = key.split('.').reduce((node: any, part) => (node == null ? undefined : node[part]), config);
+    if (value !== undefined) result[key] = value;
+  }
+  return result;
+}
+
+function indent(text: string): string {
+  return text
+    .split('\n')
+    .map(line => (line ? `  ${line}` : line))
+    .join('\n');
+}
+
+function isMain(): boolean {
+  try {
+    return !!process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1]);
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) runCli().catch(() => process.exit(1));
+
+/** Every name a built-in command answers to - what a `.rman/*.mjs` command may not take. Kept here
+ *  rather than read back out of yargs (which exposes no such list) and pinned by a test against the
+ *  `command:` strings in `src/commands/*.command.ts`, so adding a command can't quietly leave a
+ *  repository's own able to shadow it. */
+const BUILT_IN_COMMANDS = [
+  'build',
+  'changed',
+  'changelog',
+  'completion',
+  'config',
+  'diff',
+  'exec',
+  'github-release',
+  'import',
+  'info',
+  'list',
+  'run',
+  'test',
+  'version',
+] as const;

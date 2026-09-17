@@ -1,0 +1,8 @@
+{
+  "extends": "../../../tsconfig-test.json",
+  /* `include` is load-bearing: without the sources the specs import, tsc reports TS6307 for every
+     one of them ("not listed within the file list of project"). The per-package `paths` override
+     that used to sit here is gone on purpose - `tsconfig-test.json` maps every specifier now, so
+     the test tree loads one copy of the core rather than two. */
+  "include": ["**/*.ts", "../src/**/*.ts"]
+}

@@ -1,6 +1,9 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli.md for the baseline convention -->
+<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli-rman.md for the baseline convention -->
 
 # `rman clean`
+
+> Comes from **[`@rman/node`](../cli-node.md)**, not from rman's core - name it in `.rmanrc`
+> `plugins` (directly, or inherited through `extends`) or this command does not exist.
 
 ```
 rman clean [options]
@@ -19,7 +22,7 @@ For every package not opted out via its own (cascaded) `clean.skip: true`:
 
 ## Options
 
-Accepts [package filtering](../cli.md#package-filtering) and [branch guard](../cli.md#branch-guard)
+Accepts [package filtering](../cli-rman.md#package-filtering) and [branch guard](../cli-rman.md#branch-guard)
 options, in addition to:
 
 | Option | Alias | Type | Default | Description |
@@ -67,4 +70,4 @@ the matching files *inside* an otherwise-deleted directory, leaving the rest of 
 ## See also
 
 - [`rman ci`](ci.md) - removes `node_modules`/lockfiles instead (the complementary concern).
-- [`CleanService`](../api.md#cleanservice) - the underlying service.
+- [`CleanService`](../node.md#cleanservice) - the underlying service.

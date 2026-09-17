@@ -1,3 +1,10 @@
 {
-  "extends": "@panates/tsconfig/node.json"
+  "extends": "@panates/tsconfig/node.json",
+  "compilerOptions": {
+    "composite": true,
+    "incremental": true,
+    "noEmit": false,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
+  }
 }

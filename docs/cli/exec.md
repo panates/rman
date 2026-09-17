@@ -1,4 +1,4 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli.md for the baseline convention -->
+<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli-rman.md for the baseline convention -->
 
 # `rman exec [command..]`
 
@@ -15,7 +15,7 @@ options.
 
 ## Options
 
-Accepts [package filtering](../cli.md#package-filtering) and [branch guard](../cli.md#branch-guard)
+Accepts [package filtering](../cli-rman.md#package-filtering) and [branch guard](../cli-rman.md#branch-guard)
 options, in addition to:
 
 | Option | Alias | Type | Default | Description |
@@ -51,4 +51,4 @@ Running `rman exec` with no command at all (nothing after `exec`, and nothing af
 
 - [`rman run <script>`](run.md) - the equivalent for an actual npm script, with pre/post hooks and
   `.rmanrc run.<script>.*` configuration.
-- [`ExecService`](../api.md#execservice) - the underlying service.
+- [`ExecService`](../rman.md#execservice) - the underlying service.

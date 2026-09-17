@@ -1,4 +1,4 @@
-<!-- verified against commit 0e33a0a - see ../cli.md for the baseline convention -->
+<!-- verified against commit 0e33a0a - see ../cli-rman.md for the baseline convention -->
 
 # `rman version [bump]`
 
@@ -18,7 +18,7 @@ nothing unless `--interactive` confirms it. With an explicit `bump`, applies imm
 
 ## Options
 
-Accepts [package filtering](../cli.md#package-filtering) and [branch guard](../cli.md#branch-guard)
+Accepts [package filtering](../cli-rman.md#package-filtering) and [branch guard](../cli-rman.md#branch-guard)
 options, in addition to:
 
 | Option | Alias | Type | Description |
@@ -70,6 +70,34 @@ rman version patch --show         # preview what an explicit patch bump would do
 Any package with uncommitted local changes aborts the whole run (`N package(s) have uncommitted
 local changes (pass --ignore-dirty to exclude them instead of aborting)`) unless `--ignore-dirty`
 is given. With nothing to bump at all, prints `Nothing to version.`.
+
+## What it reports once applied
+
+The table above is the plan. Once a run applies, what follows is **what it did** - deliberately not
+the same list again:
+
+```
+updated 2 packages
+commit  f167ee2  chore: sync root version to 2026.9.17-1814
+commit  81fb42d  chore(release): v1.1.0
+commit  c9992f8  chore(release): v2.1.0
+tags    pkg-a@1.1.0, pkg-b@2.1.0
+tags    release-2026.9.17-1814 (repository release)
+push    not pushed - run with --push, or push it yourself
+```
+
+Each line is something the plan cannot tell you:
+
+- **`updated`** counts the packages whose manifest was written. In a monorepo that is *fewer* than
+  the plan's `bump` rows: the root's entry is informational and never written, which the old output
+  listed as `updated <root> 1.0.12 -> 1.1.1` - reading as a write that never happened.
+- **`commit`** - one per group, so independently-versioned lines get clean, separate commits, plus
+  the root's own version-sync commit ahead of them. Nothing reported these at all before.
+- **`tags`** - each group's tag, then the repository release tag on its own line (calendar versions
+  only, see [The repository's own version](#the-repositorys-own-version)). A tag that already
+  existed reads `(existing, left alone)` rather than being silently counted as created.
+- **`push`** - a release that is committed but not pushed looks identical to one that is, until
+  someone looks.
 
 ## Grouping (`.rmanrc group`)
 
@@ -174,10 +202,28 @@ leaves the checked-in file claiming a placeholder: anything running from source 
 dev loop) reports that placeholder, the tagged commit never records the released version, and the
 rewrite has to be redone on every build.
 
+## Hooks, and the version being written
+
+`.rmanrc "version"`'s `before`/`exec`/`after` run around the bump as this package's
+`preversion`/`version`/`postversion` (a real npm script of that name in `package.json` still wins).
+They are the one place [`${{ pkg.targetVersion }}`](../rman.md#expressions---) means anything:
+
+```yaml
+"[*]":
+  version:
+    after: "docker tag app:latest app:${{ pkg.targetVersion }}"
+```
+
+The version doesn't exist until `version` has computed its plan - long after the config was
+resolved - so these three keys are left unevaluated at load and evaluated here, with it bound.
+Naming `pkg.targetVersion` in any other key fails when the repository loads, which is deliberate:
+no other command has a target version, and evaluating it to `undefined` would quietly produce an
+`app:undefined`.
+
 ## Severity auto-detection
 
 With no explicit `bump`, each package's severity comes from its own commits since its last release -
-the shared [`detectChangeHash`](../api.md#detectchangehash) boundary [`changelog`](changelog.md)
+the shared [`ChangeHashService`](../rman.md#changehashservice) boundary [`changelog`](changelog.md)
 measures from too, so the two never disagree about which commits are unreleased. `fix:` → `patch`;
 `feat:` → `minor`; `feat!:`/a `BREAKING CHANGE:` footer → `major`; anything non-conventional →
 `patch`. A `Release-As: patch|minor|major` commit-body footer overrides that one
@@ -199,7 +245,7 @@ has no effect here - a package can still be meaningfully versioned even if it's 
 explicit `workspace:<range>` (e.g. `workspace:^1.0.0`) is bumped the same way a plain range would
 be.
 
-See [`VersionService`](../api.md#versionservice) for the complete algorithm (including the
+See [`VersionService`](../rman.md#versionservice) for the complete algorithm (including the
 `incVersion` prerelease logic and cross-group ripple mechanics) and its full test-verified examples.
 
 ## See also

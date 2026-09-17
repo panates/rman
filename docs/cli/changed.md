@@ -1,4 +1,4 @@
-<!-- verified against commit 0e33a0a - see ../cli.md for the baseline convention -->
+<!-- verified against commit 0e33a0a - see ../cli-rman.md for the baseline convention -->
 
 # `rman changed`
 
@@ -12,7 +12,7 @@ Useful in CI to decide whether a release is even needed before running `version`
 
 ## Options
 
-Accepts [package filtering](../cli.md#package-filtering) options, in addition to:
+Accepts [package filtering](../cli-rman.md#package-filtering) options, in addition to:
 
 | Option | Alias | Type | Description |
 | --- | --- | --- | --- |
@@ -45,7 +45,7 @@ With nothing to bump, prints `Nothing has changed.` (or `[]` with `--json`) and 
 ## Not a "has this been published?" check
 
 `changed` answers a purely **commit-driven** question: what landed since each package's last release
-(the shared [`detectChangeHash`](../api.md#detectchangehash) boundary, the same one
+(the shared [`ChangeHashService`](../rman.md#changehashservice) boundary, the same one
 [`changelog`](changelog.md) measures from), and how big a bump that implies. It never asks any
 registry anything - a registry can only say *older/newer*, never *how much* or *why*.
 
@@ -60,6 +60,6 @@ answers: whether a *new version* is warranted.
 ## See also
 
 - [`rman version`](version.md) - the command this previews; same grouping/severity-detection
-  algorithm, see that page (and [`VersionService`](../api.md#versionservice)) for the full details.
+  algorithm, see that page (and [`VersionService`](../rman.md#versionservice)) for the full details.
 - [`rman diff`](diff.md) - the actual commit-level diff, rather than a version-bump summary.
 - [`rman publish`](publish.md) - the registry-side question this one deliberately doesn't answer.
