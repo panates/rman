@@ -20,7 +20,8 @@
     "compile": "tsc --noEmit",
     "prebuild": "rimraf build *.tsbuildinfo",
     "build": "tsc -b tsconfig-build.json",
-    "postbuild": "node ../../support/postbuild.cjs && rimraf build/*.tsbuildinfo"
+    "postbuild": "node ../../support/postbuild.cjs && rimraf build/*.tsbuildinfo",
+    "test": "mocha"
   },
   "type": "module",
   "module": "./index.js",

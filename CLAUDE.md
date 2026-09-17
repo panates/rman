@@ -868,6 +868,29 @@ no version planner - so a spec that needs one **brings it**.
     setup failure silences **both** streams - see `plugin.spec.ts`'s own `expectCliFailure`.
   - The quickest way to find a leak is to diff a run's output against what mocha itself prints:
     every line that is neither a suite title nor a result came from the code under test.
+- **The test tree must load exactly ONE copy of the core, and `tsconfig-test.json`'s `paths` is what
+  enforces it.** Map *every* specifier the specs can reach it by - `"rman"` **and** `"rman/cli"`,
+  and any subpath export added later. With `"rman/cli"` unmapped, a spec importing it got the built
+  copy out of `node_modules` while `"rman"` gave the source one: two module instances, two sets of
+  module-global registries. `rman info` then ran the build copy's `SystemInfo` while the plugin had
+  augmented the source copy's, and reported `Binaries: [Node]` with no npm.
+- **`--parallel` hides a broken suite, so verify with `--parallel=false` whenever a change touches
+  a registry, an augmentation or a fixture.** Measured, and not a small margin: a run reporting
+  **636 passing** in parallel was **595 passing / 41 failing** serially, on the same commit. Workers
+  load only the files assigned to them, so a spec that depends on another file's import-time side
+  effect - or is rescued by one - passes there and nowhere else.
+- **`useNodeEcosystem()` reads `nodePlugin`, the named export - never the module's default**, which
+  is an rman *config* (`{ plugins: [nodePlugin] }`). Reading the default silently registered
+  nothing: `plugin.manifest` and friends were `undefined`, so a service-level spec had no manifest
+  provider, no version planner, and **no `BinPath` provider** - which left `exec` resolving the real
+  `npm` from the inherited PATH. The suite reached `registry.npmjs.org` with an actual
+  `PUT /pkg-a`, and only `ENEEDAUTH` stopped it. The docker rule applies here word for word: a test
+  must never be one credential away from publishing.
+- **A spec that patches a core function captures the original in `beforeEach`, not at module
+  scope.** At module load, whether `SystemInfo.getSystemInfo` is already augmented depends on
+  whether the plugin's entry point happened to be imported first - a function of file order, and
+  therefore of `--parallel`. Restoring a module-scope capture put the *un-augmented* function back
+  for the rest of the process and broke a spec two files away.
 - `import { expect } from 'expect'` - the named form. The default import works at runtime through
   CJS interop and produced ~287 type errors, which is why the test tree never type-checked. Both
   `test/tsconfig.json`s are clean now; keep them that way.

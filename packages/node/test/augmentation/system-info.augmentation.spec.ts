@@ -15,10 +15,21 @@ import { useNodeEcosystem } from '../_fixture.js';
 describe('augmentation/system-info', () => {
   useNodeEcosystem();
 
-  const original = SystemInfo.getSystemInfo;
+  /**
+   * Captured when the **first test starts**, not when this module loads.
+   *
+   * At module load, whether `getSystemInfo` is already augmented depends on whether the plugin's
+   * entry point happened to be imported first - which is a function of file order, and therefore of
+   * `--parallel`. Restoring a module-scope capture put the *un-augmented* core function back for
+   * the rest of the process, and `commands/info` two files later reported `Binaries: [Node]` with
+   * no npm (measured serially; the parallel run never saw it, because each worker loads its own
+   * files).
+   */
+  let original: SystemInfo.GetSystemInfo | undefined;
   let seen: SystemInfo.Options | undefined;
 
   beforeEach(() => {
+    original ??= SystemInfo.getSystemInfo;
     seen = undefined;
     // Stand in for the core implementation, then augment *that* - so the assertions are about what
     // the wrapper passes down rather than about envinfo's output.
@@ -30,7 +41,7 @@ describe('augmentation/system-info', () => {
   });
 
   after(() => {
-    (SystemInfo as { getSystemInfo: SystemInfo.GetSystemInfo }).getSystemInfo = original;
+    if (original) (SystemInfo as { getSystemInfo: SystemInfo.GetSystemInfo }).getSystemInfo = original;
   });
 
   it('makes npm the default, so a Node repository needs no configuration to be reported', async () => {

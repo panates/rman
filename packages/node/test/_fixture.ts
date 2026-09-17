@@ -3,7 +3,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BinPath, Manifest, RunService, VersionPlanService, Workspace } from 'rman';
 import { runCli as rmanRunCli } from 'rman/cli';
-import plugin from '../src/index.js';
+/**
+ * The **plugin**, by name - not the module's default export, which is an rman *config* that carries
+ * it (`{ plugins: [nodePlugin] }`).
+ *
+ * Reading the default export was right until the entry point became a config, and then it silently
+ * registered nothing: `nodePlugin.manifest` and friends were simply `undefined`, so a spec calling a
+ * service directly got no manifest provider, no version planner and - the dangerous one - no
+ * `BinPath` provider, which left `exec` resolving the **real** `npm` from the inherited PATH.
+ */
+import { nodePlugin } from '../src/index.js';
 
 /**
  * This package's plugin entry point, as an absolute path to the **source** file.
@@ -72,10 +81,10 @@ export function runCli(options?: { argv?: string[]; cwd?: string }): Promise<voi
  */
 export function useNodeEcosystem(): void {
   beforeEach(() => {
-    if (plugin.manifest) Manifest.addProvider(plugin.manifest);
-    if (plugin.workspace) Workspace.addProvider(plugin.workspace);
-    if (plugin.runSteps) RunService.addStepSource(plugin.runSteps);
-    if (plugin.binPaths) BinPath.addProvider(plugin.binPaths);
-    if (plugin.versionPlanner) VersionPlanService.setPlanner(plugin.versionPlanner);
+    if (nodePlugin.manifest) Manifest.addProvider(nodePlugin.manifest);
+    if (nodePlugin.workspace) Workspace.addProvider(nodePlugin.workspace);
+    if (nodePlugin.runSteps) RunService.addStepSource(nodePlugin.runSteps);
+    if (nodePlugin.binPaths) BinPath.addProvider(nodePlugin.binPaths);
+    if (nodePlugin.versionPlanner) VersionPlanService.setPlanner(nodePlugin.versionPlanner);
   });
 }

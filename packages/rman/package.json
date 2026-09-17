@@ -32,7 +32,8 @@
     "prebuild": "rimraf build *.tsbuildinfo",
     "build": "tsc -b tsconfig-build.json",
     "postbuild": "node ../../support/postbuild.cjs && rimraf build/*.tsbuildinfo",
-    "check": "dpdm -T --no-warning --no-tree ./src/index.ts"
+    "check": "dpdm -T --no-warning --no-tree ./src/index.ts",
+    "test": "mocha"
   },
   "type": "module",
   "module": "./index.js",

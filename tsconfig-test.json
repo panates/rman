@@ -2,6 +2,19 @@
   "extends": "./tsconfig-base.json",
   "compilerOptions": {
     "types": ["node", "mocha"],
-    "sourceMap": true
+    "sourceMap": true,
+    /**
+     * **Every specifier the test tree can reach the core by, mapped to the same source files.**
+     * `"rman/cli"` was missing, so a spec importing it got the *built* copy from `node_modules`
+     * while `"rman"` gave the source one - two module instances, two sets of module-global
+     * registries. `rman info` then ran the build copy's `SystemInfo` while the plugin had augmented
+     * the source copy's, and reported `Binaries: [Node]` with no npm. Add a mapping here for any
+     * new subpath export.
+     */
+    "paths": {
+      "rman": ["./packages/rman/src/index.js"],
+      "rman/cli": ["./packages/rman/src/cli.js"],
+      "@rman/node": ["./packages/node/src/index.js"]
+    }
   }
 }

@@ -1,9 +1,6 @@
 {
   "extends": "../../../tsconfig-test.json",
-  "include": ["**/*.ts", "../src/**/*.ts", "../../rman/src/**/*.ts"],
-  "compilerOptions": {
-    "paths": {
-      "rman": ["../../rman/src/index.js"]
-    }
-  }
+  /* See `packages/rman/test/tsconfig.json`: the sources have to be listed, and the `paths`
+     override does not belong here any more. */
+  "include": ["**/*.ts", "../src/**/*.ts", "../../rman/src/**/*.ts"]
 }
