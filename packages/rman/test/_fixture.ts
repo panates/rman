@@ -16,7 +16,7 @@ import { stampVersionConstant } from '../src/utils/version-stamp.js';
  *
  * The core has no manifest provider, no workspace provider and no version planner of its own - that
  * is the whole point of the plugin seams - so a core spec has to bring one. It cannot borrow
- * `@rman/node`'s: that package *depends on* this one, so importing it here would invert the build
+ * `rman-node`'s: that package *depends on* this one, so importing it here would invert the build
  * order and make the core's tests pass only because its own plugin happened to be correct.
  *
  * This provider reads `package.json`, and that is a fixture convenience rather than a statement: the
@@ -67,7 +67,7 @@ export const testManifest: ManifestProvider = {
   },
 
   /** The quoted-constant shape, via the helper the core exports for exactly this - so a core spec
-   *  can exercise `version.stamp` without `@rman/node`. `constant` comes from the config entry. */
+   *  can exercise `version.stamp` without `rman-node`. `constant` comes from the config entry. */
   stampVersion(_file, content, version, options) {
     return stampVersionConstant(content, version, options?.constant);
   },
@@ -115,11 +115,11 @@ export const testWorkspace: Workspace.Provider = (root: string): Workspace.Layou
  * A step source for the core specs: `pre<script>`/`<script>`/`post<script>` out of the fixture
  * manifest's `scripts`, mapped onto rman's three slots.
  *
- * The core has no step source either - `package.json#scripts` is `@rman/node`'s. But
+ * The core has no step source either - `package.json#scripts` is `rman-node`'s. But
  * `getScriptSteps`' precedence (`override` -> contributed -> config, slot by slot) *is* core logic,
  * and testing it needs *a* contribution. Deliberately simpler than the real one: no `&&` splitting,
  * no `parseNpmScript`. That npm's own lifecycle maps onto these slots correctly is
- * `@rman/node`'s to prove, not this file's.
+ * `rman-node`'s to prove, not this file's.
  */
 export const testSteps: RunService.StepSource = (pkg: Package, script: string) => {
   const scripts = pkg.manifest.raw?.scripts;
@@ -178,7 +178,7 @@ export function useTestEcosystem(): void {
  * `packages/a`, and the **real** `docker` ran instead.
  *
  * The directory is `local-bin`, deliberately not `node_modules/.bin`: that is npm's layout, and
- * `@rman/node` is what contributes it. A core spec must not depend on it.
+ * `rman-node` is what contributes it. A core spec must not depend on it.
  */
 export function useLocalBin(): void {
   beforeEach(() => {

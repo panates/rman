@@ -54,7 +54,7 @@ export function augmentSystemInfo(): void {
         Binaries: ['Node', PACKAGE_MANAGER_BINARY[packageManager]],
         /** This package's own version alongside rman's - when `info` is being read to work out why
          *  a command behaved oddly, which plugin version is installed is half the answer. */
-        npmPackages: ['rman', '@rman/node', 'typescript'],
+        npmPackages: ['rman', 'rman-node', 'typescript'],
         npmGlobalPackages: ['typescript'],
         ...options?.envinfo,
       },
@@ -84,6 +84,6 @@ function asPackageManager(value: unknown): OrgSystemInfo.PackageManager | undefi
 
 /** Marks an implementation as already wrapped. A symbol rather than a property name so it cannot
  *  collide with anything `envinfo` or a future core option carries. */
-const AUGMENTED = Symbol.for('@rman/node.systemInfo.augmented');
+const AUGMENTED = Symbol.for('rman-node.systemInfo.augmented');
 
 type Augmented = OrgSystemInfo.GetSystemInfo & { [AUGMENTED]?: boolean };

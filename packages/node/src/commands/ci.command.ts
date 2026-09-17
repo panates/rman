@@ -10,7 +10,7 @@ import {
 import { CiService } from '../services/ci.service.js';
 
 /**
- * `rman ci` - contributed by the `@rman/node` plugin rather than built into rman.
+ * `rman ci` - contributed by the `rman-node` plugin rather than built into rman.
  *
  * A plugin's command is a `CustomCommand`, so the repository arrives through `context` instead of
  * being captured when the command is registered - the same shape a repository's own `.rman/*.mjs`

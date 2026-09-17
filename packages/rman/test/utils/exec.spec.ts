@@ -88,7 +88,7 @@ describe('utils/exec', () => {
   /**
    * `exec` puts whatever `BinPath`'s providers offer ahead of the inherited PATH - and the core has
    * none, so the spec brings one. The directory is `local-bin`, deliberately not
-   * `node_modules/.bin`: that is npm's layout, and `@rman/node` is what contributes it.
+   * `node_modules/.bin`: that is npm's layout, and `rman-node` is what contributes it.
    */
   describe('PATH augmentation', () => {
     useLocalBin();

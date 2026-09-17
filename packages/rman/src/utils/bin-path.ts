@@ -9,7 +9,7 @@ import process from 'node:process';
  *
  * - **Which directories** is the *ecosystem's* answer, and the core has none - `node_modules/.bin`
  *   walked up the directory chain is npm's layout and nothing else's (a Python venv says
- *   `.venv/bin`, a Ruby project `bin`). `@rman/node` contributes it; see `RmanPlugin.binPaths`.
+ *   `.venv/bin`, a Ruby project `bin`). `rman-node` contributes it; see `RmanPlugin.binPaths`.
  * - **How a PATH is spelled** is the *operating system's*, and that stays here: the variable is
  *   `PATH` everywhere except Windows, where its case is whatever the environment happens to use.
  *   That has nothing to do with any ecosystem, and every provider would otherwise get it wrong

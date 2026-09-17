@@ -29,15 +29,15 @@ describe('core/merge-config', () => {
       /** The silent failure this closes: a repository that `extends` a toolchain config and then
        *  names a plugin of its own used to *drop* the toolchain's, and what it noticed was
        *  `Unknown argument: publish`. */
-      const target = { plugins: ['@rman/node'] };
+      const target = { plugins: ['rman-node'] };
       mergeConfig(target, { plugins: ['./local-plugin.mjs'] });
-      expect(target).toEqual({ plugins: ['@rman/node', './local-plugin.mjs'] });
+      expect(target).toEqual({ plugins: ['rman-node', './local-plugin.mjs'] });
     });
 
     it('drops a `plugins` entry already there - two layers naming one plugin is the ordinary case', () => {
-      const target = { plugins: ['@rman/node'] };
-      mergeConfig(target, { plugins: ['@rman/node', 'other'] });
-      expect(target).toEqual({ plugins: ['@rman/node', 'other'] });
+      const target = { plugins: ['rman-node'] };
+      mergeConfig(target, { plugins: ['rman-node', 'other'] });
+      expect(target).toEqual({ plugins: ['rman-node', 'other'] });
     });
 
     it('does not de-duplicate an explicit `+key`, which was written rather than inferred', () => {

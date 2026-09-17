@@ -66,7 +66,7 @@ rman version
 # Apply it: bump versions, write CHANGELOG.md, commit, tag
 rman version --changelog
 
-# Publish everything that isn't already on the registry (needs @rman/node)
+# Publish everything that isn't already on the registry (needs rman-node)
 rman publish
 ```
 
@@ -93,12 +93,12 @@ worked examples of every single command, see **[docs/cli-rman.md](https://github
 | [`github-release`](#rman-github-release) | Creates the repository's GitHub Release for its release tag. |
 | [`import <path>`](#rman-import-path) | Imports an external git repository as a new package, with history. |
 
-**`publish`, `ci` and `clean` come from [`@rman/node`](https://www.npmjs.com/package/@rman/node)**,
+**`publish`, `ci` and `clean` come from [`rman-node`](https://www.npmjs.com/package/rman-node)**,
 not from this package - each is about npm or TypeScript rather than about repositories. Name the
 plugin in `.rmanrc` to get them:
 
 ```yaml
-plugins: ['@rman/node']
+plugins: ['rman-node']
 ```
 
 Options shared across several commands:
@@ -135,7 +135,7 @@ rman list --scope '@myorg/*' --ignore '*-internal'
 ### `rman info`
 
 Prints local environment (OS/CPU/memory, Node, git) and repository information. A plugin adds its
-own ecosystem's part - `@rman/node` reports whichever package manager `.rmanrc "packageManager"`
+own ecosystem's part - `rman-node` reports whichever package manager `.rmanrc "packageManager"`
 names, plus the installed `rman` packages.
 
 ```bash
@@ -408,7 +408,7 @@ import { defineConfig } from 'rman';
 export default defineConfig({ allowBranch: ['main'] });
 ```
 
-With a plugin, import `defineConfig` from the plugin instead (`@rman/node`'s carries its own keys
+With a plugin, import `defineConfig` from the plugin instead (`rman-node`'s carries its own keys
 into the type). The `.rmanrc`/`.rmanrc.yml` forms get no checking - see
 [docs/rman.md#editor-support-types](https://github.com/panates/rman/blob/main/docs/rman.md#editor-support-types) for why the JSON Schema that
 used to cover them was removed.

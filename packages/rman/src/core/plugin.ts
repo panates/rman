@@ -25,7 +25,7 @@ export interface RmanPlugin {
   name: string;
   commands?: CustomCommand[];
   /**
-   * Where `run` can find a package's steps besides its `.rmanrc` - `@rman/node` contributes
+   * Where `run` can find a package's steps besides its `.rmanrc` - `rman-node` contributes
    * `package.json#scripts` here, with npm's `pre`/`post` lifecycle.
    *
    * Registered in `plugins` declaration order, and only for plugins the repository actually named:
@@ -34,7 +34,7 @@ export interface RmanPlugin {
    */
   runSteps?: RunService.StepSource;
   /**
-   * How this ecosystem's repositories are laid out - `@rman/node` reads `workspaces` from the root
+   * How this ecosystem's repositories are laid out - `rman-node` reads `workspaces` from the root
    * `package.json` here.
    *
    * Loaded **before any package is known**, since this is what finds them: `Repository.create`
@@ -43,7 +43,7 @@ export interface RmanPlugin {
    */
   workspace?: Workspace.Provider;
   /**
-   * Where a package's name and version are written, and how it is numbered - `@rman/node`
+   * Where a package's name and version are written, and how it is numbered - `rman-node`
    * contributes `package.json` here.
    *
    * Registered before any package is constructed, since `Package` reads through it. A repository
@@ -53,7 +53,7 @@ export interface RmanPlugin {
   manifest?: ManifestProvider;
   /**
    * How a release is planned - which packages have changed since their last release and what
-   * version each gets. `@rman/node` contributes `NodeVersionPlanService` here.
+   * version each gets. `rman-node` contributes `NodeVersionPlanService` here.
    *
    * **`VersionPlanService` is abstract, so `version`/`changed` do not work without one** (they fail
    * naming this key). Unlike `manifest` and `workspace`, which degrade to honest defaults, a plan is
@@ -64,7 +64,7 @@ export interface RmanPlugin {
    */
   versionPlanner?: VersionPlanService;
   /**
-   * Where this ecosystem keeps a repository's locally installed executables - `@rman/node`
+   * Where this ecosystem keeps a repository's locally installed executables - `rman-node`
    * contributes npm's `node_modules/.bin`, walked up the directory chain.
    *
    * Prepended to PATH for every `exec`/`runBin` child process, so a command an author wrote runs
@@ -82,11 +82,11 @@ export interface RmanPlugin {
  * `.rmanrc` like any other and can carry a second plugin later without changing shape:
  *
  * ```js
- * // @rman/node's entry point
+ * // rman-node's entry point
  * import { defineConfig, definePlugin } from 'rman';
  * import publishCommand from './commands/publish.js';
  *
- * export const nodePlugin = definePlugin({ name: '@rman/node', commands: [publishCommand] });
+ * export const nodePlugin = definePlugin({ name: 'rman-node', commands: [publishCommand] });
  * export default defineConfig({ plugins: [nodePlugin] });
  * ```
  *
@@ -102,7 +102,7 @@ export function definePlugin(plugin: RmanPlugin): RmanPlugin {
  * Loads every plugin the repository's `.rmanrc "plugins"` declares, in declaration order.
  *
  * This is what lets a *package* contribute commands. `.rman/*.mjs` covers one repository's own
- * commands (see `loadCustomCommands`); a plugin covers a whole class of repository - `@rman/node`
+ * commands (see `loadCustomCommands`); a plugin covers a whole class of repository - `rman-node`
  * carrying everything that only means something because the repository is a Node one, so rman's
  * core does not have to.
  *
@@ -128,13 +128,13 @@ export async function loadPlugins(rootDir: string, rootConfig: RmanConfig): Prom
 /**
  * One config's `plugins`, in declaration order.
  *
- * Recursive because a plugin package **exports a config**, not a plugin: `@rman/node`'s entry point
+ * Recursive because a plugin package **exports a config**, not a plugin: `rman-node`'s entry point
  * is `export default defineConfig({ plugins: [ ... ] })`, so resolving a name lands on another
  * config whose own `plugins` are the ones to register. That also means a plugin package can name a
  * plugin of its own and it simply works.
  *
  * `from` is the file the entries are resolved against, and it changes as it descends - an entry in
- * `@rman/node`'s config resolves through *its* `node_modules`, not the repository's, the same rule
+ * `rman-node`'s config resolves through *its* `node_modules`, not the repository's, the same rule
  * `extends` follows.
  *
  * **Only `plugins` is read out of an imported config.** Its other keys are not merged: a config's

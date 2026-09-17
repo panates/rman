@@ -1,4 +1,4 @@
-# @rman/node
+# rman-node
 
 Node.js support for [rman](https://github.com/panates/rman).
 
@@ -11,12 +11,12 @@ Full API reference: **[docs/node.md](https://github.com/panates/rman/blob/main/d
 ## Install
 
 ```bash
-npm i -D @rman/node
+npm i -D rman-node
 ```
 
 ```yaml
 # .rmanrc.yml
-plugins: ['@rman/node']
+plugins: ['rman-node']
 ```
 
 A plugin that cannot be loaded is an error, not a skip: silently losing `rman publish` is worse
@@ -96,10 +96,10 @@ what carries the augmentation:
 
 ```js
 // .rmanrc.mjs
-import { defineConfig } from '@rman/node';
+import { defineConfig } from 'rman-node';
 
 export default defineConfig({
-  plugins: ['@rman/node'],
+  plugins: ['rman-node'],
   packageManager: 'pnpm',
   '[ws:*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
 });
@@ -130,7 +130,7 @@ This package makes npm the default and adds its own version to the report:
     Node : 24.15.0                Node       : 24.15.0
                                   npm        : 11.12.1
                                npmPackages:
-                                  @rman/node : ...
+                                  rman-node : ...
                                   rman       : ...
 ```
 

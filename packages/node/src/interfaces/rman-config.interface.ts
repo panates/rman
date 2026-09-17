@@ -63,10 +63,10 @@ export namespace RmanNodeConfig {
  *
  * ```js
  * // .rmanrc.mjs
- * import { defineConfig } from '@rman/node';
+ * import { defineConfig } from 'rman-node';
  *
  * export default defineConfig({
- *   plugins: ['@rman/node'],
+ *   plugins: ['rman-node'],
  *   '[ws:*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
  * });
  * ```

@@ -5,7 +5,7 @@ package-version: 1.0.3
 date: 2026-09-13
 
 Verified against `packages/rman/src/cli.ts` and every `packages/rman/src/commands/*.command.ts` as
-of the commit above (and the matching specs for behavior examples). `@rman/node`'s three commands
+of the commit above (and the matching specs for behavior examples). `rman-node`'s three commands
 have their own index, [cli-node.md](cli-node.md). Before trusting/updating this file (or any page
 under `docs/cli/`) in a later session, run:
 
@@ -48,7 +48,7 @@ rman <command> --help   # full option list for that one command
 | `import <path>` | [`docs/cli/import.md`](cli/import.md) | Imports an external git repository as a new package, with history. |
 
 **`publish`, `ci` and `clean` are not in that list** - they come from
-[`@rman/node`](cli-node.md), because each is about npm or TypeScript rather than about
+[`rman-node`](cli-node.md), because each is about npm or TypeScript rather than about
 repositories.
 
 ## Where a command comes from
@@ -70,7 +70,7 @@ A plugin is an ordinary package that contributes commands (and more - see
 
 ```yaml
 # .rmanrc.yml
-plugins: ['@rman/node']
+plugins: ['rman-node']
 ```
 
 Without it, `rman clean` is `Unknown argument: clean`. A plugin that cannot be *loaded* is an error
@@ -93,7 +93,7 @@ import { defineConfig, definePlugin } from 'rman';
 
 export default defineConfig({
   plugins: [
-    '@rman/node',
+    'rman-node',
     definePlugin({ name: 'mine', commands: [/* ... */] }),
   ],
 });
@@ -116,7 +116,7 @@ toolchain - the plugin *and* the settings for it - and a repository writes one l
 
 ```json
 // node_modules/@myorg/rman-config/index.json
-{ "plugins": ["@rman/node"], "[ws:*]": { "clean": { "include": "build" } } }
+{ "plugins": ["rman-node"], "[ws:*]": { "clean": { "include": "build" } } }
 ```
 
 Measured end to end: with only that `extends`, `rman clean --dry-run` runs and `rman list` finds the
@@ -216,7 +216,7 @@ A misspelled command name (e.g. `rman versoin`) gets a `Did you mean version?` s
 
 ## Command scope: repository root vs. current package
 
-Several commands (`run`/`build`/`test`, `exec`, `changelog`, `diff`, `config`, and `@rman/node`'s
+Several commands (`run`/`build`/`test`, `exec`, `changelog`, `diff`, `config`, and `rman-node`'s
 `clean`)
 automatically scope themselves to *just the package you're standing in* when your shell's current
 directory is inside one package's own directory (rather than the repository root) - pass
@@ -263,7 +263,7 @@ Full semantics (glob syntax, how `--deps`/`--dependents` combine): see
 ### Branch guard
 
 Every command that mutates state or runs scripts - `run`/`build`/`test`, `exec`, `version`, and
-`@rman/node`'s `ci`/`clean`/`publish` - additionally accepts:
+`rman-node`'s `ci`/`clean`/`publish` - additionally accepts:
 
 | Option | Description |
 | --- | --- |

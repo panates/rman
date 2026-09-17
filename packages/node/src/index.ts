@@ -33,7 +33,7 @@ export const version = '1';
  *
  * ```yaml
  * # .rmanrc.yml
- * plugins: ['@rman/node']
+ * plugins: ['rman-node']
  * ```
  *
  * rman's core is about repositories - packages, versions, changelogs, releases, branches. These
@@ -76,7 +76,7 @@ augmentBinPath();
 /** Everything this package contributes to rman, as one plugin. Exported by name as well, for code
  *  registering it directly instead of through a config. */
 export const nodePlugin = definePlugin({
-  name: '@rman/node',
+  name: 'rman-node',
   commands: [publishCommand.command, ciCommand.command, cleanCommand.command],
   /** Declared as well as registered by `augmentRun()` above - `addStepSource` is idempotent per
    *  source, and a plugin loaded through `plugins` should not need an import side effect to work. */

@@ -30,7 +30,7 @@ const PLUGIN_ENTRY = path.resolve(fileURLToPath(import.meta.url), '../../src/ind
  * all - `rman publish` is no longer built in, and a repository that does not name the plugin does
  * not have it.
  *
- * The entry point is named by **absolute path** rather than as `"@rman/node"`: a fixture is a bare
+ * The entry point is named by **absolute path** rather than as `"rman-node"`: a fixture is a bare
  * temporary directory with no `node_modules`, and `plugins` resolves a bare specifier through the
  * repository's own dependencies (the same rule `extends` follows), which is exactly right in a real
  * repository and unusable here. `resolveConfigTarget` accepts a path for this reason.
@@ -77,7 +77,7 @@ export function runCli(options?: { argv?: string[]; cwd?: string }): Promise<voi
  * time a test body runs. Declaring them here is what puts them back.
  *
  * Reads them off the `definePlugin` object rather than calling `augment*()` again, so the specs
- * exercise exactly what a repository naming `@rman/node` in `plugins` would get.
+ * exercise exactly what a repository naming `rman-node` in `plugins` would get.
  */
 export function useNodeEcosystem(): void {
   beforeEach(() => {

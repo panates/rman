@@ -15,7 +15,7 @@ import { CiService } from '../services/ci.service.js';
 import { PublishService } from '../services/publish.service.js';
 
 /**
- * `rman publish` - contributed by the `@rman/node` plugin.
+ * `rman publish` - contributed by the `rman-node` plugin.
  *
  * Question B at the package level: each target asks its *own* registry whether this version is
  * already out there (npm via `npm view`, Docker via `docker manifest inspect`). Never whether

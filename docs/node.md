@@ -17,7 +17,7 @@ signatures were re-read from source during the move; the prose around them was n
 by line.
 -->
 
-# `@rman/node` API Reference
+# `rman-node` API Reference
 
 Node.js support for rman, as a plugin. rman's core is about **repositories** - packages, versions,
 changelogs, releases, branches. This package is about **npm**, which is a different thing that
@@ -25,7 +25,7 @@ happens to be true of most repositories rman has been used on.
 
 ```yaml
 # .rmanrc.yml
-plugins: ['@rman/node']
+plugins: ['rman-node']
 ```
 
 Naming it does three kinds of thing at once, and they are worth telling apart:
@@ -55,7 +55,7 @@ rather than working around npm's.
 ## Installation
 
 ```bash
-npm install @rman/node
+npm install rman-node
 ```
 
 ESM-only, requires **Node.js >= 20**, and takes `rman` itself as a peer. Everything below is
@@ -77,8 +77,8 @@ import {
   DEPENDENCY_KEYS,
   parseWorkspaceRange,
   resolveWorkspaceRange,
-} from '@rman/node';
-import type { RmanNodeConfig, NodeConfigKeys, ParsedWorkspaceRange } from '@rman/node';
+} from 'rman-node';
+import type { RmanNodeConfig, NodeConfigKeys, ParsedWorkspaceRange } from 'rman-node';
 ```
 
 ## Config keys
@@ -107,10 +107,10 @@ import that carries that augmentation - explicit, rather than a side effect some
 
 ```js
 // .rmanrc.mjs
-import { defineConfig } from '@rman/node';
+import { defineConfig } from 'rman-node';
 
 export default defineConfig({
-  plugins: ['@rman/node'],
+  plugins: ['rman-node'],
   packageManager: 'pnpm',
   '[ws:*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
 });
@@ -161,7 +161,7 @@ namespace PublishService {
 ```
 
 ```ts
-import { PublishService } from '@rman/node';
+import { PublishService } from 'rman-node';
 
 const plan = await PublishService.getPlan(repository);
 for (const entry of plan) console.log(entry.status, entry.package.name, entry.reason);
@@ -249,7 +249,7 @@ namespace CiService {
 ```
 
 ```ts
-import { CiService } from '@rman/node';
+import { CiService } from 'rman-node';
 
 await CiService.reinstall(repository, { packageManager: 'pnpm' });
 
@@ -282,7 +282,7 @@ namespace CleanService {
 ```
 
 ```ts
-import { CleanService } from '@rman/node';
+import { CleanService } from 'rman-node';
 
 // Preview only, nothing removed:
 await CleanService.clean(repository, { dryRun: true });
@@ -341,7 +341,7 @@ repository naming this package in `plugins` needs no import side effect:
 
 ```ts
 export const nodePlugin = definePlugin({
-  name: '@rman/node',
+  name: 'rman-node',
   commands: [publishCommand.command, ciCommand.command, cleanCommand.command],
   runSteps: packageJsonSteps,
   workspace: npmWorkspace,

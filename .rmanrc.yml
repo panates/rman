@@ -1,15 +1,15 @@
 # `publish`, `ci` and `info` are no longer built in - they come from the Node plugin.
 #
-# Named by path rather than as `@rman/node`, and only because this repository is the plugin's own:
+# Named by path rather than as `rman-node`, and only because this repository is the plugin's own:
 # the package's `exports` points at `./index.js`, which is the *published* layout (the build
 # directory becomes the package root), so resolving it by name inside this checkout finds nothing.
-# A consuming repository installs it normally and writes `plugins: ['@rman/node']`.
+# A consuming repository installs it normally and writes `plugins: ['rman-node']`.
 #
-# It follows that `@rman/node` has to be built before `rman publish` exists here - self-hosting a
+# It follows that `rman-node` has to be built before `rman publish` exists here - self-hosting a
 # plugin costs exactly one bootstrap step.
 plugins: ['./packages/node/build/index.js']
 
-# One version line for the whole repository (rman's default) - `rman` and `@rman/node` release
+# One version line for the whole repository (rman's default) - `rman` and `rman-node` release
 # together, so a config written for one can never name a version of the other that does not exist.
 
 # `[ws:*]`, not `[*]`: both packages, and *not* the repository root, which has no build directory

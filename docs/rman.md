@@ -93,7 +93,7 @@ import {
 import type { RmanConfig } from 'rman';
 ```
 
-**Everything npm-specific lives in `@rman/node`** - `PublishService`, `CiService`, `CleanService`,
+**Everything npm-specific lives in `rman-node`** - `PublishService`, `CiService`, `CleanService`,
 the `package.json` manifest reader, the version planner, `node_modules/.bin` on PATH, and the
 `publish`/`ci`/`clean` commands. See [node.md](node.md). The package documented here knows nothing
 about npm: a repository naming no plugin has no manifest reader at all, so a polyglot or non-Node
@@ -575,16 +575,16 @@ A JSDoc annotation does the same without the import, which is what a `.cjs` conf
 module.exports = { allowBranch: ['main'] };
 ```
 
-**With a plugin, import `defineConfig` from the plugin instead** - `@rman/node`'s is the same
+**With a plugin, import `defineConfig` from the plugin instead** - `rman-node`'s is the same
 function typed with `RmanNodeConfig`, and the import is what carries the plugin's own keys
 (`clean`, `publish.directory`, `packageManager`) into the type:
 
 ```js
 // .rmanrc.mjs
-import { defineConfig } from '@rman/node';
+import { defineConfig } from 'rman-node';
 
 export default defineConfig({
-  plugins: ['@rman/node'],
+  plugins: ['rman-node'],
   packageManager: 'pnpm',
   '[ws:*]': { clean: { include: 'build' } },
 });
@@ -1371,7 +1371,7 @@ here, and that is the point rather than a gap: the core has no opinion about npm
 repository cannot end up reporting `npm: Not Found`, which is a wrong answer rather than a missing
 one. A plugin adds its ecosystem's half by augmenting `Options` and wrapping `getSystemInfo` -
 `Options.repository` exists for exactly that, giving an augmentation somewhere to read a setting
-from (`@rman/node` takes `.rmanrc "packageManager"` off it). `envinfo` merges *over* the defaults, so
+from (`rman-node` takes `.rmanrc "packageManager"` off it). `envinfo` merges *over* the defaults, so
 an augmentation can replace `Binaries` rather than only append to it. See
 [node.md](node.md#systeminfo-the-npm-half).
 

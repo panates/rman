@@ -36,7 +36,7 @@ export interface RmanConfig extends RmanConfigKeys, WithAppend<RmanConfigKeys> {
  *  `RmanConfig` is built from, kept separate only so `WithAppend` has something to map over. */
 export interface RmanConfigKeys {
   /**
-   * **A plugin adds its own keys here, by declaration merging** - `@rman/node` contributes
+   * **A plugin adds its own keys here, by declaration merging** - `rman-node` contributes
    * `clean` and `publish.directory` from its own
    * `interfaces/rman-config.interface.ts`, so `pkg.config.clean` stays typed wherever it is read
    * without the core having to know npm has a `node_modules` or that TypeScript has build output.
@@ -53,7 +53,7 @@ export interface RmanConfigKeys {
    *
    * ```yaml
    * # .rmanrc.yml - imported by name, resolved through the repository's own node_modules
-   * plugins: ['@rman/node']
+   * plugins: ['rman-node']
    * ```
    *
    * ```js
@@ -63,7 +63,7 @@ export interface RmanConfigKeys {
    * ```
    *
    * The object form is what lets a **plugin package export a config** rather than a single plugin:
-   * `@rman/node`'s entry point is `export default defineConfig({ plugins: [ ... ] })`, so it is an
+   * `rman-node`'s entry point is `export default defineConfig({ plugins: [ ... ] })`, so it is an
    * `.rmanrc` like any other and is free to grow a second plugin without changing its shape. When an
    * imported module exports a config this way, **only its `plugins` are read** - a config's other
    * keys reach a repository through `extends`, which is the key that means "merge this underneath

@@ -83,7 +83,7 @@ describe('core/plugin', () => {
     return dir;
   }
 
-  /** A module exporting a *config* whose `plugins` hold the plugin - the shape `@rman/node` uses. */
+  /** A module exporting a *config* whose `plugins` hold the plugin - the shape `rman-node` uses. */
   function configModule(name: string, command: string, says: string): string {
     return `export default { plugins: [{ name: ${JSON.stringify(name)}, commands: [
       { command: ${JSON.stringify(command)}, describe: 'from ${name}',

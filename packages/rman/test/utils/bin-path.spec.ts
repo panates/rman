@@ -5,7 +5,7 @@ import { BinPath } from '../../src/utils/bin-path.js';
 /**
  * The core's half: composing whatever the providers offer into a PATH. **No npm anywhere** - the
  * provider below is a synthetic one, which is the point: the core must not know what a local install
- * looks like. `@rman/node`'s own directories are covered by its `npm-run-path.spec.ts`.
+ * looks like. `rman-node`'s own directories are covered by its `npm-run-path.spec.ts`.
  */
 describe('utils/BinPath', () => {
   it('has no provider of its own, so the inherited PATH is left exactly as it was', () => {

@@ -125,7 +125,7 @@ function assignMerged(target: Record<string, any>, key: string, value: unknown):
  * Appends `value` to `target[key]`, de-duplicating **only** an `ALWAYS_APPEND` key.
  *
  * That asymmetry is the point. `plugins` appends without being asked, so a repository and the config
- * it extends both naming `'@rman/node'` is the ordinary case rather than a mistake, and the list is
+ * it extends both naming `'rman-node'` is the ordinary case rather than a mistake, and the list is
  * also what `rman config` prints. An explicit `+before`, by contrast, was *written* - repeating a
  * step that is already there is a strange thing to ask for, but it is what was asked for, and
  * silently collapsing it would make one layer's list depend on another's contents.

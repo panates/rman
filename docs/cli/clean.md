@@ -2,7 +2,7 @@
 
 # `rman clean`
 
-> Comes from **[`@rman/node`](../cli-node.md)**, not from rman's core - name it in `.rmanrc`
+> Comes from **[`rman-node`](../cli-node.md)**, not from rman's core - name it in `.rmanrc`
 > `plugins` (directly, or inherited through `extends`) or this command does not exist.
 
 ```

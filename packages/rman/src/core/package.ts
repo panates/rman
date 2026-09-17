@@ -10,7 +10,7 @@ export class Package {
    *
    * There is no `json` here any more, and that is the point: `package.json` is npm's answer to
    * "where is a package's name and version written", not rman's. `manifest.raw` is still the whole
-   * document for a command that knows its own ecosystem - `@rman/node` reads `scripts` and
+   * document for a command that knows its own ecosystem - `rman-node` reads `scripts` and
    * `publishConfig` off it - but the core only ever touches `name`, `version` and `private`.
    */
   manifest: Manifest;
@@ -60,7 +60,7 @@ export class Package {
   manifestFileName: string;
 
   /**
-   * **Which ecosystem this package belongs to** - `'node'` for one read by `@rman/node`, from the
+   * **Which ecosystem this package belongs to** - `'node'` for one read by `rman-node`, from the
    * `ManifestProvider.name` that claimed the directory. Empty when no provider did.
    *
    * The escape hatch for code that legitimately knows one technology: `if (pkg.provider === 'node')`

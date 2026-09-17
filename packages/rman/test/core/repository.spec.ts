@@ -482,7 +482,7 @@ describe('core/Repository', () => {
         JSON.stringify({
           '[*]': {
             /** A **core** key that takes package-relative paths - the assertion is about `${{ }}`,
-             *  not about stamping. It used to be `clean.include`, which is `@rman/node`'s now: the
+             *  not about stamping. It used to be `clean.include`, which is `rman-node`'s now: the
              *  core's `RmanConfig` does not declare it, and a core spec must not need a plugin. */
             version: { stamp: ['build', '../../coverage/${{ pkg.basename }}'] },
             changelog: { filePath: '${{ pkg.unscopedName }}-v${{ semver.major(pkg.version) }}.md' },
@@ -665,7 +665,7 @@ describe('core/Repository', () => {
           // Unmarked, at the root - the one key that does not stop at the root's own package.
           vars: { x: 1, outDir: 'build', image: 'panates/${{ pkg.basename }}' },
           '[*]': {
-            /** A core key again - `publish.directory` left with `@rman/node`. */
+            /** A core key again - `publish.directory` left with `rman-node`. */
             changelog: { filePath: '${{ vars.outDir }}' },
             run: { a: '${{ vars.x }}', b: 'x is ${{ vars.x }}', c: '${{ vars.image }}:latest' },
           },

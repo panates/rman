@@ -38,7 +38,7 @@ describe('public API (src/index.ts)', () => {
 
   /** What the core deliberately does **not** export any more - each one left with the plugin that
    *  owns it, and a stray re-export here would quietly make the core npm-shaped again. */
-  it('does not export what moved into @rman/node', () => {
+  it('does not export what moved into rman-node', () => {
     for (const name of ['CleanService', 'PublishService', 'CiService', 'parseWorkspaceRange', 'DEPENDENCY_KEYS']) {
       expect((api as Record<string, unknown>)[name]).toBeUndefined();
     }
@@ -58,7 +58,7 @@ describe('public API (src/index.ts)', () => {
   });
 
   it('exports what a plugin needs in order to behave like a built-in command', () => {
-    // `@rman/node` is an ordinary package importing from here, so this surface is a contract:
+    // `rman-node` is an ordinary package importing from here, so this surface is a contract:
     // dropping any of it breaks a plugin rather than an internal caller.
     expect(typeof api.exec).toBe('function');
     expect(typeof api.runBin).toBe('function');

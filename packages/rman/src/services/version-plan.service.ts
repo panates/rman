@@ -13,7 +13,7 @@ import { ConventionalCommitsService } from './conventional-commits.service.js';
  * writes nothing, touches no manifest, makes no commit. `VersionService.applyPlan` does the writes.
  *
  * **Abstract, so the core cannot produce a plan on its own** - a repository gets one from the
- * planner its `plugins` contribute (`@rman/node`'s `NodeVersionPlanService` for a Node repository).
+ * planner its `plugins` contribute (`rman-node`'s `NodeVersionPlanService` for a Node repository).
  * That is not ceremony: what a release *is* differs by ecosystem, and two of the decisions below
  * have no answer that is true of repositories in general.
  *
@@ -501,7 +501,7 @@ export namespace VersionPlanService {
    * **One slot, last registration wins** - unlike `Manifest`/`Workspace`, which keep a list and take
    * the first provider that *recognizes* a repository. A planner has nothing to recognize: asked for
    * a plan it always has one, so "first that answers" would just mean "first registered" and a
-   * repository layering its own policy plugin after `@rman/node` could never take effect - which is
+   * repository layering its own policy plugin after `rman-node` could never take effect - which is
    * the only reason to name two in the first place.
    */
   export function setPlanner(planner: VersionPlanService): void {
@@ -524,7 +524,7 @@ export namespace VersionPlanService {
     if (!current) {
       throw new Error(
         'No version planner is registered, so no version plan can be computed. Name a plugin that ' +
-          'contributes one in .rmanrc "plugins" - "@rman/node" for a Node repository.',
+          'contributes one in .rmanrc "plugins" - "rman-node" for a Node repository.',
       );
     }
     return current;

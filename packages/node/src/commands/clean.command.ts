@@ -11,7 +11,7 @@ import {
 import { CleanService } from '../services/clean.service.js';
 
 /**
- * `rman clean` - contributed by the `@rman/node` plugin rather than built into rman, because what
+ * `rman clean` - contributed by the `rman-node` plugin rather than built into rman, because what
  * it deletes is TypeScript's output. See `CleanService.clean`.
  */
 export const command: CustomCommand = {

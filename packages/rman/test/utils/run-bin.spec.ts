@@ -15,7 +15,7 @@ describe('utils/run-bin', () => {
    * `runBin` finds a binary by PATH, and what goes on PATH is `BinPath`'s - which in the core has no
    * provider at all. So the spec brings one, pointing at a directory called `local-bin`:
    * deliberately **not** `node_modules/.bin`, because that is npm's layout and this file is testing
-   * rman's core. `@rman/node`'s own directories are its spec's business.
+   * rman's core. `rman-node`'s own directories are its spec's business.
    */
   useLocalBin();
 
