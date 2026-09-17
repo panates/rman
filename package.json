@@ -49,8 +49,6 @@
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --max-warnings=0 --fix",
     "format": "prettier . --write --log-level=warn",
-    "clean": "rman clean",
-    "qc": "rman run lint && rman run check",
     "graph": "graphify update ."
   },
   "engines": {
