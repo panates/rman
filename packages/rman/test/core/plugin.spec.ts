@@ -23,13 +23,33 @@ async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
   return lines;
 }
 
+/**
+ * A CLI call expected to fail, with **both** output streams silenced while it runs.
+ *
+ * `console.error` and not just `console.log`, which is what the other specs' `captureLogs` patches:
+ * these failures are thrown while `Repository.create` loads the plugins, so they never reach the
+ * `logged` convention and `runCli`'s own catch prints them with `console.error`. Left through, they
+ * do worse than clutter - the reporter and the stray write race for the same stream, and a line
+ * comes out spliced: `Plugin "./p.mjs" must export an rman conf      ✔ throws a clear error...`.
+ *
+ * Every assertion here reads `error.message`, so nothing is lost by dropping the printed copy.
+ */
 async function expectCliFailure(fn: () => Promise<void>): Promise<Error> {
-  return fn().then(
-    () => {
-      throw new Error('expected the command to fail, but it resolved');
-    },
-    (e: Error) => e,
-  );
+  const log = console.log;
+  const error = console.error;
+  console.log = () => undefined;
+  console.error = () => undefined;
+  try {
+    return await fn().then(
+      () => {
+        throw new Error('expected the command to fail, but it resolved');
+      },
+      (e: Error) => e,
+    );
+  } finally {
+    console.log = log;
+    console.error = error;
+  }
 }
 
 describe('core/plugin', () => {

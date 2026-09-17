@@ -859,6 +859,15 @@ no version planner - so a spec that needs one **brings it**.
   rejection thrown through `captureLogs` loses the lines the assertions were going to read. It
   replaced a `process.exit` stub that was only ever needed because `runCli` exited from inside the
   library; it also asserts the failure, which the stub never did.
+  - **A failure thrown during *setup* prints to `console.error`, which `captureLogs` does not
+    patch.** Anything thrown while `Repository.create` runs - a plugin that will not load, no
+    manifest to find - never reaches the `logged` convention, so `runCli`'s own catch prints it.
+    Left through, it does worse than clutter the report: the reporter and the stray write race for
+    the same stream and a line comes out spliced (measured -
+    `Plugin "./p.mjs" must export an rman conf      ✔ throws a clear error...`). A spec expecting a
+    setup failure silences **both** streams - see `plugin.spec.ts`'s own `expectCliFailure`.
+  - The quickest way to find a leak is to diff a run's output against what mocha itself prints:
+    every line that is neither a suite title nor a result came from the code under test.
 - `import { expect } from 'expect'` - the named form. The default import works at runtime through
   CJS interop and produced ~287 type errors, which is why the test tree never type-checked. Both
   `test/tsconfig.json`s are clean now; keep them that way.
