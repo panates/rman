@@ -868,6 +868,14 @@ no version planner - so a spec that needs one **brings it**.
     setup failure silences **both** streams - see `plugin.spec.ts`'s own `expectCliFailure`.
   - The quickest way to find a leak is to diff a run's output against what mocha itself prints:
     every line that is neither a suite title nor a result came from the code under test.
+- **A fixture repository sets `user.email`/`user.name` in its own config, right after `git init` -
+  never per command with `-c`.** The code under test commits too (`applyPlan` makes one per group
+  plus the root's version sync) and cannot be handed an identity, so a fixture that configures only
+  its *own* commits passes on any machine with a global identity and fails on a fresh CI runner
+  with `fatal: empty ident name`. That is exactly how it failed, in GitHub Actions and nowhere else.
+  - **Reproduce a runner locally with `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null`**,
+    which is the whole difference and takes one run rather than a push. Worth doing for any change
+    that touches a fixture's git setup.
 - **The test tree must load exactly ONE copy of the core, and `tsconfig-test.json`'s `paths` is what
   enforces it.** Map *every* specifier the specs can reach it by - `"rman"` **and** `"rman/cli"`,
   and any subpath export added later. With `"rman/cli"` unmapped, a spec importing it got the built

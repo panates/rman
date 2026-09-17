@@ -42,8 +42,18 @@ describe('augmentation/manifest - dependency ranges after a bump', () => {
       dependencies: { 'pkg-a': pkgADependencyRange },
     });
     git(dir, 'init', '-q');
+    /**
+     * Identity in the **repository's own config**, not passed per command with `-c`.
+     *
+     * The code under test commits too - `applyPlan` makes one commit per group plus the root's
+     * version sync - and it has no way to be handed an identity. With only the fixture's own
+     * commits configured, this passes on any machine with a global `user.email` and fails on a
+     * fresh CI runner with `fatal: empty ident name`, which is exactly where it did fail.
+     */
+    git(dir, 'config', 'user.email', 't@t');
+    git(dir, 'config', 'user.name', 't');
     git(dir, 'add', '-A');
-    git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+    git(dir, 'commit', '-q', '-m', 'init');
     git(dir, 'tag', 'v1.0.0');
     return dir;
   }
@@ -51,7 +61,7 @@ describe('augmentation/manifest - dependency ranges after a bump', () => {
   async function bumpPkgA(dir: string): Promise<void> {
     fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
     git(dir, 'add', '-A');
-    git(dir, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'feat!: a breaking change in pkg-a');
+    git(dir, 'commit', '-q', '-m', 'feat!: a breaking change in pkg-a');
     const repo = await Repository.create(dir);
     const plan = await VersionPlanService.getPlanner().getPlan(repo);
     await VersionService.applyPlan(repo, plan);
