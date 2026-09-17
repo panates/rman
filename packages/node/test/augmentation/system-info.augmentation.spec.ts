@@ -81,7 +81,7 @@ describe('augmentation/system-info', () => {
 
   it("reports this package's own version alongside rman's", async () => {
     await SystemInfo.getSystemInfo();
-    expect(seen?.envinfo?.npmPackages).toEqual(['rman', '@rman/node', 'typescript']);
+    expect(seen?.envinfo?.npmPackages).toEqual(['rman', 'rman-node', 'typescript']);
   });
 
   it('lets a caller override the categories it adds', async () => {
@@ -95,6 +95,6 @@ describe('augmentation/system-info', () => {
     augmentSystemInfo();
     augmentSystemInfo();
     await SystemInfo.getSystemInfo();
-    expect(seen?.envinfo?.npmPackages).toEqual(['rman', '@rman/node', 'typescript']);
+    expect(seen?.envinfo?.npmPackages).toEqual(['rman', 'rman-node', 'typescript']);
   });
 });

@@ -53,7 +53,7 @@ function printRepositoryInfo(info: SystemInfo.RepositoryInfo): void {
  * `rman info` - environment and repository, and back in the core because most of what it reports
  * (OS, CPU, shell, git, the repository's own shape) is true of any repository.
  *
- * The Node half is not here at all: installing `@rman/node` augments `SystemInfo` and the package
+ * The Node half is not here at all: installing `rman-node` augments `SystemInfo` and the package
  * manager, `npmPackages` and this plugin's own version start appearing. Without it nothing
  * npm-shaped is asked for or printed, which is the right answer for a repository in any other
  * language.
@@ -73,7 +73,7 @@ export function initCli(repository: Repository, program: Argv) {
         }),
     handler: async args => {
       /** Only the repository - which package manager to report, if any, is a question the core
-       *  cannot ask. `@rman/node`'s augmentation reads `.rmanrc "packageManager"` off this. */
+       *  cannot ask. `rman-node`'s augmentation reads `.rmanrc "packageManager"` off this. */
       const systemInfo = await SystemInfo.getSystemInfo({ repository });
       const repositoryInfo = SystemInfo.getRepositoryInfo(repository);
       if (args.json) {

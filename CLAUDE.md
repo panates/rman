@@ -31,7 +31,7 @@ or between exported declarations.
 - **Unmarked keys configure the package of the directory that declares them.** The repository
   root's own `.rmanrc` therefore configures the *root package* - which is where every repo-wide
   setting is read from anyway (`allowBranch`, `version.*`, `githubRelease.*`, and a plugin's own
-  root-level keys such as `@rman/node`'s `packageManager`).
+  root-level keys such as `rman-node`'s `packageManager`).
 - **A `"[selector]"` block configures the packages it names.** This is the only way a directory
   speaks about anything but its own package, and there are **three audiences** because a repository
   has three:
@@ -180,7 +180,7 @@ work: the type composes and a schema does not.
   `.rmanrc.cjs`/`.mjs`/`.js`, through `defineConfig` or a `/** @type {import('rman').RmanConfig} */`
   annotation. **rman loads no `.ts` config**, so a "`.rmanrc.ts`" in an example is wrong; the type
   reaches the file through the editor, never a compiler.
-- **A plugin's keys arrive by `declare module 'rman'`**, so `@rman/node`'s `defineConfig` is the same
+- **A plugin's keys arrive by `declare module 'rman'`**, so `rman-node`'s `defineConfig` is the same
   function with a narrower parameter and the import is what carries the augmentation.
 - **`.rmanrc` and `.rmanrc.yml` are now unchecked, and that is the price.** rman validates config at
   no point during a run - no ajv, no key check anywhere in `config.ts` - so an unknown key in those
@@ -209,7 +209,7 @@ work: the type composes and a schema does not.
 
 ## Which ecosystem a package belongs to
 
-`Package.provider` - `'node'` for one read by `@rman/node`, empty when no plugin claimed the
+`Package.provider` - `'node'` for one read by `rman-node`, empty when no plugin claimed the
 directory. Comes from `ManifestProvider.name`, and that field means the **ecosystem**, not the file
 (`fileName` already says `package.json`; a name repeating it carried no information, which is why it
 went unused until this existed).
@@ -240,9 +240,9 @@ a command an author wrote (`eslint .`) runs the repo's pinned copy rather than a
 who owns which half:
 
 - **Which directories** is the ecosystem's, and the core has none. `node_modules/.bin` walked up the
-  directory chain is npm's layout; `@rman/node` contributes it (`RmanPlugin.binPaths`). Measured: a
+  directory chain is npm's layout; `rman-node` contributes it (`RmanPlugin.binPaths`). Measured: a
   `run` step calling a binary in `node_modules/.bin` fails with `command not found` in a repository
-  naming no plugin, and runs with `@rman/node` named.
+  naming no plugin, and runs with `rman-node` named.
 - **How a PATH is spelled** is the OS's, and stays in the core: `PATH` everywhere but Windows, where
   the existing key's case must be *read* rather than a second one written, or the child inherits two.
 - **Every provider contributes, in declaration order** - unlike `Manifest`/`Workspace`, which take
@@ -259,7 +259,7 @@ the walk reaches first.
 [`packages/rman/src/interfaces/rman-config.interface.ts`](packages/rman/src/interfaces/rman-config.interface.ts)
 is **purely a typing aid** - rman never reads it at runtime, it only ever sees the plain object a
 config file exports. So the split is about who can *author* what, and it follows the code: `clean`
-and `publish.directory` are `@rman/node`'s, because `clean` describes TypeScript's output and
+and `publish.directory` are `rman-node`'s, because `clean` describes TypeScript's output and
 `publish.directory` a `package.json` generated at publish time. `target`, `skip` and `docker` stay
 in the core - the first two are read by `list` and by every target's own plan, and Docker publishing
 is nobody's ecosystem.
@@ -270,7 +270,7 @@ is nobody's ecosystem.
   `RmanNodeConfig` could never do - the reader holds a `Package`, and `Package.config` is the core's
   type. `WithAppend<RmanConfigKeys>` is a mapped type evaluated where it is used, so `+clean` comes
   along on its own.
-- **`RmanNodeConfig` (exported from `@rman/node`, with its own `defineConfig`) is the authoring
+- **`RmanNodeConfig` (exported from `rman-node`, with its own `defineConfig`) is the authoring
   name** - so the import that carries the augmentation is explicit instead of a side effect someone
   has to remember. Named, not a second `RmanConfig`: one name per meaning.
 - **Trap: one `declare module 'rman'` block per package, or the others stop applying.** A second
@@ -280,8 +280,8 @@ is nobody's ecosystem.
   beside the others rather than next to the code it describes. The *runtime* half of an augmentation
   still lives with its own subject (`augmentSystemInfo()`, `augmentManifest()`, ...).
 - Measured both ways: with the core alone, `{ clean: ... }` and `{ publish: { directory } }` are
-  rejected; with the plugin in the program, `@rman/node`'s own `pkg.config?.clean` type-checks.
-- `packageManager` is `@rman/node`'s. It was core "because `info` reads it", and that stopped being
+  rejected; with the plugin in the program, `rman-node`'s own `pkg.config?.clean` type-checks.
+- `packageManager` is `rman-node`'s. It was core "because `info` reads it", and that stopped being
   true when `SystemInfo`'s npm half moved out: measured, **nothing in the core read it any more** -
   only the declaration was left, and its value set was npm's tooling all along.
 - **`dependencies` is core, and must stay.** It layers on top of whatever
@@ -477,7 +477,7 @@ touched package counts as changed.
 - **Question A**, from the same plan `changed` shows
   (`VersionPlanService.getPlanner().getPlan`); `VersionService.applyPlan` does the writes.
 - **`VersionPlanService` is abstract - a plugin supplies the planner** (`RmanPlugin.versionPlanner`,
-  `@rman/node`'s `NodeVersionPlanService`), and `version`/`changed` fail naming that key when none
+  `rman-node`'s `NodeVersionPlanService`), and `version`/`changed` fail naming that key when none
   is registered. One slot, last registration wins: unlike `Manifest`/`Workspace` a planner has
   nothing to *recognize*, so "first that answers" would mean "first registered" and a repo layering
   its own policy plugin could never take effect. It does not degrade to a built-in default either -
@@ -520,7 +520,7 @@ touched package counts as changed.
   are in `DEFERRED_PATHS` and `${{ pkg.targetVersion }}` binds nowhere else.
   - The package's *own* declaration pre-empts that fallback, slot by slot, and it arrives through a
     step source: npm spells the lifecycle `preversion`/`version`/`postversion`, which is the same
-    `pre<script>`/`<script>`/`post<script>` shape `@rman/node` already maps onto
+    `pre<script>`/`<script>`/`post<script>` shape `rman-node` already maps onto
     `before`/`exec`/`after` - so this needed no second seam and no extra line in the plugin. **Never
     read `manifest.raw.scripts` from core again**, and don't re-add a script runner here: the
     own-beats-fallback rule belongs to `RunService`, which applies the identical rule for `run`.
@@ -617,7 +617,7 @@ touched package counts as changed.
   those would silently break every native-module package); `private` (publish refuses a private
   package anyway); `publishConfig.directory` (it pointed *here*). `"workspace:"` ranges are resolved
   in it, and it is deleted again afterwards.
-  - **The `"workspace:"` protocol lives in `@rman/node`** (`utils/workspace-range.ts`), not in the
+  - **The `"workspace:"` protocol lives in `rman-node`** (`utils/workspace-range.ts`), not in the
     core: it is a statement about a `package.json` dependency field, and the core never read it -
     it was only exported from there because `publish` needed it before `publish` itself moved out.
   - Generated here, not by a build script, for the same reason the Dockerfile label moved into
@@ -646,7 +646,7 @@ touched package counts as changed.
 - A missing release tag is an **error**, never a silent skip - the notes' boundary is the previous
   release tag, so releasing without one would quietly produce notes covering the entire history.
 
-### `clean` - in `@rman/node`, not the core
+### `clean` - in `rman-node`, not the core
 
 Everything its built-in behaviour knows how to delete is a **TypeScript** fact: a compiled
 `.js`/`.js.map`/`.d.ts` beside its `.ts` source, a `*.tsbuildinfo`, and a `node_modules` to skip
@@ -762,7 +762,7 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   a module that fails to load affects only itself, while `rman publish` resolving to two different
   things has no safe guess. Both name the file and the reason.
 - **A clash with a *plugin's* command is neither - the repository wins, silently.** Measured: a
-  `.rman/clean.mjs` in a repository naming `@rman/node` simply becomes `rman clean`, with no notice.
+  `.rman/clean.mjs` in a repository naming `rman-node` simply becomes `rman clean`, with no notice.
   That is the intended escape hatch and the same precedence a package's own `.rmanrc` has over an
   `extends` base, so don't "fix" it into an error - but know it when a plugin's command appears not
   to work.
@@ -785,7 +785,7 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
 - **A `plugins` entry is a package name, a path, or the plugin object itself.** The object form is
   what a JS config uses to declare a plugin without publishing a package, and it is the form a
   plugin package's own config holds.
-- **A plugin package exports an `RmanConfig`, never a plugin** - `@rman/node`'s entry point is
+- **A plugin package exports an `RmanConfig`, never a plugin** - `rman-node`'s entry point is
   `export default defineConfig({ plugins: [nodePlugin] })`, and `loadPlugins` recurses into that
   config's `plugins`. A package exposing exactly one plugin was the shape of the plugin it happens
   to contain: a second one would change what every repository importing it receives, where a config
@@ -802,7 +802,7 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   a repository naming one never means "and drop the ones my shared config brought". Replacement was
   the silent failure: `extends` a toolchain config, add a plugin of your own, and what you noticed
   was `Unknown argument: publish`.
-  - An entry already in the list is dropped, by identity - two layers naming `'@rman/node'` is
+  - An entry already in the list is dropped, by identity - two layers naming `'rman-node'` is
     ordinary, not a mistake. **An explicit `+key` is *not* de-duplicated**: `plugins` repeats as a
     consequence of the rule, while a repeated `+before` is what the author typed.
   - `register` also allows **one registration per plugin name**, which catches what identity cannot
@@ -824,13 +824,13 @@ no version planner - so a spec that needs one **brings it**.
 - **`support/mocha-root-hooks.ts` empties every registry before each test.** Mocha runs both
   packages' specs in one process and the registries are module-global by design, so without this
   whichever spec ran first decided the answer for the rest: `Manifest.read` takes the first provider
-  that recognizes a directory, so `@rman/node`'s would answer for core specs that registered
+  that recognizes a directory, so `rman-node`'s would answer for core specs that registered
   nothing, and the core would *appear* to work in tests that never set it up. Registration therefore
   belongs in a `beforeEach` **inside** the `describe` (the root hook is the outermost, and mocha runs
   hooks outermost-first) - never at module scope.
 - **[`packages/rman/test/_fixture.ts`](packages/rman/test/_fixture.ts)** is the core's synthetic
   ecosystem: `useTestEcosystem()` registers a provider named `'test'` (not `'node'`), a workspace
-  provider, a step source and a `TestVersionPlanService`. **It must not import `@rman/node`** - that
+  provider, a step source and a `TestVersionPlanService`. **It must not import `rman-node`** - that
   package depends on this one, so borrowing its plugin would invert the build order and make the
   core's tests pass because its own plugin happened to be right.
   - `registryVersions` / `registryCalls` replace the old `npmViewVersion` injections: a spec fills
@@ -911,7 +911,7 @@ symlink that directory as the package itself:
 
 ```bash
 ln -s <rman>/packages/rman/build  <other-repo>/node_modules/rman
-ln -s <rman>/packages/node/build  <other-repo>/node_modules/@rman/node
+ln -s <rman>/packages/node/build  <other-repo>/node_modules/rman-node
 ```
 
 Two things this measured, both of which cost more time than the linking did:
@@ -921,7 +921,7 @@ Two things this measured, both of which cost more time than the linking did:
   shebang present and correct, which sends the reader to look at the shebang. `postbuild.cjs` now
   chmods every `bin` entry, so it survives each rebuild.
 - **A plugin resolves `rman` from its own location, not from the repository using it.** So
-  `@rman/node`'s `import 'rman'` walks up from `<rman>/packages/node/build` and lands in **this**
+  `rman-node`'s `import 'rman'` walks up from `<rman>/packages/node/build` and lands in **this**
   repository's `node_modules` - linking it elsewhere changes nothing about that. Its `node_modules/rman`
   therefore has to resolve too, and pointing it at `packages/rman/build` (rather than at
   `packages/rman`, which npm's workspace link does) is what makes it: the build directory is the
@@ -941,7 +941,7 @@ the repository is a Node one belongs in the `node` file.
 | | |
 | --- | --- |
 | [`docs/cli-rman.md`](docs/cli-rman.md) | the CLI rman ships, plus global options, the shared option groups, and **Where a command comes from** |
-| [`docs/cli-node.md`](docs/cli-node.md) | `@rman/node`'s three commands |
+| [`docs/cli-node.md`](docs/cli-node.md) | `rman-node`'s three commands |
 | [`docs/rman.md`](docs/rman.md) | the core's programmatic API |
 | [`docs/node.md`](docs/node.md) | the plugin's |
 

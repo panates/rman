@@ -233,7 +233,7 @@ describe('core/config', () => {
 
   describe('defineConfig()', () => {
     it('returns the given config object completely unchanged - a typing aid, not a transform', () => {
-      /** Core keys only - `packageManager` left with `@rman/node`, and a core spec must not need a
+      /** Core keys only - `packageManager` left with `rman-node`, and a core spec must not need a
        *  plugin loaded to type its own fixture. */
       const config: RmanConfig = { logLevel: 'silent', group: false };
       expect(defineConfig(config)).toBe(config);

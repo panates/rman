@@ -365,7 +365,7 @@ export interface PackageScope {
    *  addressing another package from the root usually needs. Empty string for the root itself. */
   relativeDir: string;
   /**
-   * Which ecosystem this package belongs to - `'node'` for one read by `@rman/node`, empty when no
+   * Which ecosystem this package belongs to - `'node'` for one read by `rman-node`, empty when no
    * plugin claimed it. The same `Package.provider`, so one declaration can address a single
    * ecosystem in a polyglot repository (`if: "${{ pkg.provider === 'node' }}"`).
    */

@@ -79,7 +79,7 @@ export namespace RunService {
    *
    * The core knows one source: the config. **`package.json#scripts` is not a source the core has**,
    * because "a script lives in package.json" is true of a Node repository and of nothing else -
-   * `@rman/node` contributes that one (with npm's `pre<script>`/`post<script>` convention and its
+   * `rman-node` contributes that one (with npm's `pre<script>`/`post<script>` convention and its
    * `&&` splitting), and a plugin for another ecosystem would contribute its own.
    *
    * Returns `undefined` for "this package declares nothing", not empty slots - the difference
@@ -559,7 +559,7 @@ function normalizeScriptValue(value: unknown): string[] {
  *
  * 1. `run.<script>.override: true` -> the config, always. The escape hatch for "ignore what the
  *    package says it does".
- * 2. a **contributed** source - `package.json#scripts` via `@rman/node`. It wins over the config
+ * 2. a **contributed** source - `package.json#scripts` via `rman-node`. It wins over the config
  *    because it is the *package's own* declaration, while a config value typically arrives
  *    cascaded from the root or an `extends` base; the more specific statement wins, as everywhere
  *    else in rman.

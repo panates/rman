@@ -15,7 +15,7 @@ export namespace SystemInfo {
 
   /**
    * **Deliberately empty of anything language-specific.** A plugin adds what its own ecosystem
-   * needs by augmenting this interface - see `@rman/node`, which adds `packageManager` and turns it
+   * needs by augmenting this interface - see `rman-node`, which adds `packageManager` and turns it
    * into `envinfo` categories. There is no `packageManager` here, and that is the point: the core
    * has no opinion about npm, so a repository in another language cannot end up reporting
    * "npm: Not Found", which is a wrong answer rather than a missing feature.
@@ -24,7 +24,7 @@ export namespace SystemInfo {
     /**
      * The repository the report is about. The core uses it for nothing - `getRepositoryInfo` is a
      * separate call - and it is here **for augmentations**, which need somewhere to read a setting
-     * from: `@rman/node` takes `.rmanrc "packageManager"` off it.
+     * from: `rman-node` takes `.rmanrc "packageManager"` off it.
      */
     repository?: Repository;
     /** Extra `envinfo` categories, merged **over** the defaults - so an augmentation can replace
@@ -33,7 +33,7 @@ export namespace SystemInfo {
   }
 
   /** The shape of `getSystemInfo` - named so a plugin can wrap it without restating the signature
-   *  (see `@rman/node`'s system-info augmentation). */
+   *  (see `rman-node`'s system-info augmentation). */
   export type GetSystemInfo = (options?: Options) => Promise<SystemInfo.SystemInfo>;
 
   /** What this machine is, in terms true of any repository: OS, CPU, memory, shell, Node, git. */

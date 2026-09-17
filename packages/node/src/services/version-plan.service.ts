@@ -9,7 +9,7 @@ import { ChangeHashService, type GitHelper, type Package, VersionPlanService } f
  * npm's pair of answers.
  *
  * Registered through the plugin's `versionPlanner`, so `rman version`/`rman changed` work in a
- * repository that names `@rman/node` and say what is missing in one that does not.
+ * repository that names `rman-node` and say what is missing in one that does not.
  */
 export class NodeVersionPlanService extends VersionPlanService {
   /**

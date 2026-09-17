@@ -13,7 +13,7 @@ and update only the pages touched by what that diff actually shows. Once verifie
 `git-commit`/`package-version`/`date` here and in each page's own baseline comment.
 -->
 
-# `@rman/node` CLI Reference
+# `rman-node` CLI Reference
 
 Three commands that exist only in a repository naming this plugin. They are not rman's, because
 each is about **npm** or **TypeScript** rather than about repositories - see
@@ -21,7 +21,7 @@ each is about **npm** or **TypeScript** rather than about repositories - see
 
 ```yaml
 # .rmanrc.yml
-plugins: ['@rman/node']
+plugins: ['rman-node']
 ```
 
 Without that line, `rman clean` is `Unknown argument: clean`. The line may also be **inherited**

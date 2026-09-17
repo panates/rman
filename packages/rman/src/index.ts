@@ -6,7 +6,7 @@
  * per domain - CLI-only concerns (argv parsing, `--help` text, and all console/file presentation)
  * stay in `cli.ts` and the individual `commands/*.command.ts` modules, which are not exported here.
  *
- * **This is also the plugin contract.** A plugin (`@rman/node`, say) is an ordinary package that
+ * **This is also the plugin contract.** A plugin (`rman-node`, say) is an ordinary package that
  * imports from here, so everything a command needs in order to live outside rman has to be
  * exported - the progress panel, the package filter, the branch guard, the git helper. What is
  * *not* exported is deliberately private: config resolution internals, the expression evaluator,
@@ -16,7 +16,7 @@ export { defineConfig } from './core/config.js';
 export type { CommandContext, CustomCommand } from './core/custom-command.js';
 export { defineCommand } from './core/custom-command.js';
 /** The manifest seam: where a package's name and version are written, and how it is numbered.
- *  The core has no provider - `package.json` is npm's answer, and lives in `@rman/node`. */
+ *  The core has no provider - `package.json` is npm's answer, and lives in `rman-node`. */
 export type { ManifestProvider } from './core/manifest.js';
 /** Both the shape and the registry: `const m: Manifest` and `Manifest.read(dir)` - merged onto one
  *  name so a plugin can augment it the way it augments `SystemInfo`. */
@@ -32,7 +32,7 @@ export type { ChangeKind } from './core/version-scheme.js';
 export { assertOneScheme, SemverScheme, semverScheme, VersionScheme } from './core/version-scheme.js';
 /** The workspace seam: how a repository's packages are found. A plugin contributes a provider
  *  (see `RmanPlugin.workspace`); the core has none, so `workspaces` is npm's idea and lives in
- *  `@rman/node`. */
+ *  `rman-node`. */
 /** `Workspace.Layout`, `Workspace.Provider`, `Workspace.addProvider`, `Workspace.resolve`,
  *  `Workspace.findRoot` - one namespace, so a plugin can augment it. */
 export { Workspace } from './core/workspace.js';

@@ -33,7 +33,7 @@ export namespace CleanService {
    * `clean`: removes build output across every package (root included) - the replacement for
    * `ts-cleanup`, plus whatever else `.rmanrc clean.include`/`clean.exclude` says to remove.
    *
-   * **In `@rman/node` rather than rman's core, because what it knows how to delete is not
+   * **In `rman-node` rather than rman's core, because what it knows how to delete is not
    * repository-shaped knowledge but TypeScript-shaped**: a compiled `.js`/`.js.map`/`.d.ts` beside
    * its `.ts` source, a `*.tsbuildinfo`, and a `node_modules` to skip while looking. A Cargo or Go
    * repository has `cargo clean` and `go clean` and nothing here would fire for it, so a core

@@ -75,7 +75,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
          * - but it still has to **throw**, not exit.
          *
          * This branch called `process.exit(1)`, and `runCli` is a library entry point: rman's own
-         * bin calls it, so do `@rman/node`'s fixtures and every spec. Exiting from in here took the
+         * bin calls it, so do `rman-node`'s fixtures and every spec. Exiting from in here took the
          * whole process down before any caller could see the rejection - which in mocha meant the
          * first command that failed killed the run and the suite could not report a single result.
          * The exit belongs to the bin entry alone (see `isMain()` at the bottom), which already does

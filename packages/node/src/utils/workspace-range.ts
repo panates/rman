@@ -2,7 +2,7 @@
  * The `"workspace:"` dependency protocol - pnpm/yarn's spelling for "this dependency is a sibling in
  * this repository", which npm's own workspaces understand too.
  *
- * **In `@rman/node`, because it is a statement about a `package.json` dependency field.** It sat in
+ * **In `rman-node`, because it is a statement about a `package.json` dependency field.** It sat in
  * rman's core with a comment admitting it was only there because `publish` needed it from out here -
  * and now `publish`, the manifest provider and the dependency-range rewrite all live in this
  * package, so nothing in the core ever looked at it.
