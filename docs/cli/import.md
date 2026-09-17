@@ -1,4 +1,4 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli.md for the baseline convention -->
+<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli-rman.md for the baseline convention -->
 
 # `rman import <path>`
 
@@ -53,4 +53,4 @@ exists, or the source repository has no commits at all.
 
 ## See also
 
-- [`ImportService`](../api.md#importservice) - the underlying service.
+- [`ImportService`](../rman.md#importservice) - the underlying service.

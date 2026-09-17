@@ -1,0 +1,9 @@
+{
+  "extends": "../../../tsconfig-test.json",
+  "include": ["**/*.ts", "../src/**/*.ts", "../../rman/src/**/*.ts"],
+  "compilerOptions": {
+    "paths": {
+      "rman": ["../../rman/src/index.js"]
+    }
+  }
+}

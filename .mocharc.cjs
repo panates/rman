@@ -1,8 +1,8 @@
-process.env.TS_NODE_PROJECT = __dirname + '/test/tsconfig.json';
+process.env.TS_NODE_PROJECT = __dirname + '/tsconfig-test.json';
 /** @type {import('mocha').MochaOptions} */
 module.exports = {
-  require: ['@swc-node/register/esm-register'],
+  require: ['@swc-node/register/esm-register', './support/mocha-root-hooks.ts'],
   extension: ['ts'],
-  spec: './test/**/*.spec.ts',
+  spec: './packages/*/test/**/*.spec.ts',
   timeout: 30000,
 };

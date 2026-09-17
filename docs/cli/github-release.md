@@ -1,4 +1,4 @@
-<!-- verified against commit 0e33a0a - see ../cli.md for the baseline convention -->
+<!-- verified against commit 0e33a0a - see ../cli-rman.md for the baseline convention -->
 
 # `rman github-release`
 
@@ -27,7 +27,7 @@ So there is nothing to declare: `github-release` works in any repository, with n
 
 ## Options
 
-Accepts [branch guard](../cli.md#branch-guard) options, in addition to:
+Accepts [branch guard](../cli-rman.md#branch-guard) options, in addition to:
 
 | Option | Alias | Type | Description |
 | --- | --- | --- | --- |
@@ -37,7 +37,7 @@ Accepts [branch guard](../cli.md#branch-guard) options, in addition to:
 | `--repository <owner/repo>` | - | string | Where the release is created. Default: `.rmanrc "githubRelease.repository"`, falling back to the `origin` remote's URL. |
 | `--ignore-dirty` | - | boolean | Release anyway when the working tree has uncommitted changes, instead of aborting. |
 
-There is no [package filtering](../cli.md#package-filtering) here - a release belongs to the
+There is no [package filtering](../cli-rman.md#package-filtering) here - a release belongs to the
 repository, so there is nothing for `--scope`/`--ignore` to narrow down.
 
 ```bash
@@ -114,4 +114,4 @@ release is a no-op.
 
 - [`rman version`](version.md) - creates the tag this releases, and decides the repository's own release identity.
 - [`rman publish`](publish.md) - the registry side, run right before this.
-- [`GithubReleaseService`](../api.md#githubreleaseservice) - the underlying service.
+- [`GithubReleaseService`](../rman.md#githubreleaseservice) - the underlying service.

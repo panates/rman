@@ -30,11 +30,49 @@ or between exported declarations.
 
 - **Unmarked keys configure the package of the directory that declares them.** The repository
   root's own `.rmanrc` therefore configures the *root package* - which is where every repo-wide
-  setting is read from anyway (`packageManager`, `allowBranch`, `version.*`, `githubRelease.*`).
-- **A `"[selector]"` block configures the packages it names** - `"[*]"`, `"[*-dialect]"`,
-  `"[pkg-a]"`. This is the only way a directory speaks about anything but its own package.
+  setting is read from anyway (`allowBranch`, `version.*`, `githubRelease.*`, and a plugin's own
+  root-level keys such as `@rman/node`'s `packageManager`).
+- **A `"[selector]"` block configures the packages it names.** This is the only way a directory
+  speaks about anything but its own package, and there are **three audiences** because a repository
+  has three:
+
+  | | |
+  | --- | --- |
+  | `"[/]"` | the **root package** alone |
+  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | every package the glob matches, **the root included** |
+  | `"[ws:*]"`, `"[workspace:pkg-*]"` | every **non-root** package the glob matches |
+
+  - `/` for the root because that is what a repository root is called everywhere else, and no
+    package can be named it. `ws:` is a *qualifier on the glob*, not a second spelling of `*`, so
+    `"[ws:pkg-*]"` means what it looks like.
+  - **`"[*]"` including the root is a change, and the migration is real.** Selectors were not
+    applied to the root at all before, so `"[*]"` quietly meant "the workspace packages" - a
+    catch-all with an exception nothing in the syntax mentioned. Every existing `"[*]"` now also
+    speaks to the root; `"[ws:*]"` is the old behaviour, spelled. The root package is resolved with
+    its own name now (`Repository._resolveConfigs`), which is what makes any of this reach it.
+  - **Measured, and it is the hazard to warn users about:** three specs in
+    `repository.spec.ts` broke the moment `"[*]"` reached the root, all with `${{ file.resolve(...) }}`
+    expressions asking about a `tsconfig.json` - a file every *package* has and the root does not.
+    A `"[*]"` block whose values assume a package directory is now wrong; that is what `"[ws:*]"` is
+    for, and this repository's own `.rmanrc.yml` was migrated for exactly that reason.
+  - Precedence, lowest first: `"[*]"` → a catch-all `"[ws:*]"` → the rest in declaration order → the
+    package's own unmarked config. A catch-all is **ranked** rather than left to declaration order
+    (`selectorRank`): where you happen to write "everything" should not decide whether it beats a
+    rule about one package.
+  - The root *package* is the one whose directory is the repository root - no other test, and none
+    would be as reliable, since a name can be anything. In a single-package repository that is the
+    only package, so `"[/]"` and `"[*]"` reach it and `"[ws:*]"` reaches nothing.
 - A directory holding no package (an intermediate `packages/`) has none to speak for, so its
   unmarked config still cascades to everything below.
+- **`vars` is the one unmarked key that cascades to every package anyway** - and it is not a hole
+  in the rule above, it is a key the rule was never about. The rule exists because a *setting*
+  means different things to the two audiences (`run.build.after` on the root is a repo-wide
+  bookend, on a package its own hook), so one declaration cannot serve both. `vars: {x: 1}` means
+  the number 1 to everyone; there is no second audience for it to be wrong for. Read as
+  `${{ vars.x }}`, overridden **per key** by a package's own `.rmanrc` or a `"[selector]"` block
+  (so redefining one var keeps the rest), and a selector's `vars` beats the same directory's
+  plainer statement because it names the packages explicitly. Do not generalize this to any other
+  key.
 
 **Never restore the old "root config is every package's baseline" cascade.** The same key means
 different things to the two audiences, and conflating them is a measured bug, not a hypothetical:
@@ -43,19 +81,33 @@ repo-wide bookend run once at the repository root. One declaration feeding both 
 `node ../../support/postbuild.cjs` at the root, where it cannot resolve.
 
 - Selector patterns are **globs over package names**, anchored both ends (`"[*-dialect]"` does not
-  match `my-dialect-helper`) - glob, not regex, like every other pattern in rman. `"[*]"` is
-  whatever `getPackages()` returns: not the root in a monorepo, the root itself in a single-package
-  repo.
-- Precedence, lowest first: `"[*]"` → other selectors in declaration order → the package's own
-  unmarked config. Directory levels closer to the package still win.
+  match `my-dialect-helper`) - glob, not regex, like every other pattern in rman. Which packages
+  each *kind* of selector speaks for is the table above.
+- Precedence, lowest first: `"[*]"` → a catch-all `"[ws:*]"` → other selectors in declaration order
+  → the package's own unmarked config. Directory levels closer to the package still win.
 - **Trap: in YAML the quotes are mandatory.** A bare `[*]` is a flow sequence and `*` an alias
   indicator - the file fails to load. Write `"[*]":`.
 - Any string value may embed `${{ ... }}` - **real JavaScript**, evaluated per package
   (`interpolateConfig`), in **every** string, so there is neither a list of "interpolated keys" nor
-  a growing list of substitutions to memorize. Scope: `pkg`, `repository`, `env`, `semver`.
+  a growing list of substitutions to memorize. Scope: `pkg`, `repository`, `file`, `env`, `semver`,
+  `path` (Node's own `node:path`, the platform flavour), **plus the config's own top-level keys,
+  bare**.
+  - **`file`** answers what is on disk, against **`pkg.dirname`** - so one `"[*]"` declaration asks
+    each package about its own directory. `file.exists(p)` returns the absolute path or **`''`**;
+    `file.resolve(p)` returns it or **throws**; `file.resolveFirst(...p)` is the first that exists
+    or throws naming every candidate - what a build config wanting whichever tsconfig a package
+    happens to have should use, since an `exists() || exists()` chain ending in `exists()` leaves
+    `tsc -b ` with no argument and tsc then falls back to the directory's default rather than
+    reporting the package has none. The `exists`/`resolve` split is the point: the
+    empty string is falsy, so `file.exists("tsconfig-build.json") || file.resolve("tsconfig.json")`
+    takes the first that exists and *fails loudly* when none do. `''` rather than `undefined` also
+    keeps a miss clear of the nullish-inside-a-string guard below. `exists` hands back a path rather
+    than a boolean because the caller wants the path - a boolean test plus a second call to fetch it
+    would read the disk twice and let the two answers disagree.
   - `pkg` and `repository` share one shape, because the repository root **is** a package: `name`,
-    `scope`, `unscopedName`, `version`, `basename`, `dirname`, `relativeDir`, `json`. `basename` is
-    the *directory*, `name` the package - sqb's root is `sqb.v4` in a directory called `sqb`.
+    `scope`, `unscopedName`, `version`, `basename`, `dirname`, `relativeDir`, `provider`, `manifest`
+    (**not** `json` - renamed, see `PackageScope`). `basename` is the *directory*, `name` the
+    package - sqb's root is `sqb.v4` in a directory called `sqb`.
   - `repository` adds `monorepo`, `packages`, `package(name)`, and `git.{branch,sha,shortSha,dirty}`
     - the last **lazily**, since every command resolves config and most never mention git.
   - **`${{ }}`, never `{{ }}`**: a config value may carry `{{...}}` for something else entirely
@@ -72,7 +124,8 @@ repo-wide bookend run once at the repository root. One declaration feeding both 
   - **`pkg.targetVersion` is bound only inside `version.before`/`.exec`/`.after`.** The version a
     run writes doesn't exist until `version`'s plan is computed, so those three paths are listed in
     `DEFERRED_PATHS` and left *unevaluated* when the repository loads - `version` evaluates them
-    itself from `pkg.rawConfig` with it bound. Naming it elsewhere fails at load, on purpose.
+    itself from `pkg.config` (which holds those paths raw) with it bound, and hands the result to
+    `RunService.runLifecycleSlot` as the fallback. Naming it elsewhere fails at load, on purpose.
     - **Trap: the unbound binding is a non-enumerable throwing getter, and both words matter.**
       Enumerable, it fired on the `{...}` spread inside `_repositoryScope` - so *every* command
       died building its scope (measured). Not a getter at all, it would hand back `undefined` and
@@ -114,11 +167,223 @@ when `!repository.monorepo`, or every hook runs twice (measured).
     `+key` there silently discarded them (measured - a package appending to both `"[*]"` and
     `"[*-dialect]"` kept only its own step). `finalizeConfig` collapses whatever is still
     outstanding once the chain ends, and only then.
-- **The schema cannot spell "declared keys plus an append"**, so `+key` is allowed by a
-  `^\+.+$` pattern and `+befor` validates. The TS side covers it: `WithAppend<T>` generates the
-  append form for every key by remapping, so nothing drifts and typos are caught there. Both are
-  pinned by [`test/schemas/rmanrc.schema.spec.ts`](test/schemas/rmanrc.schema.spec.ts), which also
-  asserts every closed object carries the append pattern.
+- `+key` needs no separate typing: `WithAppend<T>` generates the append form for every key by
+  remapping, so nothing drifts and a typo is caught there.
+
+## The type is the only config surface - there is no JSON Schema
+
+`rman` **shipped** a JSON Schema for `.rmanrc`/`.rmanrc.yml` (`rman/rmanrc.schema.json`, published
+through 1.0.x). It is gone, on purpose, and the reason is the same one that made the plugin split
+work: the type composes and a schema does not.
+
+- **Autocomplete comes from `RmanConfig`, so it reaches the JS forms only** -
+  `.rmanrc.cjs`/`.mjs`/`.js`, through `defineConfig` or a `/** @type {import('rman').RmanConfig} */`
+  annotation. **rman loads no `.ts` config**, so a "`.rmanrc.ts`" in an example is wrong; the type
+  reaches the file through the editor, never a compiler.
+- **A plugin's keys arrive by `declare module 'rman'`**, so `@rman/node`'s `defineConfig` is the same
+  function with a narrower parameter and the import is what carries the augmentation.
+- **`.rmanrc` and `.rmanrc.yml` are now unchecked, and that is the price.** rman validates config at
+  no point during a run - no ajv, no key check anywhere in `config.ts` - so an unknown key in those
+  forms was always silent at runtime and the schema was the only thing catching it. Recommend a JS
+  config for anything non-trivial; do not answer a "my key is ignored" report with "the schema would
+  have caught it".
+
+**Do not re-add it.** Every route was measured, and each fails for a different reason:
+
+- `allOf` + `$ref` *is* JSON Schema's `extends`, and a closed base defeats it:
+  `additionalProperties: false` is evaluated against the properties of its **own** schema object
+  only, so `{allOf: [core], properties: {clean}}` has the core branch reject `clean`. Draft 2019-09's
+  `unevaluatedProperties: false` is annotation-aware and fixes that - but only for the schema
+  *declaring* it, so a base closing itself with it rejects the extension just the same.
+- An **open base plus a closed leaf** does work (measured, 11/11 on the real document), and then
+  needs one published leaf **per combination of plugins** - which no plugin can publish, since it
+  cannot know the others.
+- **Merging the documents into one generated file** also works, on plain draft-07, keeping `$ref: "#"`
+  recursion and `+key` (measured). But it is not a JSON Schema feature at all: it is a build step of
+  our own, the merge semantics (arrays append? conflicts throw?) become ours to get wrong, a
+  plugin's fragment alone is not a valid schema (its `$ref`s dangle into the core's definitions), and
+  no other tool can read the result.
+- None of the three has any answer for a **`.rman/*.mjs` command's own keys** - one repository's, and
+  published nowhere. `vars` is the open slot such a command already has (`additionalProperties: true`
+  in the schema that was; free-form in the type), and it cascades to every package.
+
+## Which ecosystem a package belongs to
+
+`Package.provider` - `'node'` for one read by `@rman/node`, empty when no plugin claimed the
+directory. Comes from `ManifestProvider.name`, and that field means the **ecosystem**, not the file
+(`fileName` already says `package.json`; a name repeating it carried no information, which is why it
+went unused until this existed).
+
+- **The escape hatch for code that legitimately knows one technology**: check
+  `if (pkg.provider === 'node')` before reaching into `manifest.raw` for something only npm has.
+  Reaching in without the check is the bug this replaces.
+- **Per package, not per repository**, because `Manifest.read` is asked per directory: a polyglot
+  monorepo can hold a `node` package beside a `cargo` one, and a command sweeping `getPackages()`
+  has to tell them apart. Measured, with both in one repo.
+- Also bound as `${{ pkg.provider }}`, so one `"[*]"` declaration can address a single ecosystem
+  (`if: "${{ pkg.provider === 'node' }}"`). Keep the two in step - the expression scope mirrors
+  `Package`, and a property on one that is missing from the other makes them disagree about what a
+  package is.
+- Not a union type, and never make it one: the set of ecosystems is whatever `plugins` contribute,
+  so narrowing it would mean the core naming plugins it cannot know about.
+- **Note a real limitation of the *workspace* seam, which is separate:** `Workspace.resolve` takes
+  the first provider that answers, so in a polyglot repo the ecosystem listed first in `plugins`
+  decides which directories are packages at all - npm's keeps only the `package.json` ones
+  (measured: a `Cargo.toml`-only package was simply not found until a provider that looks for both
+  was listed first). Per-package *identity* is polyglot; per-repository *discovery* is not yet.
+
+## PATH for a child process: `BinPath`
+
+[`packages/rman/src/utils/bin-path.ts`](packages/rman/src/utils/bin-path.ts). `exec` and `runBin`
+hand every child process a PATH with the repository's **locally installed** executables in front, so
+a command an author wrote (`eslint .`) runs the repo's pinned copy rather than a global one. Split by
+who owns which half:
+
+- **Which directories** is the ecosystem's, and the core has none. `node_modules/.bin` walked up the
+  directory chain is npm's layout; `@rman/node` contributes it (`RmanPlugin.binPaths`). Measured: a
+  `run` step calling a binary in `node_modules/.bin` fails with `command not found` in a repository
+  naming no plugin, and runs with `@rman/node` named.
+- **How a PATH is spelled** is the OS's, and stays in the core: `PATH` everywhere but Windows, where
+  the existing key's case must be *read* rather than a second one written, or the child inherits two.
+- **Every provider contributes, in declaration order** - unlike `Manifest`/`Workspace`, which take
+  the first that recognizes a repository. A PATH is a list, and a polyglot repo wants both
+  ecosystems' binaries reachable.
+
+**Trap, and it survived the move:** the npm provider puts the running `node`'s own directory on PATH
+after its walk, so rman's own bin directory sits ahead of the inherited PATH - a nested `rman` inside
+a `run` script resolves to the *globally installed* one. Shim it in `<root>/node_modules/.bin`, which
+the walk reaches first.
+
+## Config types: a plugin's keys are a plugin's
+
+[`packages/rman/src/interfaces/rman-config.interface.ts`](packages/rman/src/interfaces/rman-config.interface.ts)
+is **purely a typing aid** - rman never reads it at runtime, it only ever sees the plain object a
+config file exports. So the split is about who can *author* what, and it follows the code: `clean`
+and `publish.directory` are `@rman/node`'s, because `clean` describes TypeScript's output and
+`publish.directory` a `package.json` generated at publish time. `target`, `skip` and `docker` stay
+in the core - the first two are read by `list` and by every target's own plan, and Docker publishing
+is nobody's ecosystem.
+
+- **A plugin adds its keys by declaration merging**, not by a separate type nobody's code reads:
+  `declare module 'rman' { interface RmanConfigKeys extends NodeConfigKeys {} }`. That is what keeps
+  `pkg.config.clean` typed at the place it is *read* (`CleanService`), which a standalone
+  `RmanNodeConfig` could never do - the reader holds a `Package`, and `Package.config` is the core's
+  type. `WithAppend<RmanConfigKeys>` is a mapped type evaluated where it is used, so `+clean` comes
+  along on its own.
+- **`RmanNodeConfig` (exported from `@rman/node`, with its own `defineConfig`) is the authoring
+  name** - so the import that carries the augmentation is explicit instead of a side effect someone
+  has to remember. Named, not a second `RmanConfig`: one name per meaning.
+- **Trap: one `declare module 'rman'` block per package, or the others stop applying.** A second
+  block silently disabled the first - measured, `SystemInfo.PackageManager` went unresolved at four
+  call sites with nothing pointing at the cause. Every type augmentation therefore lives in
+  [`packages/node/src/augmentation/rman.augmentation.ts`](packages/node/src/augmentation/rman.augmentation.ts),
+  beside the others rather than next to the code it describes. The *runtime* half of an augmentation
+  still lives with its own subject (`augmentSystemInfo()`, `augmentManifest()`, ...).
+- Measured both ways: with the core alone, `{ clean: ... }` and `{ publish: { directory } }` are
+  rejected; with the plugin in the program, `@rman/node`'s own `pkg.config?.clean` type-checks.
+- `packageManager` is `@rman/node`'s. It was core "because `info` reads it", and that stopped being
+  true when `SystemInfo`'s npm half moved out: measured, **nothing in the core read it any more** -
+  only the declaration was left, and its value set was npm's tooling all along.
+- **`dependencies` is core, and must stay.** It layers on top of whatever
+  `ManifestProvider.dependencies` read, and it is the only way a repository with *no* provider has a
+  graph at all - a repo whose manifests rman cannot read can still state its edges by hand.
+  - **A `string[]`, and only that.** It used to accept a `Record<string, string>` as well, documented
+    in both the interface and the schema as "an explicit name -> range map" - and the ranges went
+    nowhere: the single reader took `Object.keys` and dropped the values. Nor could they ever mean
+    anything here, since the cascade works from groups and severities and a sibling's range is
+    rewritten in the *manifest* - a range declared only in `.rmanrc` has no file to be written to.
+    The key states an **edge**, and an edge needs two ends and nothing else. Don't re-add the object.
+  - **Each entry is a package name *or* a repository-relative directory**, tried in that order
+    (`_resolveDeclaredPackage`). The path form is what makes the key usable outside npm: a name
+    identifies a package only where the ecosystem guarantees uniqueness, while a directory is unique
+    by construction - the same reason `Package.dependencies` holds references and `Workspace.Layout`
+    carries paths. Name first because that is what a Node repo writes, and a package name that is
+    also an existing directory path in the same repository does not occur. An entry matching neither
+    is ignored, as an unknown name always was.
+  - **Trap when writing a fixture for this:** a `"[selector]"` matches **package names**, not
+    directory names - `"[app]"` matches nothing when the package in `packages/app` is called
+    `pkg-app` (measured, twice).
+- **Still core's, and still wrong:** `PublishTarget = 'npm' | 'docker'`. The union is the type half
+  of a bug whose runtime half is the `['npm']` default in `list`/`docker-publish` - `rman list
+  --json` reports `publishTargets: ["npm"]` for a Cargo package. Fixing only the type would make it
+  worse, so both wait for publish targets to become a plugin contribution.
+## `rman config` - the resolved config, for the directory you are standing in
+
+[`src/commands/config.command.ts`](packages/rman/src/commands/config.command.ts). Prints
+`Package.config` for `Repository.currentPackage` (the root package otherwise, and with `--root`),
+which is the *resolved* object - directory cascade, `"[selector]"` blocks, `extends`, `+key` and
+`${{ }}` all already applied. It computes nothing of its own; the value it prints is the one every
+command reads, which is the point of having it.
+
+- **YAML by default, `--json` for piping.** The header and notes are `#` comments so the YAML form
+  is a loadable document.
+- **Colour only when `process.stdout.isTTY`, and that is correctness rather than taste.** An escape
+  sequence inside a `#` comment makes the document *unloadable*: `rman config > rmanrc.yml` wrote a
+  file js-yaml refuses with "the stream contains non-printable characters" (measured - `ansi-colors`
+  does not disable itself for a pipe here). Its spec strips colour rather than assuming there is
+  none, because mocha run from a terminal *has* a TTY and would otherwise fail only on a developer's
+  machine.
+- **It must say when a value is printed raw.** `version.before`/`.exec`/`.after` are in
+  `DEFERRED_PATHS`, so `${{ pkg.targetVersion }}` is still an expression here - printed among
+  resolved values with no note, it reads as interpolation being broken.
+
+## `--config`: what a command would run with
+
+A **global** flag - `rman <anything> --config` prints and runs nothing. Three sections, and each
+answers a different question the other two cannot: `options` (the parsed argv - what this
+invocation asked for), `packages` (the set after `--scope`/`--ignore`/`--deps` and `skip`, computed
+through `filterPackages` the way the command computes it), and the `.rmanrc` those packages carry.
+
+- **Applied once, by wrapping `program.command`** (`interceptConfigFlag` in
+  [`src/cli.ts`](packages/rman/src/cli.ts)), because every command - built-in, a plugin's, a
+  `.rman/*.mjs` one - is registered through that one method. An option per command would have been
+  twelve edits plus a rule for plugin authors to remember, and a global flag that quietly does
+  nothing on whichever command forgot it is worse than no flag. It must be installed **before** any
+  command is registered.
+- **Which keys to show is `configKeys`, declared on the command itself** (`ConfigKeys` in
+  `core/custom-command.ts`) - a `string[]`, or a function of argv where the answer depends on it
+  (`run <script>` reads `run.<script>`). Beside the command rather than in a central map, so it
+  cannot drift from the code doing the reading, and a plugin or `.rman/*.mjs` command can declare
+  it too. **Absent, it prints the whole effective config** - the honest answer when nothing has
+  said which half matters.
+  - **Trap: the `.rman/*.mjs` and plugin loop in `cli.ts` builds a *new* spec object**, so a field
+    it does not copy is silently lost. `--config` printed the whole config for every plugin command
+    until `configKeys: custom.configKeys` was added there (measured, on `clean` and `ci`).
+  - **`configKeys` needed a `declare module 'yargs'` augmentation** of `CommandModule`, not just a
+    field on our own `CustomCommand`: `program.command({ ... })` takes a literal, and TypeScript's
+    excess-property check fires on a literal however the parameter is typed - nine commands failed
+    to compile at once. The augmented parameters must be spelled exactly as yargs spells them
+    (`T = {}, U = {}`) or the merge is refused.
+- **The root package is always in the config section**, even when it is not a target: a repo-wide
+  key is read off the root, so showing only the targets answered `rman ci --config` with
+  `pkg-a: {}` - which reads as "nothing is configured" about the one key `ci` reads (measured).
+- Distinct from [`rman config`](docs/cli/config.md), and keep them distinct: that prints one
+  package's whole config with no command involved; this answers "what would *this command* do".
+
+## `skip` and `--root`, the two flags every command should share
+
+- **Top-level `skip`: "leave this package alone", honoured by every command that *acts*** -
+  `run`/`build`/`test`, `exec`, `clean`, `publish`, `version`, `changelog`. Applied inside
+  `filterPackages` itself, not as one of its options: it is the *repository's* standing filter,
+  where `--scope` is the caller's ad-hoc one. Dropped **before** `--deps`/`--dependents`, so a
+  dependency edge cannot drag a skipped package back in.
+  - **`filterPackages`' third argument is the only opt-out, and `list` is the only caller that uses
+    it.** The test for a new command: does it *do* something to the packages, or *report* on them?
+    An inventory hiding part of the repository answers a different question than the one asked.
+    `changed` follows `version` (it honours skip), because its whole job is to say what `version`
+    would do.
+  - The finer-grained keys stay, and are not the same statement: `run.<script>.skip` stops one
+    script, `publish.skip` means "never distributed, by any target" - which `changelog` reuses on
+    purpose - and `version` deliberately honours *neither* of those (a package can be meaningfully
+    versioned without ever being published). A blanket `skip` replacing them would flatten that.
+- **`--root`/`-r` comes from one `applyRootOption(cmd, verb)`**, not from four near-identical option
+  blocks. It means something **only where a command scopes by the current directory** -
+  `run`/`build`/`test`, `exec`, `clean`, `changelog`, `diff` narrow to `Repository.currentPackage`
+  when you stand inside a package, and this is the escape hatch. Do **not** add it to `version`,
+  `publish`, `list` or `changed`: they already work across the whole repository, so the flag would
+  do nothing, and a no-op flag reads as a promise.
+  - `diff` was the measured gap - it narrowed to the current package like the others but had no way
+    to say "the whole repository", since omitting the package name is what already meant that.
 
 ## Change and release detection
 
@@ -140,10 +405,11 @@ sources and are **not** interchangeable. Before touching a command, establish wh
   "changed", and `version` **bumps again for zero commits**. Severity only ever comes out of commit
   messages anyway - no registry can say *how much* or *why*.
 
-### `detectChangeHash` - the single boundary source for A
+### `ChangeHashService.detect` - the single boundary source for A
 
-[`src/utils/change-hash.ts`](src/utils/change-hash.ts). Every command asking A calls this; no
-command reimplements its own tag lookup. In order, first match wins:
+[`packages/rman/src/services/change-hash.service.ts`](packages/rman/src/services/change-hash.service.ts).
+Every command asking A calls this; no command reimplements its own tag lookup. In order, first match
+wins:
 
 1. **An explicit `from`** (anything but `"npm"`) is returned as-is and applies identically to every
    package. No detection runs at all.
@@ -154,12 +420,20 @@ command reimplements its own tag lookup. In order, first match wins:
    - Pattern has no `{name}` (the default `v*`, one repo-wide tag) → `git describe`, i.e. the nearest
      tag **reachable from HEAD**. No single package owns a repo-wide tag, so ancestry is the right
      criterion.
-3. **No tag → npm fallback.** The version from `npm view <name> version` is turned into a tag name
-   via `expandTag` and used only if **that tag actually exists in git**. The one real scenario it
-   covers: a tag exists but isn't in HEAD's ancestry (release cut on another branch, rewritten
-   history, shallow clone). With no tag in git at all this step resolves nothing either. **This is
-   not a "has it been published" check** - it only borrows a version string to guess a tag name, and
-   never compares against the local `package.json` version (that is B's job).
+3. **No tag → the package's own ecosystem.** `ManifestProvider.publishedVersion(pkg)` - `npm view`
+   for a `node` package, whatever a plugin supplies elsewhere, **nothing at all** for a repository
+   naming no plugin. The version it returns is turned into a tag name via `expandTag` and used only
+   if **that tag actually exists in git**. The one real scenario it covers: a tag exists but isn't in
+   HEAD's ancestry (release cut on another branch, rewritten history, shallow clone). With no tag in
+   git at all this step resolves nothing either. **This is not a "has it been published" check** - it
+   only borrows a version string to guess a tag name, and never compares against the local manifest
+   version (that is B's job).
+   - **Per package, not per repository**, and that is the whole reason it sits on the manifest
+     provider rather than behind a repo-wide hook: a registry belongs to an *ecosystem*, so a
+     polyglot repo asks npm about its `node` packages and crates.io about its `cargo` ones. It is
+     also the test seam - register a provider that answers from a file instead of stubbing a
+     network call, which exercises the real path (measured: `changed since v0.9.0` with an answer,
+     `unreleased commits` without).
 4. **`catchUpFile` (a changelog file), if given and present** → the result is merge-based with that
    file's own last-modifying commit, **widening** the boundary backwards. Purpose: if the changelog
    stalled at 1.1.0 while 1.5.0 shipped, the versions in between aren't silently skipped. With no
@@ -169,8 +443,17 @@ command reimplements its own tag lookup. In order, first match wins:
    "not yet pushed" would read as empty the moment a first release is pushed, and for a repo with
    no remote at all.
 
-Tag naming also has a single source: `expandTag` (forward: version → tag name) and `findLatestTag`
-(backward), both in that same file. Don't build a tag name anywhere else.
+Tag naming also has a single source: `ChangeHashService.expandTag` (forward: version → tag name) and
+`.findLatestTag` (backward), both in that same file. Don't build a tag name anywhere else.
+
+**`--from` takes a ref or the keyword `auto`** (`ChangeHashService.AUTO`), which is what omitting it
+already means. It used to be `npm`, which named a *source* and the wrong one - most of detection is
+git, and the registry part is the ecosystem's now. A rename, not an alias: `--from npm` means a ref
+called `npm` and fails as one.
+
+**Both of these live in `services/`, as namespaces**: `ChangeHashService` and
+`ConventionalCommitsService`, whose members are named for what they do rather than repeating the
+subject (`detect`, not `detectChangeHash`; `parseSubject`, not `parseConventionalCommit`).
 
 A commit counts toward whichever package's directory its files fall under. `VersionService` does
 this directly (`belongsToPkg`); `ChangelogService` additionally attributes "repo-wide" commits -
@@ -180,17 +463,67 @@ touched package counts as changed.
 
 ### `changed`
 
-- **Question A.** `VersionService.getPlan` filtered to `status === 'bump'`; writes nothing.
-- Takes its boundary from `detectChangeHash`. **Never queries any registry.**
+- **Question A.** `VersionPlanService.getPlanner().getPlan` filtered to `status === 'bump'`; writes
+  nothing.
+- Takes its boundary from the planner's `detectBoundary` (`detectChangeHash` for every planner so
+  far). **Never asks a registry whether a version is published** - the one registry call in that
+  path borrows a version string to guess a tag name for a package that has no tag at all, and is
+  used only if that tag exists in git. That is not B.
 - **Empty output does not mean "nothing to publish"** - it means "no package needs a new version".
   Don't gate a CI release pipeline on it; that decision belongs to B (`publish`).
 
 ### `version`
 
-- **Question A**, from the same plan `changed` shows (`VersionService.getPlan`).
-- Severity comes only from commit messages: `fix:` → patch, `feat:` → minor, `feat!:`/`BREAKING
-  CHANGE:` → major, non-conventional → patch. The single-commit escape hatch is a `Release-As:`
-  footer. Never add a fixed `bump` input to CI - it would apply identically to every future run.
+- **Question A**, from the same plan `changed` shows
+  (`VersionPlanService.getPlanner().getPlan`); `VersionService.applyPlan` does the writes.
+- **`VersionPlanService` is abstract - a plugin supplies the planner** (`RmanPlugin.versionPlanner`,
+  `@rman/node`'s `NodeVersionPlanService`), and `version`/`changed` fail naming that key when none
+  is registered. One slot, last registration wins: unlike `Manifest`/`Workspace` a planner has
+  nothing to *recognize*, so "first that answers" would mean "first registered" and a repo layering
+  its own policy plugin could never take effect. It does not degrade to a built-in default either -
+  a wrong boundary or cascade releases a plausible, untrue set of packages.
+  - Abstract are exactly the two decisions no repository-in-general has an answer to:
+    `detectBoundary` (which registry stands in when a package has no release tag yet) and `cascade`
+    (how far into its group a bump reaches). **`cascade` is a statement about dependency *ranges*,
+    not versions** - patch reaches only the changed packages because `^1.2.0` already resolves to
+    `1.2.1`; an ecosystem pinning exact versions must release every dependent for a patch too.
+    Groups, the commit→size reading, the cascade mechanics and the root's release identity stay in
+    the core: none of them is a technology's business, and moving them out would have every plugin
+    copy them.
+- **The bump *names* belong to the version scheme, not to rman** (`VersionScheme.bumpNames`,
+  smallest first). `patch`/`minor`/`major` are semver's words for how a *number* moves, and a
+  `major.minor.build.revision` scheme has four sizes and no `patch` - so `rman version <bump>`
+  validates against `bumpNames`, `--help` lists them, and the "invalid bump" error names them plus
+  the scheme (`VersionScheme.name`). Never hardcode the trio in a message, a help string or a
+  comparison.
+  - **The order is the ranking**: `highestBump` (what a group takes when members disagree) and
+    `smallestBump` (what a package bumped only because a dependency moved gets) read it. Both, and
+    `highestVersion`, are *implemented* on the abstract `VersionScheme` and overridable there - they
+    derive from `compare`/`bumpNames`, so requiring every scheme to restate them would be boilerplate
+    and a second place to disagree, but each is a real decision (parallel 1.x/2.x lines have their
+    own "highest"; a four-part scheme may reserve `revision` and want `build` for the ripple).
+    Subclass `SemverScheme` to change one thing without restating semver.
+- Two steps, and they must stay apart: **what happened** is `ChangeKind` (`breaking`/`feature`/`fix`)
+  read off the commit - `feat!:`/`BREAKING CHANGE:` → breaking, `feat:` → feature, anything else
+  (`fix:`, an unknown type, a non-conventional subject) → fix; **how the number moves** is then
+  `VersionScheme.bumpFor(kind)`. Three kinds because three is what a commit message distinguishes,
+  which is a fact about commit messages and not about any numbering. Never add a fixed `bump` input
+  to CI - it would apply identically to every future run.
+  - The single-commit escape hatch is a `Release-As:` footer, naming a **bump** (not a kind).
+    **Trap: it must be checked against `bumpNames` and otherwise treated as no override at all.**
+    Ranking an unrecognized word lowest is not the same as ignoring it - ranked low it still
+    replaces what the commit's own subject said, which turned a `feat:` carrying release-please's
+    `Release-As: 1.2.3` into a patch (measured). A typo has to be inert, not quietly decisive.
+- **`VersionService` runs no command of its own.** The hooks around the write go through
+  `RunService.runLifecycleSlot(pkg, 'version', slot, fallback)`; `version.service.ts` supplies only
+  the `fallback` - its own `.rmanrc version.<slot>`, interpolated there because those three paths
+  are in `DEFERRED_PATHS` and `${{ pkg.targetVersion }}` binds nowhere else.
+  - The package's *own* declaration pre-empts that fallback, slot by slot, and it arrives through a
+    step source: npm spells the lifecycle `preversion`/`version`/`postversion`, which is the same
+    `pre<script>`/`<script>`/`post<script>` shape `@rman/node` already maps onto
+    `before`/`exec`/`after` - so this needed no second seam and no extra line in the plugin. **Never
+    read `manifest.raw.scripts` from core again**, and don't re-add a script runner here: the
+    own-beats-fallback rule belongs to `RunService`, which applies the identical rule for `run`.
 - **Never consults `.rmanrc "publish.skip"`.** A package that is never published can still be
   meaningfully versioned.
 - When folding the changelog into the bump commit (`--changelog`, or `.rmanrc "version.changelog"`)
@@ -204,11 +537,30 @@ touched package counts as changed.
   records a stale label in the commit that was actually tagged. Reads the same path
   `DockerPublishService` builds from (`publish.docker.dockerfile`), never a second guess at it.
   Never *inserts* a label - which labels an image carries is the author's call. The same pass
-  rewrites the `version` constant in every file `.rmanrc "version.stamp"` lists
-  (`stampVersionConstant`). **Stamp the source, never the build output**: rewriting
-  `build/constants.js` from a build script leaves the checked-in file on a placeholder, so anything
-  running from source reports it, the tagged commit never records the released version, and the
-  rewrite has to be redone every build.
+  rewrites the version in every file `.rmanrc "version.stamp"` lists. **Stamp the source, never the
+  build output**: rewriting `build/constants.js` from a build script leaves the checked-in file on a
+  placeholder, so anything running from source reports it, the tagged commit never records the
+  released version, and the rewrite has to be redone every build.
+  - **How a version is *declared* is `ManifestProvider.stampVersion`'s answer, not the core's**;
+    which files hold one is the repository's, which is why the list is config and the rewrite is a
+    seam. `stampVersionConstant` is exported as the helper most providers delegate to - measured, it
+    reaches a Go `const version = "…"`, a Gradle/TOML `version = "…"` and a JS `const version =
+    '…'`, so it is not npm-shaped; what it cannot reach is anything with a type annotation between
+    the name and the value (Rust's `pub const VERSION: &str`, and equally TypeScript's own `const
+    version: string`), an unquoted value (`pom.xml`'s `<version>`), or another spelling unless the
+    entry names it (`{ file, constant: 'Version' }`).
+  - **The identifier used to be unnameable**: the helper took a `name` and nothing ever passed it,
+    so only the exact lowercase word `version` was matched and `VERSION`/`Version`/`__version__`
+    were silently skipped.
+  - **A listed file that exists and holds nothing rewritable is an error, raised before anything is
+    written.** A missing file stays a silent no-op (that is what one `"[*]"` declaration relies on),
+    but the two are not the same thing: the second means "not this package", the first means the
+    repository asked for something and did not get it - and silently released a tagged commit with a
+    stale constant. It is a *configuration* mistake, so the check runs first: finding it mid-write
+    left the manifest bumped on disk with no commit and no tag (measured, exit 1 and a dirty tree).
+  - **`undefined` from a stamper means "nothing matched", never "no change needed".** Conflating
+    them made that error message a liar - a file already sitting at the target version is not a file
+    holding no version.
 - Also decides the **repository's own** release identity (the monorepo root's version) and, on a
   calendar version, creates the repository release tag alongside the per-group ones - see
   "Release identity" below.
@@ -250,6 +602,9 @@ touched package counts as changed.
   those would silently break every native-module package); `private` (publish refuses a private
   package anyway); `publishConfig.directory` (it pointed *here*). `"workspace:"` ranges are resolved
   in it, and it is deleted again afterwards.
+  - **The `"workspace:"` protocol lives in `@rman/node`** (`utils/workspace-range.ts`), not in the
+    core: it is a statement about a `package.json` dependency field, and the core never read it -
+    it was only exported from there because `publish` needed it before `publish` itself moved out.
   - Generated here, not by a build script, for the same reason the Dockerfile label moved into
     `version`: a build script writes it when the *build* runs, so a later bump publishes a manifest
     that disagrees with the package. And the `"workspace:"` rewrite only ever touched the package's
@@ -275,6 +630,26 @@ touched package counts as changed.
   that never arrived).
 - A missing release tag is an **error**, never a silent skip - the notes' boundary is the previous
   release tag, so releasing without one would quietly produce notes covering the entire history.
+
+### `clean` - in `@rman/node`, not the core
+
+Everything its built-in behaviour knows how to delete is a **TypeScript** fact: a compiled
+`.js`/`.js.map`/`.d.ts` beside its `.ts` source, a `*.tsbuildinfo`, and a `node_modules` to skip
+while looking. Nothing in it would fire for a Cargo or Go repository - both of which ship
+`cargo clean`/`go clean` anyway - so a core `clean` was a command that only appeared general.
+Measured after the move: without the plugin `rman clean` is `Unknown argument: clean`; with it all
+four behaviours still fire.
+
+- **`clean.include`/`clean.exclude` moved with it**, and they are genuinely ecosystem-neutral - that
+  is the cost of the move, named rather than hidden. A repository wanting only the globs has to name
+  the plugin, or write the `rm` lines as a `run` script. The alternative was a stub `clean` in the
+  core plus this one, i.e. two commands with one name and a precedence rule between them.
+- A `.d.ts` with **no** matching `.ts`/`.tsx` is left alone - that is a hand-written declaration,
+  not build output. Don't "simplify" that check away.
+- Never touches `node_modules`; that is `ci`'s job.
+- The `clean` key still sits in the *core's* `RmanConfig` interface and JSON schema, as `publish`'s
+  and `ci`'s do. That is consistent but not yet right: config *types* for plugin-owned commands
+  should be contributed by the plugin. One cleanup for all three, not three.
 
 ### `list` / `run`
 
@@ -334,40 +709,220 @@ never by what happens to sit on HEAD.
 
 [`src/core/custom-command.ts`](src/core/custom-command.ts). A module there becomes `rman <its file
 name>`, built with `defineCommand` (the `defineConfig` pattern again). `handler(context, args)` -
-`context` is an **object** (`repository`, `package`) precisely so later additions don't break
-commands already written against it; `context.package` is `Repository.currentPackage`, so
-`undefined` at the root.
+`context` is an **object** precisely so later additions don't break commands already written
+against it, which has already paid for itself twice (`runBin`, `logger`). Its members:
+`repository`; `package` (`Repository.currentPackage`, so `undefined` at the root); `runBin`; and
+`logger`.
+
+- **`context.runBin`/`context.logger` carry *this run's* settings, and that is why they are handed
+  over rather than imported.** `runBin` is pre-bound with `cwd` = the repository root and the log
+  level resolved from `--log-level`/`.rmanrc logLevel`; `logger` is at that same level. A command
+  importing `runBin` from `'rman'` directly gets one that knows neither, so `--log-level silent`
+  would quietly fail to apply to the only part of the command that prints anything. Anything else a
+  run turns out to carry goes on the context the same way.
+- **`runBin` vs `exec`** ([`src/utils/run-bin.ts`](src/utils/run-bin.ts)): `runBin` takes **argv as
+  an array** and spawns with no shell, so an interpolated value containing a space stays one
+  argument and one containing `;` stays data. `exec` runs a shell and is right for a command string
+  a config author wrote, shell operators and all (`run.<script>`, `version` hooks) - and wrong for
+  arguments assembled in code. `runBin` also resolves the binary through `BinPath.env` rather than
+  by path, which is what makes Windows find `eslint.cmd`; and a non-zero exit **rejects** rather
+  than returning a code, because a lint or check step that passes in CI having checked nothing is
+  the outcome worth ruling out.
+  - **The distinction is kept in `exec`'s signature, not in a convention**: it takes no `argv` and
+    its shell is not optional. It used to accept both, and nothing ever passed either - which made
+    it look able to do `runBin`'s job, badly, since the shell would still re-split the arguments.
+    Don't re-add them.
+  - **Anything that spawns goes through `trackChild`**
+    ([`packages/rman/src/utils/child-tracker.ts`](packages/rman/src/utils/child-tracker.ts)), so an
+    interrupted rman kills it. The registry used to be private to `exec.ts`, which meant a `runBin`
+    child - i.e. every plugin's and `.rman/*.mjs` command's child - survived a Ctrl-C. Measured both
+    ways on the same build: with the call the child is gone, with it commented out rman exits and
+    `sleep` is still running.
 
 - **Scope boundary, and state it when documenting either side:** `.rman/*.mjs` is for *one*
   repository-level operation with logic of its own; a shell step across every package is
   `run.<script>`, which already owns the scheduling, topological order, `bail` and progress panel.
   A loop over packages written inside a command module reimplements all of that and loses it.
-- **A broken module warns and is skipped; a name clash throws.** Not an inconsistency: a module
-  that fails to load affects only itself, while `rman publish` resolving to two different things
-  has no safe guess. Both name the file and the reason.
+- **A broken module warns and is skipped; a clash with a *built-in* throws.** Not an inconsistency:
+  a module that fails to load affects only itself, while `rman publish` resolving to two different
+  things has no safe guess. Both name the file and the reason.
+- **A clash with a *plugin's* command is neither - the repository wins, silently.** Measured: a
+  `.rman/clean.mjs` in a repository naming `@rman/node` simply becomes `rman clean`, with no notice.
+  That is the intended escape hatch and the same precedence a package's own `.rmanrc` has over an
+  `extends` base, so don't "fix" it into an error - but know it when a plugin's command appears not
+  to work.
 - `BUILT_IN_COMMANDS` in [`src/cli.ts`](src/cli.ts) is hand-maintained (yargs exposes no such list)
   and pinned by a test against the `command:` strings in `src/commands/*.command.ts` - so adding a
-  command can't quietly leave a repository's own able to shadow it.
+  command can't quietly leave a repository's own able to shadow it. It covers **built-ins only**,
+  which is why the rule above differs for plugins.
+- **`plugins` arrives through `extends` too, commands and seams alike.** `Repository.create` reads
+  it off `readDirConfig(rootDir)`, which has already resolved `extends` - so a shared config package
+  can deliver a whole toolchain and a repository writes one line. Measured: with nothing but
+  `{ "extends": "shared-config" }`, `rman clean --dry-run` ran and `rman list` found the workspace
+  packages, i.e. the inherited entry brought the manifest reader and workspace provider along with
+  the command. It is read **once, from the root, before the packages are known**, which is why it is
+  root-level and why a `plugins` entry in a package's own `.rmanrc` is never read.
 - No `.rman` directory means no scan and no imports. Every `rman` invocation runs this, `info`
   included, so that has to stay true.
+
+## `plugins`: one shape, and always additive
+
+- **A `plugins` entry is a package name, a path, or the plugin object itself.** The object form is
+  what a JS config uses to declare a plugin without publishing a package, and it is the form a
+  plugin package's own config holds.
+- **A plugin package exports an `RmanConfig`, never a plugin** - `@rman/node`'s entry point is
+  `export default defineConfig({ plugins: [nodePlugin] })`, and `loadPlugins` recurses into that
+  config's `plugins`. A package exposing exactly one plugin was the shape of the plugin it happens
+  to contain: a second one would change what every repository importing it receives, where a config
+  is the same kind of thing as the file naming it and simply grows.
+  - **Never re-accept a module that exports the plugin directly.** Supporting both meant deciding
+    which it was at runtime, and there is no reliable test - `name` is a key a config may have too,
+    so it came down to "a name plus at least one seam", a guess. Guessing "plugin" registers nothing
+    and reports success. It is refused now, with a message naming the fix; the seam list survives
+    only inside `describeExport`, where it shapes a sentence and decides nothing.
+  - **Only `plugins` is read out of an imported config.** Merging its other keys would let a plugin
+    configure a repository by being installed; a config's way in is `extends`.
+- **`plugins` always appends (`ALWAYS_APPEND` in `merge-config.ts`), so there is no `+plugins`.**
+  Every other key lets a closer layer overrule a value, but a plugin *adds* commands and seams, and
+  a repository naming one never means "and drop the ones my shared config brought". Replacement was
+  the silent failure: `extends` a toolchain config, add a plugin of your own, and what you noticed
+  was `Unknown argument: publish`.
+  - An entry already in the list is dropped, by identity - two layers naming `'@rman/node'` is
+    ordinary, not a mistake. **An explicit `+key` is *not* de-duplicated**: `plugins` repeats as a
+    consequence of the rule, while a repeated `+before` is what the author typed.
+  - `register` also allows **one registration per plugin name**, which catches what identity cannot
+    (two objects claiming a name, an object duplicating a named package). Registering twice defines
+    its commands twice, which yargs does not survive.
+- Don't extend `ALWAYS_APPEND` casually: an always-appending key can never be *un*-said by a closer
+  layer, which is only acceptable where the value is a set of contributions rather than a decision.
 
 **Trap: a setup failure used to exit 0.** `runCli`'s top-level catch printed the message and
 swallowed it, so `rman info` in a directory with no `package.json` reported failure on stdout and
 success to the shell (measured, and true of the published 1.0.10 too). It rethrows now, and the
 entry point exits 1. Any new throw path before `parseAsync` inherits that - keep it that way.
 
-## API docs baseline (docs/api.md, docs/api/*.md)
+## Tests: every spec declares its own ecosystem
 
-`docs/api.md` starts with an HTML comment block (`docs-baseline`) recording the git commit,
-package version, and date the API docs were last verified against source - see that block for
-the exact format and the `git diff <commit>..HEAD -- src/` command it documents.
+The core has no manifest provider, no workspace provider, no step source, no `BinPath` provider and
+no version planner - so a spec that needs one **brings it**.
+
+- **`support/mocha-root-hooks.ts` empties every registry before each test.** Mocha runs both
+  packages' specs in one process and the registries are module-global by design, so without this
+  whichever spec ran first decided the answer for the rest: `Manifest.read` takes the first provider
+  that recognizes a directory, so `@rman/node`'s would answer for core specs that registered
+  nothing, and the core would *appear* to work in tests that never set it up. Registration therefore
+  belongs in a `beforeEach` **inside** the `describe` (the root hook is the outermost, and mocha runs
+  hooks outermost-first) - never at module scope.
+- **[`packages/rman/test/_fixture.ts`](packages/rman/test/_fixture.ts)** is the core's synthetic
+  ecosystem: `useTestEcosystem()` registers a provider named `'test'` (not `'node'`), a workspace
+  provider, a step source and a `TestVersionPlanService`. **It must not import `@rman/node`** - that
+  package depends on this one, so borrowing its plugin would invert the build order and make the
+  core's tests pass because its own plugin happened to be right.
+  - `registryVersions` / `registryCalls` replace the old `npmViewVersion` injections: a spec fills
+    the map instead of stubbing a function, so `ChangeHashService.detect` is exercised through the
+    real provider - and `registryCalls` can assert the registry was **not** consulted, which a
+    throwing stub only ever did by accident.
+  - `useLocalBin()` registers a `BinPath` provider offering `<dir>/local-bin` **at every level from
+    cwd upward**. Walking up is not decoration: `exec` runs a step in the *package's* directory, so a
+    provider offering only `<cwd>/local-bin` serves a command run at the repository root and nothing
+    else. Measured, and the failure was dangerous - a stubbed `docker` was invisible from
+    `packages/a`, the **real** `docker` ran, and it got as far as `registry-1.docker.io`. A test must
+    never be one credential away from pushing an image.
+  - `registerTestEcosystem()` is the hook-free form, for the `version --interactive` specs that
+    drive a real stdin through a subprocess.
+- **`packages/node/test/_fixture.ts`**: `declarePlugin()`/`runCli()` for the command path (a real
+  `plugins` load, which is the only way a plugin's *commands* exist), `useNodeEcosystem()` for specs
+  that call a service directly. `declarePlugin` writes to `Workspace.findRoot(dir)`, not to `dir` -
+  a `plugins` entry dropped inside a package is never read, since `findRoot` takes the outermost
+  `.rmanrc` (measured as `Unknown argument: clean`). Its `plugins` entry names `src/index.**ts**`:
+  `resolveConfigTarget` checks the filesystem and there is no `.js` before a build.
+- **A fixture writing a workspace must mark the root** with an `.rmanrc` (or a `.git`).
+  `Workspace.findRoot` runs *before* the plugins that would know what a package is, so `workspaces`
+  in a `package.json` means nothing to it. One spec deliberately writes no marker - that is the case
+  under test.
+- `expectCliFailure()` wraps a CLI call expected to fail, **inside** `captureLogs`, not outside: a
+  rejection thrown through `captureLogs` loses the lines the assertions were going to read. It
+  replaced a `process.exit` stub that was only ever needed because `runCli` exited from inside the
+  library; it also asserts the failure, which the stub never did.
+- `import { expect } from 'expect'` - the named form. The default import works at runtime through
+  CJS interop and produced ~287 type errors, which is why the test tree never type-checked. Both
+  `test/tsconfig.json`s are clean now; keep them that way.
+
+## Linking a built package into another repository
+
+**`packages/<name>/build` *is* the published package** - `postbuild.cjs` writes a `package.json`
+there whose `exports` are relative to it. So the way to try a local build in another repository is to
+symlink that directory as the package itself:
+
+```bash
+ln -s <rman>/packages/rman/build  <other-repo>/node_modules/rman
+ln -s <rman>/packages/node/build  <other-repo>/node_modules/@rman/node
+```
+
+Two things this measured, both of which cost more time than the linking did:
+
+- **`tsc` writes a bin at 644, and npm is what normally makes it 755.** Linked rather than installed,
+  `node_modules/.bin/rman` then points at a file the shell refuses - `permission denied`, with the
+  shebang present and correct, which sends the reader to look at the shebang. `postbuild.cjs` now
+  chmods every `bin` entry, so it survives each rebuild.
+- **A plugin resolves `rman` from its own location, not from the repository using it.** So
+  `@rman/node`'s `import 'rman'` walks up from `<rman>/packages/node/build` and lands in **this**
+  repository's `node_modules` - linking it elsewhere changes nothing about that. Its `node_modules/rman`
+  therefore has to resolve too, and pointing it at `packages/rman/build` (rather than at
+  `packages/rman`, which npm's workspace link does) is what makes it: the build directory is the
+  published layout, so no dev-time bridge file is needed at all. The same link makes the whole test
+  suite run - `packages/node/test/*` imports `'rman'` by name.
+  - Caveat worth stating: with that link, node's specs run against the **built** core rather than
+    `src`, so a stale `build` is silently what gets tested. `npm install` restores npm's own
+    workspace links and undoes all of this.
+
+## Docs: one file per package, and a baseline in each
+
+**Four reference files, two per package** - split for the same reason the code was: a reader asking
+what `rman` is should not have to know which half of the answer is npm's. The rule for placing a
+section is the rule for placing the code, so they cannot drift apart: whatever is only true because
+the repository is a Node one belongs in the `node` file.
+
+| | |
+| --- | --- |
+| [`docs/cli-rman.md`](docs/cli-rman.md) | the CLI rman ships, plus global options, the shared option groups, and **Where a command comes from** |
+| [`docs/cli-node.md`](docs/cli-node.md) | `@rman/node`'s three commands |
+| [`docs/rman.md`](docs/rman.md) | the core's programmatic API |
+| [`docs/node.md`](docs/node.md) | the plugin's |
+
+- **`docs/cli/*.md` stays one page per command regardless of who ships it**, and the two index files
+  above both link into it - someone looking up `rman clean` does not know, or need to know, which
+  package provides it. The page itself says so, in a blockquote under its heading.
+- **Named `cli-rman.md`, not `cli/rman.md`.** The latter was tried and reverted within the hour: a
+  `docs/cli/rman.md` beside a `docs/rman.md` makes every relative link ambiguous to a *reader*, who
+  sees `rman.md` in two places meaning two different documents.
+- `SystemInfo` is the exception worth remembering, and not an inconsistency: the service and the
+  `info` command are the **core's**, so they are in `rman.md`; the npm half the plugin augments in
+  is a short section of `node.md` pointing back at it.
+- **Check anchors with `github-slugger`, never by eye.** Two long-standing links never jumped:
+  `#configuration-rmanrc-rmanrcyml` needs **two** hyphens (the ` / ` in the heading becomes one each)
+  and `#expressions--` needs **three**. A link to a missing anchor silently lands at the top of the
+  page, so nothing reports it.
+- A **published README must not carry relative `docs/` links.** `packages/*/README.md` ships to npm,
+  where no `docs/` directory exists - and since the READMEs moved under `packages/`, a relative link
+  was broken in the repository too. Use the full `https://github.com/panates/rman/blob/main/docs/...`
+  URL.
+
+Each file starts with an HTML comment block (`docs-baseline`) recording the git commit, package
+version, and date it was last verified against source - see that block for the exact format and the
+`git diff <commit>..HEAD -- <its own src>` command it documents.
 
 Rules:
 - Whenever you write or update these API docs, record (or update) that baseline block with the
   commit you verified against - so a later session can diff from a known point instead of
   re-reading everything from scratch.
-- Before trusting/updating the docs, diff `src/` (and `test/**/*.spec.ts` for examples) between
-  the recorded commit and `HEAD` to see what actually changed, then update only the affected
-  doc section(s) - don't regenerate everything unless the diff is broad enough to warrant it.
+- Before trusting/updating the docs, diff that package's `src/` (and its `test/**/*.spec.ts` for
+  examples) between the recorded commit and `HEAD` to see what actually changed, then update only
+  the affected doc section(s) - don't regenerate everything unless the diff is broad enough to
+  warrant it.
 - After updating, bump `git-commit`/`package-version`/`date` in the baseline block to the new
   `HEAD` (only once the docs are verified accurate as of that commit).
+- **Re-read a signature from source before moving a section between these files.** The move looks
+  mechanical and is not: the sections moved out of the old `docs/api.md` were at a baseline three
+  refactors old, and carried a `getSystemInfo(packageManager, options)` and a `detectChangeHash`
+  that no longer existed.

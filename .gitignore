@@ -1,6 +1,6 @@
 # compiled output
 /node_modules
-/build
+build
 *.tsbuildinfo
 graphify-out
 .claude
@@ -13,7 +13,7 @@ graphify-out
 .development.env
 
 # Debug
-test/debug.ts
+packages/*/test/debug.ts
 
 # Logs
 *.log

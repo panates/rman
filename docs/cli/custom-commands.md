@@ -1,4 +1,4 @@
-<!-- verified against commit 11dd8d1 - see ../cli.md for the baseline convention -->
+<!-- verified against commit 11dd8d1 - see ../cli-rman.md for the baseline convention -->
 
 # A repository's own commands (`.rman/*.mjs`)
 
@@ -50,6 +50,7 @@ own options, and a `Repository` handed to you instead of constructed.
 | `handler(context, args)` | **Required.** `args` is the parsed argv; `context` is below. |
 | `builder` | Optional [yargs](https://yargs.js.org) builder, for the command's own options. |
 | `command` | Optional yargs command string, for positionals (`'deploy <stage>'`). Defaults to the file's own name. |
+| `configKeys` | Optional - which `.rmanrc` keys `--config` should show for this command. See below. |
 
 `context` is an object rather than loose parameters, so later additions don't break commands
 already written against it:
@@ -63,11 +64,33 @@ already written against it:
 A command that only makes sense inside a package should say so itself rather than assume.
 
 Everything else comes from `import { ... } from 'rman'` - `VersionService`, `PublishService`,
-`ChangelogService`, and the rest of the [programmatic API](../api.md).
+`ChangelogService`, and the rest of the [programmatic API](../rman.md).
 
 `.js`, `.mjs` and `.cjs` load, the same forms a `.rmanrc.cjs`/`.mjs`/`.js` config already accepts.
 A `.ts` command would need a loader registered inside rman's own process - a separate question from
 this one.
+
+### Declaring what config the command reads
+
+**`rman <your command> --config` works without you doing anything** - the flag is applied where
+commands are registered, so it reaches yours too and your handler is not called. By default it
+prints the whole effective config, which is the honest answer when nothing has said which part
+matters. `configKeys` narrows it:
+
+```js
+export default defineCommand({
+  describe: 'Ships what was just published to the staging cluster',
+  /** Dotted paths, or a function of the parsed argv when the answer depends on it -
+   *  `run <script>` uses `args => ['run.' + args.script]`. */
+  configKeys: ['vars.cluster', 'publish.target'],
+  async handler({ repository }, args) {
+    /* ... */
+  },
+});
+```
+
+Declared here rather than in a list inside rman, so it cannot drift out of step with the code that
+does the reading.
 
 ## When something is wrong
 
@@ -99,4 +122,4 @@ which matters, because every `rman` invocation would otherwise pay for it.
 ## See also
 
 - [`rman run`](run.md) - the other way to add a named operation, for shell steps across packages.
-- [`docs/api.md`](../api.md) - the services a command module imports.
+- [`docs/rman.md`](../rman.md) - the services a command module imports.

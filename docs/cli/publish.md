@@ -1,6 +1,9 @@
-<!-- verified against commit 0e33a0a - see ../cli.md for the baseline convention -->
+<!-- verified against commit 0e33a0a - see ../cli-rman.md for the baseline convention -->
 
 # `rman publish`
+
+> Comes from **[`@rman/node`](../cli-node.md)**, not from rman's core - name it in `.rmanrc`
+> `plugins` (directly, or inherited through `extends`) or this command does not exist.
 
 ```
 rman publish [options...]
@@ -36,7 +39,7 @@ for it, and `publish` still has to notice.
 
 ## Options
 
-Accepts [package filtering](../cli.md#package-filtering) and [branch guard](../cli.md#branch-guard)
+Accepts [package filtering](../cli-rman.md#package-filtering) and [branch guard](../cli-rman.md#branch-guard)
 options, in addition to:
 
 | Option | Alias | Type | Choices | Description |
@@ -108,7 +111,7 @@ dependency's exact current version; `workspace:^`/`workspace:~` → `^`/`~` + th
 explicit `workspace:<range>` → the range verbatim, prefix stripped) - the same substitution
 pnpm/yarn's own `publish` performs. The original file is restored immediately afterward, success or
 failure, since `rman` publishes directly from the working tree rather than a staged tarball. See
-[`PublishService`](../api.md#publishservice) for the full mechanics and test-verified examples.
+[`PublishService`](../node.md#publishservice) for the full mechanics and test-verified examples.
 
 ## Docker publishing (`publish.docker`)
 
@@ -146,7 +149,7 @@ rman publish --target npm --target docker # both, explicitly (same as omitting -
 rman publish --docker-namespace myorg
 ```
 
-See [`DockerPublishService`](../api.md#dockerpublishservice) for the full mechanics.
+See [`DockerPublishService`](../rman.md#dockerpublishservice) for the full mechanics.
 
 ## The GitHub Release is not a target
 
@@ -163,7 +166,7 @@ to **GitHub Packages** (`npm.pkg.github.com`). That works today through npm's ow
 When the publishable output is a subdirectory, say so once:
 
 ```yaml
-"[*]":
+"[ws:*]":
   publish:
     directory: build
 ```
@@ -207,4 +210,4 @@ actually reached the registry. Unrelated packages elsewhere in the plan are unaf
 
 - [`rman version`](version.md) - typically run right before `publish`.
 - [`rman github-release`](github-release.md) - the repository's own release record, cut separately.
-- [`PublishService`](../api.md#publishservice) / [`DockerPublishService`](../api.md#dockerpublishservice) - the underlying services.
+- [`PublishService`](../node.md#publishservice) / [`DockerPublishService`](../rman.md#dockerpublishservice) - the underlying services.

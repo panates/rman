@@ -1,4 +1,4 @@
-<!-- verified against commit 0e33a0a - see ../cli.md for the baseline convention -->
+<!-- verified against commit 0e33a0a - see ../cli-rman.md for the baseline convention -->
 
 # `rman run <script>`
 
@@ -13,7 +13,7 @@ and [`test`](test.md) are just aliases for `run build`/`run test`.
 
 ## Options
 
-Accepts [package filtering](../cli.md#package-filtering) and [branch guard](../cli.md#branch-guard)
+Accepts [package filtering](../cli-rman.md#package-filtering) and [branch guard](../cli-rman.md#branch-guard)
 options, in addition to:
 
 | Option | Alias | Type | Default | Description |
@@ -59,7 +59,7 @@ A run with nothing in it ends two different ways, and the difference matters to 
 
 Every option above has a matching `.rmanrc` key, so you rarely need to repeat flags on every
 invocation. **Who a block is about follows the one config rule** (see
-[the config reference](../api.md#configuration-rmanrc-rmanrcyml)): unmarked keys configure the
+[the config reference](../rman.md#configuration-rmanrc--rmanrcyml)): unmarked keys configure the
 package of the directory declaring them, and a `"[selector]"` block configures the packages it
 names - so at the repository root, package-facing script config goes under `"[*]"`:
 
@@ -81,7 +81,7 @@ names - so at the repository root, package-facing script config goes under `"[*]
       if: changed # only actually runs when the package has changed since the last publish
 ```
 
-Values may embed [`${{ ... }}` expressions](../api.md#expressions--), evaluated per package - so one
+Values may embed [`${{ ... }}` expressions](../rman.md#expressions---), evaluated per package - so one
 declaration can still say something package-specific (`../../coverage/${{ pkg.basename }}`,
 `app:${{ repository.git.shortSha ?? 'local' }}`).
 
@@ -131,5 +131,5 @@ hooks in the same directory, so a bookend would simply run each of them twice.
 - [`build`](build.md) / [`test`](test.md) - aliases for `run build` / `run test`.
 - [`exec`](exec.md) - the same scheduling machinery, but for an arbitrary shell command instead of
   an npm script (no pre/post hook convention).
-- [`RunService`](../api.md#runservice) - the underlying service, including `parseIfExpr`/
+- [`RunService`](../rman.md#runservice) - the underlying service, including `parseIfExpr`/
   `evaluateIf` if you want to build your own tooling on the same `if` grammar.

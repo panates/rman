@@ -1,4 +1,4 @@
-<!-- verified against commit 0e33a0a - see ../cli.md for the baseline convention -->
+<!-- verified against commit 0e33a0a - see ../cli-rman.md for the baseline convention -->
 
 # `rman version [bump]`
 
@@ -18,7 +18,7 @@ nothing unless `--interactive` confirms it. With an explicit `bump`, applies imm
 
 ## Options
 
-Accepts [package filtering](../cli.md#package-filtering) and [branch guard](../cli.md#branch-guard)
+Accepts [package filtering](../cli-rman.md#package-filtering) and [branch guard](../cli-rman.md#branch-guard)
 options, in addition to:
 
 | Option | Alias | Type | Description |
@@ -178,7 +178,7 @@ rewrite has to be redone on every build.
 
 `.rmanrc "version"`'s `before`/`exec`/`after` run around the bump as this package's
 `preversion`/`version`/`postversion` (a real npm script of that name in `package.json` still wins).
-They are the one place [`${{ pkg.targetVersion }}`](../api.md#expressions--) means anything:
+They are the one place [`${{ pkg.targetVersion }}`](../rman.md#expressions---) means anything:
 
 ```yaml
 "[*]":
@@ -195,7 +195,7 @@ no other command has a target version, and evaluating it to `undefined` would qu
 ## Severity auto-detection
 
 With no explicit `bump`, each package's severity comes from its own commits since its last release -
-the shared [`detectChangeHash`](../api.md#detectchangehash) boundary [`changelog`](changelog.md)
+the shared [`ChangeHashService`](../rman.md#changehashservice) boundary [`changelog`](changelog.md)
 measures from too, so the two never disagree about which commits are unreleased. `fix:` → `patch`;
 `feat:` → `minor`; `feat!:`/a `BREAKING CHANGE:` footer → `major`; anything non-conventional →
 `patch`. A `Release-As: patch|minor|major` commit-body footer overrides that one
@@ -217,7 +217,7 @@ has no effect here - a package can still be meaningfully versioned even if it's 
 explicit `workspace:<range>` (e.g. `workspace:^1.0.0`) is bumped the same way a plain range would
 be.
 
-See [`VersionService`](../api.md#versionservice) for the complete algorithm (including the
+See [`VersionService`](../rman.md#versionservice) for the complete algorithm (including the
 `incVersion` prerelease logic and cross-group ripple mechanics) and its full test-verified examples.
 
 ## See also

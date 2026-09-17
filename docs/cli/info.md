@@ -1,4 +1,4 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli.md for the baseline convention -->
+<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli-rman.md for the baseline convention -->
 
 # `rman info`
 
@@ -56,5 +56,5 @@ rman info --json
 
 ## See also
 
-- [`SystemInfo`](../api.md#systeminfo) - the two underlying functions (`getSystemInfo`,
+- [`SystemInfo`](../rman.md#systeminfo) - the two underlying functions (`getSystemInfo`,
   `getRepositoryInfo`), callable independently from your own scripts.

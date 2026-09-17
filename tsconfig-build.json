@@ -1,8 +1,9 @@
 {
-  "extends": ["./tsconfig-base.json", "@panates/tsconfig/build.json"],
+  "extends": "@panates/tsconfig/build.json",
   "compilerOptions": {
-    "rootDir": "src",
-    "outDir": "build"
-  },
-  "include": ["src"]
+    "paths": {
+      "rman": ["./packages/rman/build/index.d.ts"],
+      "@rman/*": ["./packages/*/build/index.d.ts"]
+    }
+  }
 }
