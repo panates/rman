@@ -1,4 +1,5 @@
 import type { RmanPlugin } from '../core/plugin.js';
+import type { RunConditionFn, RunStepValue } from '../core/run-step.js';
 
 /**
  * Adds a `+key` alongside every key of `T`, which **appends** to whatever that key already resolved
@@ -122,8 +123,8 @@ export interface RmanConfigKeys {
   githubRelease?: RmanConfig.GithubReleaseOptions;
   /** Keyed by npm script name (e.g. `"build"`, `"lint"`, `"test"`). A bare string (or array of
    *  them) is shorthand for `{ exec: ... }` - `test: "mocha"` and `test: { exec: "mocha" }` mean
-   *  exactly the same thing. */
-  run?: Record<string, string | string[] | RmanConfig.RunScriptOptions>;
+   *  exactly the same thing, and a bare function is the same shorthand for a function step. */
+  run?: Record<string, RunStepValue | RunStepValue[] | RmanConfig.RunScriptOptions>;
   /**
    * In-repo packages this one depends on **beyond what its own manifest declares** - purely for
    * rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s scheduling, the version
@@ -226,12 +227,15 @@ export namespace RmanConfig {
      *  that slot of its own (`version` in a Node repository's `package.json#scripts`, whatever a
      *  plugin's step source answers elsewhere - the package's own declaration wins, as in `run`).
      *  An array runs them in sequence. `${{ pkg.targetVersion }}` is bound here and in the two
-     *  below, and nowhere else. */
-    exec?: string | string[];
+     *  below, and nowhere else.
+     *
+     *  A `RunStepFn` runs in place of a shell command - but note that `${{ pkg.targetVersion }}` is
+     *  a *string* substitution, so a function reads the written version off `pkg` instead. */
+    exec?: RunStepValue | RunStepValue[];
     /** Same, before the write (`preversion` in a Node repository). */
-    before?: string | string[];
+    before?: RunStepValue | RunStepValue[];
     /** Same, after it (`postversion` in a Node repository). */
-    after?: string | string[];
+    after?: RunStepValue | RunStepValue[];
   }
 
   export interface ChangelogOptions extends ChangelogOptionsKeys, WithAppend<ChangelogOptionsKeys> {}
@@ -253,14 +257,18 @@ export namespace RmanConfig {
     logLevel?: 'silent' | 'error' | 'info' | 'verbose';
     changedSince?: string;
     skip?: boolean;
-    if?: string;
+    /** Whether this script runs for a package at all - the small `changed and not private` grammar,
+     *  or a `RunConditionFn` for a condition it cannot express. Both are evaluated per package when
+     *  the run reaches it; a `${{ }}` expression here is not, having been resolved when the config
+     *  loaded. */
+    if?: string | RunConditionFn;
     /** Command(s) to run as this script itself, when the package's `package.json` doesn't define
-     *  it. An array runs them in sequence. */
-    exec?: string | string[];
+     *  it. An array runs them in sequence, and may mix shell commands with functions. */
+    exec?: RunStepValue | RunStepValue[];
     /** Same, for this script's `pre<script>` hook. */
-    before?: string | string[];
+    before?: RunStepValue | RunStepValue[];
     /** Same, for its `post<script>` hook. */
-    after?: string | string[];
+    after?: RunStepValue | RunStepValue[];
     override?: boolean;
   }
 

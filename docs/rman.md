@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 0e33a0a
-package-version: 1.0.11
-date: 2026-09-16
+git-commit: 6d90551
+package-version: 1.1.1
+date: 2026-09-18
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff 0e33a0a..HEAD -- src/
+  git diff 6d90551..HEAD -- src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -45,7 +45,8 @@ standalone utilities (`ChangeHashService`, `Logger`). For the CLI itself (comman
   - [`Repository`](#repository)
   - [`Package`](#package)
 - [Configuration (`.rmanrc` / `.rmanrc.yml`)](#configuration-rmanrc--rmanrcyml)
-  - [JS config (`.rmanrc.cjs` / `.rmanrc.mjs` / `.rmanrc.js`)](#js-config-rmanrccjs-rmanrcmjs-rmanrcjs)
+  - [JS config (`.rmanrc.cjs` / `.rmanrc.mjs` / `.rmanrc.js`)](#js-config-rmanrccjs--rmanrcmjs--rmanrcjs)
+  - [Function steps](#function-steps)
   - [Editor support (types)](#editor-support-types)
 - [Services](#services)
   - [`VersionService`](#versionservice)
@@ -59,7 +60,7 @@ standalone utilities (`ChangeHashService`, `Logger`). For the CLI itself (comman
   - [`SystemInfo`](#systeminfo)
 - [Shared utilities](#shared-utilities)
   - [`ChangeHashService`](#changehashservice)
-  - [`Logger` / `LogLevel` / `resolveRootLogLevel`](#logger-loglevel-resolverootloglevel)
+  - [`Logger` / `LogLevel` / `resolveRootLogLevel`](#logger--loglevel--resolverootloglevel)
 - [The `logged` error convention](#the-logged-error-convention)
 - [Package filtering (`scope`/`ignore`/`deps`/`dependents`)](#package-filtering-scopeignoredepsdependents)
 
@@ -466,8 +467,9 @@ file in the repository would (CommonJS by default, ESM under `"type": "module"`)
 
 **Type-checked authoring:** `rman` exports an `RmanConfig` type and a `defineConfig()` identity
 helper (the same pattern Vite/Vitest use) - wrap the config object in it to get full autocomplete
-and type errors in a JS config file, the equivalent of what the [JSON Schema](#editor-support-json-schema)
-gives `.rmanrc`/`.rmanrc.yml`:
+and type errors in a JS config file. There is no equivalent for `.rmanrc`/`.rmanrc.yml`: rman
+shipped a JSON Schema through 1.0.x and it is gone, so those two forms are unchecked - which is the
+argument for a JS config as soon as one is non-trivial.
 
 ```js
 // .rmanrc.mjs
@@ -497,6 +499,88 @@ import type { RmanConfig } from 'rman';
 const config: RmanConfig = { packageManager: 'pnpm' };
 ```
 
+> **Note on `.rmanrc.cjs` and `require('rman')`.** rman is ESM-only, so `require('rman')` in a
+> CommonJS config needs `require(esm)`, which arrived in Node 20.19 - below that it throws
+> `ERR_REQUIRE_ESM`, and rman's own floor is `>=20.0`. The JSDoc form imports nothing and works on
+> every supported version:
+>
+> ```js
+> /** @type {import('rman').RmanConfig} */
+> module.exports = { packageManager: 'pnpm' };
+> ```
+>
+> Use `.rmanrc.mjs` if you want to call `defineConfig()` itself.
+
+### Function steps
+
+A `run.<script>` step, a `version` hook and a `run.<script>.if` can each be **a function instead of
+a string**. The string form is a shell command and stays the right shape for one; the function form
+exists for the cases a shell command answers badly.
+
+```js
+// .rmanrc.mjs
+import fs from 'node:fs';
+import path from 'node:path';
+
+export default {
+  '[ws:*]': {
+    run: {
+      build: {
+        exec: 'tsc -b tsconfig-build.json',
+        // a list may mix the two, and runs them in order
+        after: [
+          'chmod +x build/cli.js',
+          function copyDocs({ pkg, repository }) {
+            for (const name of ['README.md', 'LICENSE']) {
+              const from = [pkg.dirname, repository.dirname].map(d => path.join(d, name)).find(fs.existsSync);
+              if (from) fs.copyFileSync(from, path.join(pkg.dirname, 'build', name));
+            }
+          },
+        ],
+      },
+    },
+  },
+};
+```
+
+**Why it exists - and it is about *when*, not about taste.** A `${{ ... }}` expression is evaluated
+while the config resolves, which *every* command does (`rman list` included). So an expression can
+only see the state the config was loaded in, and anything it *did* would happen on every
+invocation. A function step runs when its turn comes. Reach for it when that difference matters, or
+when the work is genuinely code; write a shell command when the step is a shell command.
+
+**The context** (`RunStepContext`), the same object an `if` receives:
+
+| | |
+| --- | --- |
+| `pkg` | the package this step is for - always set, and spelled `pkg` as in `${{ pkg }}` |
+| `repository` | the whole repository |
+| `cwd` | the directory the step is *about* - the package's, or the root for a monorepo bookend |
+| `runBin(bin, argv, opts?)` | the repository's locally installed binaries, already bound to `cwd` and this run's log level |
+| `logger` | at this run's resolved log level |
+
+**Trap: `process.cwd()` is not changed.** A shell step is a child process and gets a real working
+directory; a function runs inside rman's own, and `run` executes packages **concurrently** - one
+step calling `process.chdir()` would move the ground under every step running beside it. So join
+paths yourself:
+
+```js
+fs.writeFileSync('out.txt', data)                     // the repository root. Wrong, and silently so.
+fs.writeFileSync(path.join(ctx.cwd, 'out.txt'), data) // the package
+```
+
+`ctx.runBin` is already bound to `cwd`, so a binary run through it needs no such care.
+
+**Failure is a throw.** The return value means nothing - exactly as a non-zero exit is what fails a
+shell step. **Prefer `ctx.logger` to `console`**: with the live progress panel on, a direct write
+lands beside the panel instead of in the step's own log.
+
+**Only the JS config forms can hold one**, since YAML cannot. A repository whose own `.rmanrc.yml`
+`extends` a JS config still gets the functions that config declares, so a shared config package can
+use them on behalf of repositories that stay in YAML.
+
+`rman config` prints a function as `[Function: copyDocs]`, which is why naming them is worth it.
+
 ### Config keys reference
 
 | Key | Type | Default | Scope / notes |
@@ -511,7 +595,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
 | `version.stampDockerfile` | `boolean` | `true` | Per-package cascaded. Rewrite this package's Dockerfile `org.opencontainers.image.version` label to the version being written, in the same commit as the bump. Only ever rewrites a label already declared; reads `publish.docker.dockerfile`. |
 | `version.stamp` | `string \| string[]` | none | Per-package cascaded. Source files (relative to the package's own directory) whose `version` constant is rewritten to the version being written, in the same commit. A listed file a package doesn't have is a silent no-op. |
-| `version.before` / `.exec` / `.after` | `string \| string[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). |
+| `version.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). A `RunStepValue` is a shell command **or a function** - see [Function steps](#function-steps). |
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
 | `changelog.template` | `string` (a file **path**, relative to repo root) | built-in template | Per-package cascaded. Throws if the path doesn't exist. |
 | `changelog.filePath` | `string` | `'CHANGELOG.md'` | Per-package cascaded, relative to that package's own directory. CLI `--file-path` wins when given. |
@@ -539,8 +623,8 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `run.<script>.logLevel` | `LogLevel` | root's resolved log level | Per-package cascaded. |
 | `run.<script>.changedSince` | `string` | none | Root-level fallback, used only when CLI `--changed-since` isn't given. |
 | `run.<script>.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of running this script entirely. |
-| `run.<script>.if` | `string` (small expression grammar) | none (always runs) | Per-package cascaded. See [`RunService`'s conditional execution](#conditional-execution-if). |
-| `run.<script>.before` / `.exec` / `.after` | `string \| string[]` | none | Per-package cascaded - supplies the command(s) to run when the package's own `package.json` doesn't define this script slot. A bare string in place of the whole `run.<script>` object is shorthand for `exec`. |
+| `run.<script>.if` | `string` (small expression grammar) \| `RunConditionFn` | none (always runs) | Per-package cascaded. See [`RunService`'s conditional execution](#conditional-execution-if) and [Function steps](#function-steps). |
+| `run.<script>.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded - supplies the step(s) to run when the package's own `package.json` doesn't define this script slot. A `RunStepValue` is a shell command **or a function** ([Function steps](#function-steps)); a list may mix them. A bare value in place of the whole `run.<script>` object is shorthand for `exec`. |
 | `run.<script>.override` | `boolean` | `false` | Per-package cascaded - when `true`, the config's script replaces the package's own definition even when it has one. |
 | `extends` | `string \| string[]` | none | Root of each file only. Configs to inherit from - see [above](#inheriting-a-shared-config-extends). |
 | `dependencies` | `string[] \| Record<string, string>` | none | Extra in-repo "dependencies" not present in the package's real `package.json`, purely for rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s task scheduling). Declared from the root through a selector (`"[pkg-a]": { dependencies: [...] }`) or in the package's own `.rmanrc`. |
@@ -840,7 +924,7 @@ A pnpm/yarn `"workspace:"` range is handled specially:
 
 - A **bare** selector (`"workspace:*"`, `"workspace:^"`, `"workspace:~"`) is left **untouched** -
   it already tracks the dependency's current version dynamically, and gets resolved to a real
-  range only at publish time (see [`PublishService`](#publishservice) below).
+  range only at publish time (see [`PublishService`](node.md#publishservice), in `rman-node`).
 - An **explicit** `"workspace:<range>"` (e.g. `"workspace:^1.0.0"`) *is* bumped, the same way a
   plain range would be: `"workspace:^1.0.0"` → `"workspace:^2.0.0"`.
 

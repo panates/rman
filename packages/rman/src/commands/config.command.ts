@@ -6,6 +6,7 @@ import { DEFERRED_PATHS } from '../core/config.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import { applyRootOption, readRootOption } from '../utils/package-filter.js';
+import { printableConfig } from '../utils/printable-config.js';
 
 export function initCli(repository: Repository, program: Argv) {
   program.command({
@@ -25,7 +26,7 @@ export function initCli(repository: Repository, program: Argv) {
       const target = (!readRootOption(args) && repository.currentPackage) || repository.rootPackage;
 
       if (args.json) {
-        console.log(JSON.stringify(target.config, undefined, 2));
+        console.log(JSON.stringify(printableConfig(target.config), undefined, 2));
         return;
       }
 
@@ -44,7 +45,7 @@ export function initCli(repository: Repository, program: Argv) {
       /** `noRefs`: a value appearing twice in the config is the *same object* after merging, and
        *  js-yaml would otherwise emit the second as an `*anchor` reference - valid YAML that reads
        *  as a mistake in something meant to be looked at. */
-      console.log(yaml.dump(target.config, { noRefs: true, lineWidth: 100 }).trimEnd());
+      console.log(yaml.dump(printableConfig(target.config), { noRefs: true, lineWidth: 100 }).trimEnd());
     },
   });
 }

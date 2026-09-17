@@ -163,4 +163,51 @@ describe('commands/config', () => {
     const inPkg = await captureLogs(() => runCli({ argv: ['config'], cwd: path.join(dir, 'packages/a') }));
     expect(inPkg.some(l => l.includes('printed raw'))).toBe(false);
   });
+
+  /**
+   * A config may legitimately hold a function - a `run.<script>` step or an `if` written as
+   * JavaScript - and a `plugins` entry given in its object form holds several.
+   *
+   * This died rather than printed: js-yaml refuses one with `unacceptable kind of an object to
+   * dump [object Function]`, so `rman config` failed on a repository whose shared config did
+   * nothing more unusual than `extends` a plugin package. Printing the name is what makes the
+   * output answer the question being asked of it - *which* function is configured here.
+   */
+  it('prints a function rather than failing to serialize it', async () => {
+    const dir = tmp();
+    writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+    writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+    fs.writeFileSync(
+      path.join(dir, '.rmanrc.cjs'),
+      `module.exports = { '[*]': { run: { build: {
+         exec: function copyDocs() {},
+         if: () => true,
+       } } } };\n`,
+    );
+
+    const lines = await captureLogs(() => runCli({ argv: ['config'], cwd: path.join(dir, 'packages/a') }));
+    const text = stripColor(lines.join('\n'));
+    expect(text).toContain('[Function: copyDocs]');
+    /** An anonymous one still prints, as `[Function]` - which is itself worth seeing, since it is
+     *  also what the progress panel has to label. */
+    expect(text).toMatch(/if: '?\[Function\]?/);
+
+    /** And the document stays loadable, which is the reason the command emits YAML at all. */
+    expect(() => yaml.load(text.replace(/^#.*$/gm, ''))).not.toThrow();
+  });
+
+  it('prints a function in --json too, where JSON.stringify would have dropped the key', async () => {
+    const dir = tmp();
+    writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+    writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+    fs.writeFileSync(
+      path.join(dir, '.rmanrc.cjs'),
+      `module.exports = { '[*]': { run: { build: { exec: function copyDocs() {} } } } };\n`,
+    );
+
+    const lines = await captureLogs(() => runCli({ argv: ['config', '--json'], cwd: path.join(dir, 'packages/a') }));
+    // JSON.stringify omits a function-valued key entirely, so `exec` would simply have vanished -
+    // a quieter wrong answer than the YAML crash, and a worse one.
+    expect(JSON.parse(lines.join('\n')).run.build.exec).toBe('[Function: copyDocs]');
+  });
 });

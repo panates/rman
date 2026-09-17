@@ -814,6 +814,68 @@ describe('services/version', () => {
       expect(git(dir, 'show', '--name-only', '--format=', 'HEAD')).toContain('packages/a/src/constants.ts');
     });
 
+    /**
+     * `version.before`/`.exec`/`.after` take the same values `run.<script>` does, and must keep
+     * doing so - they are the same three things, resolved by the same function now.
+     *
+     * `VersionService` used to carry its own `normalizeScriptValue`, which joined an array with
+     * `' && '` into a single shell line and dropped anything that wasn't a string. Both had to go:
+     * a function cannot be a term in a `&&` chain, and `cd x && y` in one process was never the
+     * same as two steps anyway.
+     */
+    it('runs a function in a version hook, with the package it is versioning', async () => {
+      const { dir } = fixtureWithOrigin();
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc.cjs'),
+        `module.exports = { '[*]': { version: { before: function note(ctx) {
+           require('node:fs').writeFileSync(
+             require('node:path').join(ctx.pkg.dirname, 'hook.txt'),
+             ctx.pkg.name + ' @ ' + ctx.pkg.version,
+           );
+         } } } };\n`,
+      );
+      commitAll(dir, 'chore: add a version hook');
+
+      const repo = await Repository.create(dir);
+      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+
+      /** Written *before* the bump, which is what `before` means - the assertion would pass either
+       *  way if it only checked the file existed. */
+      expect(fs.readFileSync(path.join(dir, 'packages/a/hook.txt'), 'utf-8')).toBe('pkg-a @ 1.0.0');
+    });
+
+    it('runs each entry of a hook list as its own step, rather than joining them with &&', async () => {
+      const { dir } = fixtureWithOrigin();
+      /**
+       * The function writes through `ctx.cwd`, and that is the point of the case rather than an
+       * incidental detail: a shell step is a child process and gets a real working directory, while
+       * a function runs inside rman's own - which `run` never changes, since packages execute
+       * concurrently and one `process.chdir()` would move the ground under the rest. Written as a
+       * bare `'steps.txt'` this landed in the repository root while the two shell steps wrote to the
+       * package (measured).
+       */
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc.cjs'),
+        `module.exports = { '[pkg-a]': { version: { before: [
+           'echo one >> steps.txt',
+           function second(ctx) {
+             const p = require('node:path').join(ctx.cwd, 'steps.txt');
+             require('node:fs').appendFileSync(p, 'two\\n');
+           },
+           'echo three >> steps.txt',
+         ] } } };\n`,
+      );
+      commitAll(dir, 'chore: add version hooks');
+
+      const repo = await Repository.create(dir);
+      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+
+      // In order, and interleaved with the shell steps - which is what "not joined with &&" buys.
+      const steps = fs.readFileSync(path.join(dir, 'packages/a/steps.txt'), 'utf-8').trim().split('\n');
+      expect(steps).toEqual(['one', 'two', 'three']);
+      expect(fs.existsSync(path.join(dir, 'steps.txt'))).toBe(false);
+    });
+
     it('a listed file a package does not have is a silent no-op', async () => {
       // So one "[*]" declaration covers a repo where only some packages carry one.
       const { dir } = fixtureWithOrigin();

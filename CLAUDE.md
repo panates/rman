@@ -720,6 +720,77 @@ its own commit and tag, so whichever group was committed last owns HEAD (measure
 on HEAD with `v1.3.0` one commit behind). Read a release tag with `git describe --match <pattern>`,
 never by what happens to sit on HEAD.
 
+## Function steps: a step written as JavaScript
+
+[`src/core/run-step.ts`](packages/rman/src/core/run-step.ts). `run.<script>.before`/`.exec`/`.after`,
+`version.before`/`.exec`/`.after` and `run.<script>.if` each take a **function** as well as a string.
+Six step slots and one condition - and that list is the whole surface, because it is exactly the set
+of keys whose value is a shell command the *author wrote*. `rman exec <cmd>` takes its command from
+argv, and `ci`/`publish`/`docker-publish` build theirs from data (`packageManager`, an image name),
+so none of them has anything a function could replace.
+
+- **The reason is *when*, not taste, and it is the whole justification.** A `${{ }}` expression is
+  evaluated while the config resolves - which every command does, `rman list` included - so it can
+  only see the state the config loaded in, and anything it *did* would fire on every invocation.
+  Measured, and it is how this started: a shared config with `after: '${{ file.copyMany(...) }}'`
+  made **every** rman command exit 1, `list` and `info` among them. A function runs when its turn
+  comes. Don't answer "I want to run JS in a step" by adding a side-effecting member to the `file`
+  scope; `file` answers what is on disk and must stay a query.
+- **A string step stays a shell command**, and dropping the `${{ }}` does not turn one into an
+  expression - the string goes to `/bin/sh` verbatim (measured:
+  `syntax error near unexpected token`). There is no third form between the two.
+- **`process.cwd()` is never changed, and cannot be.** A shell step is a child process and gets a
+  real working directory; a function runs inside rman's own, and `run` executes packages
+  **concurrently** - one `process.chdir()` would move the ground under every step running beside it.
+  So `ctx.cwd` is handed over and a relative path in a step resolves against wherever rman was
+  invoked. Measured, and silent: a hook writing `fs.appendFileSync('steps.txt', ...)` landed in the
+  repository root while the shell steps beside it wrote to the package. `ctx.runBin` is pre-bound to
+  `cwd`, so a binary run through it needs no care.
+- **The context is `pkg`, not `package`** - matching `${{ pkg }}` rather than
+  `CommandContext.package`. `package` is a reserved word, so that spelling forces every author to
+  rename while destructuring (`{ package: current }`, as `check.js` does). The two contexts
+  therefore disagree on this one name, deliberately; an object either way, so a member added later
+  breaks nothing.
+- **Failure is a throw**, as a non-zero exit is for a shell step and as `runBin` already rejects. A
+  step that can only report trouble by returning something nobody reads is a step that passes while
+  doing nothing.
+- **`console` is redirected only while the progress panel is on**, which is the same split `exec`
+  already makes (`stdio: 'pipe'` + `onLine` with the panel, `'inherit'` without). A function writing
+  to the real stdout would print *over* the panel it is being rendered inside. Steps should prefer
+  `ctx.logger`.
+- **Only the JS config forms can hold one** - YAML cannot, and don't paper over that with a
+  `js: './file.mjs'` step: it buys nothing over the `node ./file.mjs` a YAML repo would write
+  anyway, and adds a second mechanism. A YAML `.rmanrc.yml` that `extends` a JS config **does** get
+  that config's functions (measured), so a shared config package can use them on behalf of
+  repositories that stay in YAML.
+- `.rmanrc.cjs` is checked before `.mjs`/`.js` and beats `.rmanrc.yml`. **`require('rman')` in a
+  `.cjs` is not safe on every supported Node**: rman is ESM-only and `require(esm)` arrived in
+  20.19, while the engine floor is `>=20.0`. The `/** @type {import('rman').RmanConfig} */` form
+  imports nothing and always works - which is why `@panates/rman-node` uses it.
+
+**Two things this fixed on the way, both of which were bugs on their own:**
+
+- `normalizeScriptValue` used to `return []` for anything it did not recognize, so a function in
+  `after` produced `1 succeeded, 0 failed` with the step never run (measured). It throws now, naming
+  the config path and the index. A configuration mistake has to be loud.
+- **`VersionService` carried a second `normalizeScriptValue`** that joined an array with `' && '`
+  into one shell line and dropped non-strings. Both had to go - a function cannot be a term in a
+  `&&` chain, and `cd x && y` in one process was never the same as two steps. `RunService`'s is the
+  only implementation now, and `runLifecycleSlot` takes a list rather than one joined string.
+
+**Serializing a config is now a thing that can fail, so it goes through `printableConfig`**
+([`src/utils/printable-config.ts`](packages/rman/src/utils/printable-config.ts)): `rman config` and
+`--config` print `[Function: copyDocs]`. This was already broken before functions existed - a
+`plugins` entry in its object form carries the plugin's seams, and `rman config --root` died with
+`unacceptable kind of an object to dump [object Function]` on a repository that merely `extends`-ed
+a plugin package. In `--json` it was worse and quieter: `JSON.stringify` drops a function-valued key
+entirely, so the step simply vanished from the output.
+
+**Known, pre-existing, and not this feature's:** an error thrown from a command handler without the
+`logged` marker is printed **twice** - once to stdout by yargs' `.fail()`, once to stderr by
+`runCli`'s catch. Measured on untouched paths too (`rman version banana` prints it three times).
+Don't take a doubled message as evidence that a new throw site is wrong.
+
 ## A repository's own commands (`.rman/*.mjs`)
 
 [`src/core/custom-command.ts`](src/core/custom-command.ts). A module there becomes `rman <its file

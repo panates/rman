@@ -4,6 +4,7 @@ import { interpolateConfig } from '../core/config.js';
 import { Manifest } from '../core/manifest.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
+import type { RunStepValue } from '../core/run-step.js';
 import { GitHelper } from '../utils/git.js';
 import { expandReleaseTag, isCalendarVersion } from '../utils/release-version.js';
 import { stampVersionLabel } from '../utils/version-stamp.js';
@@ -129,7 +130,7 @@ export namespace VersionService {
           pkg,
           VERSION_LIFECYCLE,
           slot,
-          normalizeScriptValue(interpolateConfig(pkg.config?.version?.[slot], scope)),
+          RunService.normalizeScriptValue(interpolateConfig(pkg.config?.version?.[slot], scope), `version.${slot}`),
         );
       await hook('before');
       /** Through the manifest, not through a `package.json` field: where a version is written is
@@ -280,15 +281,19 @@ export namespace VersionService {
     return `chore(release): ${entries.map(e => `${e.package.name}@${e.to}`).join(', ')}`;
   }
 
-  /** A `version.<key>` value: one command, or several to run in sequence - same shape as
-   *  `run.<script>.script`/`.preScript`/`.postScript`. */
-  export function normalizeScriptValue(value: unknown): string | undefined {
-    if (typeof value === 'string') return value || undefined;
-    if (Array.isArray(value)) {
-      const parts = value.filter((v): v is string => typeof v === 'string' && !!v);
-      return parts.length ? parts.join(' && ') : undefined;
-    }
-    return undefined;
+  /**
+   * A `version.<slot>` value: one step, or several to run in sequence - the same shape, and now the
+   * same function, as `run.<script>.before`/`.exec`/`.after`.
+   *
+   * It used to be a second implementation living here, and it differed in two ways that both had to
+   * go. It **joined an array with `' && '`** into one shell line, which a function step cannot be
+   * part of and which was not even right for shell steps - `cd x && y` in one process is not two
+   * processes. And it **dropped anything it did not recognize**, so a function here was silently
+   * never run. (The doc comment also still named `.script`/`.preScript`/`.postScript`, three keys
+   * that have been `before`/`exec`/`after` for a long time.)
+   */
+  export function normalizeScriptValue(value: unknown, at: string): RunStepValue[] {
+    return RunService.normalizeScriptValue(value, at);
   }
 
   /**

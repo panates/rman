@@ -25,6 +25,7 @@ import type { Package } from './core/package.js';
 import { Repository } from './core/repository.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/logger.js';
 import { filterPackages, readPackageFilterOptions, readRootOption } from './utils/package-filter.js';
+import { printableConfig } from './utils/printable-config.js';
 import { runBin } from './utils/run-bin.js';
 
 export async function runCli(options?: { argv?: string[]; cwd?: string }) {
@@ -218,7 +219,7 @@ function printCommandConfig(repository: Repository, spec: any, args: any): void 
   const options = readOptions(args);
   console.log(
     Object.keys(options).length
-      ? `options:\n${indent(yaml.dump(options, { noRefs: true }).trimEnd())}`
+      ? `options:\n${indent(yaml.dump(printableConfig(options), { noRefs: true }).trimEnd())}`
       : `options: {}${comment('   # nothing but defaults')}`,
   );
 
@@ -237,7 +238,7 @@ function printCommandConfig(repository: Repository, spec: any, args: any): void 
   if (!shown.some(p => p === repository.rootPackage)) shown.push(repository.rootPackage);
   const config: Record<string, unknown> = {};
   for (const pkg of shown) config[pkg.name] = keys?.length ? pick(pkg.config, keys) : pkg.config;
-  console.log(indent(yaml.dump(config, { noRefs: true, lineWidth: 100 }).trimEnd()));
+  console.log(indent(yaml.dump(printableConfig(config), { noRefs: true, lineWidth: 100 }).trimEnd()));
   if (!targets.includes(repository.rootPackage)) {
     console.log(
       comment(`# "${repository.rootPackage.name}" is the root - listed because repo-wide keys are read there.`),
