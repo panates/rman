@@ -360,6 +360,7 @@ substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
 | `semver` | rman's own `semver`, for `semver.major(pkg.version)` and friends |
 | `path` | Node's own `node:path`, the platform's flavour (`path.posix` / `path.win32` through it) |
 | `git` | the checkout: `branch`, `sha`, `shortSha`, `dirty` |
+| `value` | what this key resolved to in the layers below - see [Function values](#function-values) |
 
 plus **the config's own top-level keys, bare** (`${{ vars.registry }}`, `${{ publish.directory }}`)
 - resolved on demand, so key order in the file means nothing and a cycle is reported rather than
@@ -764,12 +765,22 @@ export default {
 ```
 
 It receives one object with **exactly** what an expression can name - `pkg`, `repository`, `file`,
-`read`, `env`, `semver`, `path`, `git`, plus the config's own top-level keys (`vars`, `publish`, …) -
-and one thing an expression has no way to express:
+`read`, `env`, `semver`, `path`, `git`, `value`, plus the config's own top-level keys (`vars`,
+`publish`, …). There is no asymmetry between the two spellings:
 
 | | |
 | --- | --- |
-| `value` | what this key resolved to in the layers **below** this one |
+| `value` | what this key resolved to in the layers **below** this one - the general form of `+key` |
+
+`value` is bound in an expression too, so the same thing can be written either way:
+
+```yaml
+"[*]":    { version: { stamp: ['src/constants.ts'] } }
+"[ws:*]": { version: { stamp: "${{ [...value, 'src/version.ts'] }}" } }
+```
+
+A string that is *nothing but* one expression keeps that value's own type, which is what lets an
+expression hand a real list back.
 
 **`value` is `undefined` when nothing below sets the key**, which is the case a function written to
 extend an inherited list also has to handle - it is the first layer in a repository that inherits

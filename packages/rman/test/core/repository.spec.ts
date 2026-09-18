@@ -1060,7 +1060,7 @@ describe('core/Repository', () => {
      * the argument would split them silently, and a config author would find a name that works in
      * one spelling and not the other.
      */
-    it('exposes exactly what an expression does, plus `value`', async () => {
+    it('exposes exactly what an expression does - the same names, with no asymmetry', async () => {
       const dir = jsFixture(
         `{ '[*]': {
              vars: { sample: 'x' },
@@ -1084,10 +1084,46 @@ describe('core/Repository', () => {
         expect([name, inFunction.has(name)]).toEqual([name, true]);
       }
 
+      /**
+       * **No asymmetry at all, in either direction.** `value` used to be function-only, on the
+       * reasoning that a string could not carry an inherited array back - which was wrong: a string
+       * that is *nothing but* one expression keeps the value's own type, so
+       * `"${{ [...value, 'x'] }}"` returns a list. It is bound on the context now, which the
+       * function's argument inherits through its prototype, so the two cannot disagree about it.
+       */
       expect([...inExpression].filter(n => !inFunction.has(n))).toEqual([]);
-      /** `value` is the one deliberate asymmetry: an expression is a string, so it could not carry
-       *  an inherited array back anyway - measured, `${{ value }}` is `value is not defined`. */
-      expect([...inFunction].filter(n => !inExpression.has(n))).toEqual(['value']);
+      expect([...inFunction].filter(n => !inExpression.has(n))).toEqual([]);
+      for (const name of ['value']) {
+        expect([name, inExpression.has(name)]).toEqual([name, true]);
+        expect([name, inFunction.has(name)]).toEqual([name, true]);
+      }
+    });
+
+    it('binds `value` in an expression too, not only in a function', async () => {
+      // A string that is nothing but one expression keeps the value's own type, so this returns a
+      // real list - which is why the original "an expression cannot carry an array back" reasoning
+      // for making `value` function-only was wrong.
+      const dir = jsFixture(
+        `{ '[*]':    { version: { stamp: ['base'] } },
+           '[ws:*]': { version: { stamp: "\${{ [...value, pkg.name] }}" } } }`,
+      );
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['base', 'pkg-a']);
+      /** The root is outside `"[ws:*]"`, so it stops at the layer below - the chain is per package. */
+      expect(repo.config.version?.stamp).toEqual(['base']);
+    });
+
+    it('chains three layers, each handed the finished value of the one below', async () => {
+      // One slot would have lost the bottom layer the moment the third arrived; the chain is a link
+      // per layer for exactly this.
+      const dir = jsFixture(
+        `{ '[*]':     { version: { stamp: ['a'] } },
+           '[ws:*]':  { version: { stamp: "\${{ [...value, 'b'] }}" } },
+           '[pkg-a]': { version: { stamp: ({ value }) => [...value, 'c'] } } }`,
+      );
+      const repo = await Repository.create(dir);
+      /** And the two spellings interleave: expression over list, function over expression. */
+      expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['a', 'b', 'c']);
     });
 
     it('keeps the `value` hint off a failure that never read `value`', async () => {

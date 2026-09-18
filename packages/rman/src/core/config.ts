@@ -9,7 +9,7 @@ import { pathToFileURL } from 'url';
 import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
-import { finalizeConfig, mergeConfig, PREVIOUS_VALUE } from './merge-config.js';
+import { finalizeConfig, mergeConfig, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
 
 /**
  * Identity helper for authoring a `.rmanrc.cjs`/`.mjs`/`.js` config with full type-checking and
@@ -599,7 +599,15 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: In
     }
     resolving.push(key);
     try {
-      const value = walk((config as Record<string, unknown>)[key], scope, context, [...base, key], skip);
+      const chain = (config as Record<symbol, unknown>)[PREVIOUS_VALUES] as Record<string, PreviousValue> | undefined;
+      const value = walkWithPrevious(
+        (config as Record<string, unknown>)[key],
+        chain?.[key],
+        scope,
+        context,
+        [...base, key],
+        skip,
+      );
       resolved.set(key, value);
       return value;
     } catch (e: any) {
@@ -793,14 +801,17 @@ function walk(value: unknown, scope: ConfigScope, context: vm.Context, at: (stri
      *  build-time work while merely *loading* the repository, which is the whole distinction the
      *  function form exists to draw. */
     if (isCodePath(at)) return value;
-    return callValueFn(value as (arg: unknown) => unknown, scope, context, at, skip);
+    return callValueFn(value as (arg: unknown) => unknown, context, at);
   }
   if (typeof value === 'string') return interpolateString(value, context, at);
   if (Array.isArray(value)) return value.map((item, i) => walk(item, scope, context, [...at, i], skip));
   if (value && typeof value === 'object') {
+    const chain = (value as Record<symbol, unknown>)[PREVIOUS_VALUES] as Record<string, PreviousValue> | undefined;
     return withScopedVars(value as Record<string, unknown>, scope, context, at, skip, () => {
       const result: Record<string, unknown> = {};
-      for (const [key, item] of Object.entries(value)) result[key] = walk(item, scope, context, [...at, key], skip);
+      for (const [key, item] of Object.entries(value)) {
+        result[key] = walkWithPrevious(item, chain?.[key], scope, context, [...at, key], skip);
+      }
       return result;
     });
   }
@@ -893,6 +904,78 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 const VARS_KEY = 'vars';
 
 /**
+ * Walks one key of an object with **`value` bound** to whatever the layers below it resolved to.
+ *
+ * Bound on the interpolation context rather than passed as an argument, because an expression reads
+ * it as a global (`"${{ [...value, 'x'] }}"`) - a function then picks the same binding up through
+ * its prototype, so the two spellings cannot disagree about what `value` is. It was function-only
+ * at first, on the reasoning that a string cannot carry an array back; that was wrong, since a
+ * string which is *nothing but* one expression keeps the value's own type.
+ *
+ * **Always bound, even with nothing underneath.** Left unbound, an expression naming it fails with
+ * V8's `value is not defined`, which reads as "there is no such thing" rather than "nothing below
+ * this layer set it" - two different mistakes needing two different fixes.
+ *
+ * The chain resolves bottom-up, so a layer deriving from a layer that itself derived from something
+ * is handed the finished value rather than a half-resolved expression.
+ */
+function walkWithPrevious(
+  item: unknown,
+  previous: PreviousValue | undefined,
+  scope: ConfigScope,
+  context: vm.Context,
+  at: (string | number)[],
+  skip: string[],
+): unknown {
+  const resolved =
+    previous === undefined ? undefined : walkWithPrevious(previous.value, previous.previous, scope, context, at, skip);
+
+  const outer = Object.getOwnPropertyDescriptor(context, VALUE_KEY);
+  /** A getter, so the catch below can tell whether the value **actually read `value`**: the hint is
+   *  irrelevant to any other failure, and attaching it anyway is the send-the-reader-to-the-wrong-
+   *  place mistake it exists to prevent. Recorded, never matched on V8's wording. */
+  let wasRead = false;
+  Object.defineProperty(context, VALUE_KEY, {
+    configurable: true,
+    enumerable: true,
+    get: () => {
+      wasRead = true;
+      return resolved;
+    },
+  });
+  try {
+    return walk(item, scope, context, at, skip);
+  } catch (e: any) {
+    /**
+     * **`value` is `undefined` when no layer underneath set this key**, and a value written to
+     * extend an inherited list is also the *first* layer in a repository that inherits nothing.
+     * V8 reports that as `value is not iterable`, naming neither the key nor the reason.
+     *
+     * Here rather than in `callValueFn`, so the expression and the function spelling get the same
+     * sentence from the same place. `rmanValueHint` keeps a rethrow from stacking it twice as the
+     * error passes back up through the enclosing keys.
+     *
+     * Not papered over by defaulting `value` to `[]`: that would be a guess about the key's type,
+     * and wrong for every key that is not a list.
+     */
+    if (wasRead && resolved === undefined && !e?.rmanValueHint) {
+      const where = at.length ? formatPath(at) : 'the config root';
+      e.rmanValueHint = true;
+      e.message =
+        `${e.message}\n  \`value\` is undefined here - nothing below this layer sets "${where}".` +
+        `\n  Write \`value ?? []\` (or \`?? ''\`) if it has to work as the first layer too.`;
+    }
+    throw e;
+  } finally {
+    if (outer) Object.defineProperty(context, VALUE_KEY, outer);
+    else delete context[VALUE_KEY];
+  }
+}
+
+/** What a layer deriving from the one below it reads - see `walkWithPrevious`. */
+const VALUE_KEY = 'value';
+
+/**
  * Whether a function at `at` is **code** - a step to run later, or part of a plugin - rather than a
  * value to compute now.
  *
@@ -929,18 +1012,12 @@ function isCodePath(at: (string | number)[]): boolean {
  * anything. That is the same reason `FileScope` offers no way to change anything. Work goes in a
  * step, which is the one thing rman runs on purpose and which can also be a function.
  */
-function callValueFn(
-  fn: (arg: unknown) => unknown,
-  scope: ConfigScope,
-  context: vm.Context,
-  at: (string | number)[],
-  skip: string[],
-): unknown {
-  const previous = (fn as unknown as Record<symbol, unknown>)[PREVIOUS_VALUE];
+function callValueFn(fn: (arg: unknown) => unknown, context: vm.Context, at: (string | number)[]): unknown {
+  /** `value` arrives through the prototype, bound by `walkWithPrevious` for exactly this key - so
+   *  nothing here may *read* it. Passing it in as an argument did, which tripped the "was it read"
+   *  getter before the function ran and put the `value` hint on every unrelated failure (caught by
+   *  the spec that exists for precisely that). */
   const arg = Object.create(context);
-  /** Resolved the same way any other value is, so an inherited `${{ }}` string or a function under
-   *  it is already finished by the time this one is handed it. */
-  const resolvedPrevious = previous === undefined ? undefined : walk(previous, scope, context, at, skip);
   /**
    * A getter only so the catch below can tell whether the function **actually read `value`**.
    *
@@ -950,33 +1027,13 @@ function callValueFn(
    * exists to prevent. Recorded rather than inferred from the message, because matching on V8's
    * wording is the other way to get this wrong.
    */
-  let valueRead = false;
-  Object.defineProperty(arg, 'value', {
-    enumerable: true,
-    get: () => {
-      valueRead = true;
-      return resolvedPrevious;
-    },
-  });
   try {
     return fn(arg);
   } catch (e: any) {
     const where = at.length ? formatPath(at) : 'the config root';
-    /**
-     * **`value` is `undefined` when no layer underneath set this key.** A function written to extend
-     * an inherited list (`[...value, x]`) is also the *first* layer in a repository that inherits
-     * nothing, and V8's report for that is `value is not iterable` - which names neither the key nor
-     * the reason, and sends the reader looking at their spread instead of at what is missing.
-     *
-     * Told rather than papered over: defaulting `value` to `[]` would be a guess about the key's
-     * type, and wrong for every key that is not a list.
-     */
-    const hint =
-      valueRead && resolvedPrevious === undefined
-        ? `\n  \`value\` is undefined here - nothing below this layer sets "${where}".` +
-          `\n  Write \`value ?? []\` (or \`?? ''\`) if the function has to work as the first layer too.`
-        : '';
-    throw new Error(`Config function in "${where}" failed: ${e?.message}${hint}`, { cause: e });
+    /** The `value` hint comes from `walkWithPrevious`, which wraps this call and is the one place
+     *  that knows whether `value` was read - so the expression spelling gets the same sentence. */
+    throw new Error(`Config function in "${where}" failed: ${e?.message}`, { cause: e });
   }
 }
 
