@@ -1151,6 +1151,16 @@ no version planner - so a spec that needs one **brings it**.
 - `import { expect } from 'expect'` - the named form. The default import works at runtime through
   CJS interop and produced ~287 type errors, which is why the test tree never type-checked. Both
   `test/tsconfig.json`s are clean now; keep them that way.
+- **`npm run typecheck` is what keeps them that way, and it exists because nothing else looks.**
+  `npm test` runs mocha, which transpiles without type-checking, and `npm run build` compiles `src`
+  only - so a spec can be wrong about a type indefinitely. Measured on the exact mistake that
+  prompted it (a *core* spec typing its fixture with `rman-node`'s `clean`): `typecheck` reports
+  `'clean' does not exist in type 'RmanConfig'`, mocha reports `1 passing`.
+  - One pass per package (`tsc --noEmit -p packages/*/test`) covers `src` too, since each test
+    tsconfig includes `../src/**/*.ts` - and covers it under the settings the *specs* load it with,
+    which is where the one-copy-of-the-core `paths` mapping lives.
+  - In CI as its own job on one Node version, beside `lint`: the answer does not vary by runtime, so
+    running it inside the test matrix would pay for it three times.
 
 ## Linking a built package into another repository
 

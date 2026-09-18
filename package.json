@@ -43,6 +43,7 @@
   },
   "scripts": {
     "build": "rman build",
+    "typecheck": "tsc --noEmit -p packages/rman/test && tsc --noEmit -p packages/node/test",
     "test": "mocha",
     "precitest": "rimraf coverage",
     "citest": "c8 mocha",

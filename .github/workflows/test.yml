@@ -19,6 +19,45 @@ concurrency:
 
 jobs:
   # ***********************************
+  # Job: Type check
+  # ***********************************
+  # Its own job, and on one Node version: the answer does not vary by runtime, so running it in the
+  # test matrix would pay for it three times.
+  #
+  # It exists because **nothing else checks the test tree**. `npm test` runs mocha, which transpiles
+  # without type-checking, and `npm run build` compiles `src` only - so a spec could be wrong about
+  # a type for as long as nobody happened to run `tsc` over `test/` by hand. That is exactly how a
+  # core spec came to type its fixture with `rman-node`'s keys and nothing said so.
+  typecheck:
+    name: 'Type check'
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'push' &&
+        !(
+          contains(github.event.head_commit.message, 'no-test') ||
+          (
+            startsWith(github.event.head_commit.message, 'Merge pull request') &&
+            contains(github.event.head_commit.message, '/dev')
+          )
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Setup Environment
+        uses: panates/gh-setup-node@v1
+        with:
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          node-version: '24'
+
+      - name: Check types
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+  # ***********************************
   # Job: Test
   # ***********************************
   test:
