@@ -1048,7 +1048,8 @@ describe('core/Repository', () => {
 
     it('names the config path when a function throws', async () => {
       const dir = jsFixture(`{ '[*]': { group: () => { throw new Error('nope'); } } }`);
-      await expect(Repository.create(dir)).rejects.toThrow(/Config function in "group" failed: nope/);
+      /** The file comes after the path - see the `errors name the config file` block below. */
+      await expect(Repository.create(dir)).rejects.toThrow(/Config function in "group" \(.*\) failed: nope/);
     });
 
     /**
@@ -1306,6 +1307,56 @@ describe('core/Repository', () => {
       const dir = varsFixture({ '[*]': { run: { vars: { x: 2 }, clean: { probe: '${{ vars.x }}' } } } });
       const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as any;
       expect(cfg.run.vars).toEqual({ x: 2 });
+    });
+  });
+
+  /**
+   * **Which file the mistake is in.** A config is merged from a directory's own forms, an `extends`
+   * base, every `"[selector]"` block and one layer per directory before anything reads it - so a
+   * message naming only `version.commitMessage` leaves the reader to search all of them.
+   */
+  describe('errors name the config file', () => {
+    function errorFixture(files: Record<string, string>): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      for (const [rel, content] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+        fs.writeFileSync(path.join(dir, rel), content);
+      }
+      return dir;
+    }
+
+    it('names an `extends` base rather than the file that named it', async () => {
+      // The case with the most files to search, and the one where the key's own file is furthest
+      // from where the reader would start looking.
+      const dir = errorFixture({
+        '.rmanrc.yml': "extends: './shared/base.yml'\n",
+        'shared/base.yml': "'[*]':\n  version:\n    commitMessage: 'release ${{ nope.missing }}'\n",
+      });
+      await expect(Repository.create(dir)).rejects.toThrow(/"version\.commitMessage" \(.*shared\/base\.yml\)/);
+    });
+
+    it("names a package's own .rmanrc, not the root's", async () => {
+      const dir = errorFixture({
+        '.rmanrc': '{}',
+        'packages/pkg-a/.rmanrc': '{ "version": { "commitMessage": "x ${{ boom.here }}" } }',
+      });
+      await expect(Repository.create(dir)).rejects.toThrow(/\(.*packages\/pkg-a\/\.rmanrc\)/);
+    });
+
+    it('names the JS form, and does the same for a value function', async () => {
+      const expression = errorFixture({
+        '.rmanrc.cjs': "module.exports = { '[*]': { version: { commitMessage: '${{ nope.x }}' } } };\n",
+      });
+      await expect(Repository.create(expression)).rejects.toThrow(/"version\.commitMessage" \(.*\.rmanrc\.cjs\)/);
+
+      const fn = errorFixture({
+        '.rmanrc.cjs': "module.exports = { '[*]': { group: () => { throw new Error('boom'); } } };\n",
+      });
+      await expect(Repository.create(fn)).rejects.toThrow(
+        /Config function in "group" \(.*\.rmanrc\.cjs\) failed: boom/,
+      );
     });
   });
 

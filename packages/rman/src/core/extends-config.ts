@@ -46,7 +46,7 @@ export async function resolveExtends(config: RmanConfig, from: string, seen: str
     const loaded = await loadConfigFile(file);
     assertNoSelectorExtends(loaded, file);
     // Recursive: a shared config may itself be built on another.
-    mergeConfig(base, await resolveExtends(loaded, file, [...seen, file]));
+    mergeConfig(base, await resolveExtends(loaded, file, [...seen, file]), file);
   }
 
   const own = { ...(config as Record<string, unknown>) };

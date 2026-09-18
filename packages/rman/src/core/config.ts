@@ -9,7 +9,7 @@ import { pathToFileURL } from 'url';
 import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
-import { finalizeConfig, mergeConfig, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
+import { finalizeConfig, mergeConfig, ORIGINS, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
 
 /**
  * Identity helper for authoring a `.rmanrc.cjs`/`.mjs`/`.js` config with full type-checking and
@@ -75,7 +75,7 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
     if (pkgJson && typeof pkgJson.rman === 'object') {
       assertNoSelectorExtends(pkgJson.rman, pkgJsonFile);
       if (EXTENDS_KEY in pkgJson.rman) extendsFrom = pkgJsonFile;
-      mergeConfig(result, pkgJson.rman);
+      mergeConfig(result, pkgJson.rman, pkgJsonFile);
     }
   }
 
@@ -85,7 +85,7 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
     if (obj && typeof obj === 'object') {
       assertNoSelectorExtends(obj as RmanConfig, ymlFile);
       if (EXTENDS_KEY in obj) extendsFrom = ymlFile;
-      mergeConfig(result, obj as Record<string, any>);
+      mergeConfig(result, obj as Record<string, any>, ymlFile);
     }
   }
 
@@ -95,7 +95,7 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
     if (obj && typeof obj === 'object') {
       assertNoSelectorExtends(obj, rcFile);
       if (EXTENDS_KEY in obj) extendsFrom = rcFile;
-      mergeConfig(result, obj);
+      mergeConfig(result, obj, rcFile);
     }
   }
 
@@ -106,7 +106,7 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
       if (obj && typeof obj === 'object') {
         assertNoSelectorExtends(obj, jsFile);
         if (EXTENDS_KEY in obj) extendsFrom = jsFile;
-        mergeConfig(result, obj);
+        mergeConfig(result, obj, jsFile);
       }
     }
   }
@@ -600,13 +600,9 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: In
     resolving.push(key);
     try {
       const chain = (config as Record<symbol, unknown>)[PREVIOUS_VALUES] as Record<string, PreviousValue> | undefined;
-      const value = walkWithPrevious(
-        (config as Record<string, unknown>)[key],
-        chain?.[key],
-        scope,
-        context,
-        [...base, key],
-        skip,
+      const origins = (config as Record<symbol, unknown>)[ORIGINS] as Record<string, string> | undefined;
+      const value = withOrigin(origins?.[key], () =>
+        walkWithPrevious((config as Record<string, unknown>)[key], chain?.[key], scope, context, [...base, key], skip),
       );
       resolved.set(key, value);
       return value;
@@ -809,8 +805,11 @@ function walk(value: unknown, scope: ConfigScope, context: vm.Context, at: (stri
     const chain = (value as Record<symbol, unknown>)[PREVIOUS_VALUES] as Record<string, PreviousValue> | undefined;
     return withScopedVars(value as Record<string, unknown>, scope, context, at, skip, () => {
       const result: Record<string, unknown> = {};
+      const origins = (value as Record<symbol, unknown>)[ORIGINS] as Record<string, string> | undefined;
       for (const [key, item] of Object.entries(value)) {
-        result[key] = walkWithPrevious(item, chain?.[key], scope, context, [...at, key], skip);
+        result[key] = withOrigin(origins?.[key], () =>
+          walkWithPrevious(item, chain?.[key], scope, context, [...at, key], skip),
+        );
       }
       return result;
     });
@@ -904,6 +903,44 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 const VARS_KEY = 'vars';
 
 /**
+ * The file the key being walked was written in, for the errors below to name.
+ *
+ * A config is merged from several files before anything reads it - a directory's own forms, an
+ * `extends` base, every `"[selector]"` block, one layer per directory - so `version.commitMessage`
+ * alone does not say where to go and look. `mergeConfig` records the file per key (`ORIGINS`); this
+ * is the depth-first cursor over that, kept in a module variable rather than threaded through
+ * `walk`'s signature because every error site would otherwise have to carry a parameter it only
+ * passes on.
+ *
+ * Nested keys inherit the enclosing file when the merge recorded none of their own, which is what a
+ * nested object in one file means.
+ */
+let currentOrigin: string | undefined;
+
+function withOrigin<T>(origin: string | undefined, body: () => T): T {
+  const outer = currentOrigin;
+  if (origin !== undefined) currentOrigin = origin;
+  try {
+    return body();
+  } finally {
+    currentOrigin = outer;
+  }
+}
+
+/** `"version.commitMessage" (.rmanrc.yml)`, or just the path when nothing recorded a file - a
+ *  caller interpolating a fragment it built itself, say. Relative to the repository when it sits
+ *  inside one, since an absolute path is noise in a message about the repository you are in. */
+function describeAt(at: (string | number)[]): string {
+  const where = at.length ? formatPath(at) : 'the config root';
+  return currentOrigin ? `${where}" (${shortenOrigin(currentOrigin)})` : `${where}"`;
+}
+
+function shortenOrigin(file: string): string {
+  const relative = path.relative(process.cwd(), file);
+  return !relative.startsWith('..') && !path.isAbsolute(relative) ? relative : file;
+}
+
+/**
  * Walks one key of an object with **`value` bound** to whatever the layers below it resolved to.
  *
  * Bound on the interpolation context rather than passed as an argument, because an expression reads
@@ -959,10 +996,9 @@ function walkWithPrevious(
      * and wrong for every key that is not a list.
      */
     if (wasRead && resolved === undefined && !e?.rmanValueHint) {
-      const where = at.length ? formatPath(at) : 'the config root';
       e.rmanValueHint = true;
       e.message =
-        `${e.message}\n  \`value\` is undefined here - nothing below this layer sets "${where}".` +
+        `${e.message}\n  \`value\` is undefined here - nothing below this layer sets "${describeAt(at)}.` +
         `\n  Write \`value ?? []\` (or \`?? ''\`) if it has to work as the first layer too.`;
     }
     throw e;
@@ -1030,10 +1066,9 @@ function callValueFn(fn: (arg: unknown) => unknown, context: vm.Context, at: (st
   try {
     return fn(arg);
   } catch (e: any) {
-    const where = at.length ? formatPath(at) : 'the config root';
     /** The `value` hint comes from `walkWithPrevious`, which wraps this call and is the one place
      *  that knows whether `value` was read - so the expression spelling gets the same sentence. */
-    throw new Error(`Config function in "${where}" failed: ${e?.message}`, { cause: e });
+    throw new Error(`Config function in "${describeAt(at)} failed: ${e?.message}`, { cause: e });
   }
 }
 
@@ -1053,9 +1088,8 @@ function interpolateString(value: string, context: vm.Context, at: (string | num
      *  tag like `app:undefined` that looks plausible and is wrong - the exact silent-mistake shape
      *  this evaluator exists to avoid. `?? 'fallback'` says what was meant. */
     if (result === undefined || result === null) {
-      const where = at.length ? formatPath(at) : 'the config root';
       throw new Error(
-        `Expression in "${where}" is ${result} inside a string: ${value.trim()}\n` +
+        `Expression in "${describeAt(at)} is ${result} inside a string: ${value.trim()}\n` +
           `  \${{${expr}}} has no value here - give it a fallback (\${{${expr.trim()} ?? '...'}}).`,
       );
     }
@@ -1069,8 +1103,7 @@ function evaluate(expr: string, source: string, context: vm.Context, at: (string
   try {
     return vm.runInContext(expr, context, { timeout: EXPRESSION_TIMEOUT });
   } catch (e: any) {
-    const where = at.length ? formatPath(at) : 'the config root';
-    throw new Error(`Invalid expression in "${where}": ${source.trim()}\n  ${e?.message ?? e}`, { cause: e });
+    throw new Error(`Invalid expression in "${describeAt(at)}: ${source.trim()}\n  ${e?.message ?? e}`, { cause: e });
   }
 }
 

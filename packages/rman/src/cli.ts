@@ -29,9 +29,23 @@ import { printableConfig } from './utils/printable-config.js';
 import { runBin } from './utils/run-bin.js';
 
 export async function runCli(options?: { argv?: string[]; cwd?: string }) {
+  const _argv = options?.argv || hideBin(process.argv);
+
+  /**
+   * **Answered before the repository is touched**, because neither question is about a repository.
+   *
+   * `rman -v` is what you reach for when something is wrong - to find out which rman is even
+   * installed - and it was the one thing a broken repository took away: resolution happens during
+   * `Repository.create`, long before yargs sees the flag, so `rman -v` in a repository whose
+   * `.rmanrc` named a plugin it could not resolve answered with that error and exit 1. Measured.
+   */
+  if (_argv.some(arg => arg === '-v' || arg === '--version')) {
+    console.log(version);
+    return;
+  }
+
   try {
     const repository = await Repository.create(options?.cwd);
-    const _argv = options?.argv || hideBin(process.argv);
 
     const program = yargs(_argv)
       .scriptName('rman')
@@ -165,6 +179,27 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
      *  turns the rejection into an exit code. */
     else await program.parseAsync();
   } catch (e: any) {
+    /**
+     * **`--help` still answers**, because a broken repository is the moment you most want it. The
+     * command list is the part that genuinely needs the repository - every built-in's `initCli`
+     * closes over it, and a plugin's commands *are* the repository's - so help degrades to the
+     * global options and says plainly why the rest is missing, rather than failing outright.
+     *
+     * The reason goes to stderr, so `rman --help | less` is still just help.
+     */
+    if (_argv.some(arg => arg === '-h' || arg === '--help')) {
+      console.error(colors.yellow(`Repository could not be read: ${e.message}`));
+      console.error(colors.yellow('Commands are not listed - they come from this repository and its plugins.\n'));
+      await yargs(_argv)
+        .scriptName('rman')
+        .version(version)
+        .alias('version', 'v')
+        .usage('$0 <cmd> [options...]')
+        .help('help')
+        .alias('help', 'h')
+        .showHelp(text => console.log(text));
+      return;
+    }
     /** Setup failures - no `package.json` to be found, a `.rman` command shadowing a built-in -
      *  used to be printed and then swallowed, so the shell saw success: `rman info` in the wrong
      *  directory reported failure on stdout and 0 to whatever called it. Printed once (unless the
