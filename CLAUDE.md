@@ -220,6 +220,17 @@ repo-wide bookend run once at the repository root. One declaration feeding both 
       Enumerable, it fired on the `{...}` spread inside `_repositoryScope` - so *every* command
       died building its scope (measured). Not a getter at all, it would hand back `undefined` and
       put an `app:undefined` somewhere plausible.
+  - **A failing expression throws with the config path *and the file*** -
+    `Invalid expression in "version.commitMessage" (shared/base.yml)`. A config is merged from a
+    directory's own four forms, an `extends` base, every `"[selector]"` block and one layer per
+    directory before anything reads it, so the key alone leaves the reader searching all of them.
+    `mergeConfig` records the file per key under a symbol (`ORIGINS`), and `walk` keeps a depth-first
+    cursor over it (`withOrigin`/`describeAt`). An `extends` base keeps **its own** file rather than
+    the one that named it, since that is where the line was written. Relative to the cwd when it
+    lies inside it.
+    - **Non-enumerable, like `PREVIOUS_VALUES`, and for a measured reason**: `expect`'s `toEqual`
+      compares symbol properties, so a plain assignment turned five config-shape specs into diffs
+      about bookkeeping.
   - A failing expression throws with the config path holding it. Never pass a mistake through. A
     nullish result is allowed standing alone ("unset") but refused **inside a string**: splicing in
     the word `undefined` yields an `app:undefined` that looks plausible and is wrong.
