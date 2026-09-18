@@ -240,6 +240,40 @@ describe('core/config', () => {
     });
   });
 
+  /**
+   * **A type-level check, run by `tsc` over the test tree rather than by mocha.** The runtime rule
+   * is general - any object node may carry `vars` and scopes its subtree - while a type can only
+   * say it one interface at a time, so the two can drift apart in exactly one direction: a nested
+   * options interface that forgot to extend `ScopedVars`. It did drift, and the assertion below is
+   * what would have caught it - `vars` worked at every level and type-checked at none.
+   *
+   * `tsc --noEmit -p packages/rman/test/tsconfig.json` is what enforces this; `npm test` does not
+   * type-check.
+   */
+  describe('ScopedVars', () => {
+    it('is accepted wherever the runtime scopes it', () => {
+      const config: RmanConfig = {
+        vars: { x: 1 },
+        run: {
+          build: { vars: { x: 3 }, exec: 'tsc -b' },
+        },
+        version: { vars: { x: 4 }, commitMessage: 'release' },
+        changelog: { vars: { x: 5 } },
+        publish: { vars: { x: 6 } },
+        githubRelease: { vars: { x: 7 } },
+      };
+      /** Nothing to assert at runtime: the declaration above either compiles or it does not. */
+      expect(config.run?.build).toEqual({ vars: { x: 3 }, exec: 'tsc -b' });
+
+      /** `run.vars` is the one place the runtime scopes and the type does not - see `RunConfig`
+       *  for the measurement behind that. It needs a cast, and the cast is what this pins. */
+      const withRunVars: RmanConfig = {
+        run: { vars: { x: 2 }, build: { exec: 'tsc' } } as RmanConfig['run'],
+      };
+      expect((withRunVars.run as Record<string, unknown>).vars).toEqual({ x: 2 });
+    });
+  });
+
   describe('createFileScope()', () => {
     /**
      * **Pinned, not merely documented.** `file` is evaluated while the config *resolves*, which

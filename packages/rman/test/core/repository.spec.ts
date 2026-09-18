@@ -995,19 +995,19 @@ describe('core/Repository', () => {
 
     it("reads the config's own top-level keys bare, as an expression does", async () => {
       const dir = jsFixture(
-        `{ vars: { buildDir: 'out' }, '[*]': { publish: { directory: ({ vars }) => vars.buildDir } } }`,
+        `{ vars: { buildDir: 'out' }, '[*]': { changelog: { filePath: ({ vars }) => vars.buildDir } } }`,
       );
       const repo = await Repository.create(dir);
-      expect(repo.getPackage('pkg-a')?.config.publish?.directory).toBe('out');
+      expect(repo.getPackage('pkg-a')?.config.changelog?.filePath).toBe('out');
     });
 
     it('resolves a function inside vars, which other keys then read', async () => {
       const dir = jsFixture(
         `{ vars: { coverage: ({ repository }) => require('node:path').join(repository.dirname, 'coverage') },
-           '[*]': { publish: { directory: ({ vars }) => vars.coverage } } }`,
+           '[*]': { changelog: { filePath: ({ vars }) => vars.coverage } } }`,
       );
       const repo = await Repository.create(dir);
-      expect(repo.getPackage('pkg-a')?.config.publish?.directory).toBe(path.join(dir, 'coverage'));
+      expect(repo.getPackage('pkg-a')?.config.changelog?.filePath).toBe(path.join(dir, 'coverage'));
     });
 
     /**
@@ -1018,32 +1018,32 @@ describe('core/Repository', () => {
      */
     it('hands a layer what the layers below it resolved to, as `value`', async () => {
       const dir = jsFixture(
-        `{ '[*]':    { clean: { include: () => ['build'] } },
-           '[ws:*]': { clean: { include: ({ value, pkg }) => [...value, pkg.name + '.log'] } } }`,
+        `{ '[*]':    { version: { stamp: () => ['build'] } },
+           '[ws:*]': { version: { stamp: ({ value, pkg }) => [...value, pkg.name + '.log'] } } }`,
       );
       const repo = await Repository.create(dir);
-      expect(repo.getPackage('pkg-a')?.config.clean?.include).toEqual(['build', 'pkg-a.log']);
+      expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['build', 'pkg-a.log']);
       /** The root is not in `"[ws:*]"`, so it stops at the first layer - which is also the case
        *  that proves the chain is per-package rather than computed once. */
-      expect(repo.config.clean?.include).toEqual(['build']);
+      expect(repo.config.version?.stamp).toEqual(['build']);
     });
 
     it('resolves the inherited value before handing it over, expressions included', async () => {
       const dir = jsFixture(
-        `{ '[*]':    { clean: { include: ['\${{ pkg.name }}-base'] } },
-           '[ws:*]': { clean: { include: ({ value }) => [...value, 'extra'] } } }`,
+        `{ '[*]':    { version: { stamp: ['\${{ pkg.name }}-base'] } },
+           '[ws:*]': { version: { stamp: ({ value }) => [...value, 'extra'] } } }`,
       );
       const repo = await Repository.create(dir);
-      expect(repo.getPackage('pkg-a')?.config.clean?.include).toEqual(['pkg-a-base', 'extra']);
+      expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['pkg-a-base', 'extra']);
     });
 
     it('gives `value` as undefined when nothing below sets the key, and says so when that throws', async () => {
       // Undefined rather than `[]`: defaulting would be a guess about the key's type, and wrong for
       // every key that is not a list. So the error has to name the cause instead - V8's own
       // "value is not iterable" names neither the key nor the reason.
-      const dir = jsFixture(`{ '[*]': { clean: { include: ({ value }) => [...value] } } }`);
+      const dir = jsFixture(`{ '[*]': { version: { stamp: ({ value }) => [...value] } } }`);
       await expect(Repository.create(dir)).rejects.toThrow(/`value` is undefined here/);
-      await expect(Repository.create(dir)).rejects.toThrow(/nothing below this layer sets "clean.include"/);
+      await expect(Repository.create(dir)).rejects.toThrow(/nothing below this layer sets "version.stamp"/);
     });
 
     it('names the config path when a function throws', async () => {
@@ -1074,7 +1074,7 @@ describe('core/Repository', () => {
              },
            } }`,
       );
-      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, string>;
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as unknown as Record<string, string>;
       const inExpression = new Set(cfg.inExpr.split(','));
       const inFunction = new Set(cfg.inFn.split(','));
 
@@ -1355,7 +1355,7 @@ describe('core/Repository', () => {
       } as typeof fs.readFileSync;
       try {
         const repo = await Repository.create(dir);
-        expect(repo.getPackages().map(p => p.config.v)).toEqual(['once', 'once', 'once']);
+        expect(repo.getPackages().map(p => (p.config as Record<string, unknown>).v)).toEqual(['once', 'once', 'once']);
         expect(reads).toBe(1);
       } finally {
         (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = real;
@@ -1422,7 +1422,8 @@ describe('core/Repository', () => {
       const dir = readFixture({
         '[ws:*]': { a: '${{ file.exists("maybe.json") ? read("maybe.json").x : "absent" }}' },
       });
-      expect((await Repository.create(dir)).getPackage('pkg-a')!.config.a).toBe('absent');
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(cfg.a).toBe('absent');
     });
   });
 
@@ -1452,7 +1453,8 @@ describe('core/Repository', () => {
       const dir = gitFixture({ '[*]': { a: '${{ repository.git }}' } });
       /** A nullish result standing alone is "unset", so the move shows up as `undefined` here
        *  rather than an error - which is why the positive case above is the one that matters. */
-      expect((await Repository.create(dir)).getPackage('pkg-a')!.config.a).toBeUndefined();
+      const resolved = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(resolved.a).toBeUndefined();
     });
 
     /**

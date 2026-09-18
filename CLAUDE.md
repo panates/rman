@@ -80,6 +80,19 @@ or between exported declarations.
   - **`vars` is reserved at every level**, which costs a script that would have been called `vars` -
     `run.vars` is a scope. Nothing enumerates `run`'s keys as script names, so that is where the
     cost stops.
+  - **Every nested options interface extends `ScopedVars`**, and a new one has to remember to: the
+    runtime rule is general (any object node scopes) while a type states it one interface at a time,
+    so they drift in exactly one direction. They *did* - `vars` worked at every level and
+    type-checked at none until this was noticed. `config.spec.ts`'s `ScopedVars` block is a
+    type-level pin, checked by `tsc -p packages/rman/test/tsconfig.json`, **not by mocha**.
+  - **`run.vars` is the one place the runtime scopes and the type deliberately does not.** `run` is
+    keyed by script name, so any encoding that admits `vars` widens the index signature's value type
+    - and TypeScript then stops excess-property-checking *every* script's options. Measured on one
+    file: with the widened index, `run: { build: { exce: 'tsc' } }` compiles clean; with the strict
+    one the typo is caught and `run.vars` is rejected. A key-remapped index
+    (`{ [K in string as K extends 'vars' ? never : K]: ... }`) was tried and does not help - the
+    remap still produces an index signature claiming `vars`. Catching the typo across every script
+    won; a typed JS config casts (`... as RmanConfig['run']`), and YAML is unchecked anyway.
 - **`vars` is the one unmarked key that cascades to every package anyway** - and it is not a hole
   in the rule above, it is a key the rule was never about. The rule exists because a *setting*
   means different things to the two audiences (`run.build.after` on the root is a repo-wide

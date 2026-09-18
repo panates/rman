@@ -574,6 +574,19 @@ vars:
 `run.vars` is a scope, not a script. Nothing enumerates `run`'s keys as a list of script names, so
 that is where the cost stops.
 
+**One gap, in the types only.** `run.vars` works at runtime and in YAML, but `RmanConfig` cannot
+express it: `run` is keyed by script name, so any encoding that lets `vars` through has to widen the
+index signature - and TypeScript then stops excess-property-checking *every* script's options
+(measured: with the widened index, `run: { build: { exce: 'tsc' } }` compiles clean). Catching that
+typo across every script is worth more than typing one key, so a typed JS config needs a cast:
+
+```js
+run: { vars: { x: 2 }, build: { exec: 'tsc' } } as RmanConfig['run'],
+```
+
+Every other level - `run.<script>.vars`, `version.vars`, `publish.vars`, `changelog.vars`,
+`githubRelease.vars`, and a plugin's own option blocks - is typed through `ScopedVars`.
+
 ### Reading a file (`read`)
 
 `file` says where something is; `read` says what is in it.

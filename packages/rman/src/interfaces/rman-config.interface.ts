@@ -11,6 +11,24 @@ import type { RunConditionFn, RunStepValue } from '../core/run-step.js';
 export type WithAppend<T> = { [K in keyof T as `+${K & string}`]?: T[K] };
 
 /**
+ * The one key every nested config node may carry: `vars` scoping that node's subtree - a fresh copy
+ * per level, merged per key over the level above. See `withScopedVars` in `core/config.ts` for what
+ * it does at resolution time, and docs/rman.md#scoped-vars for how it reads.
+ *
+ * **Every nested options interface extends this**, and a new one has to remember to - which is the
+ * cost of the runtime rule being general (any object node scopes) while a type can only say it one
+ * interface at a time. TypeScript has no way to state "and every object below this may also carry
+ * `vars`" without a recursive remap that would wreck the error messages.
+ *
+ * Extended by the `XOptions` interface rather than declared on `XOptionsKeys`, so `WithAppend` does
+ * not generate a `+vars`: appending to `vars` means nothing, since objects merge either way.
+ */
+export interface ScopedVars {
+  /** Values for `${{ vars.* }}` to read, for this node and everything under it. */
+  vars?: Record<string, unknown>;
+}
+
+/**
  * The shape of `.rmanrc`/`.rmanrc.yml`/`.rmanrc.cjs`/`.mjs`/`.js` (and `package.json`'s own
  * `"rman"` key) - see docs/rman.md#configuration-rmanrc-rmanrcyml for the full reference. Every
  * field is optional and cascades from the repository root down to each package's own directory.
@@ -124,7 +142,7 @@ export interface RmanConfigKeys {
   /** Keyed by npm script name (e.g. `"build"`, `"lint"`, `"test"`). A bare string (or array of
    *  them) is shorthand for `{ exec: ... }` - `test: "mocha"` and `test: { exec: "mocha" }` mean
    *  exactly the same thing, and a bare function is the same shorthand for a function step. */
-  run?: Record<string, RunStepValue | RunStepValue[] | RmanConfig.RunScriptOptions>;
+  run?: RmanConfig.RunConfig;
   /**
    * In-repo packages this one depends on **beyond what its own manifest declares** - purely for
    * rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s scheduling, the version
@@ -192,7 +210,7 @@ export namespace RmanConfig {
    */
   export type VersionStampEntry = string | { file: string; constant?: string };
 
-  export interface VersionOptions extends VersionOptionsKeys, WithAppend<VersionOptionsKeys> {}
+  export interface VersionOptions extends VersionOptionsKeys, WithAppend<VersionOptionsKeys>, ScopedVars {}
 
   export interface VersionOptionsKeys {
     commitMessage?: string;
@@ -238,7 +256,7 @@ export namespace RmanConfig {
     after?: RunStepValue | RunStepValue[];
   }
 
-  export interface ChangelogOptions extends ChangelogOptionsKeys, WithAppend<ChangelogOptionsKeys> {}
+  export interface ChangelogOptions extends ChangelogOptionsKeys, WithAppend<ChangelogOptionsKeys>, ScopedVars {}
 
   export interface ChangelogOptionsKeys {
     ignoreTypes?: string[];
@@ -247,7 +265,24 @@ export namespace RmanConfig {
     tagPattern?: string;
   }
 
-  export interface RunScriptOptions extends RunScriptOptionsKeys, WithAppend<RunScriptOptionsKeys> {}
+  /**
+   * The `run` block: scripts by name.
+   *
+   * **`run.vars` works at runtime but is deliberately not in this type**, and the reason is a
+   * measured trade rather than an oversight. `run` is keyed by script name, so any encoding that
+   * lets `vars` through has to widen the index signature's value type to something object-shaped -
+   * and TypeScript then stops excess-property-checking *every* script's options. Measured on the
+   * same file: with the widened index, `run: { build: { exce: 'tsc' } }` compiles clean.
+   *
+   * Catching that typo across every script is worth more than typing one key, so a typed JS config
+   * writing `run.vars` needs a cast (`run: { vars: { x: 2 }, build: ... } as RmanConfig['run']`).
+   * YAML and JSON configs are unchecked anyway and simply work. A key-remapped index signature
+   * (`{ [K in string as K extends 'vars' ? never : K]: ... }`) was tried and does not help - the
+   * remap still produces an index signature that claims `vars`.
+   */
+  export type RunConfig = Record<string, RunStepValue | RunStepValue[] | RunScriptOptions>;
+
+  export interface RunScriptOptions extends RunScriptOptionsKeys, WithAppend<RunScriptOptionsKeys>, ScopedVars {}
 
   export interface RunScriptOptionsKeys {
     concurrency?: number;
@@ -272,7 +307,7 @@ export namespace RmanConfig {
     override?: boolean;
   }
 
-  export interface PublishOptions extends PublishOptionsKeys, WithAppend<PublishOptionsKeys> {}
+  export interface PublishOptions extends PublishOptionsKeys, WithAppend<PublishOptionsKeys>, ScopedVars {}
 
   export interface PublishOptionsKeys {
     /** Which **registry** `publish` ships this package to - default `['npm']` (every existing repo
@@ -300,7 +335,8 @@ export namespace RmanConfig {
 
   /** Required once `"docker"` is one of this package's `publish.target`s - `publish --target
    *  docker` errors clearly on a package that opts in here but leaves this out. */
-  export interface DockerPublishOptions extends DockerPublishOptionsKeys, WithAppend<DockerPublishOptionsKeys> {}
+  export interface DockerPublishOptions
+    extends DockerPublishOptionsKeys, WithAppend<DockerPublishOptionsKeys>, ScopedVars {}
 
   export interface DockerPublishOptionsKeys {
     /** DockerHub image name/repository - bare (e.g. `"my-app"`) to be prefixed with
@@ -329,7 +365,8 @@ export namespace RmanConfig {
    *  (which tag, which repository, what the notes say) already has a sensible source. Nothing here
    *  decides *whether* a release is cut: a release records that the repository shipped, so it is
    *  always cut, and these are only details about how. */
-  export interface GithubReleaseOptions extends GithubReleaseOptionsKeys, WithAppend<GithubReleaseOptionsKeys> {}
+  export interface GithubReleaseOptions
+    extends GithubReleaseOptionsKeys, WithAppend<GithubReleaseOptionsKeys>, ScopedVars {}
 
   export interface GithubReleaseOptionsKeys {
     /** Files to attach to the release, as glob patterns relative to the package's own directory

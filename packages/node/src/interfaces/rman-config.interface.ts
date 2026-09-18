@@ -1,4 +1,4 @@
-import type { RmanConfig, WithAppend } from 'rman';
+import type { RmanConfig, ScopedVars, WithAppend } from 'rman';
 import type { CiService } from '../services/ci.service.js';
 
 /**
@@ -34,7 +34,7 @@ export interface NodeConfigKeys {
 }
 
 export namespace RmanNodeConfig {
-  export interface CleanOptions extends CleanOptionsKeys, WithAppend<CleanOptionsKeys> {}
+  export interface CleanOptions extends CleanOptionsKeys, WithAppend<CleanOptionsKeys>, ScopedVars {}
 
   export interface CleanOptionsKeys {
     include?: string | string[];
@@ -46,7 +46,7 @@ export namespace RmanNodeConfig {
   /** Added to the core's `publish` block - the npm-only half of it. `target`, `skip` and `docker`
    *  stay in the core: the first two are read by `list` and by every target's own plan, and Docker
    *  publishing is not a Node concern at all. */
-  export interface PublishOptions {
+  export interface PublishOptions extends ScopedVars {
     /** Where this package's publishable output lives, relative to its own directory (e.g.
      *  `"build"`). Per-package cascaded, so a root `"[*]"` block can say it once for the whole
      *  repository instead of repeating `publishConfig.directory` in every `package.json` - which
