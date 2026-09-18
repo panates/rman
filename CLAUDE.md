@@ -853,23 +853,32 @@ underneath, which is the general form of `+key` and the one thing an expression 
 
 - **The chain is built during the merge, not at resolution.** Only `mergeConfig` knows the layer
   order; by the time `interpolateConfig` runs they have collapsed into one object and a closer
-  layer's value has already replaced what it was derived from. `assignMerged` wraps a function in a
-  forwarding wrapper carrying `PREVIOUS_VALUE`.
-- **A forwarding *function*, not a `{fn, prev}` object or a class**, and that is load-bearing: every
-  walker in `merge-config.ts` and `config.ts` branches on `isPlainObject`, which a wrapper object
-  would satisfy - `finalizeConfig` would rebuild it as a plain object and lose the function, and
-  `mergeConfig` would merge into it key by key. A function is not a plain object, so it travels
-  through all of them untouched. The wrapper also copies `name`, since a step's log label is its
-  function's name. The user's own function is never mutated: two packages inheriting the same
-  shared-config function would otherwise share and overwrite one `prev`.
-- **The two contexts expose the same names, and that is an invariant with a test on it.** A value
-  function sees exactly what a `${{ }}` expression sees - every scope binding and the config's own
-  top-level keys - plus `value`, which is function-only because an expression is a string and could
-  not carry an inherited array back anyway (`${{ value }}` is `value is not defined`). They cannot
-  drift by accident, since the argument *is* the expression context with one property added; a
-  member defined straight onto the argument would split them silently, and a config author would
-  find a name that works in one spelling and not the other. The spec enumerates both rather than
-  checking a list someone has to remember to extend.
+  layer's value has already replaced what it was derived from.
+- **It lives on the containing object under a symbol (`PREVIOUS_VALUES`), keyed by the key.** It
+  began as a wrapper around the *function* - the only kind of value you can hang a property on - and
+  that is exactly why it had to move: `value` belongs to an expression string just as much, and a
+  string carries nothing. A symbol is invisible to `Object.entries`, `JSON.stringify` and js-yaml,
+  so it travels through `mergeConfig` and `rman config` without either knowing it is there;
+  `finalizeConfig` rebuilds objects from `Object.entries` and so has to copy it across by hand.
+- **Each entry is a link, not a slot.** Three layers each deriving from the one below need
+  `A <- expr2 <- expr3`, and a single slot loses `A` the moment `expr3` arrives. Resolved bottom-up,
+  so a layer is always handed a finished value rather than a half-resolved expression.
+- Only a function or a string containing `${{` gets a chain recorded (`carriesPreviousValue`) -
+  nothing else can ask for `value`.
+- **The two contexts expose the same names, with no asymmetry, and that is an invariant with a test
+  on it.** `value` was function-only at first, on the reasoning that a string could not carry an
+  inherited array back - **wrong**, since a string that is *nothing but* one expression keeps the
+  value's own type, so `"${{ [...value, 'x'] }}"` returns a list. It is bound on the interpolation
+  context now, which the function's argument inherits through its prototype, so the two spellings
+  cannot disagree. They cannot drift by accident either - the argument *is* the context with nothing
+  added - but a member defined straight onto the argument would split them silently, and what a
+  config author would meet is a name that works in one spelling and not the other. The spec
+  enumerates both sides rather than checking a list someone has to remember to extend.
+- **Nothing may *read* `context.value` on the way to calling a value function.** It is bound as a
+  getter that records whether the value actually asked for it, and `callValueFn` reading it to pass
+  it along as an argument tripped that getter before the function ran - putting the `value` hint on
+  every unrelated failure. Caught by the spec written for exactly that. The function gets `value`
+  through the prototype; there is nothing to pass.
 - The argument object is built with the interpolation context as its **prototype**, never spread
   from it. Those top-level keys are lazy memoized getters (so key order in the file means nothing
   and a cycle is reported rather than half-resolved); spreading would fire every one on every call,
