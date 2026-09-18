@@ -843,6 +843,19 @@ function withScopedVars<T>(
   skip: string[],
   body: () => T,
 ): T {
+  /**
+   * **A `vars` block does not scope itself.** Resolving one walks its own values, and without this
+   * that walk asks for the scope it is in the middle of producing - which the cycle guard catches
+   * and reports as `vars -> vars`. It recovered (the guard returns `undefined`, so the block simply
+   * saw no outer scope, which is what it should see anyway), but it left the cycle *flag* set, and
+   * the next genuine error in that key came out wearing `Config expression forms a cycle` - found by
+   * running a real shared config, whose `[...value]` mistake arrived with a loop attached that had
+   * nothing to do with it.
+   *
+   * Any path with a `vars` segment is inside a block: its contents are values, not config nodes.
+   */
+  if (at.some(segment => segment === VARS_KEY)) return body();
+
   const outer = context[VARS_KEY] as Record<string, unknown> | undefined;
   const own = node[VARS_KEY];
   /** Nothing to shadow and nothing to protect: a node with no object below it can hold no function

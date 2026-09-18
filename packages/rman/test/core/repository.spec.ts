@@ -1190,6 +1190,30 @@ describe('core/Repository', () => {
       expect(cfg.run.clean.probe).toBe('top:2');
     });
 
+    it('does not scope a `vars` block with itself, or leave a cycle flag behind', async () => {
+      /**
+       * Resolving a block walks its own values, and that walk must not ask for the scope it is
+       * producing. It used to: the cycle guard caught it and recovered (the block saw no outer
+       * scope, which is right anyway), but left the *flag* set - so the next genuine error in that
+       * key came out wearing `Config expression forms a cycle`. Found by running a real shared
+       * config, whose unrelated `[...value]` mistake arrived with a loop attached.
+       */
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc.cjs'),
+        `module.exports = {
+           vars: { computed: ({ repository }) => repository.basename },
+           '[*]': { group: ({ value }) => [...value] },
+         };\n`,
+      );
+      writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      /** The failure is the `[...value]`, and it must arrive alone. */
+      await expect(Repository.create(dir)).rejects.toThrow(/`value` is undefined here/);
+      await expect(Repository.create(dir)).rejects.not.toThrow(/forms a cycle/);
+    });
+
     it("resolves a level's own block against the level above it, not against itself", async () => {
       // `vars: { out: '${{ vars.x }}/dist' }` refines the `x` it is inheriting - reading its own
       // half-built scope instead would make the answer depend on key order inside the block.
