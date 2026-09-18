@@ -46,6 +46,7 @@ standalone utilities (`ChangeHashService`, `Logger`). For the CLI itself (comman
   - [`Package`](#package)
 - [Configuration (`.rmanrc` / `.rmanrc.yml`)](#configuration-rmanrc--rmanrcyml)
   - [JS config (`.rmanrc.cjs` / `.rmanrc.mjs` / `.rmanrc.js`)](#js-config-rmanrccjs--rmanrcmjs--rmanrcjs)
+  - [Scoped `vars`](#scoped-vars)
   - [Reading a file (`read`)](#reading-a-file-read)
   - [Function steps](#function-steps)
   - [Function values](#function-values)
@@ -540,6 +541,38 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 > ```
 >
 > Use `.rmanrc.mjs` if you want to call `defineConfig()` itself.
+
+### Scoped `vars`
+
+`vars` can be declared at **any level** of the config, and applies to that level's subtree:
+
+```yaml
+vars:
+  x: 1
+"[ws:*]":
+  run:
+    vars:
+      x: 2
+    clean:
+      before: '${{ read(vars.x + ".json") }}'    # reads 2.json
+    build:
+      vars:
+        x: 3
+      before: '${{ read(vars.x + ".json") }}'    # reads 3.json
+```
+
+- **A fresh copy at every level**, with that level's own block merged over what the level above
+  resolved to. Merged **per key**, so redeclaring one var keeps the rest.
+- **Nothing written at a level reaches the level above, or a sibling.** That is what the copy is
+  for: a [value function](#function-values) is handed this object, so one that writes to it
+  (`vars.built = Date.now()`) writes into its own level and nowhere else.
+- A level's own block is resolved **against the level above it**, so
+  `vars: { out: '${{ vars.x }}/dist' }` refines the `x` it is inheriting rather than reading its own
+  half-built scope - which would make the answer depend on key order inside the block.
+
+**`vars` is reserved at every level**, which costs a script that would have been called `vars`:
+`run.vars` is a scope, not a script. Nothing enumerates `run`'s keys as a list of script names, so
+that is where the cost stops.
 
 ### Reading a file (`read`)
 

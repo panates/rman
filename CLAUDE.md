@@ -64,6 +64,22 @@ or between exported declarations.
     only package, so `"[/]"` and `"[*]"` reach it and `"[ws:*]"` reaches nothing.
 - A directory holding no package (an intermediate `packages/`) has none to speak for, so its
   unmarked config still cascades to everything below.
+- **`vars` is declared at any level of the config and scopes its own subtree**
+  (`withScopedVars` in `config.ts`): a fresh copy per level, the level's own block merged **per key**
+  over what the level above resolved to, so `run.vars` covers every script and `run.build.vars`
+  covers one.
+  - **Copied at every node, not only where a block appears**, and that is the difference between
+    scoping and leaking: a value function is handed this object, so a write inside `run.build`
+    would otherwise land in `run`'s object and `run.clean` would read it. Nothing written at a level
+    reaches the level above or a sibling.
+  - A level's own block is resolved **against the outer scope** before being installed, so
+    `vars: { out: '${{ vars.x }}/dist' }` refines the `x` it inherits rather than reading its own
+    half-built scope - which would make the answer depend on key order inside the block.
+  - Installed as a plain property over the context's lazy top-level getter and restored in a
+    `finally`; `walk` is depth-first and synchronous, so the window is exactly that subtree.
+  - **`vars` is reserved at every level**, which costs a script that would have been called `vars` -
+    `run.vars` is a scope. Nothing enumerates `run`'s keys as script names, so that is where the
+    cost stops.
 - **`vars` is the one unmarked key that cascades to every package anyway** - and it is not a hole
   in the rule above, it is a key the rule was never about. The rule exists because a *setting*
   means different things to the two audiences (`run.build.after` on the root is a repo-wide

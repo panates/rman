@@ -798,12 +798,86 @@ function walk(value: unknown, scope: ConfigScope, context: vm.Context, at: (stri
   if (typeof value === 'string') return interpolateString(value, context, at);
   if (Array.isArray(value)) return value.map((item, i) => walk(item, scope, context, [...at, i], skip));
   if (value && typeof value === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) result[key] = walk(item, scope, context, [...at, key], skip);
-    return result;
+    return withScopedVars(value as Record<string, unknown>, scope, context, at, skip, () => {
+      const result: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(value)) result[key] = walk(item, scope, context, [...at, key], skip);
+      return result;
+    });
   }
   return value;
 }
+
+/**
+ * Runs `body` with `vars` scoped to this node: **a fresh copy at every level**, with the node's own
+ * `vars` block - if it declares one - merged over what the level above resolved to.
+ *
+ * ```yaml
+ * vars: { x: 1 }
+ * run:
+ *   vars: { x: 2 }
+ *   clean: { before: '${{ read(vars.x + ".json") }}' }     # 2.json
+ *   build:
+ *     vars: { x: 3 }
+ *     before: '${{ read(vars.x + ".json") }}'              # 3.json
+ * ```
+ *
+ * **Copied at every node, not only where a `vars` block appears**, and that is the difference
+ * between scoping and leaking: a value function is handed this object, so one that writes to it
+ * (`vars.built = Date.now()`) must not be writing into the level above. Without a copy per node,
+ * a write inside `run.build` would land in `run`'s object and `run.clean` would see it. Merged per
+ * key rather than replaced, so redeclaring one var keeps the rest - the rule the top-level `vars`
+ * has always followed.
+ *
+ * The node's own block is resolved **against the outer scope** before being installed, so
+ * `vars: { out: '${{ vars.x }}/dist' }` reads the `x` it is refining rather than itself.
+ *
+ * Installed as a plain property over the context's lazy top-level getter and restored afterwards -
+ * `walk` is depth-first and synchronous, so the window is exactly this subtree, and a value function
+ * called inside it reads the same object through its prototype.
+ */
+function withScopedVars<T>(
+  node: Record<string, unknown>,
+  scope: ConfigScope,
+  context: vm.Context,
+  at: (string | number)[],
+  skip: string[],
+  body: () => T,
+): T {
+  const outer = context[VARS_KEY] as Record<string, unknown> | undefined;
+  const own = node[VARS_KEY];
+  /** Nothing to shadow and nothing to protect: a node with no object below it can hold no function
+   *  either, so the copy would be pure cost. */
+  if (own === undefined && !hasObjectChild(node)) return body();
+
+  const resolvedOwn = own === undefined ? undefined : walk(own, scope, context, [...at, VARS_KEY], skip);
+  const scoped = { ...outer, ...(isPlainObject(resolvedOwn) ? resolvedOwn : undefined) };
+
+  const previous = Object.getOwnPropertyDescriptor(context, VARS_KEY);
+  Object.defineProperty(context, VARS_KEY, { value: scoped, enumerable: true, configurable: true, writable: true });
+  try {
+    return body();
+  } finally {
+    if (previous) Object.defineProperty(context, VARS_KEY, previous);
+    else delete context[VARS_KEY];
+  }
+}
+
+function hasObjectChild(node: Record<string, unknown>): boolean {
+  for (const item of Object.values(node)) {
+    if (typeof item === 'function') return true;
+    if (item && typeof item === 'object') return true;
+  }
+  return false;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** The one key that scopes rather than configures - see `withScopedVars`. Reserved at **every**
+ *  level, which costs a script that would have been called `vars`: `run.vars` is a scope, not a
+ *  script. Nothing enumerates `run`'s keys as a list of script names, so the cost stops there. */
+const VARS_KEY = 'vars';
 
 /**
  * Whether a function at `at` is **code** - a step to run later, or part of a plugin - rather than a

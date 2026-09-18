@@ -1150,6 +1150,105 @@ describe('core/Repository', () => {
    * `read(path)` - a structured file's **contents**, where `file` answers only where one is.
    * Resolved against `pkg.dirname` like `file`, so one `"[*]"` declaration reads each package's own.
    */
+  /**
+   * `vars` declared at any level of the config tree, scoping its own subtree - a fresh copy per
+   * level, the level's own block merged over what the level above resolved to.
+   */
+  describe('scoped vars', () => {
+    function varsFixture(config: unknown): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(config));
+      writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      return dir;
+    }
+
+    it('shadows per level, so each node reads the nearest declaration', async () => {
+      const dir = varsFixture({
+        vars: { x: 1 },
+        '[*]': {
+          top: '${{ vars.x }}',
+          run: {
+            vars: { x: 2 },
+            clean: { probe: '${{ vars.x }}' },
+            build: { vars: { x: 3 }, probe: '${{ vars.x }}' },
+          },
+        },
+      });
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as any;
+      expect(cfg.top).toBe(1);
+      expect(cfg.run.clean.probe).toBe(2);
+      expect(cfg.run.build.probe).toBe(3);
+    });
+
+    it('merges per key, so redeclaring one var keeps the rest', async () => {
+      const dir = varsFixture({
+        vars: { x: 1, keep: 'top' },
+        '[*]': { run: { vars: { x: 2 }, clean: { probe: '${{ vars.keep + ":" + vars.x }}' } } },
+      });
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as any;
+      expect(cfg.run.clean.probe).toBe('top:2');
+    });
+
+    it("resolves a level's own block against the level above it, not against itself", async () => {
+      // `vars: { out: '${{ vars.x }}/dist' }` refines the `x` it is inheriting - reading its own
+      // half-built scope instead would make the answer depend on key order inside the block.
+      const dir = varsFixture({
+        vars: { x: 'outer' },
+        '[*]': {
+          run: { vars: { x: 'inner', derived: '${{ vars.x }}-seen' }, clean: { probe: '${{ vars.derived }}' } },
+        },
+      });
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as any;
+      expect(cfg.run.clean.probe).toBe('outer-seen');
+    });
+
+    /**
+     * **The reason a copy is made at every node rather than only where a block appears.** A value
+     * function is handed this object, so one that writes to it must be writing into its own level -
+     * without a copy per node a write inside `run.build` would land in `run`'s object, and a sibling
+     * would read it.
+     */
+    it('keeps a write inside the level that made it', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc.cjs'),
+        `module.exports = {
+           vars: { x: 1 },
+           '[*]': {
+             run: {
+               vars: { x: 2 },
+               build: {
+                 vars: ({ value }) => ({ ...(value ?? {}), x: 3 }),
+                 probe: ({ vars }) => { vars.addedHere = true; return JSON.stringify(vars); },
+               },
+               clean: { probe: '\${{ JSON.stringify(vars) }}' },
+             },
+             outer: '\${{ JSON.stringify(vars) }}',
+           },
+         };
+`,
+      );
+      writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as any;
+      expect(JSON.parse(cfg.run.build.probe)).toEqual({ x: 3, addedHere: true });
+      /** Neither the shadowed `x` nor the added key reaches a sibling, the level above, or the top. */
+      expect(JSON.parse(cfg.run.clean.probe)).toEqual({ x: 2 });
+      expect(JSON.parse(cfg.outer)).toEqual({ x: 1 });
+      expect(cfg.vars).toEqual({ x: 1 });
+    });
+
+    it('leaves the declaration in the resolved config, where `rman config` can show it', async () => {
+      // `run.vars` is a scope rather than a script, which costs a script that would have been
+      // called `vars` - nothing enumerates `run`'s keys as script names, so the cost stops there.
+      const dir = varsFixture({ '[*]': { run: { vars: { x: 2 }, clean: { probe: '${{ vars.x }}' } } } });
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as any;
+      expect(cfg.run.vars).toEqual({ x: 2 });
+    });
+  });
+
   describe('${{ read() }}', () => {
     function readFixture(config: unknown, files: Record<string, string> = {}, packages = ['pkg-a']): string {
       const dir = tmp();
