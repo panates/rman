@@ -966,6 +966,130 @@ describe('core/Repository', () => {
     });
   });
 
+  /**
+   * A config value written as a **function** - the JS spelling of a `${{ }}` expression, answering
+   * the same question at the same moment, with the same scope plus `value`.
+   *
+   * Every case goes through a real `.rmanrc.cjs`, because that is the only form able to carry one
+   * and because the point is that it survives loading, merging and resolution.
+   */
+  describe('value functions', () => {
+    /** Writes a repository whose root config is JS source, plus N packages. */
+    function jsFixture(source: string, packages: string[] = ['pkg-a']): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc.cjs'), `module.exports = ${source};\n`);
+      for (const name of packages) writeJson(dir, `packages/${name}/package.json`, { name, version: '1.0.0' });
+      return dir;
+    }
+
+    it('is called with the same scope an expression gets, per package', async () => {
+      const dir = jsFixture(`{ '[ws:*]': { group: ({ pkg, repository }) => pkg.name + '@' + repository.basename } }`, [
+        'pkg-a',
+        'pkg-b',
+      ]);
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.group).toBe(`pkg-a@${path.basename(dir)}`);
+      expect(repo.getPackage('pkg-b')?.config.group).toBe(`pkg-b@${path.basename(dir)}`);
+    });
+
+    it("reads the config's own top-level keys bare, as an expression does", async () => {
+      const dir = jsFixture(
+        `{ vars: { buildDir: 'out' }, '[*]': { publish: { directory: ({ vars }) => vars.buildDir } } }`,
+      );
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.publish?.directory).toBe('out');
+    });
+
+    it('resolves a function inside vars, which other keys then read', async () => {
+      const dir = jsFixture(
+        `{ vars: { coverage: ({ repository }) => require('node:path').join(repository.dirname, 'coverage') },
+           '[*]': { publish: { directory: ({ vars }) => vars.coverage } } }`,
+      );
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.publish?.directory).toBe(path.join(dir, 'coverage'));
+    });
+
+    /**
+     * `value` is what the key resolved to in the layers **underneath** - the general form of `+key`,
+     * and the reason the chain is built during the merge rather than after it: by the time the
+     * config is resolved the layers have collapsed, and a closer layer's value has already taken
+     * the place of what it was derived from.
+     */
+    it('hands a layer what the layers below it resolved to, as `value`', async () => {
+      const dir = jsFixture(
+        `{ '[*]':    { clean: { include: () => ['build'] } },
+           '[ws:*]': { clean: { include: ({ value, pkg }) => [...value, pkg.name + '.log'] } } }`,
+      );
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.clean?.include).toEqual(['build', 'pkg-a.log']);
+      /** The root is not in `"[ws:*]"`, so it stops at the first layer - which is also the case
+       *  that proves the chain is per-package rather than computed once. */
+      expect(repo.config.clean?.include).toEqual(['build']);
+    });
+
+    it('resolves the inherited value before handing it over, expressions included', async () => {
+      const dir = jsFixture(
+        `{ '[*]':    { clean: { include: ['\${{ pkg.name }}-base'] } },
+           '[ws:*]': { clean: { include: ({ value }) => [...value, 'extra'] } } }`,
+      );
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.clean?.include).toEqual(['pkg-a-base', 'extra']);
+    });
+
+    it('gives `value` as undefined when nothing below sets the key, and says so when that throws', async () => {
+      // Undefined rather than `[]`: defaulting would be a guess about the key's type, and wrong for
+      // every key that is not a list. So the error has to name the cause instead - V8's own
+      // "value is not iterable" names neither the key nor the reason.
+      const dir = jsFixture(`{ '[*]': { clean: { include: ({ value }) => [...value] } } }`);
+      await expect(Repository.create(dir)).rejects.toThrow(/`value` is undefined here/);
+      await expect(Repository.create(dir)).rejects.toThrow(/nothing below this layer sets "clean.include"/);
+    });
+
+    it('names the config path when a function throws', async () => {
+      const dir = jsFixture(`{ '[*]': { group: () => { throw new Error('nope'); } } }`);
+      await expect(Repository.create(dir)).rejects.toThrow(/Config function in "group" failed: nope/);
+    });
+
+    /**
+     * The other half of the rule, and the one that makes both halves usable: **the key decides**
+     * whether a function is a value to compute now or code to run later. A step is left alone.
+     */
+    it('leaves a step function alone - run.<script> slots, the shorthand, and `if`', async () => {
+      const dir = jsFixture(
+        `{ '[*]': { run: {
+             build: { before: () => {}, exec: () => {}, after: () => {}, if: () => true },
+             test: function shorthand() {},
+           } } }`,
+      );
+      const repo = await Repository.create(dir);
+      const cfg = repo.getPackage('pkg-a')!.config;
+      for (const slot of ['before', 'exec', 'after', 'if'] as const) {
+        expect(typeof (cfg.run as any).build[slot]).toBe('function');
+      }
+      /** The bare-value shorthand too: `run: { test: fn }` is `{ exec: fn }`, so calling it here
+       *  would make the short spelling run at a different time than the long one. */
+      expect(typeof (cfg.run as any).test).toBe('function');
+    });
+
+    it("leaves a plugin's own functions alone - they are code, not config", async () => {
+      // Measured: with `plugins` walked like any other key, resolving the config called the
+      // plugin's yargs builder with the config scope ("cmd.option is not a function").
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc.cjs'),
+        `module.exports = { plugins: [{ name: 'p', commands: [
+           { command: 'x', describe: 'a command', builder: cmd => cmd.option('y'), handler() {} },
+         ] }] };\n`,
+      );
+      writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const repo = await Repository.create(dir);
+      expect(typeof (repo.config.plugins as any)[0].commands[0].builder).toBe('function');
+    });
+  });
+
   describe('listStatus()', () => {
     let dir: string;
     let originDir: string;

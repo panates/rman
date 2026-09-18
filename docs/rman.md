@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 6d90551
+git-commit: f30fea9
 package-version: 1.1.1
 date: 2026-09-18
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff 6d90551..HEAD -- src/
+  git diff f30fea9..HEAD -- src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -47,6 +47,7 @@ standalone utilities (`ChangeHashService`, `Logger`). For the CLI itself (comman
 - [Configuration (`.rmanrc` / `.rmanrc.yml`)](#configuration-rmanrc--rmanrcyml)
   - [JS config (`.rmanrc.cjs` / `.rmanrc.mjs` / `.rmanrc.js`)](#js-config-rmanrccjs--rmanrcmjs--rmanrcjs)
   - [Function steps](#function-steps)
+  - [Function values](#function-values)
   - [Editor support (types)](#editor-support-types)
 - [Services](#services)
   - [`VersionService`](#versionservice)
@@ -580,6 +581,76 @@ lands beside the panel instead of in the step's own log.
 use them on behalf of repositories that stay in YAML.
 
 `rman config` prints a function as `[Function: copyDocs]`, which is why naming them is worth it.
+
+### Function values
+
+**Any other config value may also be a function** - and that one is the JS spelling of a
+`${{ ... }}` expression: same question, same moment, same scope.
+
+```js
+// .rmanrc.mjs
+import path from 'node:path';
+
+export default {
+  vars: {
+    coveragePath: ({ repository }) => path.join(repository.dirname, 'coverage'),
+    buildDir: 'build',
+  },
+  '[*]': {
+    publish: { directory: ({ vars }) => vars.buildDir },
+    clean: { include: ({ vars }) => [vars.buildDir, '*.tsbuildinfo'] },
+  },
+  '[ws:*]': {
+    // `value` is what the layers underneath resolved to - the general form of `+key`
+    clean: { include: ({ value, vars, pkg }) => [...(value ?? []), path.join(vars.coveragePath, pkg.basename)] },
+  },
+};
+```
+
+It receives one object with everything an expression can name - `pkg`, `repository`, `file`, `env`,
+`semver`, `path`, plus **the config's own top-level keys** (`vars`, `publish`, …) - and one thing an
+expression has no way to express:
+
+| | |
+| --- | --- |
+| `value` | what this key resolved to in the layers **below** this one |
+
+**`value` is `undefined` when nothing below sets the key**, which is the case a function written to
+extend an inherited list also has to handle - it is the first layer in a repository that inherits
+nothing. Write `value ?? []` (or `?? ''`). It is deliberately not defaulted to `[]`: that would be a
+guess about the key's type and wrong for every key that is not a list. The error says so when a
+spread trips over it, since V8's own `value is not iterable` names neither the key nor the reason.
+
+**Why this is not just a nicer `${{ }}`:** an expression is a string, so it cannot carry a real
+array or object, cannot see what it is overriding, and has to be written in a language with no
+editor support inside a quoted value. A function is checked by TypeScript, refactorable, and can
+import whatever it needs.
+
+#### Which functions are values, and which are code
+
+Both kinds live in one config, and **the key decides** - exactly as the key already decides whether
+a string is a shell command or a path:
+
+| | |
+| --- | --- |
+| `run.<script>`, `run.<script>.before`/`.exec`/`.after`, `run.<script>.if`, `version.before`/`.exec`/`.after` | **code** - left alone, called later by `run`/`version` |
+| `plugins` and anything under it | **code** - a plugin object is functions all the way down |
+| everything else | **a value** - called when the config resolves |
+
+```js
+'[ws:*]': {
+  clean: { include: ({ vars }) => [vars.buildDir] },  // a value: called now
+  run: { build: { after: ({ pkg }) => copy(pkg) } },  // a step: called by `rman build`
+}
+```
+
+No marker to remember, and nothing about the function itself is inspected - arity or parameter
+names would be a guess, and guessing wrong means either running build-time code while merely
+*loading* the repository, or silently never running it.
+
+A command interpolating a fragment of the config on its own must say where that fragment sits
+(`interpolateConfig(value, scope, { at: ['version', slot] })`), or the path matches nothing and a
+step there is mistaken for a value.
 
 ### Config keys reference
 

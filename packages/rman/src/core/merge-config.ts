@@ -16,6 +16,20 @@ export const APPEND_PREFIX = '+';
  */
 export const ALWAYS_APPEND: readonly string[] = ['plugins'];
 
+/**
+ * Where a value function keeps the value it is replacing, so it can be handed back as `value`.
+ *
+ * A **symbol on a forwarding wrapper**, rather than a class or a `{fn, prev}` object, for one
+ * concrete reason: every walker in this file and in `config.ts` decides what to do by asking
+ * `isPlainObject`, and a wrapper object would answer yes - `finalizeConfig` would rebuild it as a
+ * plain object and lose the function, and `mergeConfig` would try to merge into it key by key. A
+ * function is not a plain object, so it travels through all of them untouched.
+ *
+ * The user's own function is never mutated: two packages inheriting the same shared-config function
+ * would otherwise share - and overwrite - one `prev`.
+ */
+export const PREVIOUS_VALUE = Symbol('rman.previousValue');
+
 /** `"+before"` -> `"before"`, or `undefined` for a key that isn't an append. */
 export function appendTarget(key: string): string | undefined {
   return key.length > APPEND_PREFIX.length && key.startsWith(APPEND_PREFIX)
@@ -118,7 +132,41 @@ function assignMerged(target: Record<string, any>, key: string, value: unknown):
     mergeConfig(target[key], value);
     return;
   }
+  /**
+   * A function **replaces** like any other value - and remembers what it replaced, so it can be
+   * given it back as `value` when the config resolves:
+   *
+   * ```js
+   * '[*]':      { clean: { include: ({ vars }) => [vars.buildDir] } }
+   * '[ws:*]':   { clean: { include: ({ value, pkg }) => [...value, pkg.basename + '.log'] } }
+   * ```
+   *
+   * Chained here rather than at resolution time because only the merge knows the order of the
+   * layers - by the time `interpolateConfig` sees the config they have collapsed into one object,
+   * and whatever a closer layer said has already taken the place of what it was derived from.
+   */
+  if (typeof value === 'function') {
+    target[key] = chainValueFn(value as (...args: any[]) => unknown, target[key]);
+    return;
+  }
   target[key] = Array.isArray(value) ? [...value] : value;
+}
+
+/**
+ * Wraps `fn` so it carries `previous`, leaving `fn` itself alone.
+ *
+ * The wrapper forwards every argument unchanged, which is what lets one rule cover both kinds of
+ * function a config can hold: a **value** function is called by `interpolateConfig` with the config
+ * scope, a **step** function by `RunService` with a `RunStepContext`, and neither needs to know it
+ * has been wrapped. `name` is copied over because a step's label is its function's name.
+ */
+function chainValueFn(fn: (...args: any[]) => unknown, previous: unknown): (...args: any[]) => unknown {
+  const wrapper = (...args: any[]) => fn(...args);
+  Object.defineProperty(wrapper, 'name', { value: fn.name, configurable: true });
+  /** Only when there *is* one: an own property set to `undefined` is indistinguishable from an
+   *  inherited value that genuinely resolved to nothing. */
+  if (previous !== undefined) Object.defineProperty(wrapper, PREVIOUS_VALUE, { value: previous });
+  return wrapper;
 }
 
 /**

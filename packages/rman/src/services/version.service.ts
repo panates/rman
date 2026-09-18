@@ -130,7 +130,12 @@ export namespace VersionService {
           pkg,
           VERSION_LIFECYCLE,
           slot,
-          RunService.normalizeScriptValue(interpolateConfig(pkg.config?.version?.[slot], scope), `version.${slot}`),
+          RunService.normalizeScriptValue(
+            /** `at`: the path is what tells a step function from a value one, and this is a fragment -
+             *  without it a function here was called while the hook was being prepared. */
+            interpolateConfig(pkg.config?.version?.[slot], scope, { at: ['version', slot] }),
+            `version.${slot}`,
+          ),
         );
       await hook('before');
       /** Through the manifest, not through a `package.json` field: where a version is written is

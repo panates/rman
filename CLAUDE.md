@@ -720,6 +720,69 @@ its own commit and tag, so whichever group was committed last owns HEAD (measure
 on HEAD with `v1.3.0` one commit behind). Read a release tag with `git describe --match <pattern>`,
 never by what happens to sit on HEAD.
 
+## Functions in config: two kinds, and the key decides which
+
+A config value may be a **function**, and there are two entirely different meanings depending on
+where it sits. Both live in one config, so the rule has to be decidable without looking at the
+function:
+
+| | |
+| --- | --- |
+| `run.<script>`, `run.<script>.before`/`.exec`/`.after`, `run.<script>.if`, `version.before`/`.exec`/`.after` | **code** (`STEP_PATHS`) - left alone, called later by `run`/`version` |
+| `plugins`, and everything below it | **code** (`CODE_SUBTREES`) - an `RmanPlugin` is functions all the way down |
+| everything else | **a value** - called by `interpolateConfig`, exactly where a `${{ }}` would be |
+
+- **The key decides, and it already did.** `run.build.exec: 'tsc -b'` is a shell command and
+  `publish.directory: 'build'` is a path - not because of anything about those strings, but because
+  of where they sit. A function inherits the rule, so there is no marker to remember. **Never
+  replace this with a test on the function** (arity, parameter names): that is the guess
+  `loadPlugins` refuses to make about a module's export, and here guessing wrong means either
+  running build-time code while merely *loading* the repository or silently never running it.
+- **`plugins` has to be in the list, and it was measured the hard way**: with it walked like any
+  other key, resolving the config of a repository that named a plugin called that plugin's yargs
+  builder with the config scope - `Config function in "plugins[0].commands[0].builder" failed:
+  cmd.option is not a function`.
+- **`run.*` (the bare shorthand) and `run.*.if` are in `STEP_PATHS` for reasons that are not
+  symmetry.** `run: { build: fn }` means `{ exec: fn }`, so leaving it out made the short and long
+  spellings disagree about *when* the function runs. And an `if` called at load time collapsed to
+  the boolean it happened to return, which `parseIfExpr` then read as "no condition given" - so the
+  script ran unconditionally (measured).
+- **A string at a step path is still interpolated**, so this is narrower than `DEFERRED_PATHS`:
+  `exec: 'tsc -b ${{ file.resolve(...) }}'` has to keep working.
+- **A caller interpolating a *fragment* must say where it sits.** `interpolateConfig`'s `at` option
+  exists for `version`, which resolves its own `version.<slot>` because those three paths are
+  deferred. Without it the fragment starts at the root, matches no step path, and a function in a
+  version hook was called while the hook was being *prepared* - measured, failing inside the user's
+  own code with `path.join` receiving undefined.
+
+### The value kind: the JS spelling of `${{ }}`
+
+Same question, same moment, same scope - `pkg`, `repository`, `file`, `env`, `semver`, `path`, plus
+the config's own top-level keys - **plus `value`**: what the key resolved to in the layers
+underneath, which is the general form of `+key` and the one thing an expression cannot express.
+
+- **The chain is built during the merge, not at resolution.** Only `mergeConfig` knows the layer
+  order; by the time `interpolateConfig` runs they have collapsed into one object and a closer
+  layer's value has already replaced what it was derived from. `assignMerged` wraps a function in a
+  forwarding wrapper carrying `PREVIOUS_VALUE`.
+- **A forwarding *function*, not a `{fn, prev}` object or a class**, and that is load-bearing: every
+  walker in `merge-config.ts` and `config.ts` branches on `isPlainObject`, which a wrapper object
+  would satisfy - `finalizeConfig` would rebuild it as a plain object and lose the function, and
+  `mergeConfig` would merge into it key by key. A function is not a plain object, so it travels
+  through all of them untouched. The wrapper also copies `name`, since a step's log label is its
+  function's name. The user's own function is never mutated: two packages inheriting the same
+  shared-config function would otherwise share and overwrite one `prev`.
+- The argument object is built with the interpolation context as its **prototype**, never spread
+  from it. Those top-level keys are lazy memoized getters (so key order in the file means nothing
+  and a cycle is reported rather than half-resolved); spreading would fire every one on every call,
+  and one of them throwing would blame the wrong key.
+- **`value` is `undefined` when nothing below set the key, and is deliberately not defaulted to
+  `[]`** - that would be a guess about the key's type, wrong for every key that is not a list. The
+  case matters because a function written to extend an inherited list is also the *first* layer in a
+  repository that inherits nothing, and V8 reports that as `value is not iterable`, naming neither
+  the key nor the reason. So `callValueFn`'s catch adds the reason itself when `previous` was
+  undefined; it does not sniff the message.
+
 ## Function steps: a step written as JavaScript
 
 [`src/core/run-step.ts`](packages/rman/src/core/run-step.ts). `run.<script>.before`/`.exec`/`.after`,

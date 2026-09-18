@@ -7,7 +7,7 @@ import { pathToFileURL } from 'url';
 import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
-import { finalizeConfig, mergeConfig } from './merge-config.js';
+import { finalizeConfig, mergeConfig, PREVIOUS_VALUE } from './merge-config.js';
 
 /**
  * Identity helper for authoring a `.rmanrc.cjs`/`.mjs`/`.js` config with full type-checking and
@@ -491,10 +491,28 @@ export interface ConfigScope {
  * A failing expression throws with the config path that holds it, rather than being left in place:
  * silently passing through a mistake is how a config ends up quietly doing nothing.
  */
-export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: { skip?: string[] }): T {
+export interface InterpolateOptions {
+  /** Config paths to leave entirely untouched - `DEFERRED_PATHS`, when the whole config is walked. */
+  skip?: string[];
+  /** Where `config` sits in the whole config, for a caller interpolating a fragment. */
+  at?: string[];
+}
+
+export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: InterpolateOptions): T {
   const skip = options?.skip ?? [];
+  /**
+   * Where `config` sits in the whole config, when a caller hands over a fragment rather than the
+   * root - `version` interpolates its own `version.<slot>` value on its own, those three paths being
+   * in `DEFERRED_PATHS`.
+   *
+   * It matters because the path is what decides whether a function is a value to compute or a step
+   * to leave alone (`STEP_PATHS`). Without it, a fragment starts at the root and matches nothing, so
+   * a function in a `version` hook was called while the hook was being *prepared* - measured, and it
+   * failed inside the user's own code with `path.join` receiving undefined.
+   */
+  const base = options?.at ?? [];
   const context = vm.createContext({ ...scope });
-  if (!config || typeof config !== 'object' || Array.isArray(config)) return walk(config, scope, context, [], skip);
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return walk(config, scope, context, base, skip);
 
   /**
    * The config's own top-level keys, readable bare: `${{ publish.directory }}`. So a value that
@@ -529,7 +547,7 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: { 
     }
     resolving.push(key);
     try {
-      const value = walk((config as Record<string, unknown>)[key], scope, context, [key], skip);
+      const value = walk((config as Record<string, unknown>)[key], scope, context, [...base, key], skip);
       resolved.set(key, value);
       return value;
     } catch (e: any) {
@@ -567,6 +585,61 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: { 
  * command at all would fail on a config that mentions it.
  */
 export const DEFERRED_PATHS = ['version.before', 'version.exec', 'version.after'];
+
+/**
+ * Paths whose value is a **step** - something to run later - rather than a setting to compute now.
+ * `*` matches one path segment (`run.<script>.exec`).
+ *
+ * This is what tells a step function from a value function, and the two live side by side in one
+ * config:
+ *
+ * ```js
+ * '[ws:*]': {
+ *   clean: { include: ({ vars, value }) => [...value, vars.buildDir] },   // a value: called here
+ *   run: { build: { after: ({ pkg }) => copyDocs(pkg) } },                // a step: called by `run`
+ * }
+ * ```
+ *
+ * **The key decides, and it already did.** `run.build.exec: 'tsc -b'` is a shell command and
+ * `publish.directory: 'build'` is a path - not because of anything about the strings, but because of
+ * where they sit. A function inherits the same rule, so nothing new has to be learned and no marker
+ * has to be remembered. The alternative was inspecting the function (arity, parameter names), which
+ * is the kind of guess `loadPlugins` refuses to make about a module's export for the same reason:
+ * guessing wrong here means running build-time code while merely loading the repository, or
+ * silently never running it.
+ *
+ * A **string** at one of these paths is still interpolated - `exec: 'tsc -b ${{ file.resolve(...) }}'`
+ * has to keep working - so this is narrower than `DEFERRED_PATHS`, which skips its paths entirely.
+ */
+export const STEP_PATHS = [
+  /** The bare-value shorthand: `run: { build: fn }` means `{ exec: fn }`, as `run: { build: 'cmd' }`
+   *  means `{ exec: 'cmd' }`. Missing it made the two spellings disagree about *when* the function
+   *  runs, which is worse than not supporting the short one at all. */
+  'run.*',
+  'run.*.before',
+  'run.*.exec',
+  'run.*.after',
+  /** A condition, evaluated per package by `RunService` when the run reaches it. Called here
+   *  instead, it collapsed to the boolean it happened to return at load time - and `parseIfExpr`
+   *  then read that boolean as "no condition given", so the script ran unconditionally (measured). */
+  'run.*.if',
+  'version.before',
+  'version.exec',
+  'version.after',
+];
+
+/**
+ * Keys whose **whole subtree** is code rather than config, so no function under them is a value to
+ * compute. `plugins` is the only one, and it has to be here: an entry may be the plugin *object*
+ * itself, and an `RmanPlugin` is almost entirely functions - `manifest.read`, `workspace.resolve`,
+ * `versionPlanner`, `binPaths`, and every command's `builder` and `handler`.
+ *
+ * Measured, and it is why this exists: with `plugins` walked like any other key, resolving the
+ * config of a repository that named a plugin called that plugin's yargs builder with the config
+ * scope - `Config function in "plugins[0].commands[0].builder" failed: cmd.option is not a
+ * function`. A `plugins` entry is loaded by `loadPlugins`, never read as a setting.
+ */
+export const CODE_SUBTREES = ['plugins'];
 
 const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
 
@@ -615,6 +688,14 @@ function walk(value: unknown, scope: ConfigScope, context: vm.Context, at: (stri
   /** Compared on the key path rather than the value, so a deferred key's whole subtree - a single
    *  command or an array of them - is handed on untouched. */
   if (at.length && skip.includes(at.filter(p => typeof p === 'string').join('.'))) return value;
+  if (typeof value === 'function') {
+    /** Code, not a value: a step for `run`/`version` to call in its own time, or a plugin's own
+     *  function. Carried through exactly as a command string would be - calling it here would run
+     *  build-time work while merely *loading* the repository, which is the whole distinction the
+     *  function form exists to draw. */
+    if (isCodePath(at)) return value;
+    return callValueFn(value as (arg: unknown) => unknown, scope, context, at, skip);
+  }
   if (typeof value === 'string') return interpolateString(value, context, at);
   if (Array.isArray(value)) return value.map((item, i) => walk(item, scope, context, [...at, i], skip));
   if (value && typeof value === 'object') {
@@ -623,6 +704,72 @@ function walk(value: unknown, scope: ConfigScope, context: vm.Context, at: (stri
     return result;
   }
   return value;
+}
+
+/**
+ * Whether a function at `at` is **code** - a step to run later, or part of a plugin - rather than a
+ * value to compute now.
+ *
+ * Array indices are dropped before matching, so a function inside a *list* of steps is still a
+ * step; `*` in a `STEP_PATHS` entry matches any one segment (`run.<script>.exec`).
+ */
+function isCodePath(at: (string | number)[]): boolean {
+  const segments = at.filter((p): p is string => typeof p === 'string');
+  if (CODE_SUBTREES.includes(segments[0])) return true;
+  return STEP_PATHS.some(pattern => {
+    const parts = pattern.split('.');
+    return parts.length === segments.length && parts.every((part, i) => part === '*' || part === segments[i]);
+  });
+}
+
+/**
+ * Calls a **value** function: the JS spelling of a `${{ }}` expression, and it answers the same
+ * question at the same moment.
+ *
+ * It receives one object carrying everything an expression can name - `pkg`, `repository`, `file`,
+ * `env`, `semver`, `path`, plus the config's own top-level keys - and, in addition, **`value`**: what
+ * this key resolved to in the layers underneath, which is what makes a derived value possible
+ * without restating the base.
+ *
+ * Built with the interpolation context as its **prototype**, not copied from it. The top-level keys
+ * are lazy getters (`resolve`, memoized, so key order in the file means nothing and a cycle is
+ * reported rather than half-resolved); spreading them into a new object would fire every one of
+ * them on every call, including the ones a function never reads - and one of those throwing would
+ * blame the wrong key.
+ */
+function callValueFn(
+  fn: (arg: unknown) => unknown,
+  scope: ConfigScope,
+  context: vm.Context,
+  at: (string | number)[],
+  skip: string[],
+): unknown {
+  const previous = (fn as unknown as Record<symbol, unknown>)[PREVIOUS_VALUE];
+  const arg = Object.create(context);
+  /** Resolved the same way any other value is, so an inherited `${{ }}` string or a function under
+   *  it is already finished by the time this one is handed it. */
+  arg.value = previous === undefined ? undefined : walk(previous, scope, context, at, skip);
+  try {
+    return fn(arg);
+  } catch (e: any) {
+    const where = at.length ? formatPath(at) : 'the config root';
+    /**
+     * **`value` is `undefined` when no layer underneath set this key**, and saying so is the whole
+     * reason this catch exists. A function written to extend an inherited list (`[...value, x]`) is
+     * also the *first* layer in a repository that inherits nothing, and V8's report for that is
+     * `value is not iterable` - which names neither the key nor the reason, and sends the reader
+     * looking at their spread instead of at what is missing.
+     *
+     * Told rather than papered over: defaulting `value` to `[]` would be a guess about the key's
+     * type, and wrong for every key that is not a list.
+     */
+    const hint =
+      previous === undefined
+        ? `\n  \`value\` is undefined here - nothing below this layer sets "${where}".` +
+          `\n  Write \`value ?? []\` (or \`?? ''\`) if the function has to work as the first layer too.`
+        : '';
+    throw new Error(`Config function in "${where}" failed: ${e?.message}${hint}`, { cause: e });
+  }
 }
 
 function interpolateString(value: string, context: vm.Context, at: (string | number)[]): unknown {
