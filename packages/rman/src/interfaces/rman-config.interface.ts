@@ -169,17 +169,21 @@ export interface RmanConfigKeys {
    */
   dependencies?: string[];
   /**
-   * Config for **other** packages, keyed by a `"[selector]"` naming them - `"[*]"` for every
-   * package in the repository, `"[*-dialect]"` for a glob over package names, `"[pkg-a]"` for one.
-   * Everything else in this object configures the package of the directory declaring it, so this
-   * is the only way a `.rmanrc` speaks about anything but its own package - most usefully the
-   * repository root's, which otherwise configures the root package alone.
+   * Config for a **narrower audience**, keyed by a `"[selector]"` naming it - `"[/]"` for the root
+   * package alone, `"[*]"` for the packages below this directory, `"[*-dialect]"` for a glob over
+   * their names, `"[pkg-a]"` for one. Everything else in this object reaches this directory *and*
+   * every package under it, so a selector is how a statement stops being everyone's.
+   *
+   * A glob never matches the root, which is nobody's child - so a package-shaped setting cannot
+   * reach a root that has no package directory to apply it to, and `"[/]"` is the only way to
+   * address the root.
    *
    * ```yaml
    * # the repository root's own .rmanrc.yml
-   * run:
-   *   build:
-   *     before: node support/generate.cjs   # a repo-wide bookend, run once at the root
+   * "[/]":
+   *   run:
+   *     build:
+   *       before: node support/generate.cjs   # a repo-wide bookend, run once at the root
    * "[*]":
    *   run:
    *     build:
@@ -187,8 +191,8 @@ export interface RmanConfigKeys {
    * ```
    *
    * In YAML the quotes are **required**: a bare `[*]` parses as a flow sequence, and `*` as an
-   * alias indicator. Precedence, lowest first: `"[*]"`, then other selectors in declaration order,
-   * then the package's own unmarked config.
+   * alias indicator. Precedence: the unmarked keys first, then these blocks **in the order they
+   * were written** - later wins. A directory level closer to the package wins over all of them.
    *
    * Recursive, mirroring the schema's own `"$ref": "#"`: whatever a `.rmanrc` may say about its own
    * package it may say here about the ones it names - nested selectors included. Typed as

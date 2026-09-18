@@ -26,44 +26,64 @@ or between exported declarations.
 
 ## Config: who a declaration is about
 
-[`src/core/config.ts`](src/core/config.ts). One rule decides it, and it is not the usual cascade:
+[`src/core/config.ts`](src/core/config.ts). One sentence decides it: **what is written above reaches
+below, and a `"[selector]"` narrows the audience.**
 
-- **Unmarked keys configure the package of the directory that declares them.** The repository
-  root's own `.rmanrc` therefore configures the *root package* - which is where every repo-wide
-  setting is read from anyway (`allowBranch`, `version.*`, `githubRelease.*`, and a plugin's own
-  root-level keys such as `rman-node`'s `packageManager`).
-- **A `"[selector]"` block configures the packages it names.** This is the only way a directory
-  speaks about anything but its own package, and there are **three audiences** because a repository
-  has three:
+- **An unmarked key configures that directory and every package under it.** The repository root's
+  own `.rmanrc` is therefore the baseline for the whole repository, the root package included.
+- **A `"[selector]"` block narrows it.** Two audiences, and the second is a glob:
 
   | | |
   | --- | --- |
   | `"[/]"` | the **root package** alone |
-  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | every package the glob matches, **the root included** |
-  | `"[ws:*]"`, `"[workspace:pkg-*]"` | every **non-root** package the glob matches |
+  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches |
 
   - `/` for the root because that is what a repository root is called everywhere else, and no
-    package can be named it. `ws:` is a *qualifier on the glob*, not a second spelling of `*`, so
-    `"[ws:pkg-*]"` means what it looks like.
-  - **`"[*]"` including the root is a change, and the migration is real.** Selectors were not
-    applied to the root at all before, so `"[*]"` quietly meant "the workspace packages" - a
-    catch-all with an exception nothing in the syntax mentioned. Every existing `"[*]"` now also
-    speaks to the root; `"[ws:*]"` is the old behaviour, spelled. The root package is resolved with
-    its own name now (`Repository._resolveConfigs`), which is what makes any of this reach it.
-  - **Measured, and it is the hazard to warn users about:** three specs in
-    `repository.spec.ts` broke the moment `"[*]"` reached the root, all with `${{ file.resolve(...) }}`
-    expressions asking about a `tsconfig.json` - a file every *package* has and the root does not.
-    A `"[*]"` block whose values assume a package directory is now wrong; that is what `"[ws:*]"` is
-    for, and this repository's own `.rmanrc.yml` was migrated for exactly that reason.
-  - Precedence, lowest first: `"[*]"` → a catch-all `"[ws:*]"` → the rest in declaration order → the
-    package's own unmarked config. A catch-all is **ranked** rather than left to declaration order
-    (`selectorRank`): where you happen to write "everything" should not decide whether it beats a
-    rule about one package.
+    package can be named it.
+  - **The root is never selected by name, and that one rule removes two traps.** A glob matches
+    package names and the root is nobody's child, so `"[my-*]"` cannot quietly pick up a repository
+    whose root package is called `my-repo`, and `"[*]"` cannot hand a package-shaped setting to a
+    root with no build directory to apply it to. The root is addressed structurally or not at all.
+    (That second trap was real: three specs in `repository.spec.ts` broke the day `"[*]"` reached
+    the root, all `${{ file.resolve(...) }}` asking about a `tsconfig.json` the root does not have.)
+  - **Precedence: unmarked first, then the selector blocks in the order they were written** - later
+    wins, as `overrides` does in eslint, prettier and babel. Directory levels closer to the package
+    still win over everything above them.
+    - **Unmarked is the level's floor wherever it sits in the file.** Written below a selector
+      block it still loses to it: it is not a fourth selector but the layer that also feeds the
+      directories below, and making that depend on key order would be absurd.
+    - **There used to be a ranking (`selectorRank`) and it was dropped on purpose.** Specificity
+      only orders sets that *nest*, and globs do not: for `pkg-dialect`, neither `"[pkg-*]"` nor
+      `"[*-dialect]"` contains the other, so any answer is an invented tiebreak - worse than the
+      order the author typed. What was left was already declaration order with the catch-all lifted
+      out of it. The cost, stated rather than hidden: a catch-all written *below* a narrower block
+      now overrides it. Writing catch-alls first is a convention, not a rule.
+  - **`"[ws:*]"` / `"[workspace:*]"` is accepted and means exactly `"[*]"`.** The qualifier said
+    "not the root" back when a bare glob included it; the shape of the set says that now. Kept
+    working rather than rejected because both spellings resolve to the same packages - an error
+    would be friction with no reader to protect. Retired from the docs; don't write it in new code.
   - The root *package* is the one whose directory is the repository root - no other test, and none
     would be as reliable, since a name can be anything. In a single-package repository that is the
-    only package, so `"[/]"` and `"[*]"` reach it and `"[ws:*]"` reaches nothing.
-- A directory holding no package (an intermediate `packages/`) has none to speak for, so its
-  unmarked config still cascades to everything below.
+    only package, so `"[/]"` reaches it and `"[*]"` reaches nothing.
+- **Every directory cascades, and whether it holds a package changes nothing.** This is the
+  correction the design above *is*: the root used to be the one level whose unmarked config stayed
+  put, so an intermediate `packages/` reached the packages below while the root beside it did not -
+  what a file meant depended on whether a `package.json` sat next to it. `vars` then had to be
+  carved out as an exception, which is what a rule fighting itself looks like.
+  - **The reasoning behind the old rule was sound and is still true**: the same key does mean
+    different things to a package and to the repository. It just does not justify a rule nobody can
+    read. The answer is `"[/]"`, which says the audience out loud.
+  - **The cost is real and lands on one subtree: `run.<script>`.** Its hooks on the root are a
+    repo-wide bookend run once at the repository root; on a package they are that package's own
+    hook run in its directory. Cascaded, one declaration is both - once at the root and once per
+    package. **A repo-wide bookend belongs under `"[/]"`**, and that is the one migration step that
+    is not mechanical. The measured failure it prevents: `node ../../support/postbuild.cjs`, written
+    for a package, run at the root where it cannot resolve.
+  - The other repo-wide keys (`allowBranch`, `version.*`, `githubRelease.*`, `packageManager`) may
+    cascade or not without consequence - nothing reads them at package level - but `"[/]"` still
+    reads better for them.
+  - Migration from 1.2.x, in three mechanical rules plus that one: `"[ws:*]"` → `"[*]"`; old `"[*]"`
+    (which included the root) → unmarked; a root key that is genuinely the root's → `"[/]"`.
 - **`vars` is declared at any level of the config and scopes its own subtree**
   (`withScopedVars` in `config.ts`): a fresh copy per level, the level's own block merged **per key**
   over what the level above resolved to, so `run.vars` covers every script and `run.build.vars`
@@ -93,27 +113,15 @@ or between exported declarations.
     (`{ [K in string as K extends 'vars' ? never : K]: ... }`) was tried and does not help - the
     remap still produces an index signature claiming `vars`. Catching the typo across every script
     won; a typed JS config casts (`... as RmanConfig['run']`), and YAML is unchecked anyway.
-- **`vars` is the one unmarked key that cascades to every package anyway** - and it is not a hole
-  in the rule above, it is a key the rule was never about. The rule exists because a *setting*
-  means different things to the two audiences (`run.build.after` on the root is a repo-wide
-  bookend, on a package its own hook), so one declaration cannot serve both. `vars: {x: 1}` means
-  the number 1 to everyone; there is no second audience for it to be wrong for. Read as
-  `${{ vars.x }}`, overridden **per key** by a package's own `.rmanrc` or a `"[selector]"` block
-  (so redefining one var keeps the rest), and a selector's `vars` beats the same directory's
-  plainer statement because it names the packages explicitly. Do not generalize this to any other
-  key.
-
-**Never restore the old "root config is every package's baseline" cascade.** The same key means
-different things to the two audiences, and conflating them is a measured bug, not a hypothetical:
-`run.build.after` on a package is that package's hook, run in its own directory; on the root it is a
-repo-wide bookend run once at the repository root. One declaration feeding both ran
-`node ../../support/postbuild.cjs` at the root, where it cannot resolve.
+- **`vars` used to be the one unmarked key that cascaded, and is not special any more.** Its
+  carve-out is what showed the general rule was wrong: `vars: {x: 1}` means the number 1 to
+  everyone, there was no second audience for it to be wrong for, and it had to be exempted one key
+  at a time. It now cascades because *every* unmarked key does. Read as `${{ vars.x }}`, overridden
+  **per key** by a directory below or a `"[selector]"` block (so redefining one var keeps the rest).
 
 - Selector patterns are **globs over package names**, anchored both ends (`"[*-dialect]"` does not
   match `my-dialect-helper`) - glob, not regex, like every other pattern in rman. Which packages
   each *kind* of selector speaks for is the table above.
-- Precedence, lowest first: `"[*]"` → a catch-all `"[ws:*]"` → other selectors in declaration order
-  → the package's own unmarked config. Directory levels closer to the package still win.
 - **Trap: in YAML the quotes are mandatory.** A bare `[*]` is a flow sequence and `*` an alias
   indicator - the file fails to load. Write `"[*]":`.
 - Any string value may embed `${{ ... }}` - **real JavaScript**, evaluated per package
@@ -1222,7 +1230,7 @@ in that order, never `rman build`.
 
 **It was `rman build`, and that is a bootstrap loop that only bites on the release that matters.**
 The `rman` on PATH is whatever is *published*, so a version introducing a config feature cannot
-build itself: the repository's own `.rmanrc.yml` already uses `plugins` and `"[ws:*]"`, neither of
+build itself: the repository's own `.rmanrc.yml` already uses `plugins` and `"[*]"`, neither of
 which 1.0.x understands. The failure lands exactly when a release is being cut.
 
 - **Order is the whole content of the script**, and `rman` first: `rman-node`'s build resolves

@@ -112,7 +112,7 @@ import { defineConfig } from 'rman-node';
 export default defineConfig({
   plugins: ['rman-node'],
   packageManager: 'pnpm',
-  '[ws:*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
+  '[*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
 });
 ```
 
@@ -203,7 +203,7 @@ await PublishService.applyPlan(repository, plan);
 #### Where it publishes from, and the manifest it finds there
 
 Most specific first: the package's own `publishConfig.directory`, then `.rmanrc
-"publish.directory"` (one `"[ws:*]"` line for a repository instead of a copy in every `package.json`),
+"publish.directory"` (one `"[*]"` line for a repository instead of a copy in every `package.json`),
 then `ApplyOptions.contents` for a single run. Absent all three, the package's own directory.
 
 When that resolves to a **subdirectory**, `applyPlan` writes the `package.json` `npm publish` will

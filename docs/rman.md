@@ -223,63 +223,80 @@ same way a `tsconfig.json` `extends` chain works: a value set closer to a packag
 (replaces, not merges - for scalars/arrays; objects merge recursively) the same key set further up
 toward the root.
 
-**Who a declaration is about is decided by one rule:** unmarked keys configure the package of the
-directory that declares them; a `"[selector]"` block configures the packages it names. So the
-repository root's own `.rmanrc` configures the **root package** - which is where repo-wide settings
-are read from anyway - and reaches the other packages only through a selector:
+**Who a declaration is about is decided by one sentence:** what is written above reaches below, and
+a `"[selector]"` block narrows the audience. So the repository root's own `.rmanrc` is the baseline
+for the whole repository, and a selector is how a statement stops being everyone's:
 
 ```yaml
 # the repository root's own .rmanrc.yml
-packageManager: pnpm            # repo-wide, read from the root
-run:
-  build:
-    before: node support/generate.cjs        # a repo-wide bookend, run once at the root
+packageManager: pnpm                          # every package, and the root
 
-"[ws:*]":                                     # every package but the root
+"[/]":                                        # the root package alone
+  run:
+    build:
+      before: node support/generate.cjs       # a repo-wide bookend, run once at the root
+"[*]":                                        # the packages below - never the root
   run:
     build:
       after: node ../../support/postbuild.cjs # run in each package's own directory
-"[*]":                                        # every package, the root included
-  changelog: { tagPattern: "{name}@*" }
-"[/]":                                        # the root package alone
-  publish: { skip: true }
 "[*-dialect]":                                # a glob over package names
   publish: { skip: true }
 "[pkg-a]":                                    # exactly one
   dependencies: [pkg-b]
 ```
 
-The split exists because the same key means different things to the two audiences. `run.build.after`
-on a package is that package's build hook, run in its own directory; on the root it is a repo-wide
-bookend run once at the repository root. One declaration feeding both ran a package-relative command
-(`node ../../support/postbuild.cjs`) at the root, where it cannot resolve.
-
 Selector details:
 
-- **Three audiences, because a repository has three:**
+- **Two audiences, and the second is a glob:**
 
   | | |
   | --- | --- |
   | `"[/]"` | the **root package** alone |
-  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | every package the glob matches, **the root included** |
-  | `"[ws:*]"`, `"[workspace:pkg-*]"` | every **non-root** package the glob matches |
+  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches |
 
   `/` for the root because that is what a repository root is called everywhere else, and no package
-  can be named it. `ws:` is a qualifier on the glob rather than another spelling of `*`, so
-  `"[ws:pkg-*]"` means what it looks like; `workspace:` is the same thing spelled out.
+  can be named it.
 
-  In a **single-package repository the root is the one package**, so `"[/]"` and `"[*]"` reach it
-  and `"[ws:*]"` reaches nothing.
+  **The root is never selected by name.** A glob matches package names and the root is nobody's
+  child, so `"[my-*]"` cannot quietly reach a repository whose root package is called `my-repo`, and
+  `"[*]"` cannot hand a package-shaped setting to a root with no build directory to apply it to.
+
+  In a **single-package repository the root is the one package**, so `"[/]"` reaches it and `"[*]"`
+  reaches nothing.
 - The pattern is a **glob over package names**, anchored at both ends - `"[*-dialect]"` matches
   `mysql-dialect`, not `my-dialect-helper`. Glob, not regex, like every other pattern in rman.
 - In YAML the quotes are **required**. A bare `[*]` parses as a flow sequence, and `*` as an alias
   indicator - the file won't load at all.
-- Precedence, lowest first: `"[*]"`, then a catch-all `"[ws:*]"`, then the rest in declaration
-  order, then the package's own unmarked config. A catch-all is ranked rather than left to
-  declaration order on purpose - where you happen to write "everything" should not decide whether it
-  beats a rule about one package. Levels closer to the package still win over levels above them.
-- A directory holding no package of its own (an intermediate `packages/`, say) has no package to
-  speak for, so its unmarked config still cascades to everything below it.
+- **Precedence: the unmarked keys first, then the selector blocks in the order they were written** -
+  later wins, the way `overrides` does in eslint, prettier and babel. Directory levels closer to the
+  package still win over everything above them.
+
+  There is no specificity ranking behind that, and the omission is deliberate: specificity only
+  orders sets that nest, and globs do not - for a package called `pkg-dialect`, neither `"[pkg-*]"`
+  nor `"[*-dialect]"` contains the other. So a catch-all written *below* a narrower block does
+  override it. Write catch-alls first; it is a convention, not a rule.
+
+  The unmarked keys are the level's floor **wherever they sit in the file** - written after a
+  selector block they still lose to it. They are not a third selector but the layer that also feeds
+  the directories below.
+- `"[ws:*]"` / `"[workspace:*]"` still works and means exactly `"[*]"`. The qualifier said "not the
+  root" back when a bare glob included it; the shape of the set says that now. Don't write it in new
+  configs.
+
+**Migrating from 1.2.x.** Three mechanical rules and one that needs a look:
+
+| was | now |
+| --- | --- |
+| `"[ws:*]"` | `"[*]"` |
+| `"[*]"` (which included the root) | unmarked |
+| a root key that is genuinely the root's | `"[/]"` |
+
+The one to look at is **`run.<script>`**, because its hooks are the one place where the audience
+changes the meaning: on the root they are a repo-wide bookend run once at the repository root; on a
+package they are that package's own hook, run in its directory. Left unmarked they are now both -
+once at the root and once per package. Put a repo-wide bookend under `"[/]"`. The other root keys
+(`allowBranch`, `version.*`, `githubRelease.*`, `packageManager`) cascade harmlessly, since nothing
+reads them at package level.
 
 ### Inheriting a shared config (`extends`)
 
@@ -300,10 +317,11 @@ the base they sit on, and the directory chain then layers on top exactly as befo
 **top level only**: naming one inside a `"[selector]"` block is an error rather than a no-op, since
 inheritance is a statement about the config and not about the packages a selector names.
 
-An inherited **unmarked** key configures the package of the directory that inherited it, not every
-package under it - the rule doesn't bend for a base. A shared config meant to reach the packages
-puts its settings in `"[ws:*]"` (or `"[*]"`, if the root is meant too), the same as any other config
-would.
+An inherited **unmarked** key behaves exactly as one written in the inheriting file: it reaches that
+directory and every package below it. That makes a base *portable* rather than fixed - the same file
+inherited by the root is the repository's baseline, and inherited by a package's own `.rmanrc` is
+that package's. A base that must always mean the root says `"[/]"`, which is fixed wherever it is
+inherited from.
 
 ### Appending instead of replacing (`+key`)
 
@@ -324,8 +342,8 @@ copied from.
 - On an **object** the prefix is ignored, because there the two spellings already coincide: objects
   merge whether or not you asked them to.
 - `key` and `+key` in the same object both apply, the replacement first.
-- Appends accumulate in merge order: `extends` base → parent directories → `"[*]"` → `"[ws:*]"` →
-  more specific selectors → the package's own config.
+- Appends accumulate in merge order: `extends` base → parent directories → each level's unmarked
+  keys → that level's selector blocks in declaration order.
 
 `WithAppend` generates an append form for every key of the type, so `defineConfig` catches `+befor`
 as readily as `befor` - see [Editor support (types)](#editor-support-types).
@@ -336,7 +354,7 @@ Any string value may embed `${{ ... }}`, evaluated per package - which is what l
 declaration stay package-specific:
 
 ```yaml
-"[ws:*]":
+"[*]":
   clean:
     include: ["build", "../../coverage/${{ pkg.basename }}"]
   publish:
@@ -550,7 +568,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 ```yaml
 vars:
   x: 1
-"[ws:*]":
+"[*]":
   run:
     vars:
       x: 2
@@ -593,7 +611,7 @@ Every other level - `run.<script>.vars`, `version.vars`, `publish.vars`, `change
 `file` says where something is; `read` says what is in it.
 
 ```yaml
-"[ws:*]":
+"[*]":
   run:
     build:
       exec: 'tsc --outDir ${{ read("tsconfig.json").compilerOptions.outDir }}'
@@ -622,7 +640,7 @@ omission. An element can repeat, carry attributes and hold text at the same time
 has to pick a convention and be wrong for somebody. So it reads the way every other XML tool reads:
 
 ```yaml
-"[ws:*]":
+"[*]":
   version:
     stamp: '${{ read("pom.xml").getElementsByTagName("version")[0].textContent }}'
 ```
@@ -635,7 +653,7 @@ Resolved against `pkg.dirname`, like `file` - so one `"[*]"` declaration reads e
 copy. A repository-level file is reached explicitly:
 
 ```yaml
-"[ws:*]":
+"[*]":
   version:
     stamp: '${{ read(path.join(repository.dirname, "release.json")).stampFiles }}'
 ```
@@ -681,7 +699,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export default {
-  '[ws:*]': {
+  '[*]': {
     run: {
       build: {
         exec: 'tsc -b tsconfig-build.json',
@@ -757,7 +775,7 @@ export default {
     publish: { directory: ({ vars }) => vars.buildDir },
     clean: { include: ({ vars }) => [vars.buildDir, '*.tsbuildinfo'] },
   },
-  '[ws:*]': {
+  '[*]': {
     // `value` is what the layers underneath resolved to - the general form of `+key`
     clean: { include: ({ value, vars, pkg }) => [...(value ?? []), path.join(vars.coveragePath, pkg.basename)] },
   },
@@ -776,7 +794,7 @@ It receives one object with **exactly** what an expression can name - `pkg`, `re
 
 ```yaml
 "[*]":    { version: { stamp: ['src/constants.ts'] } }
-"[ws:*]": { version: { stamp: "${{ [...value, 'src/version.ts'] }}" } }
+"[*]": { version: { stamp: "${{ [...value, 'src/version.ts'] }}" } }
 ```
 
 A string that is *nothing but* one expression keeps that value's own type, which is what lets an
@@ -819,7 +837,7 @@ a string is a shell command or a path:
 | everything else | **a value** - called when the config resolves |
 
 ```js
-'[ws:*]': {
+'[*]': {
   clean: { include: ({ vars }) => [vars.buildDir] },  // a value: called now
   run: { build: { after: ({ pkg }) => copy(pkg) } },  // a step: called by `rman build`
 }
@@ -899,7 +917,7 @@ import { defineConfig } from 'rman';
 
 export default defineConfig({
   allowBranch: ['main'],
-  '[ws:*]': { run: { build: { exec: 'tsc -b' } } },
+  '[*]': { run: { build: { exec: 'tsc -b' } } },
 });
 ```
 
@@ -922,7 +940,7 @@ import { defineConfig } from 'rman-node';
 export default defineConfig({
   plugins: ['rman-node'],
   packageManager: 'pnpm',
-  '[ws:*]': { clean: { include: 'build' } },
+  '[*]': { clean: { include: 'build' } },
 });
 ```
 

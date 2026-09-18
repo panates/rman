@@ -166,7 +166,7 @@ to **GitHub Packages** (`npm.pkg.github.com`). That works today through npm's ow
 When the publishable output is a subdirectory, say so once:
 
 ```yaml
-"[ws:*]":
+"[*]":
   publish:
     directory: build
 ```

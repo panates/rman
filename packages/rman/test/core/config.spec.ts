@@ -131,30 +131,35 @@ describe('core/config', () => {
       expect(await resolveConfig(root, outside)).toEqual({ a: 1 });
     });
 
-    it("a package directory's unmarked config speaks for that package only, never the ones below it", async () => {
-      // The whole point of the split: the root has a package.json, so its unmarked config is the
-      // ROOT package's - not a silent default for every package under it.
-      const root = tmp();
-      const pkg = path.join(root, 'packages', 'a');
-      fs.mkdirSync(pkg, { recursive: true });
-      fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'root' }));
-      fs.writeFileSync(path.join(root, '.rmanrc'), JSON.stringify({ a: 'root-only' }));
-      fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'pkg-a' }));
-
-      expect(await resolveConfig(root, pkg, undefined, 'pkg-a')).toEqual({});
-      expect(await resolveConfig(root, root, undefined, 'root')).toEqual({ a: 'root-only' });
-    });
-
-    it('a directory holding no package still cascades - it has no package to speak for', async () => {
+    /**
+     * **Every directory cascades, and whether it holds a package changes nothing.** That is the
+     * whole correction: the root used to be the one level whose unmarked config stayed put, so
+     * an intermediate `packages/` reached the packages below while the root beside it did not -
+     * what a file meant depended on whether a `package.json` sat next to it.
+     */
+    it('cascades an unmarked key from any directory to the packages below it', async () => {
       const root = tmp();
       const mid = path.join(root, 'packages');
       const pkg = path.join(mid, 'a');
       fs.mkdirSync(pkg, { recursive: true });
       fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'root' }));
-      fs.writeFileSync(path.join(mid, '.rmanrc'), JSON.stringify({ a: 'from-mid' }));
+      fs.writeFileSync(path.join(root, '.rmanrc'), JSON.stringify({ a: 'from-root', b: 'from-root' }));
+      fs.writeFileSync(path.join(mid, '.rmanrc'), JSON.stringify({ b: 'from-mid' }));
       fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'pkg-a' }));
 
-      expect(await resolveConfig(root, pkg, undefined, 'pkg-a')).toEqual({ a: 'from-mid' });
+      expect(await resolveConfig(root, pkg, undefined, 'pkg-a')).toEqual({ a: 'from-root', b: 'from-mid' });
+    });
+
+    it('keeps a "[/]" statement at the root, which is how one stays there', async () => {
+      const root = tmp();
+      const pkg = path.join(root, 'packages', 'a');
+      fs.mkdirSync(pkg, { recursive: true });
+      fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'root' }));
+      fs.writeFileSync(path.join(root, '.rmanrc'), JSON.stringify({ a: 'everyone', '[/]': { b: 'root-only' } }));
+      fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'pkg-a' }));
+
+      expect(await resolveConfig(root, pkg, undefined, 'pkg-a')).toEqual({ a: 'everyone' });
+      expect(await resolveConfig(root, root, undefined, 'root')).toEqual({ a: 'everyone', b: 'root-only' });
     });
 
     it('a "[selector]" block reaches the packages it names', async () => {

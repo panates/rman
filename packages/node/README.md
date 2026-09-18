@@ -101,7 +101,7 @@ import { defineConfig } from 'rman-node';
 export default defineConfig({
   plugins: ['rman-node'],
   packageManager: 'pnpm',
-  '[ws:*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
+  '[*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
 });
 ```
 

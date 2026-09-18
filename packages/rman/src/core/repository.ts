@@ -219,9 +219,10 @@ export class Repository extends Package {
      * second `rawConfig` copy of every package's config for that one reader; measured identical.
      */
     /**
-     * The root is resolved **with its name**, like every other package, because selectors now speak
-     * to it: `"[/]"` names it and `"[*]"` includes it. It used to be resolved without one, which is
-     * what made `"[*]"` quietly mean "the workspace packages" - `"[ws:*]"` is that, spelled.
+     * The root is resolved **with its name**, like every other package. Not because a glob could
+     * match it - `"[*]"` and every other name pattern speak only to the packages below - but because
+     * `resolveConfig` needs a name to run `matchingSelectors` at all, and `"[/]"` is a selector.
+     * Passing none would silently drop the root's own block.
      */
     const rootRaw = await resolveConfig(this.dirname, this.dirname, cache, this.rootPackage.name);
     this.config = interpolateConfig(rootRaw, this.configScope(this.rootPackage), { skip: DEFERRED_PATHS });

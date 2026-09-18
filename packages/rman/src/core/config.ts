@@ -123,25 +123,30 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
  * it (inclusive) - each directory level overrides the ones above it, the way tsconfig's `extends`
  * chain does.
  *
- * Every level contributes in two ways, and the difference is the whole model:
+ * Every level contributes in two ways:
  *
- * - **Unmarked keys configure the package of the directory that declares them.** The root's own
- *   `.rmanrc` therefore configures the *root package* - which is where repo-wide settings
- *   (`packageManager`, `allowBranch`, `version.*`, `githubRelease.*`) are read from anyway - and
- *   not, silently, every package under it.
- * - **A `"[selector]"` block configures the packages it names** - `"[*]"` for all of them (the root
- *   included), `"[ws:*]"` for every one but the root, `"[/]"` for the root alone, `"[*-dialect]"`
- *   for a glob over package names. See `parseSelector`. This is the only way a directory speaks
- *   about anything but its own package.
+ * - **An unmarked key configures that directory and every package under it.** What a parent says
+ *   reaches the children, which is what every directory-scoped config in the ecosystem does and
+ *   what a reader expects without being told.
+ * - **A `"[selector]"` block narrows the audience** - `"[/]"` to the root package alone, `"[*]"` or
+ *   a glob to the packages below (never the root, which is nobody's child). See `parseSelector`.
  *
- * Splitting the two matters because the same key means different things to the two audiences. The
- * clearest case is `run.<script>.postScript`: on a package it's that package's build hook, run in
- * its own directory; on the root it's a repo-wide bookend run once at the repository root. A
- * cascade that fed one declaration to both ran a package-relative command (`node
- * ../../support/postbuild.cjs`) at the root, where it cannot resolve.
+ * **The root used to be the one directory whose unmarked config did *not* cascade**, on the
+ * reasoning that a setting means different things to a package and to the repository - and the
+ * reasoning is sound, but the rule it produced was not readable: an intermediate `packages/`
+ * cascaded while the root did not, so what a file meant depended on whether a `package.json` sat
+ * beside it. `vars` then had to be carved out as an exception, which is what a rule fighting itself
+ * looks like. One sentence now covers both: what is written above reaches below, and `"[/]"` is how
+ * a statement stays at the root.
+ *
+ * **The cost is real and lands on one subtree.** `run.<script>`'s hooks on the root are a repo-wide
+ * bookend, run once at the repository root; on a package they are that package's own hook, run in
+ * its directory. Cascaded, one declaration is both - once at the root and once per package. A
+ * repo-wide bookend therefore belongs under `"[/]"`, where its audience is visible; that is the
+ * migration this change asks for, and the only one that is not mechanical.
  *
  * `packageName` is what selectors match against; without it, selector blocks contribute nothing at
- * all. The root package passes its own, since `"[/]"` and `"[*]"` speak to it.
+ * all. The root package passes its own, since `"[/]"` speaks to it.
  */
 export async function resolveConfig(
   rootDir: string,
@@ -153,7 +158,7 @@ export async function resolveConfig(
   const target = path.resolve(targetDir);
   /** The root *package* is the one whose directory is the repository root - no other test is
    *  needed, and none would be as reliable: a name can be anything. In a single-package repository
-   *  that is the only package, so `"[/]"` reaches it and `"[ws:*]"` reaches nothing. */
+   *  that is the only package, so `"[/]"` reaches it and `"[*]"` reaches nothing. */
   const isRoot = target === path.resolve(rootDir);
   for (const dir of dirChain(rootDir, targetDir)) {
     let local = cache.get(dir);
@@ -161,29 +166,22 @@ export async function resolveConfig(
       local = await readDirConfig(dir);
       cache.set(dir, local);
     }
-    // A directory holding a package speaks for that package only - which is what keeps the root's
-    // own config off every package under it. A directory that holds none (an intermediate
-    // `packages/`, say) has no package to speak for, so its unmarked config can only mean
-    // "everything below" and still cascades.
-    const ownsAPackage = fs.existsSync(path.join(dir, 'package.json'));
-    const speaksForTarget = !ownsAPackage || path.resolve(dir) === target;
     /**
-     * `vars` is the **one** unmarked key that cascades past the package its directory speaks for,
-     * and it is not a hole in that rule - it is a key the rule was never about. The rule exists
-     * because a setting means different things to the two audiences (`run.build.after` on the root
-     * is a repo-wide bookend, on a package its own hook), so one declaration cannot serve both.
-     * `vars: {x: 1}` means the number 1 to everyone; there is no second audience to be wrong for.
+     * **Unmarked first, because it is the widest thing this level says** - and that is an inversion
+     * of the order this loop used to run in, where a directory's own plain config beat a selector
+     * declared beside it. Under the old reading "unmarked" meant *this package* and so was the
+     * narrower of the two; it now means *this package and everything below*, which is the wider.
+     * Precedence follows the audience, not the spelling, so it had to move.
      *
-     * Merged *before* this directory's selector blocks, so `"[*]": {vars: ...}` - which names the
-     * packages explicitly - overrides the same directory's plainer statement.
+     * Its position in the file is deliberately not consulted: a selector block written above the
+     * plain keys still wins. Unmarked is not a fourth selector - it is the level's floor, and the
+     * layer that feeds the directories below it.
      */
-    if (!speaksForTarget && local.vars !== undefined) mergeConfig(result, { vars: local.vars });
-    // Selectors next, so a directory's own unmarked config still wins over a selector declared
-    // alongside it - "this package" is a more specific statement than "packages matching a glob".
+    mergeConfig(result, stripSelectors(local));
+    /** Then the selector blocks, **in the order they were written** - see `matchingSelectors`. */
     if (packageName) {
       for (const block of matchingSelectors(local, packageName, isRoot)) mergeConfig(result, block);
     }
-    if (speaksForTarget) mergeConfig(result, stripSelectors(local));
   }
   /** Every layer has had its turn, so an append still outstanding has nothing left to attach to
    *  and becomes the value itself. Done here rather than per layer: until the chain is finished,
@@ -191,7 +189,7 @@ export async function resolveConfig(
   return finalizeConfig(result);
 }
 
-/** A config key naming packages rather than settings: `"[*]"`, `"[/]"`, `"[ws:*]"`, `"[pkg-a]"`. The
+/** A config key naming packages rather than settings: `"[*]"`, `"[/]"`, `"[pkg-a]"`. The
  *  brackets are what keep this space from colliding with real config keys - no setting starts with
  *  one - and in YAML they also mean the key always needs quoting (`"[*]":`), since a bare `[*]`
  *  parses as a flow sequence. */
@@ -200,71 +198,73 @@ export function isSelectorKey(key: string): boolean {
 }
 
 /**
- * **Which packages a selector speaks for.** Three audiences, because a repository has three:
+ * **Which packages a selector speaks for.** Two audiences, and the second is a glob:
  *
  * | | |
  * | --- | --- |
- * | `"[/]"` | the **root package** only |
- * | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | **every** package the glob matches, root included |
- * | `"[ws:*]"`, `"[workspace:pkg-*]"` | every **non-root** package the glob matches |
+ * | `"[/]"` | the **root package** alone |
+ * | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches |
  *
  * `/` for the root because that is what a repository root is called everywhere else, and it cannot
- * collide with a package name. `ws:` is a qualifier on the glob rather than a separate spelling of
- * `*`, so `"[ws:pkg-*]"` means what it looks like.
+ * collide with a package name.
  *
- * **`"[*]"` includes the root, and that is a change from how it used to read.** Before, selectors
- * were not applied to the root at all, so `"[*]"` silently meant "the workspace packages" - a
- * catch-all with an exception nothing in the syntax mentioned. The three names above say which
- * audience is meant; `"[ws:*]"` is the old behaviour, now spelled.
+ * **The root is never selected by name, and that one rule removes two traps.** A glob matches
+ * package names, and the root is nobody's child - so `"[my-*]"` cannot quietly pick up a repository
+ * whose root package happens to be called `my-repo`, and `"[*]"` cannot hand a package-shaped
+ * setting to a root that has no build directory to apply it to. The root is addressed structurally
+ * or not at all.
+ *
+ * **`"[ws:*]"` / `"[workspace:*]"` is accepted and means exactly `"[*]"`.** The qualifier existed to
+ * say "not the root" back when a bare glob included it; the shape of the set says that now, so it
+ * has nothing left to add. Accepted rather than rejected because the two spellings resolve to the
+ * same packages - an error would be friction with no reader to protect.
  */
-export function parseSelector(key: string): { scope: 'root' | 'all' | 'workspace'; test: (name: string) => boolean } {
+export function parseSelector(key: string): { scope: 'root' | 'package'; test: (name: string) => boolean } {
   const inner = key.slice(1, -1);
   if (inner === ROOT_SELECTOR_INNER) return { scope: 'root', test: () => true };
-  for (const prefix of WORKSPACE_PREFIXES) {
-    if (inner.startsWith(prefix)) {
-      const re = globToRegExp(inner.slice(prefix.length));
-      return { scope: 'workspace', test: name => re.test(name) };
-    }
-  }
-  const re = globToRegExp(inner);
-  return { scope: 'all', test: name => re.test(name) };
+  const re = globToRegExp(stripWorkspacePrefix(inner));
+  return { scope: 'package', test: name => re.test(name) };
 }
 
 /** The glob inside a selector key, as a `RegExp` anchored at both ends - so `"[*-dialect]"` matches
  *  `mysql-dialect` but not `my-dialect-helper`. Glob rather than regex, to match every other
  *  pattern in rman (`allowBranch`, `changelog.tagPattern`, `clean.include`). */
 export function selectorToRegExp(key: string): RegExp {
-  return globToRegExp(key.slice(1, -1));
+  return globToRegExp(stripWorkspacePrefix(key.slice(1, -1)));
 }
 
 /**
- * Every selector block in `config` that speaks for this package, in increasing precedence.
+ * Every selector block in `config` that speaks for this package, **in the order they were written**
+ * - later wins, the way `overrides` works in eslint, prettier and babel, and the way a `.gitignore`
+ * rule does.
  *
- * Order, lowest first: **`"[*]"`, then a catch-all `"[ws:*]"`, then the rest in declaration
- * order** - so narrowing the audience wins over the widest one, a named package or `"[/]"` wins
- * over both, and two equally specific globs resolve by the order they were written in. A catch-all
- * is ranked rather than left to declaration order on purpose: where you happen to write "everything"
- * should not decide whether it beats a rule about one package.
+ * **There used to be a ranking** (`"[*]"` lowest, then a catch-all `"[ws:*]"`, then the rest by
+ * declaration), so that "everything" could not beat a rule about one package by being written last.
+ * It was dropped because the ordering it implies does not exist: specificity only ranks sets that
+ * nest, and globs do not. For a package called `pkg-dialect`, neither `"[pkg-*]"` nor
+ * `"[*-dialect]"` contains the other, so any answer is an invented tiebreak - and an invented
+ * tiebreak is worse than the order the author typed. What was left was already declaration order
+ * with one case lifted out of it; this removes the exception rather than generalizing it.
+ *
+ * The cost, which the docs state rather than hide: a catch-all written *below* a narrower block now
+ * overrides it. Writing catch-alls first is a convention, not a rule - the file reads top to bottom.
  */
 function matchingSelectors(config: RmanConfig, packageName: string, isRoot: boolean): RmanConfig[] {
-  const matches: [number, RmanConfig][] = [];
+  const matches: RmanConfig[] = [];
   for (const [key, value] of Object.entries(config)) {
     if (!isSelectorKey(key) || !value || typeof value !== 'object') continue;
     const { scope, test } = parseSelector(key);
-    if (scope === 'root' && !isRoot) continue;
-    if (scope === 'workspace' && isRoot) continue;
-    if (!test(packageName)) continue;
-    matches.push([selectorRank(key), value as RmanConfig]);
+    if (scope === 'root' ? !isRoot : isRoot || !test(packageName)) continue;
+    matches.push(value as RmanConfig);
   }
-  return matches.sort((a, b) => a[0] - b[0]).map(([, block]) => block);
+  return matches;
 }
 
-/** 0 for `"[*]"`, 1 for a catch-all workspace selector, 2 for anything that names something. Equal
- *  ranks keep their declaration order, since `Array.prototype.sort` is stable. */
-function selectorRank(key: string): number {
-  if (key === CATCH_ALL) return 0;
-  const inner = key.slice(1, -1);
-  return WORKSPACE_PREFIXES.some(prefix => inner === `${prefix}*`) ? 1 : 2;
+/** `"[ws:*]"` and `"[workspace:*]"` are the pre-2.x spelling of "not the root", kept working
+ *  because they now name the same set a bare glob does. Stripped here so one code path serves both. */
+function stripWorkspacePrefix(inner: string): string {
+  for (const prefix of WORKSPACE_PREFIXES) if (inner.startsWith(prefix)) return inner.slice(prefix.length);
+  return inner;
 }
 
 function globToRegExp(glob: string): RegExp {
@@ -281,14 +281,11 @@ function stripSelectors(config: RmanConfig): RmanConfig {
   return result as RmanConfig;
 }
 
-const CATCH_ALL = '[*]';
-
 /** `"[/]"` - the root package, spelled the way a repository root is spelled everywhere else, and
  *  unable to collide with a package name. */
 const ROOT_SELECTOR_INNER = '/';
 
-/** Both spellings of "the workspace packages, not the root". The long one reads in a config file
- *  someone else has to understand; the short one is what gets typed. */
+/** Accepted spellings of the retired "not the root" qualifier - see `stripWorkspacePrefix`. */
 const WORKSPACE_PREFIXES = ['workspace:', 'ws:'] as const;
 
 function dirChain(rootDir: string, targetDir: string): string[] {
@@ -650,7 +647,7 @@ export const DEFERRED_PATHS = ['version.before', 'version.exec', 'version.after'
  * config:
  *
  * ```js
- * '[ws:*]': {
+ * '[*]': {
  *   clean: { include: ({ vars, value }) => [...value, vars.buildDir] },   // a value: called here
  *   run: { build: { after: ({ pkg }) => copyDocs(pkg) } },                // a step: called by `run`
  * }
