@@ -626,6 +626,20 @@ array or object, cannot see what it is overriding, and has to be written in a la
 editor support inside a quoted value. A function is checked by TypeScript, refactorable, and can
 import whatever it needs.
 
+> **A value function must compute and return, never act.** It runs while the config resolves -
+> which *every* command does - so one that copies a file copies it on `rman list`, `rman info` and
+> `rman config` as well, once per package, with nothing having asked. This is also why `file` offers
+> only `exists`/`resolve`/`resolveFirst` and will never gain a `copy` or `write`.
+>
+> Work belongs in a **step**, the one thing rman runs on purpose - and a step can be a function too,
+> so nothing is lost by keeping the two apart:
+>
+> ```js
+> clean: { include: ({ vars }) => [vars.buildDir] },            // computes. Right.
+> run: { build: { after: ({ pkg }) => fs.copyFileSync(...) } }, // acts. Also right - it is a step.
+> publish: { directory: () => { fs.mkdirSync('out'); ... } },   // acts at read time. Wrong.
+> ```
+
 #### Which functions are values, and which are code
 
 Both kinds live in one config, and **the key decides** - exactly as the key already decides whether

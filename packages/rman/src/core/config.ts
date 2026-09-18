@@ -318,6 +318,17 @@ function dirChain(rootDir: string, targetDir: string): string[] {
  *       # first of these that exists, and an error naming the config path if none do
  *       exec: 'tsc -b ${{ file.exists("tsconfig-build.json") || file.resolve("tsconfig.json") }}'
  * ```
+ *
+ * **Every member asks a question, and none may ever change anything - no `copy`, no `write`, no
+ * `mkdir`.** Not a matter of taste: this is evaluated when the config *resolves*, which every
+ * command does, so a member that acted would act on `rman list`, `rman info` and `rman config`.
+ *
+ * That has been tried, in the only way a missing function can be: a shared config reaching for a
+ * `file.copyMany(...)` that does not exist made **every** rman command exit 1 - and had it existed,
+ * the quieter outcome would have been files copied by `rman list`. Work belongs in a step
+ * (`run.<script>`'s slots, `version`'s hooks), which is the one place rman runs anything, and a
+ * step can now be a function - so there is nothing this would enable that is not already possible
+ * at the right moment.
  */
 export interface FileScope {
   /**
@@ -736,6 +747,12 @@ function isCodePath(at: (string | number)[]): boolean {
  * reported rather than half-resolved); spreading them into a new object would fire every one of
  * them on every call, including the ones a function never reads - and one of those throwing would
  * blame the wrong key.
+ *
+ * **It must compute and return, never act.** This runs while the repository's config resolves,
+ * which *every* command does - so a value function that writes a file writes it on `rman list`,
+ * `rman info` and `rman config` too, N times for N packages, with no command having asked for
+ * anything. That is the same reason `FileScope` offers no way to change anything. Work goes in a
+ * step, which is the one thing rman runs on purpose and which can also be a function.
  */
 function callValueFn(
   fn: (arg: unknown) => unknown,

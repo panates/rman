@@ -783,6 +783,19 @@ underneath, which is the general form of `+key` and the one thing an expression 
   the key nor the reason. So `callValueFn`'s catch adds the reason itself when `previous` was
   undefined; it does not sniff the message.
 
+**A value function computes and returns; it must never act - and `FileScope` must never gain a way
+to.** Both halves are the same rule, and the rule is about *when*: this runs while the config
+resolves, which every command does, so anything a value function or a `file` member *did* would
+happen on `rman list`, `rman info` and `rman config`, once per package, with nothing having asked
+for it. `file` therefore stays three read-only members (`exists`, `resolve`, `resolveFirst`) - **do
+not add `copy`, `write` or `mkdir`**, however reasonable the request sounds.
+
+It has already been tried, in the only way a function that does not exist can be: a shared config
+reaching for `file.copyMany(...)` made **every** rman command exit 1 (measured, `list` and `info`
+among them). The loud failure was the lucky outcome - had the member existed, `rman list` would have
+quietly copied files. And nothing is lost by refusing: work goes in a step, which is the one thing
+rman runs on purpose, and a step can be a function too.
+
 ## Function steps: a step written as JavaScript
 
 [`src/core/run-step.ts`](packages/rman/src/core/run-step.ts). `run.<script>.before`/`.exec`/`.after`,

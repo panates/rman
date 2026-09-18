@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { defineConfig, readDirConfig, resolveConfig } from '../../src/core/config.js';
+import { createFileScope, defineConfig, readDirConfig, resolveConfig } from '../../src/core/config.js';
 import type { RmanConfig } from '../../src/interfaces/rman-config.interface.js';
 
 function mkTmp(): string {
@@ -237,6 +237,40 @@ describe('core/config', () => {
        *  plugin loaded to type its own fixture. */
       const config: RmanConfig = { logLevel: 'silent', group: false };
       expect(defineConfig(config)).toBe(config);
+    });
+  });
+
+  describe('createFileScope()', () => {
+    /**
+     * **Pinned, not merely documented.** `file` is evaluated while the config *resolves*, which
+     * every command does - so a member that changed anything would change it on `rman list`,
+     * `rman info` and `rman config`, once per package, with nothing having asked. A comment saying
+     * so can be contradicted by the next person adding a plausible-sounding `copy`; this fails.
+     *
+     * Work belongs in a step, which is the one thing rman runs on purpose - and a step can be a
+     * function too, so refusing this costs nothing.
+     */
+    it('exposes exactly three members, all of them questions', () => {
+      const scope = createFileScope(tmp());
+      expect(Object.keys(scope).sort()).toEqual(['exists', 'resolve', 'resolveFirst']);
+    });
+
+    it('leaves the directory untouched - nothing here creates, copies or writes', () => {
+      const dir = tmp();
+      fs.writeFileSync(path.join(dir, 'present.txt'), 'x');
+      const before = fs.readdirSync(dir).sort();
+
+      const scope = createFileScope(dir);
+      expect(scope.exists('present.txt')).toBe(path.join(dir, 'present.txt'));
+      /** A miss is `''` rather than `undefined`, so `a || b` picks the first that exists and a miss
+       *  stays clear of the nullish-inside-a-string guard. */
+      expect(scope.exists('missing.txt')).toBe('');
+      expect(scope.resolve('present.txt')).toBe(path.join(dir, 'present.txt'));
+      expect(() => scope.resolve('missing.txt')).toThrow(/found nothing/);
+      expect(scope.resolveFirst('missing.txt', 'present.txt')).toBe(path.join(dir, 'present.txt'));
+      expect(() => scope.resolveFirst('missing.txt', 'gone.txt')).toThrow(/found none of/);
+
+      expect(fs.readdirSync(dir).sort()).toEqual(before);
     });
   });
 });
