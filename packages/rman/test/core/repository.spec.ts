@@ -1188,6 +1188,58 @@ describe('core/Repository', () => {
       expect(cfg.i).toBe('https://example.test');
     });
 
+    /**
+     * XML comes back as a **DOM**, not an object, and that asymmetry is the honest shape rather
+     * than an omission: an element can repeat, carry attributes and hold text at once, so any
+     * flattening picks a convention and is wrong for somebody.
+     */
+    it('parses xml to a DOM, by extension and by the project-file names', async () => {
+      const dir = readFixture(
+        {
+          '[ws:*]': {
+            pom: '${{ read("pom.xml").getElementsByTagName("version")[0].textContent }}',
+            /** A .NET project file is XML whatever its extension calls itself. */
+            csproj: '${{ read("app.csproj").getElementsByTagName("Version")[0].textContent }}',
+            ns: '${{ read("pom.xml").getElementsByTagNameNS("http://maven.apache.org/POM/4.0.0","artifactId")[0].textContent }}',
+          },
+        },
+        {
+          'packages/pkg-a/pom.xml':
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><artifactId>demo</artifactId>' +
+            '<version>2.4.1</version></project>',
+          'packages/pkg-a/app.csproj': '<Project><PropertyGroup><Version>9.0.2</Version></PropertyGroup></Project>',
+        },
+      );
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(cfg.pom).toBe('2.4.1');
+      expect(cfg.csproj).toBe('9.0.2');
+      expect(cfg.ns).toBe('demo');
+    });
+
+    it('survives being frozen, including a tag first queried after the freeze', async () => {
+      // The case that would have broken it: `getElementsByTagName` returns a *live* collection, so
+      // a DOM frozen on the way into the cache has to still answer a tag nobody asked about yet.
+      const dir = readFixture({}, { 'p.xml': '<a><b id="1">x</b><b id="2">y</b></a>' });
+      const repo = await Repository.create(dir);
+      const doc = repo.configScope(repo.getPackages()[0]).read(path.join(dir, 'p.xml')) as Document;
+
+      expect(Object.isFrozen(doc)).toBe(true);
+      const found = doc.getElementsByTagName('b');
+      expect(found.length).toBe(2);
+      expect(found[1].getAttribute('id')).toBe('2');
+      expect(found[0].textContent).toBe('x');
+    });
+
+    it('refuses a malformed xml file instead of handing back what it salvaged', async () => {
+      // xmldom reports problems through a handler and otherwise carries on, so without the guard a
+      // truncated file came back as a half-parsed DOM and the expression reading it found nothing.
+      const dir = readFixture(
+        { '[ws:*]': { v: '${{ read("broken.xml").documentElement.nodeName }}' } },
+        { 'packages/pkg-a/broken.xml': '<project><version>1.0</version>' },
+      );
+      await expect(Repository.create(dir)).rejects.toThrow(/could not parse .*broken\.xml as xml: unclosed xml tag/);
+    });
+
     it('reads the same file once for the whole repository, not once per package', async () => {
       // `interpolateConfig` runs once *per package*, so a cache living in one pass would not have
       // helped across them at all - which is why it lives on the `Repository`.

@@ -135,11 +135,26 @@ repo-wide bookend run once at the repository root. One declaration feeding both 
     rather than a guess at JSON. Resolved against `pkg.dirname` like `file`, and it **throws** when
     absent like `file.resolve` - `file.exists(p) ? read(p) : fallback` is the optional form, so no
     second function is needed.
-    - **`.env` and `.toml` are out, and the reasons differ.** `.toml` would be a new dependency
-      (js-yaml and ini are already here, so "no new parsers" is not the line). `.env` is the real
-      rule: `env` is already in scope, and a `.env` file exists to be loaded *into* an environment
-      by something else - reading one as data would mean two different things called the
-      environment.
+    - **`.env` is the one exclusion on principle**: `env` is already in scope, and a `.env` file
+      exists to be loaded *into* an environment by something else - reading one as data would mean
+      two different things called the environment. Nothing else is excluded by rule. "No new
+      parsers" was tried as a line and did not survive `xml`, which *is* a new dependency
+      (`@xmldom/xmldom`) and earns its place because a `pom.xml` or `.csproj` holds a version
+      exactly the way a `package.json` does - which is the whole point of a language-agnostic rman.
+      A format asking to be added is asking on those terms, not on the parser's.
+    - **`xml` returns a DOM, not an object, and that asymmetry is deliberate.** An element can
+      repeat, carry attributes and hold text at once, so any flattening picks a convention (`$`?
+      `_text`? array-or-not?) and is wrong for somebody. Recognized by extension for the whole
+      project-file family (`.csproj`, `.props`, `.nuspec`, `.plist`, ...), since a project file is
+      XML whatever its extension calls itself.
+      - **Freezing a DOM is safe - measured, not assumed.** A frozen `@xmldom/xmldom` document still
+        answers `getElementsByTagName` for a tag first asked about *after* the freeze (the
+        live-collection case that would have broken it), reads attributes, resolves namespaces,
+        walks `childNodes` and serialises back.
+      - **A malformed file must throw.** xmldom reports problems through an `onError` handler and
+        otherwise carries on with what it salvaged, so without the check a truncated file came back
+        as a half-parsed DOM and the expression reading it simply found nothing - the silent-wrong
+        shape `read()` exists to avoid for JSON.
     - **`read('package.json')` works and is the wrong answer.** Which file a package's identity
       lives in belongs to the ecosystem, so that expression is already wrong in a Cargo package
       beside a Node one. `pkg.manifest` / `repository.package(n)?.manifest` is the answer.

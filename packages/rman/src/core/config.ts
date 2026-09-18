@@ -1,3 +1,4 @@
+import { DOMParser } from '@xmldom/xmldom';
 import fs from 'fs';
 import ini from 'ini';
 import * as yaml from 'js-yaml';
@@ -723,11 +724,18 @@ export function createReadScope(dirname: string, cache: Map<string, CachedFile>)
   };
 }
 
-/** What `read` can parse. **Not `.env`**: `env` is already in scope, and a `.env` file exists to be
- *  loaded *into* an environment by something else - a config reading one as data would mean two
- *  different things called the environment. `.toml` is out for the plainer reason that it would be
- *  a new dependency, where these three parsers are already here. */
-export type FileFormat = 'json' | 'yaml' | 'ini';
+/**
+ * What `read` can parse.
+ *
+ * **`.env` is deliberately absent, and that is the durable part of this list**: `env` is already in
+ * scope, and a `.env` file exists to be loaded *into* an environment by something else - a config
+ * reading one as data would mean two different things called the environment.
+ *
+ * Nothing else is excluded on principle. `xml` arrived because a `pom.xml` or a `.csproj` holds a
+ * version exactly the way a `package.json` does, and rman is language-agnostic; the earlier line
+ * ("no new parsers") did not survive it, since xmldom *is* a new one.
+ */
+export type FileFormat = 'json' | 'yaml' | 'ini' | 'xml';
 
 /** `read(path)`, or `read(path, 'ini')` for a file whose name does not say what it is (`.npmrc`). */
 export type ReadFile = (target: string, format?: FileFormat) => unknown;
@@ -996,18 +1004,58 @@ function formatOf(file: string): FileFormat {
   if (ext === '.json') return 'json';
   if (ext === '.yml' || ext === '.yaml') return 'yaml';
   if (ext === '.ini') return 'ini';
+  if (XML_EXTENSIONS.has(ext)) return 'xml';
   throw new Error(
     `read() cannot tell what "${path.basename(file)}" is from its name.\n` +
-      `  Name the format: read("${path.basename(file)}", "json" | "yaml" | "ini").`,
+      `  Name the format: read("${path.basename(file)}", "json" | "yaml" | "ini" | "xml").`,
   );
 }
+
+/** The XML family worth recognizing by name: a project file is XML whatever its extension calls
+ *  itself, and `.csproj`/`.pom` are what a .NET or Maven repository actually holds. Anything else
+ *  still reads with an explicit `read(p, 'xml')`. */
+const XML_EXTENSIONS = new Set(['.xml', '.csproj', '.vbproj', '.fsproj', '.props', '.targets', '.nuspec', '.plist']);
 
 function parseStructured(text: string, format: FileFormat): unknown {
   if (format === 'json') return JSON.parse(text);
   /** `load`, not `loadAll`: a multi-document stream has no single value to be, and js-yaml says so
    *  clearly enough ("expected a single document in the stream") to leave alone. */
   if (format === 'yaml') return yaml.load(text);
+  if (format === 'xml') return parseXml(text);
   return ini.parse(text);
+}
+
+/**
+ * A **DOM**, not an object - and the asymmetry with the other three formats is the honest shape
+ * rather than an omission.
+ *
+ * XML has no lossless object form: an element can repeat, carry attributes and hold text at the
+ * same time, so any flattening has to pick a convention (`$`? `_text`? array-or-not?) and be wrong
+ * for somebody. A DOM is the shape XML actually has, so a config reads it the way every other XML
+ * tool does:
+ *
+ * ```yaml
+ * version: '${{ read("pom.xml").getElementsByTagName("version")[0].textContent }}'
+ * ```
+ *
+ * **Freezing it is safe** - measured, not assumed: a frozen `@xmldom/xmldom` document still answers
+ * `getElementsByTagName` for a tag first asked about *after* the freeze (the live-collection case
+ * that would have broken it), reads attributes, resolves namespaces, walks `childNodes` and
+ * serialises back.
+ */
+function parseXml(text: string): unknown {
+  /** xmldom reports a malformed document through a handler and otherwise carries on with whatever
+   *  it could salvage - so without this, a broken file would come back as a half-parsed DOM and the
+   *  expression reading it would simply find nothing. `read()` throws for a broken JSON file; it has
+   *  to throw for this one too. */
+  const problems: string[] = [];
+  const doc = new DOMParser({
+    onError: (level, message) => {
+      if (level !== 'warning') problems.push(message.split('\n')[0]);
+    },
+  }).parseFromString(text, 'text/xml');
+  if (problems.length) throw new Error(problems[0]);
+  return doc;
 }
 
 function deepFreeze(value: unknown): void {

@@ -557,11 +557,32 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `read(path)` | parsed contents, format taken from the extension |
 | `read(path, format)` | for a name that does not say - `read('.npmrc', 'ini')` |
 
-`.json`, `.yml` / `.yaml` and `.ini`. **Not `.env`**: `env` is already in scope, and a `.env` file
-exists to be loaded *into* an environment by something else - a config reading one as data would
-mean two different things called the environment. `.toml` is out for the plainer reason that it
-would be a new dependency, where these three parsers are already here. An extension it does not
-recognize is an error naming the three, never a guess at JSON.
+| format | extensions |
+| --- | --- |
+| `json` | `.json` |
+| `yaml` | `.yml`, `.yaml` |
+| `ini` | `.ini` |
+| `xml` | `.xml`, `.csproj`, `.vbproj`, `.fsproj`, `.props`, `.targets`, `.nuspec`, `.plist` |
+
+An extension it does not recognize is an error naming the four, never a guess at JSON.
+
+**`.env` is deliberately absent**, and that is the one exclusion on principle: `env` is already in
+scope, and a `.env` file exists to be loaded *into* an environment by something else, so reading one
+as data would mean two different things called the environment.
+
+**XML comes back as a DOM**, not a plain object - the asymmetry is the honest shape rather than an
+omission. An element can repeat, carry attributes and hold text at the same time, so any flattening
+has to pick a convention and be wrong for somebody. So it reads the way every other XML tool reads:
+
+```yaml
+"[ws:*]":
+  version:
+    stamp: '${{ read("pom.xml").getElementsByTagName("version")[0].textContent }}'
+```
+
+A malformed XML file is an error, not a half-parsed document: `@xmldom/xmldom` reports problems
+through a handler and otherwise carries on with whatever it salvaged, so without that check a
+truncated file would come back as a DOM whose contents are simply missing.
 
 Resolved against `pkg.dirname`, like `file` - so one `"[*]"` declaration reads each package's own
 copy. A repository-level file is reached explicitly:
