@@ -67,7 +67,7 @@ export namespace RmanNodeConfig {
  *
  * export default defineConfig({
  *   plugins: ['rman-node'],
- *   '[ws:*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
+ *   '[*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
  * });
  * ```
  *

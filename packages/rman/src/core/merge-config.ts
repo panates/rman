@@ -195,7 +195,7 @@ function assignMerged(
    *
    * ```js
    * '[*]':    { clean: { include: ({ vars }) => [vars.buildDir] } }
-   * '[ws:*]': { clean: { include: "${{ [...value, pkg.basename + '.log'] }}" } }
+   * '[*]': { clean: { include: "${{ [...value, pkg.basename + '.log'] }}" } }
    * ```
    *
    * Chained here rather than at resolution time because only the merge knows the order of the

@@ -54,7 +54,8 @@ describe('commands/config', () => {
   /**
    * A repository whose config only makes sense *after* resolution - that is the whole point of this
    * command. `"[*]"` speaks for both packages, `pkg-a` overrides one key of it and appends to
-   * another, and `vars` cascades to everything.
+   * another, `vars` cascades like any other unmarked key, and `"[/]"` keeps the two repo-wide
+   * statements at the root - which is where a repository migrating off the old cascade puts them.
    */
   function fixture(): string {
     const dir = tmp();
@@ -62,10 +63,9 @@ describe('commands/config', () => {
     fs.writeFileSync(
       path.join(dir, '.rmanrc'),
       JSON.stringify({
-        allowBranch: ['main'],
         vars: { registry: 'https://example.test' },
+        '[/]': { allowBranch: ['main'], version: { exec: 'echo releasing ${{ pkg.targetVersion }}' } },
         '[*]': { run: { build: { exec: 'tsc -b', before: 'echo shared' } } },
-        version: { exec: 'echo releasing ${{ pkg.targetVersion }}' },
       }),
     );
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
@@ -104,9 +104,9 @@ describe('commands/config', () => {
     expect(config.run.build.exec).toBe('tsc -b tsconfig-build.json');
     expect(config.run.build.before).toEqual(['echo shared', 'echo mine']);
     expect(config.group).toBe('a-line');
-    /** `vars` is the one unmarked key that reaches every package. */
+    /** An unmarked key reaches every package below - `vars` is no longer the exception it was. */
     expect(config.vars).toEqual({ registry: 'https://example.test' });
-    /** Root-only keys are not the package's. */
+    /** And a `"[/]"` key stays at the root, which is the only way one does now. */
     expect(config.allowBranch).toBeUndefined();
   });
 
@@ -128,9 +128,9 @@ describe('commands/config', () => {
     expect(lines[0]).toContain('root');
     const config = parsed(lines);
     expect(config.allowBranch).toEqual(['main']);
-    /** `"[*]"` includes the root, so its `run` block is here too - which is exactly the kind of
-     *  thing this command exists to show. `"[ws:*]"` is the selector that leaves the root out. */
-    expect(config.run.build.exec).toBe('tsc -b');
+    /** `"[*]"` names the packages *below*, so the root does not carry their build block - which is
+     *  exactly the kind of thing this command exists to make visible. */
+    expect(config.run).toBeUndefined();
   });
 
   it('falls back to the root in a directory that holds no package', async () => {

@@ -12,9 +12,10 @@ plugins: ['./packages/node/build/index.js']
 # One version line for the whole repository (rman's default) - `rman` and `rman-node` release
 # together, so a config written for one can never name a version of the other that does not exist.
 
-# `[ws:*]`, not `[*]`: both packages, and *not* the repository root, which has no build directory
-# of its own and nothing to publish. `[*]` now includes the root - that is what `[ws:*]` is for.
-'[ws:*]':
+# `[*]`, not an unmarked block: both packages, and *not* the repository root, which has no build
+# directory of its own and nothing to publish. A glob names the packages below; the root is nobody's
+# child, so it is reached only by an unmarked key or by `[/]`.
+'[*]':
   # `publish` ships the build directory, and generates the manifest there itself.
   publish:
     directory: build

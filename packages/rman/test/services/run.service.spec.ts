@@ -320,19 +320,24 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('ROOT-POST-RAN'))).toBe(false);
     });
 
-    it('a root-level skip is the root\'s own; a "[*]" one reaches the packages', async () => {
-      // The split in one test: the same key means "the repo-wide bookend" at the root and "this
-      // package" under a selector, so one declaration must never silently be read as the other.
+    /**
+     * **`run` is the subtree the cascade costs something in, so this pins both halves.** The same
+     * key means "the repo-wide bookend" at the root and "this package's hook" under a package, and
+     * an unmarked statement now reaches both - which is right for nearly every key and wrong for
+     * this one. `"[/]"` is where a bookend belongs, and this is the one migration that is not
+     * mechanical.
+     */
+    it('a "[/]" skip is the root\'s own; an unmarked one now reaches the packages', async () => {
       const onlyRoot = await fixture(
         { 'pkg-a': { scripts: { build: quiet('echo pkg-a-ran') } } },
-        { rmanrc: { run: { build: { skip: true } } } },
+        { rmanrc: { '[/]': { run: { build: { skip: true } } } } },
       );
       const a = await captureLogs(() => RunService.runScript(onlyRoot, 'build', { progress: false }));
       expect(a.lines.some(l => l.includes('pkg-a-ran'))).toBe(true);
 
       const allPackages = await fixture(
         { 'pkg-a': { scripts: { build: quiet('echo pkg-a-ran') } } },
-        { rmanrc: { '[*]': { run: { build: { skip: true } } } } },
+        { rmanrc: { run: { build: { skip: true } } } },
       );
       const b = await captureLogs(() => RunService.runScript(allPackages, 'build', { progress: false }));
       expect(b.lines.some(l => l.includes('pkg-a-ran'))).toBe(false);

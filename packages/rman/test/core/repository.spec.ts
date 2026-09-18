@@ -402,7 +402,7 @@ describe('core/Repository', () => {
   });
 
   describe('config cascading (pkg.config)', () => {
-    it('speaks for three audiences: "[/]" the root, "[ws:*]" the others, "[*]" all of them', async () => {
+    it('cascades an unmarked key to every package, and keeps a "[/]" one at the root', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       /** Marks the repository root: `Workspace.findRoot` looks for an `.rmanrc*` or a `.git`,
@@ -410,30 +410,28 @@ describe('core/Repository', () => {
       fs.writeFileSync(
         path.join(dir, '.rmanrc'),
         JSON.stringify({
-          foo: 'root-only',
-          '[*]': { everyone: 'yes' },
+          everyone: 'from-plain',
+          '[*]': { children: 'yes' },
           '[/]': { onlyRoot: 'yes' },
-          '[ws:*]': { onlyWorkspace: 'yes' },
         }),
       );
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-      fs.writeFileSync(path.join(dir, 'packages/b/.rmanrc'), JSON.stringify({ onlyWorkspace: 'b-own' }));
+      fs.writeFileSync(path.join(dir, 'packages/b/.rmanrc'), JSON.stringify({ children: 'b-own' }));
 
       const repo = await Repository.create(dir);
-      /** The root: its own unmarked keys, plus `"[*]"` and `"[/]"` - and **not** `"[ws:*]"`.
-       *  `"[*]"` reaching the root is the change here; before, selectors were not applied to the
-       *  root at all, so `"[*]"` quietly meant what `"[ws:*]"` now says. */
-      expect(repo.config).toEqual({ foo: 'root-only', everyone: 'yes', onlyRoot: 'yes' });
-      expect(repo.getPackage('pkg-a')?.config).toEqual({ everyone: 'yes', onlyWorkspace: 'yes' });
-      /** And a package's own unmarked config still beats any selector aimed at it. */
-      expect(repo.getPackage('pkg-b')?.config).toEqual({ everyone: 'yes', onlyWorkspace: 'b-own' });
+      /** The root: the unmarked key, which now reaches everyone, plus `"[/]"` - and **not** `"[*]"`,
+       *  which names the packages below and the root is nobody's child. */
+      expect(repo.config).toEqual({ everyone: 'from-plain', onlyRoot: 'yes' });
+      expect(repo.getPackage('pkg-a')?.config).toEqual({ everyone: 'from-plain', children: 'yes' });
+      /** And a directory level closer to the package still wins. */
+      expect(repo.getPackage('pkg-b')?.config).toEqual({ everyone: 'from-plain', children: 'b-own' });
     });
 
-    it('keeps the root out of a "[ws:*]" block even when it is the only selector', async () => {
+    it('keeps the root out of a "[*]" block even when it is the only selector', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[ws:*]': { group: 'lib' } }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { group: 'lib' } }));
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
 
       const repo = await Repository.create(dir);
@@ -441,7 +439,29 @@ describe('core/Repository', () => {
       expect(repo.getPackage('pkg-a')?.config.group).toBe('lib');
     });
 
-    it('takes the long spelling too, and a workspace selector may carry its own glob', async () => {
+    /**
+     * A glob names packages, and the root is not among them however it is spelled - so a repository
+     * whose root package is called `my-repo` cannot have `"[my-*]"` quietly reach it. That is the
+     * trap the structural rule removes, and it is worth a spec of its own because the old reading
+     * (`"[*]"` and every glob including the root) made it real.
+     */
+    it('never matches the root by name, however well the glob fits it', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'my-repo', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[my-*]': { group: 'matched' } }));
+      writeJson(dir, 'packages/a/package.json', { name: 'my-pkg', version: '1.0.0' });
+
+      const repo = await Repository.create(dir);
+      expect(repo.config.group).toBeUndefined();
+      expect(repo.getPackage('my-pkg')?.config.group).toBe('matched');
+    });
+
+    /**
+     * `ws:`/`workspace:` said "not the root" back when a bare glob included it. The shape of the set
+     * says that now, so the qualifier is retired - but kept working, because both spellings resolve
+     * to the same packages and an error would be friction with nothing to protect.
+     */
+    it('still takes the retired "ws:"/"workspace:" qualifier, as a synonym for a bare glob', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       fs.writeFileSync(
@@ -454,21 +474,56 @@ describe('core/Repository', () => {
       const repo = await Repository.create(dir);
       expect(repo.config.group).toBeUndefined();
       expect(repo.getPackage('pkg-a')?.config.group).toBe('all-ws');
-      /** A glob-carrying workspace selector names something, so it outranks the catch-all whatever
-       *  order they were written in. */
+      /** Written second, so it wins - by declaration order, like any other pair of blocks. */
       expect(repo.getPackage('pkg-b')?.config.group).toBe('just-b');
     });
 
-    it('in a single-package repository the root is the one package, so "[ws:*]" reaches nothing', async () => {
+    /**
+     * **Declaration order decides, and there is no ranking behind it.** A catch-all written below a
+     * narrower block overrides it - stated rather than hidden, because the ranking that used to
+     * prevent this was an exception rather than a principle: specificity only orders sets that nest,
+     * and globs do not (`"[pkg-*]"` and `"[*-dialect]"` both match `pkg-dialect`, neither contains
+     * the other). Both orders are asserted, or the test would pass against a ranking too.
+     */
+    it('applies selector blocks in the order they were written, later winning', async () => {
+      async function groupOf(blocks: object): Promise<string | undefined> {
+        const dir = tmp();
+        writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+        fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(blocks));
+        writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+        return (await Repository.create(dir)).getPackage('pkg-a')?.config.group as string | undefined;
+      }
+
+      expect(await groupOf({ '[*]': { group: 'star' }, '[pkg-a]': { group: 'named' } })).toBe('named');
+      expect(await groupOf({ '[pkg-a]': { group: 'named' }, '[*]': { group: 'star' } })).toBe('star');
+    });
+
+    /**
+     * **The unmarked block is the level's floor, not a fourth selector**, so where it sits in the
+     * file changes nothing - written below a selector block, it still loses to it. Anything else
+     * would make a directory's cascade to the levels below depend on key order.
+     */
+    it('keeps an unmarked key underneath the selectors even when it is written after them', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { group: 'star' }, group: 'plain' }));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.group).toBe('star');
+      expect(repo.config.group).toBe('plain');
+    });
+
+    it('in a single-package repository the root is the one package, so "[*]" reaches nothing', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'solo', version: '1.0.0' });
       fs.writeFileSync(
         path.join(dir, '.rmanrc'),
-        JSON.stringify({ '[*]': { star: 'yes' }, '[/]': { root: 'yes' }, '[ws:*]': { ws: 'yes' } }),
+        JSON.stringify({ plain: 'yes', '[*]': { star: 'yes' }, '[/]': { root: 'yes' } }),
       );
 
       const repo = await Repository.create(dir);
-      expect(repo.config).toEqual({ star: 'yes', root: 'yes' });
+      expect(repo.config).toEqual({ plain: 'yes', root: 'yes' });
     });
 
     it('evaluates ${{ ... }} per package, in every string value', async () => {
@@ -742,7 +797,7 @@ describe('core/Repository', () => {
       fs.writeFileSync(
         path.join(dir, '.rmanrc'),
         JSON.stringify({
-          '[ws:*]': {
+          '[*]': {
             run: {
               build: { exec: 'tsc -b ${{ file.exists("tsconfig-build.json") || file.resolve("tsconfig.json") }}' },
               // "" rather than undefined precisely so a miss is falsy and never reaches the
@@ -806,7 +861,7 @@ describe('core/Repository', () => {
       fs.writeFileSync(
         path.join(dir, '.rmanrc'),
         JSON.stringify({
-          '[ws:*]': {
+          '[*]': {
             run: {
               build: { exec: 'tsc -b ${{ file.resolveFirst("tsconfig-build.json", "tsconfig.json") }}' },
             },
@@ -837,7 +892,7 @@ describe('core/Repository', () => {
       fs.writeFileSync(
         path.join(dir, '.rmanrc'),
         JSON.stringify({
-          '[ws:*]': { run: { build: { exec: '${{ file.resolveFirst("a.json", "b.json") }}' } } },
+          '[*]': { run: { build: { exec: '${{ file.resolveFirst("a.json", "b.json") }}' } } },
         }),
       );
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
@@ -853,7 +908,7 @@ describe('core/Repository', () => {
       fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
       fs.writeFileSync(
         path.join(dir, '.rmanrc'),
-        JSON.stringify({ '[ws:*]': { run: { build: { exec: 'tsc -b ${{ file.resolve("tsconfig.json") }}' } } } }),
+        JSON.stringify({ '[*]': { run: { build: { exec: 'tsc -b ${{ file.resolve("tsconfig.json") }}' } } } }),
       );
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
 
@@ -984,7 +1039,7 @@ describe('core/Repository', () => {
     }
 
     it('is called with the same scope an expression gets, per package', async () => {
-      const dir = jsFixture(`{ '[ws:*]': { group: ({ pkg, repository }) => pkg.name + '@' + repository.basename } }`, [
+      const dir = jsFixture(`{ '[*]': { group: ({ pkg, repository }) => pkg.name + '@' + repository.basename } }`, [
         'pkg-a',
         'pkg-b',
       ]);
@@ -1018,20 +1073,20 @@ describe('core/Repository', () => {
      */
     it('hands a layer what the layers below it resolved to, as `value`', async () => {
       const dir = jsFixture(
-        `{ '[*]':    { version: { stamp: () => ['build'] } },
-           '[ws:*]': { version: { stamp: ({ value, pkg }) => [...value, pkg.name + '.log'] } } }`,
+        `{ version: { stamp: () => ['build'] },
+           '[*]':   { version: { stamp: ({ value, pkg }) => [...value, pkg.name + '.log'] } } }`,
       );
       const repo = await Repository.create(dir);
       expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['build', 'pkg-a.log']);
-      /** The root is not in `"[ws:*]"`, so it stops at the first layer - which is also the case
+      /** The root is not in `"[*]"`, so it stops at the unmarked layer - which is also the case
        *  that proves the chain is per-package rather than computed once. */
       expect(repo.config.version?.stamp).toEqual(['build']);
     });
 
     it('resolves the inherited value before handing it over, expressions included', async () => {
       const dir = jsFixture(
-        `{ '[*]':    { version: { stamp: ['\${{ pkg.name }}-base'] } },
-           '[ws:*]': { version: { stamp: ({ value }) => [...value, 'extra'] } } }`,
+        `{ version: { stamp: ['\${{ pkg.name }}-base'] },
+           '[*]':   { version: { stamp: ({ value }) => [...value, 'extra'] } } }`,
       );
       const repo = await Repository.create(dir);
       expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['pkg-a-base', 'extra']);
@@ -1105,12 +1160,12 @@ describe('core/Repository', () => {
       // real list - which is why the original "an expression cannot carry an array back" reasoning
       // for making `value` function-only was wrong.
       const dir = jsFixture(
-        `{ '[*]':    { version: { stamp: ['base'] } },
-           '[ws:*]': { version: { stamp: "\${{ [...value, pkg.name] }}" } } }`,
+        `{ version: { stamp: ['base'] },
+           '[*]':   { version: { stamp: "\${{ [...value, pkg.name] }}" } } }`,
       );
       const repo = await Repository.create(dir);
       expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['base', 'pkg-a']);
-      /** The root is outside `"[ws:*]"`, so it stops at the layer below - the chain is per package. */
+      /** The root is outside `"[*]"`, so it stops at the layer below - the chain is per package. */
       expect(repo.config.version?.stamp).toEqual(['base']);
     });
 
@@ -1118,8 +1173,8 @@ describe('core/Repository', () => {
       // One slot would have lost the bottom layer the moment the third arrived; the chain is a link
       // per layer for exactly this.
       const dir = jsFixture(
-        `{ '[*]':     { version: { stamp: ['a'] } },
-           '[ws:*]':  { version: { stamp: "\${{ [...value, 'b'] }}" } },
+        `{ version: { stamp: ['a'] },
+           '[*]':     { version: { stamp: "\${{ [...value, 'b'] }}" } },
            '[pkg-a]': { version: { stamp: ({ value }) => [...value, 'c'] } } }`,
       );
       const repo = await Repository.create(dir);
@@ -1376,9 +1431,9 @@ describe('core/Repository', () => {
     it('parses json, yaml and ini, choosing by extension', async () => {
       const dir = readFixture(
         {
-          /** `"[ws:*]"`, not `"[*]"`: these files live in the package, and the root has none of
+          /** `"[*]"`, not `"[*]"`: these files live in the package, and the root has none of
            *  them - the documented hazard of `"[*]"` now reaching the root as well. */
-          '[ws:*]': {
+          '[*]': {
             j: '${{ read("t.json").compilerOptions.outDir }}',
             y: '${{ read("c.yml").services.db.image }}',
             i: '${{ read(".npmrc", "ini").registry }}',
@@ -1406,7 +1461,7 @@ describe('core/Repository', () => {
     it('parses xml to a DOM, by extension and by the project-file names', async () => {
       const dir = readFixture(
         {
-          '[ws:*]': {
+          '[*]': {
             pom: '${{ read("pom.xml").getElementsByTagName("version")[0].textContent }}',
             /** A .NET project file is XML whatever its extension calls itself. */
             csproj: '${{ read("app.csproj").getElementsByTagName("Version")[0].textContent }}',
@@ -1444,7 +1499,7 @@ describe('core/Repository', () => {
       // xmldom reports problems through a handler and otherwise carries on, so without the guard a
       // truncated file came back as a half-parsed DOM and the expression reading it found nothing.
       const dir = readFixture(
-        { '[ws:*]': { v: '${{ read("broken.xml").documentElement.nodeName }}' } },
+        { '[*]': { v: '${{ read("broken.xml").documentElement.nodeName }}' } },
         { 'packages/pkg-a/broken.xml': '<project><version>1.0</version>' },
       );
       await expect(Repository.create(dir)).rejects.toThrow(/could not parse .*broken\.xml as xml: unclosed xml tag/);
@@ -1454,7 +1509,7 @@ describe('core/Repository', () => {
       // `interpolateConfig` runs once *per package*, so a cache living in one pass would not have
       // helped across them at all - which is why it lives on the `Repository`.
       const dir = readFixture(
-        { '[ws:*]': { v: '${{ read(path.join(repository.dirname, "shared.json")).shared }}' } },
+        { '[*]': { v: '${{ read(path.join(repository.dirname, "shared.json")).shared }}' } },
         { 'shared.json': '{"shared":"once"}' },
         ['pkg-a', 'pkg-b', 'pkg-c'],
       );
@@ -1511,17 +1566,17 @@ describe('core/Repository', () => {
     });
 
     it('throws with the file named, for every way it can fail', async () => {
-      const missing = readFixture({ '[ws:*]': { a: '${{ read("nope.json").x }}' } });
+      const missing = readFixture({ '[*]': { a: '${{ read("nope.json").x }}' } });
       await expect(Repository.create(missing)).rejects.toThrow(/read\("nope\.json"\) found nothing at/);
       /** And points at the composition that handles an absent file, rather than leaving the reader
        *  to find `file.exists` on their own. */
       await expect(Repository.create(missing)).rejects.toThrow(/Use file\.exists\(\) first/);
 
-      const unknown = readFixture({ '[ws:*]': { a: '${{ read("x.conf").y }}' } }, { 'packages/pkg-a/x.conf': 'x' });
+      const unknown = readFixture({ '[*]': { a: '${{ read("x.conf").y }}' } }, { 'packages/pkg-a/x.conf': 'x' });
       await expect(Repository.create(unknown)).rejects.toThrow(/cannot tell what "x\.conf" is from its name/);
 
       const broken = readFixture(
-        { '[ws:*]': { a: '${{ read("b.json").y }}' } },
+        { '[*]': { a: '${{ read("b.json").y }}' } },
         { 'packages/pkg-a/b.json': 'not json {' },
       );
       /** The parser says what is wrong with the syntax but never which file it was reading - and one
@@ -1531,7 +1586,7 @@ describe('core/Repository', () => {
 
     it('composes with file.exists for a file that may not be there', async () => {
       const dir = readFixture({
-        '[ws:*]': { a: '${{ file.exists("maybe.json") ? read("maybe.json").x : "absent" }}' },
+        '[*]': { a: '${{ file.exists("maybe.json") ? read("maybe.json").x : "absent" }}' },
       });
       const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
       expect(cfg.a).toBe('absent');

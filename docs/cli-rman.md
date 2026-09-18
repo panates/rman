@@ -116,7 +116,7 @@ toolchain - the plugin *and* the settings for it - and a repository writes one l
 
 ```json
 // node_modules/@myorg/rman-config/index.json
-{ "plugins": ["rman-node"], "[ws:*]": { "clean": { "include": "build" } } }
+{ "plugins": ["rman-node"], "[*]": { "clean": { "include": "build" } } }
 ```
 
 Measured end to end: with only that `extends`, `rman clean --dry-run` runs and `rman list` finds the

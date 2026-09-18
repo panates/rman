@@ -81,7 +81,7 @@ describe('cli: global --config', () => {
       path.join(dir, '.rmanrc'),
       JSON.stringify({
         packageManager: 'pnpm',
-        '[ws:*]': { run: { build: { exec: 'echo ran > ran.txt' } } },
+        '[*]': { run: { build: { exec: 'echo ran > ran.txt' } } },
         '[pkg-b]': { skip: true },
       }),
     );
