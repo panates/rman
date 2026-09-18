@@ -1,7 +1,7 @@
 {
   "name": "rman-repo",
   "description": "Repository manager - monorepo root",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "private": true,
   "type": "module",
   "workspaces": [
