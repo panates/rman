@@ -1051,6 +1051,45 @@ describe('core/Repository', () => {
       await expect(Repository.create(dir)).rejects.toThrow(/Config function in "group" failed: nope/);
     });
 
+    /**
+     * **The two contexts must expose the same names**, and this enumerates both rather than
+     * checking a list someone has to remember to extend.
+     *
+     * They cannot drift by accident today - the function's argument is `Object.create(context)`, so
+     * it *is* the expression context with one property added - but a member defined straight onto
+     * the argument would split them silently, and a config author would find a name that works in
+     * one spelling and not the other.
+     */
+    it('exposes exactly what an expression does, plus `value`', async () => {
+      const dir = jsFixture(
+        `{ '[*]': {
+             vars: { sample: 'x' },
+             publish: { directory: 'build' },
+             inExpr: '\${{ Object.keys(globalThis).sort().join(",") }}',
+             inFn: s => {
+               const names = new Set();
+               for (let o = s; o && o !== Object.prototype; o = Object.getPrototypeOf(o))
+                 for (const k of Object.keys(o)) names.add(k);
+               return [...names].sort().join(',');
+             },
+           } }`,
+      );
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, string>;
+      const inExpression = new Set(cfg.inExpr.split(','));
+      const inFunction = new Set(cfg.inFn.split(','));
+
+      /** Every scope binding, and the config's own top-level keys, in both. */
+      for (const name of ['pkg', 'repository', 'file', 'read', 'env', 'semver', 'path', 'git', 'vars', 'publish']) {
+        expect([name, inExpression.has(name)]).toEqual([name, true]);
+        expect([name, inFunction.has(name)]).toEqual([name, true]);
+      }
+
+      expect([...inExpression].filter(n => !inFunction.has(n))).toEqual([]);
+      /** `value` is the one deliberate asymmetry: an expression is a string, so it could not carry
+       *  an inherited array back anyway - measured, `${{ value }}` is `value is not defined`. */
+      expect([...inFunction].filter(n => !inExpression.has(n))).toEqual(['value']);
+    });
+
     it('keeps the `value` hint off a failure that never read `value`', async () => {
       // The hint used to go out with every failure of a first-layer function, so an unrelated
       // `TypeError` arrived wearing advice about spreading an inherited list - the exact

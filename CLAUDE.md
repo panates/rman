@@ -818,6 +818,14 @@ underneath, which is the general form of `+key` and the one thing an expression 
   through all of them untouched. The wrapper also copies `name`, since a step's log label is its
   function's name. The user's own function is never mutated: two packages inheriting the same
   shared-config function would otherwise share and overwrite one `prev`.
+- **The two contexts expose the same names, and that is an invariant with a test on it.** A value
+  function sees exactly what a `${{ }}` expression sees - every scope binding and the config's own
+  top-level keys - plus `value`, which is function-only because an expression is a string and could
+  not carry an inherited array back anyway (`${{ value }}` is `value is not defined`). They cannot
+  drift by accident, since the argument *is* the expression context with one property added; a
+  member defined straight onto the argument would split them silently, and a config author would
+  find a name that works in one spelling and not the other. The spec enumerates both rather than
+  checking a list someone has to remember to extend.
 - The argument object is built with the interpolation context as its **prototype**, never spread
   from it. Those top-level keys are lazy memoized getters (so key order in the file means nothing
   and a cycle is reported rather than half-resolved); spreading would fire every one on every call,

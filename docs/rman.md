@@ -696,9 +696,9 @@ export default {
 };
 ```
 
-It receives one object with everything an expression can name - `pkg`, `repository`, `file`, `env`,
-`semver`, `path`, plus **the config's own top-level keys** (`vars`, `publish`, …) - and one thing an
-expression has no way to express:
+It receives one object with **exactly** what an expression can name - `pkg`, `repository`, `file`,
+`read`, `env`, `semver`, `path`, `git`, plus the config's own top-level keys (`vars`, `publish`, …) -
+and one thing an expression has no way to express:
 
 | | |
 | --- | --- |
