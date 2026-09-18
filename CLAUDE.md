@@ -1162,6 +1162,36 @@ no version planner - so a spec that needs one **brings it**.
   - In CI as its own job on one Node version, beside `lint`: the answer does not vary by runtime, so
     running it inside the test matrix would pay for it three times.
 
+## The build must not need rman
+
+`npm run build` is `npm run build -w packages/rman && npm run build -w packages/node` - plain npm,
+in that order, never `rman build`.
+
+**It was `rman build`, and that is a bootstrap loop that only bites on the release that matters.**
+The `rman` on PATH is whatever is *published*, so a version introducing a config feature cannot
+build itself: the repository's own `.rmanrc.yml` already uses `plugins` and `"[ws:*]"`, neither of
+which 1.0.x understands. The failure lands exactly when a release is being cut.
+
+- **Order is the whole content of the script**, and `rman` first: `rman-node`'s build resolves
+  `rman` from `packages/rman/build/index.d.ts`, and each package's `postbuild` writes its published
+  manifest. `packages/node/tsconfig.json` does carry `references: [{ path: "../rman" }]`, so `tsc`
+  would order the *compilation* on its own - but not the pre/post hooks around it, which is what the
+  script sequences. Two packages, so the order is written out rather than derived; deriving it would
+  mean reimplementing the thing being bootstrapped away from.
+- npm runs each workspace's `prebuild`/`postbuild` itself, so nothing else moves.
+- **CI needed no change, and that was worth checking rather than assuming**: the release workflow
+  (`panates/github-actions/.github/workflows/node-release.yaml@v1`) calls rman nowhere - packages
+  come from `gh-repository-info`, publishing from `release-npm`, the release from `ncipollo`. Its
+  `build_script` input defaults to `npm run build`, so `npm run build` was the single place CI
+  depended on rman at all.
+- Measured from a clean tree with rman absent from PATH entirely: both packages build in ~2.6s, and
+  the output is what `rman build` produced - generated manifests, README/LICENSE copied, `bin` at
+  755, the version constant stamped (`node packages/rman/build/cli.js --version` reports the new
+  one).
+
+Dogfooding is not gone, only off the critical path: `npx rman build` still works once a build
+exists, and is the right thing to run when changing `RunService`.
+
 ## Linking a built package into another repository
 
 **`packages/<name>/build` *is* the published package** - `postbuild.cjs` writes a `package.json`
