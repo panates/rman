@@ -1,7 +1,7 @@
 {
   "name": "rman-node",
   "description": "Node.js support for rman - the commands and conventions that only mean something in a Node repository",
-  "version": "1.2.0",
+  "version": "1.2.3",
   "author": "Panates",
   "license": "MIT",
   "private": true,
