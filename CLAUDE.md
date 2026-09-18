@@ -129,6 +129,33 @@ repo-wide bookend run once at the repository root. One declaration feeding both 
       `_repoScope`, so no deep walk of a package spawns git.
     - This is the same trap `pkg.targetVersion` documents from the other side: *it* is a throwing
       getter, and being enumerable is what made a spread fire it.
+  - **`read(path[, format])`** answers what is *in* a structured file, where `file` answers where one
+    is. `.json`, `.yml`/`.yaml`, `.ini` by extension; a name that says nothing takes the format
+    explicitly (`read('.npmrc', 'ini')`), and an unrecognized extension is an error naming the three
+    rather than a guess at JSON. Resolved against `pkg.dirname` like `file`, and it **throws** when
+    absent like `file.resolve` - `file.exists(p) ? read(p) : fallback` is the optional form, so no
+    second function is needed.
+    - **`.env` and `.toml` are out, and the reasons differ.** `.toml` would be a new dependency
+      (js-yaml and ini are already here, so "no new parsers" is not the line). `.env` is the real
+      rule: `env` is already in scope, and a `.env` file exists to be loaded *into* an environment
+      by something else - reading one as data would mean two different things called the
+      environment.
+    - **`read('package.json')` works and is the wrong answer.** Which file a package's identity
+      lives in belongs to the ecosystem, so that expression is already wrong in a Cargo package
+      beside a Node one. `pkg.manifest` / `repository.package(n)?.manifest` is the answer.
+    - **Cached on the `Repository`, keyed by `mtimeNs:size` rather than by path.** Both halves were
+      measured. Per repository because `interpolateConfig` runs once *per package*, so a per-pass
+      cache never helps across them - twenty packages reading one shared file would parse it twenty
+      times. Keyed on the stat because **rman writes JSON while it runs**: `version` rewrites every
+      bumped manifest and then re-interpolates its deferred hooks, and a path-keyed cache would hand
+      those back as they were before the write. `statSync` is 1.3µs against 16.1µs for a read and
+      parse, so the guard costs a thirteenth of what it saves; `mtimeNs` is nanoseconds, so a
+      same-millisecond rewrite does not slip through.
+    - **Deeply frozen once on the way into the cache, and shared.** Every package gets the same
+      object, so a mutation would quietly change what the next one sees - the reason `pkg.manifest`
+      has always been a copy. Freezing beats copying here: a copy costs 5.6µs on *every* call,
+      freezing ~1µs *once*, and it turns the mistake into a `TypeError` rather than an effect at a
+      distance.
   - **`${{ }}`, never `{{ }}`**: a config value may carry `{{...}}` for something else entirely
     (`helm template --set tag={{.Values.tag}}`). A bare `{{...}}` is left alone. A literal `${{`
     comes from an expression producing it (`${{ '${{' }}`), as in GitHub Actions.
@@ -800,7 +827,11 @@ underneath, which is the general form of `+key` and the one thing an expression 
   case matters because a function written to extend an inherited list is also the *first* layer in a
   repository that inherits nothing, and V8 reports that as `value is not iterable`, naming neither
   the key nor the reason. So `callValueFn`'s catch adds the reason itself when `previous` was
-  undefined; it does not sniff the message.
+  undefined **and the function actually read it** - recorded through a getter, never inferred from
+  the message. Without that second condition the hint went out with *every* failure of a first-layer
+  function: a frozen-object `TypeError` from `read()` arrived wearing advice about spreading an
+  inherited list, which is precisely the send-the-reader-to-the-wrong-place mistake the hint exists
+  to prevent. Matching on V8's wording is the other way to get this wrong.
 
 **A value function computes and returns; it must never act - and `FileScope` must never gain a way
 to.** Both halves are the same rule, and the rule is about *when*: this runs while the config

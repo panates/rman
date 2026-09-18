@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: f30fea9
+git-commit: 546a809
 package-version: 1.1.1
 date: 2026-09-18
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff f30fea9..HEAD -- src/
+  git diff 546a809..HEAD -- src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -46,6 +46,7 @@ standalone utilities (`ChangeHashService`, `Logger`). For the CLI itself (comman
   - [`Package`](#package)
 - [Configuration (`.rmanrc` / `.rmanrc.yml`)](#configuration-rmanrc--rmanrcyml)
   - [JS config (`.rmanrc.cjs` / `.rmanrc.mjs` / `.rmanrc.js`)](#js-config-rmanrccjs--rmanrcmjs--rmanrcjs)
+  - [Reading a file (`read`)](#reading-a-file-read)
   - [Function steps](#function-steps)
   - [Function values](#function-values)
   - [Editor support (types)](#editor-support-types)
@@ -352,7 +353,8 @@ substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
 | --- | --- |
 | `pkg` | the package the config was resolved for |
 | `repository` | the repository - the root package's own fields, plus repo-level ones |
-| `file` | what is on disk, resolved against `pkg.dirname` - `exists` / `resolve` / `resolveFirst` |
+| `file` | where something is on disk, resolved against `pkg.dirname` - `exists` / `resolve` / `resolveFirst` |
+| `read` | what is *in* a structured file - see [Reading a file](#reading-a-file-read) |
 | `env` | a copy of `process.env`, so writing to it reaches nothing |
 | `semver` | rman's own `semver`, for `semver.major(pkg.version)` and friends |
 | `path` | Node's own `node:path`, the platform's flavour (`path.posix` / `path.win32` through it) |
@@ -538,6 +540,66 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 > ```
 >
 > Use `.rmanrc.mjs` if you want to call `defineConfig()` itself.
+
+### Reading a file (`read`)
+
+`file` says where something is; `read` says what is in it.
+
+```yaml
+"[ws:*]":
+  run:
+    build:
+      exec: 'tsc --outDir ${{ read("tsconfig.json").compilerOptions.outDir }}'
+```
+
+| | |
+| --- | --- |
+| `read(path)` | parsed contents, format taken from the extension |
+| `read(path, format)` | for a name that does not say - `read('.npmrc', 'ini')` |
+
+`.json`, `.yml` / `.yaml` and `.ini`. **Not `.env`**: `env` is already in scope, and a `.env` file
+exists to be loaded *into* an environment by something else - a config reading one as data would
+mean two different things called the environment. `.toml` is out for the plainer reason that it
+would be a new dependency, where these three parsers are already here. An extension it does not
+recognize is an error naming the three, never a guess at JSON.
+
+Resolved against `pkg.dirname`, like `file` - so one `"[*]"` declaration reads each package's own
+copy. A repository-level file is reached explicitly:
+
+```yaml
+"[ws:*]":
+  version:
+    stamp: '${{ read(path.join(repository.dirname, "release.json")).stampFiles }}'
+```
+
+**It throws when the file is absent**, as `file.resolve` does. Compose with `file.exists` when the
+absence is a case to handle rather than a mistake - no second function is needed:
+
+```yaml
+outDir: '${{ file.exists("tsconfig.json") ? read("tsconfig.json").compilerOptions.outDir : "build" }}'
+```
+
+**A manifest is `pkg.manifest`, not this.** `read('package.json')` works and is the wrong answer:
+which file a package's identity lives in belongs to the ecosystem, so that expression is already
+wrong in a Cargo package sitting beside a Node one. Use `pkg.manifest`,
+`repository.package(name)?.manifest`, or `repository.manifest`.
+
+#### Caching, and why it is keyed the way it is
+
+A file is parsed **once for the whole repository**, not once per package - config resolution runs
+once per package, so twenty packages reading one shared file would otherwise parse it twenty times.
+
+The cache key is the file's `mtimeNs` and size, not its path, because **rman writes JSON files while
+it runs**: `version` rewrites every bumped manifest and then re-interpolates its own deferred hooks.
+A cache that only remembered the path would hand those back as they were before the write. A `stat`
+costs 1.3µs against 16.1µs for a read and parse, so the check costs a thirteenth of what it saves.
+
+The result is **deeply frozen and shared between packages**. Changing it would quietly change what
+the next package sees, so it raises a `TypeError` instead; spread it first if you need a copy:
+
+```js
+const tweaked = { ...read('tsconfig.json'), extends: undefined };
+```
 
 ### Function steps
 

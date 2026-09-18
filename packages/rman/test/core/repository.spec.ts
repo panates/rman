@@ -1051,6 +1051,17 @@ describe('core/Repository', () => {
       await expect(Repository.create(dir)).rejects.toThrow(/Config function in "group" failed: nope/);
     });
 
+    it('keeps the `value` hint off a failure that never read `value`', async () => {
+      // The hint used to go out with every failure of a first-layer function, so an unrelated
+      // `TypeError` arrived wearing advice about spreading an inherited list - the exact
+      // send-the-reader-to-the-wrong-place mistake the hint exists to prevent. Whether `value` was
+      // read is *recorded*, not guessed from the message: matching on V8's wording is the other way
+      // to get this wrong.
+      const dir = jsFixture(`{ '[*]': { group: () => { throw new Error('unrelated'); } } }`);
+      await expect(Repository.create(dir)).rejects.toThrow(/failed: unrelated/);
+      await expect(Repository.create(dir)).rejects.not.toThrow(/`value` is undefined here/);
+    });
+
     /**
      * The other half of the rule, and the one that makes both halves usable: **the key decides**
      * whether a function is a value to compute now or code to run later. A step is left alone.
@@ -1096,6 +1107,135 @@ describe('core/Repository', () => {
    * *is* a package, and its other members describe the repository as a container of packages; a
    * branch name describes none of that, only the working tree they all sit in.
    */
+  /**
+   * `read(path)` - a structured file's **contents**, where `file` answers only where one is.
+   * Resolved against `pkg.dirname` like `file`, so one `"[*]"` declaration reads each package's own.
+   */
+  describe('${{ read() }}', () => {
+    function readFixture(config: unknown, files: Record<string, string> = {}, packages = ['pkg-a']): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(config));
+      for (const name of packages) writeJson(dir, `packages/${name}/package.json`, { name, version: '1.0.0' });
+      for (const [rel, content] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+        fs.writeFileSync(path.join(dir, rel), content);
+      }
+      return dir;
+    }
+
+    it('parses json, yaml and ini, choosing by extension', async () => {
+      const dir = readFixture(
+        {
+          /** `"[ws:*]"`, not `"[*]"`: these files live in the package, and the root has none of
+           *  them - the documented hazard of `"[*]"` now reaching the root as well. */
+          '[ws:*]': {
+            j: '${{ read("t.json").compilerOptions.outDir }}',
+            y: '${{ read("c.yml").services.db.image }}',
+            i: '${{ read(".npmrc", "ini").registry }}',
+          },
+        },
+        {
+          'packages/pkg-a/t.json': '{"compilerOptions":{"outDir":"lib"}}',
+          'packages/pkg-a/c.yml': 'services:\n  db:\n    image: postgres:16\n',
+          /** No extension to go on, so the caller names the format - the same shape
+           *  `version.stamp`'s `{ file, constant }` uses: infer, but let an entry say. */
+          'packages/pkg-a/.npmrc': 'registry=https://example.test\n',
+        },
+      );
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(cfg.j).toBe('lib');
+      expect(cfg.y).toBe('postgres:16');
+      expect(cfg.i).toBe('https://example.test');
+    });
+
+    it('reads the same file once for the whole repository, not once per package', async () => {
+      // `interpolateConfig` runs once *per package*, so a cache living in one pass would not have
+      // helped across them at all - which is why it lives on the `Repository`.
+      const dir = readFixture(
+        { '[ws:*]': { v: '${{ read(path.join(repository.dirname, "shared.json")).shared }}' } },
+        { 'shared.json': '{"shared":"once"}' },
+        ['pkg-a', 'pkg-b', 'pkg-c'],
+      );
+      const real = fs.readFileSync;
+      let reads = 0;
+      (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = function (file: never, ...rest: never[]) {
+        if (String(file).endsWith('shared.json')) reads++;
+        return (real as (...a: never[]) => string).call(fs, file, ...rest);
+      } as typeof fs.readFileSync;
+      try {
+        const repo = await Repository.create(dir);
+        expect(repo.getPackages().map(p => p.config.v)).toEqual(['once', 'once', 'once']);
+        expect(reads).toBe(1);
+      } finally {
+        (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = real;
+      }
+    });
+
+    /**
+     * Keyed on `mtimeNs:size`, not on the path - because **rman writes JSON files while it runs**.
+     * `version` rewrites every bumped manifest and then re-interpolates its own deferred hooks; a
+     * cache that only remembered the path would hand those back as they were before the write.
+     */
+    it('re-reads a file that changed under it', async () => {
+      const dir = readFixture({}, { 'shared.json': '{"v":"before"}' });
+      const repo = await Repository.create(dir);
+      const file = path.join(dir, 'shared.json');
+      const scope = repo.configScope(repo.getPackages()[0]);
+
+      expect((scope.read(file) as { v: string }).v).toBe('before');
+      fs.writeFileSync(file, '{"v":"after"}');
+      expect((scope.read(file) as { v: string }).v).toBe('after');
+    });
+
+    /**
+     * Every package is handed the **same** object, so one config mutating it would quietly change
+     * what the next package sees - the reason `pkg.manifest` has always been a copy. Frozen once on
+     * the way into the cache rather than copied on every call: copying costs 5.6µs per call against
+     * ~1µs once, and freezing turns the mistake into a `TypeError` instead of an effect at a
+     * distance.
+     */
+    it('hands every package the same frozen object', async () => {
+      const dir = readFixture({}, { 'shared.json': '{"list":[1]}' }, ['pkg-a', 'pkg-b']);
+      const repo = await Repository.create(dir);
+      const file = path.join(dir, 'shared.json');
+      const a = repo.configScope(repo.getPackages()[0]).read(file) as { list: number[] };
+      const b = repo.configScope(repo.getPackages()[1]).read(file);
+
+      expect(a).toBe(b);
+      expect(Object.isFrozen(a)).toBe(true);
+      /** Deeply - a nested array is the half a shallow freeze would leave writable. */
+      expect(Object.isFrozen(a.list)).toBe(true);
+      expect(() => a.list.push(2)).toThrow(TypeError);
+    });
+
+    it('throws with the file named, for every way it can fail', async () => {
+      const missing = readFixture({ '[ws:*]': { a: '${{ read("nope.json").x }}' } });
+      await expect(Repository.create(missing)).rejects.toThrow(/read\("nope\.json"\) found nothing at/);
+      /** And points at the composition that handles an absent file, rather than leaving the reader
+       *  to find `file.exists` on their own. */
+      await expect(Repository.create(missing)).rejects.toThrow(/Use file\.exists\(\) first/);
+
+      const unknown = readFixture({ '[ws:*]': { a: '${{ read("x.conf").y }}' } }, { 'packages/pkg-a/x.conf': 'x' });
+      await expect(Repository.create(unknown)).rejects.toThrow(/cannot tell what "x\.conf" is from its name/);
+
+      const broken = readFixture(
+        { '[ws:*]': { a: '${{ read("b.json").y }}' } },
+        { 'packages/pkg-a/b.json': 'not json {' },
+      );
+      /** The parser says what is wrong with the syntax but never which file it was reading - and one
+       *  expression can name several. */
+      await expect(Repository.create(broken)).rejects.toThrow(/read\("b\.json"\) could not parse .*b\.json as json/);
+    });
+
+    it('composes with file.exists for a file that may not be there', async () => {
+      const dir = readFixture({
+        '[ws:*]': { a: '${{ file.exists("maybe.json") ? read("maybe.json").x : "absent" }}' },
+      });
+      expect((await Repository.create(dir)).getPackage('pkg-a')!.config.a).toBe('absent');
+    });
+  });
+
   describe('${{ git }}', () => {
     function gitFixture(config: unknown, packages = ['pkg-a']): string {
       const dir = tmp();

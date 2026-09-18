@@ -3,8 +3,10 @@ import path from 'path';
 import semver from 'semver';
 import { GitHelper } from '../utils/git.js';
 import {
+  type CachedFile,
   type ConfigScope,
   createFileScope,
+  createReadScope,
   DEFERRED_PATHS,
   type GitScope,
   interpolateConfig,
@@ -38,6 +40,15 @@ export class Repository extends Package {
   /** Cached `${{ git.* }}` facts - see `_gitScope`. Non-enumerable for the same reason as above,
    *  and because reading it is a subprocess: a deep walk of a package must not spawn one. */
   private _git?: GitScope;
+  /**
+   * Files `${{ read(...) }}` has parsed, shared by every package's scope and keyed by the identity
+   * of the bytes - see `readStructuredFile`.
+   *
+   * **On the repository rather than per scope, and that is the whole point of it**: `configScope`
+   * is built once per package, so a cache living there would re-read a repository-level file once
+   * for every package that mentions it.
+   */
+  private readonly _readCache = new Map<string, CachedFile>();
 
   protected constructor(
     readonly dirname: string,
@@ -132,6 +143,9 @@ export class Repository extends Package {
       /** `pkg.dirname`, not the repository root: a `"[*]"` block asking whether
        *  `tsconfig-build.json` exists has to be answered per package. */
       file: createFileScope(pkg.dirname),
+      /** Same base directory as `file`, so one `"[*]"` declaration reads each package's own copy -
+       *  and the cache is the repository's, so a file they *share* is parsed once. */
+      read: createReadScope(pkg.dirname, this._readCache),
       env: { ...process.env },
       semver,
       path,

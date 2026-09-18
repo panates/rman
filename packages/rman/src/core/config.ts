@@ -1,4 +1,5 @@
 import fs from 'fs';
+import ini from 'ini';
 import * as yaml from 'js-yaml';
 import { createRequire } from 'module';
 import path from 'path';
@@ -441,6 +442,23 @@ export interface ConfigScope {
   repository: RepositoryScope;
   /** Paths, resolved against the package the config was resolved for. */
   file: FileScope;
+  /**
+   * The **contents** of a structured file - `${{ read('tsconfig.json').compilerOptions.outDir }}` -
+   * where `file` answers only where one is. Resolved against `pkg.dirname` like `file`, so a
+   * `"[*]"` block asks each package about its own; a repository-level file is reached through
+   * `read(path.join(repository.dirname, ...))`.
+   *
+   * `.json`, `.yml`/`.yaml` and `.ini` by extension, or name it for a file that does not say
+   * (`read('.npmrc', 'ini')`). **Throws** when the file is absent, as `file.resolve` does - compose
+   * with `file.exists` when its absence is a case to handle.
+   *
+   * **A manifest is `pkg.manifest`, not this.** `read('package.json')` works and is the wrong
+   * answer: which file a package's identity lives in belongs to the ecosystem, so that expression
+   * is already wrong in a Cargo package sitting beside a Node one.
+   *
+   * The result is **deeply frozen and shared** - see `readStructuredFile`. Spread it to change it.
+   */
+  read: ReadFile;
   env: Record<string, string | undefined>;
   /** rman's own `semver`, for the arithmetic every release config eventually wants
    *  (`semver.major(pkg.version)`). */
@@ -681,6 +699,46 @@ const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /** The `file` namespace for one package's directory - see `FileScope`. */
+/**
+ * `read` in a `${{ ... }}` expression (and in a value function): a structured file's **contents**,
+ * parsed - where `file` answers only where a path is.
+ *
+ * ```yaml
+ * "[*]":
+ *   run:
+ *     build:
+ *       exec: 'tsc --outDir ${{ read("tsconfig.json").compilerOptions.outDir }}'
+ * ```
+ *
+ * `cache` is shared across every package (see `Repository.configScope`) and keyed by what the file
+ * *is*, not merely where - so the same file read by twenty packages is parsed once, and a file rman
+ * itself rewrites mid-run is re-read rather than remembered. See `readStructuredFile`.
+ */
+export function createReadScope(dirname: string, cache: Map<string, CachedFile>): ReadFile {
+  return (target: string, format?: FileFormat): unknown => {
+    if (typeof target !== 'string' || !target.trim()) {
+      throw new Error('read() needs a path - it was given ' + JSON.stringify(target));
+    }
+    return readStructuredFile(path.resolve(dirname, target), format, cache);
+  };
+}
+
+/** What `read` can parse. **Not `.env`**: `env` is already in scope, and a `.env` file exists to be
+ *  loaded *into* an environment by something else - a config reading one as data would mean two
+ *  different things called the environment. `.toml` is out for the plainer reason that it would be
+ *  a new dependency, where these three parsers are already here. */
+export type FileFormat = 'json' | 'yaml' | 'ini';
+
+/** `read(path)`, or `read(path, 'ini')` for a file whose name does not say what it is (`.npmrc`). */
+export type ReadFile = (target: string, format?: FileFormat) => unknown;
+
+/** One parsed file, kept against the identity of the bytes it came from - see `readStructuredFile`. */
+export interface CachedFile {
+  /** `mtimeNs:size`. */
+  stamp: string;
+  value: unknown;
+}
+
 export function createFileScope(dirname: string): FileScope {
   const locate = (target: string): { path: string; found: boolean } => {
     if (typeof target !== 'string' || !target.trim()) {
@@ -787,23 +845,39 @@ function callValueFn(
   const arg = Object.create(context);
   /** Resolved the same way any other value is, so an inherited `${{ }}` string or a function under
    *  it is already finished by the time this one is handed it. */
-  arg.value = previous === undefined ? undefined : walk(previous, scope, context, at, skip);
+  const resolvedPrevious = previous === undefined ? undefined : walk(previous, scope, context, at, skip);
+  /**
+   * A getter only so the catch below can tell whether the function **actually read `value`**.
+   *
+   * Without that, the "value is undefined" hint went out with *every* failure of a first-layer
+   * function - a frozen-object `TypeError` from `read()` arrived wearing advice about spreading an
+   * inherited list, which is precisely the send-the-reader-to-the-wrong-place mistake the hint
+   * exists to prevent. Recorded rather than inferred from the message, because matching on V8's
+   * wording is the other way to get this wrong.
+   */
+  let valueRead = false;
+  Object.defineProperty(arg, 'value', {
+    enumerable: true,
+    get: () => {
+      valueRead = true;
+      return resolvedPrevious;
+    },
+  });
   try {
     return fn(arg);
   } catch (e: any) {
     const where = at.length ? formatPath(at) : 'the config root';
     /**
-     * **`value` is `undefined` when no layer underneath set this key**, and saying so is the whole
-     * reason this catch exists. A function written to extend an inherited list (`[...value, x]`) is
-     * also the *first* layer in a repository that inherits nothing, and V8's report for that is
-     * `value is not iterable` - which names neither the key nor the reason, and sends the reader
-     * looking at their spread instead of at what is missing.
+     * **`value` is `undefined` when no layer underneath set this key.** A function written to extend
+     * an inherited list (`[...value, x]`) is also the *first* layer in a repository that inherits
+     * nothing, and V8's report for that is `value is not iterable` - which names neither the key nor
+     * the reason, and sends the reader looking at their spread instead of at what is missing.
      *
      * Told rather than papered over: defaulting `value` to `[]` would be a guess about the key's
      * type, and wrong for every key that is not a list.
      */
     const hint =
-      previous === undefined
+      valueRead && resolvedPrevious === undefined
         ? `\n  \`value\` is undefined here - nothing below this layer sets "${where}".` +
           `\n  Write \`value ?? []\` (or \`?? ''\`) if the function has to work as the first layer too.`
         : '';
@@ -858,3 +932,86 @@ function formatPath(at: (string | number)[]): string {
 /** Guards against an expression that never returns (`while(true)`) taking the whole command with
  *  it - a typo, not an attack, but the failure mode is identical. */
 const EXPRESSION_TIMEOUT = 1000;
+
+/**
+ * Reads and parses one structured file, memoized against **the identity of its contents** rather
+ * than its path alone: the cache key is `mtimeNs:size`.
+ *
+ * Both halves of that were chosen against a measurement.
+ *
+ * - **A stat rather than a re-read**: `statSync` is 1.3µs where `readFileSync` + `JSON.parse` is
+ *   16.1µs on a 2KB manifest - so the check costs a thirteenth of what it saves, and the same file
+ *   read by twenty packages is parsed once. (`interpolateConfig` runs once *per package*, so a
+ *   cache living in one pass would not have helped across them at all.)
+ * - **Keyed on the stat rather than held for the run**: rman writes JSON files while it is running
+ *   - `version` rewrites every bumped manifest, then re-interpolates its own deferred hooks. A
+ *   cache that only remembered the path would hand those back as they were before the write.
+ *   `mtimeNs` is nanoseconds, so a rewrite within the same millisecond does not slip through; the
+ *   size is in the key as well because it costs nothing.
+ *
+ * **Frozen, deeply, once on the way into the cache.** Every package is handed the same object, so
+ * one config mutating it would quietly change what the next package sees - the reason `pkg.manifest`
+ * has always been a copy. Freezing is better than copying here: a copy costs 5.6µs on *every* call,
+ * freezing costs ~1µs *once*, and it turns the mistake into a `TypeError` instead of an effect at a
+ * distance. A caller that wants to change something spreads it first.
+ */
+function readStructuredFile(file: string, format: FileFormat | undefined, cache: Map<string, CachedFile>): unknown {
+  let stat: fs.BigIntStats;
+  try {
+    stat = fs.statSync(file, { bigint: true });
+  } catch {
+    throw new Error(
+      `read("${path.basename(file)}") found nothing at ${file}\n` +
+        `  Use file.exists() first if its absence is a case to handle rather than a mistake.`,
+    );
+  }
+  if (stat.isDirectory()) throw new Error(`read() was given a directory, not a file: ${file}`);
+
+  const stamp = `${stat.mtimeNs}:${stat.size}`;
+  const cached = cache.get(file);
+  if (cached?.stamp === stamp) return cached.value;
+
+  const resolved = format ?? formatOf(file);
+  const text = fs.readFileSync(file, 'utf-8');
+  let value: unknown;
+  try {
+    value = parseStructured(text, resolved);
+  } catch (e: any) {
+    /** The parser's own message says what is wrong with the syntax but never which file it was
+     *  reading - and an expression can name several. */
+    throw new Error(`read("${path.basename(file)}") could not parse ${file} as ${resolved}: ${e?.message}`, {
+      cause: e,
+    });
+  }
+  deepFreeze(value);
+  cache.set(file, { stamp, value });
+  return value;
+}
+
+/** The extension decides, because the caller already wrote it - naming the parser as well would
+ *  restate it and let the two disagree (`json("x.yml")`). A name that says nothing takes the
+ *  explicit argument instead. */
+function formatOf(file: string): FileFormat {
+  const ext = path.extname(file).toLowerCase();
+  if (ext === '.json') return 'json';
+  if (ext === '.yml' || ext === '.yaml') return 'yaml';
+  if (ext === '.ini') return 'ini';
+  throw new Error(
+    `read() cannot tell what "${path.basename(file)}" is from its name.\n` +
+      `  Name the format: read("${path.basename(file)}", "json" | "yaml" | "ini").`,
+  );
+}
+
+function parseStructured(text: string, format: FileFormat): unknown {
+  if (format === 'json') return JSON.parse(text);
+  /** `load`, not `loadAll`: a multi-document stream has no single value to be, and js-yaml says so
+   *  clearly enough ("expected a single document in the stream") to leave alone. */
+  if (format === 'yaml') return yaml.load(text);
+  return ini.parse(text);
+}
+
+function deepFreeze(value: unknown): void {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return;
+  Object.freeze(value);
+  for (const item of Object.values(value)) deepFreeze(item);
+}
