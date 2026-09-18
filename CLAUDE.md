@@ -1028,6 +1028,25 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   and pinned by a test against the `command:` strings in `src/commands/*.command.ts` - so adding a
   command can't quietly leave a repository's own able to shadow it. It covers **built-ins only**,
   which is why the rule above differs for plugins.
+- **A bare name resolves through the *repository's* `node_modules` first, and falls back to whatever
+  is installed beside rman itself** (`resolveConfigTarget` / `resolveBesideRman` in
+  [`src/core/resolve-target.ts`](packages/rman/src/core/resolve-target.ts)). A globally installed
+  rman's siblings are the globally installed packages, which is what makes the bootstrap work:
+  `rman ci` exists to create `node_modules`, `ci` is `rman-node`'s command, so on a fresh clone the
+  plugin cannot be found in the directory the command was going to make. Measured - with both
+  installed globally, a clone answered `"plugins" target "rman-node" could not be resolved ... is it
+  installed in this repository?`, which was true and useless.
+  - **A fallback, never a search order.** The repository is always tried first and its copy always
+    wins, or a global install could silently override a pinned one.
+  - **Not gated on whether the repository looks installed**, and the gate that was tried is the
+    lesson: "fall back only when there is no `node_modules` above the config file" reads well and
+    behaves unpredictably, because that walk reaches the filesystem root - a checkout under any
+    directory that happens to have one (a home directory, a nested clone) silently lost the
+    fallback. A rule whose answer depends on where the repository was cloned is worse than the
+    looser one.
+  - `resolveBesideRman`'s `from` parameter is the test seam: the answer depends on where rman's own
+    module sits, so a spec inside this repository could otherwise only prove that this repository
+    sees its own `node_modules`.
 - **`plugins` arrives through `extends` too, commands and seams alike.** `Repository.create` reads
   it off `readDirConfig(rootDir)`, which has already resolved `extends` - so a shared config package
   can deliver a whole toolchain and a repository writes one line. Measured: with nothing but
