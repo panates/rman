@@ -14,7 +14,7 @@
     "yargs": "^18.1.0"
   },
   "peerDependencies": {
-    "rman": "^1.2.0"
+    "rman": ">=1.2.2 <2"
   },
   "scripts": {
     "compile": "tsc --noEmit",
