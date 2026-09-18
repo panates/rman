@@ -342,7 +342,7 @@ declaration stay package-specific:
       image: "panates/${{ pkg.basename }}:${{ semver.major(pkg.version) }}"
   run:
     build:
-      exec: "tsc -b ${{ pkg.json.tsconfig ?? 'tsconfig-build.json' }}"
+      exec: "tsc -b ${{ pkg.manifest.tsconfig ?? 'tsconfig-build.json' }}"
 ```
 
 The contents are **real JavaScript**, not a template mini-language, so there is no growing list of
@@ -352,8 +352,16 @@ substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
 | --- | --- |
 | `pkg` | the package the config was resolved for |
 | `repository` | the repository - the root package's own fields, plus repo-level ones |
-| `env` | a copy of `process.env` |
+| `file` | what is on disk, resolved against `pkg.dirname` - `exists` / `resolve` / `resolveFirst` |
+| `env` | a copy of `process.env`, so writing to it reaches nothing |
 | `semver` | rman's own `semver`, for `semver.major(pkg.version)` and friends |
+| `path` | Node's own `node:path`, the platform's flavour (`path.posix` / `path.win32` through it) |
+| `git` | the checkout: `branch`, `sha`, `shortSha`, `dirty` |
+
+plus **the config's own top-level keys, bare** (`${{ vars.registry }}`, `${{ publish.directory }}`)
+- resolved on demand, so key order in the file means nothing and a cycle is reported rather than
+half-resolved. A scope binding wins a name clash, and a key that is not a valid identifier (a
+`"[selector]"`, a `"lint:fix"`) is not bound at all.
 
 `pkg` and `repository` share one shape, since the repository root *is* a package:
 
@@ -363,8 +371,9 @@ substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
 | `.scope` / `.unscopedName` | `@sqb` / `builder` - `scope` is `undefined` when unscoped |
 | `.version` | its `package.json` version |
 | `.basename` | its directory's last segment - **not** the same as `name`: sqb's root is named `sqb.v4` in a directory called `sqb` |
-| `.dirname` / `.relativeDir` | absolute path / path from the repository root (`packages/builder`) |
-| `.json` | the whole `package.json`, as a copy (`pkg.json.engines.node`) |
+| `.dirname` / `.relativeDir` | absolute path / path from the repository root (`packages/builder`); `relativeDir` is `''` for the root itself |
+| `.provider` | which ecosystem claimed it - `node`, or empty when no plugin did |
+| `.manifest` | the whole manifest, as a copy (`pkg.manifest.engines.node`). **Not `.json`** - which file a package's identity lives in is the ecosystem's business now |
 | `pkg.targetVersion` | the version this run is about to write - **only inside a `version.before`/`.exec`/`.after` hook**; anywhere else, reading it throws |
 
 `repository` adds:
@@ -374,14 +383,32 @@ substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
 | `.monorepo` | boolean |
 | `.packages` | every package, each in the shape above |
 | `.package(name)` | one of them by name, or `undefined` - for reaching a sibling's directory |
-| `.git.branch` / `.sha` / `.shortSha` / `.dirty` | read from git **only if an expression asks**, then remembered - so a repository that never mentions them spawns no git, and every command resolves config. All `undefined` outside a git checkout; `branch` is `undefined` on a detached HEAD. |
+
+and `git` is **top level, not `repository.git`** - which is where it used to be, through 1.0.x:
+
+| | |
+| --- | --- |
+| `git.branch` | `undefined` on a detached HEAD, which a CI checkout often is - so `?? 'detached'` works |
+| `git.sha` / `git.shortSha` | full, and the first 7 characters |
+| `git.dirty` | whether the working tree has uncommitted changes |
+
+It sits beside `env` because that is what it is: `repository` shares its shape with `pkg` since the
+root *is* a package, and its other members (`monorepo`, `packages`, `package()`) say something
+about the repository as a container of packages. A branch name says nothing about any package - it
+describes the working tree all of them happen to be in.
+
+Read from git **only if an expression asks**, then remembered for the whole run: every command
+resolves config, so a repository that never mentions git spawns none (measured - and the same
+measurement is why `interpolateConfig` builds its context from property descriptors rather than
+spreading the scope, since a spread reads every getter). All four are `undefined` outside a
+checkout, which is a state rather than an error.
 
 - **`${{ }}`, deliberately not `{{ }}`.** A config value may legitimately carry `{{...}}` meant for
   something else (`helm template --set tag={{.Values.tag}}`), and with the plainer delimiter rman
   would try to evaluate it. A bare `{{...}}` is therefore left alone. To emit a literal `${{`, let
   an expression produce it, as in GitHub Actions: `${{ '${{' }}`.
 - A string that is **nothing but** one expression keeps that value's own type
-  (`skip: "${{ pkg.json.private === true }}"` → a boolean); embedded in surrounding text it is
+  (`skip: "${{ pkg.manifest.private === true }}"` → a boolean); embedded in surrounding text it is
   stringified. Without this, expressions could only ever produce strings and a setting like
   `run.<script>.skip` would be unreachable from one.
 - A **nullish** result is fine standing alone (it just means "unset") but an **error** embedded in

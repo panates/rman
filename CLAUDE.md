@@ -108,8 +108,27 @@ repo-wide bookend run once at the repository root. One declaration feeding both 
     `scope`, `unscopedName`, `version`, `basename`, `dirname`, `relativeDir`, `provider`, `manifest`
     (**not** `json` - renamed, see `PackageScope`). `basename` is the *directory*, `name` the
     package - sqb's root is `sqb.v4` in a directory called `sqb`.
-  - `repository` adds `monorepo`, `packages`, `package(name)`, and `git.{branch,sha,shortSha,dirty}`
-    - the last **lazily**, since every command resolves config and most never mention git.
+  - `repository` adds `monorepo`, `packages`, `package(name)` - and **nothing else**. Each of those
+    says something about the repository *as a container of packages*, which is the only thing it
+    knows that `pkg` does not.
+  - **`git.{branch,sha,shortSha,dirty}` is top level, beside `env` - not `repository.git`**, which
+    is where it was through 1.0.x. A branch name describes no package; it describes the working tree
+    every package happens to be sitting in, which is the same kind of ambient fact `env` is. Moving
+    it is a **breaking change** to the expression scope, folded into the same major as the core/plugin
+    split.
+    - **Lazy, and moving it up is what made that fragile.** It shells out to `git rev-parse`, and
+      every command resolves config, so a repository never mentioning git must spawn none. One level
+      down that was free: `interpolateConfig` did `vm.createContext({ ...scope })`, and a spread
+      copies the `repository` *reference* without touching a getter inside it. At the top level the
+      spread reads it. So the context is built from **property descriptors**
+      (`Object.defineProperties({}, Object.getOwnPropertyDescriptors(scope))`), which carries a
+      getter over as a getter. Measured both ways on the same build: 0 git reads with descriptors,
+      1 with a spread, on a config that never mentions git.
+    - Cached on the **`Repository`**, not in `configScope`'s closure - `configScope` is called once
+      per package, so a per-scope cache still means one subprocess per package. Non-enumerable, like
+      `_repoScope`, so no deep walk of a package spawns git.
+    - This is the same trap `pkg.targetVersion` documents from the other side: *it* is a throwing
+      getter, and being enumerable is what made a spread fire it.
   - **`${{ }}`, never `{{ }}`**: a config value may carry `{{...}}` for something else entirely
     (`helm template --set tag={{.Values.tag}}`). A bare `{{...}}` is left alone. A literal `${{`
     comes from an expression producing it (`${{ '${{' }}`), as in GitHub Actions.

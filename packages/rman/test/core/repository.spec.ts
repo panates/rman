@@ -1090,6 +1090,86 @@ describe('core/Repository', () => {
     });
   });
 
+  /**
+   * `git` is bound at the **top level** of the expression scope, beside `env` - not on
+   * `repository`, where it used to be. `repository` shares its shape with `pkg` because the root
+   * *is* a package, and its other members describe the repository as a container of packages; a
+   * branch name describes none of that, only the working tree they all sit in.
+   */
+  describe('${{ git }}', () => {
+    function gitFixture(config: unknown, packages = ['pkg-a']): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(config));
+      for (const name of packages) writeJson(dir, `packages/${name}/package.json`, { name, version: '1.0.0' });
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      git('init', '-q');
+      git('config', 'user.email', 't@t.com');
+      git('config', 'user.name', 't');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'init');
+      return dir;
+    }
+
+    it('reads the checkout from the top level', async () => {
+      const dir = gitFixture({ '[*]': { a: '${{ git.shortSha }}', b: '${{ git.dirty }}' } });
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(cfg.a).toMatch(/^[0-9a-f]{7}$/);
+      expect(cfg.b).toBe(false);
+    });
+
+    it('is no longer reachable as repository.git', async () => {
+      const dir = gitFixture({ '[*]': { a: '${{ repository.git }}' } });
+      /** A nullish result standing alone is "unset", so the move shows up as `undefined` here
+       *  rather than an error - which is why the positive case above is the one that matters. */
+      expect((await Repository.create(dir)).getPackage('pkg-a')!.config.a).toBeUndefined();
+    });
+
+    /**
+     * **The cost of moving it up, and the reason `interpolateConfig` builds its context from
+     * property descriptors instead of `{ ...scope }`.** A spread reads every property, so a lazy
+     * getter one level down (where `git` used to live) is untouched by it, while one at the top
+     * level is not: measured, the spread version ran `git rev-parse` on a repository whose config
+     * never mentions git.
+     */
+    it('shells out only when an expression asks, and then once for the whole repository', async () => {
+      const proto = Repository.prototype as unknown as Record<string, (dir: string) => unknown>;
+      const original = proto._readGitScope;
+      let calls = 0;
+      proto._readGitScope = function (this: unknown, dirname: string) {
+        calls++;
+        return original.call(this, dirname);
+      };
+      try {
+        const quiet = gitFixture({ '[*]': { a: 'nothing about git' } }, ['pkg-a', 'pkg-b']);
+        await Repository.create(quiet);
+        expect(calls).toBe(0);
+
+        /** Once, not once per package - the cache is on the `Repository`, and `configScope` is
+         *  called per package. */
+        const asking = gitFixture({ '[*]': { a: '${{ git.sha }}' } }, ['pkg-a', 'pkg-b']);
+        await Repository.create(asking);
+        expect(calls).toBe(1);
+      } finally {
+        proto._readGitScope = original;
+      }
+    });
+
+    it('reports every field as undefined outside a checkout, which is a state and not an error', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { a: "${{ git.branch ?? 'no-git' }}", b: '${{ git.sha }}' } }),
+      );
+      writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(cfg.a).toBe('no-git');
+      expect(cfg.b).toBeUndefined();
+    });
+  });
+
   describe('listStatus()', () => {
     let dir: string;
     let originDir: string;

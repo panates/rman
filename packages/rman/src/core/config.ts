@@ -410,10 +410,6 @@ export interface RepositoryScope extends PackageScope {
   packages: PackageScope[];
   /** One package by name, or `undefined` - for reaching a sibling's directory. */
   package(name: string): PackageScope | undefined;
-  /** Read from git only if an expression actually asks for it, then remembered: a repository that
-   *  never mentions these pays nothing, and every command resolves config. All `undefined` outside
-   *  a git checkout, which is a legitimate state rather than an error. */
-  git: GitScope;
 }
 
 export interface GitScope {
@@ -458,6 +454,23 @@ export interface ConfigScope {
    * genuinely needs one of them (a Docker image path, say, which is always posix).
    */
   path: typeof path;
+  /**
+   * The checkout: branch, sha, whether the tree is dirty.
+   *
+   * **Top level, not `repository.git`** - which is where it used to be, and the move is the point.
+   * `repository` shares its shape with `pkg` because the repository root *is* a package, and its
+   * only other members (`monorepo`, `packages`, `package()`) say something about the repository as
+   * a container of packages. A branch name says nothing about any package; it describes the
+   * working tree every one of them happens to be sitting in - the same kind of ambient fact as
+   * `env`, and it belongs beside it.
+   *
+   * **Read from git only if an expression actually asks**, then remembered for the whole run: every
+   * command resolves config, and a repository that never mentions git must not pay for one. See
+   * `Repository.configScope` for the getter, and `interpolateConfig` for why the context is built
+   * from property descriptors rather than a spread - a spread would fire this getter on every
+   * command, which is exactly what moving it up here risked.
+   */
+  git: GitScope;
 }
 
 /**
@@ -522,7 +535,16 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: In
    * failed inside the user's own code with `path.join` receiving undefined.
    */
   const base = options?.at ?? [];
-  const context = vm.createContext({ ...scope });
+  /**
+   * Built from `scope`'s property **descriptors**, never `{ ...scope }`.
+   *
+   * A spread reads every property, so a lazy getter on the scope is no longer lazy the moment one
+   * is added - and `git` is exactly that: it shells out to `git rev-parse`, and a spread here would
+   * do it on `rman list`, `rman info` and every other command, in a repository whose config never
+   * mentions git. (The same trap `pkg.targetVersion` documents from the other side: it is a
+   * *throwing* getter, and being enumerable is what made a spread fire it.)
+   */
+  const context = vm.createContext(Object.defineProperties({}, Object.getOwnPropertyDescriptors(scope)));
   if (!config || typeof config !== 'object' || Array.isArray(config)) return walk(config, scope, context, base, skip);
 
   /**
