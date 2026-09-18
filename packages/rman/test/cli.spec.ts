@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { runCli } from '../src/cli.js';
+import { version } from '../src/constants.js';
 import { useTestEcosystem } from './_fixture.js';
 
 /** Runs `fn` with console.log captured (plain, unmodified) instead of printed - proves what the
@@ -159,5 +160,80 @@ describe('cli: global --config', () => {
     const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['deploy', '--config'] }))).join('\n');
     expect(out).toContain('command: deploy');
     expect(out).toContain('the keys deploy reads: vars');
+  });
+});
+
+/**
+ * **Neither question is about a repository**, so neither may need one to work - and a broken
+ * repository is the moment you most want to ask them.
+ */
+describe('cli: --version and --help without a working repository', () => {
+  useTestEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  /** A repository whose config names a plugin that cannot be resolved - so `Repository.create`
+   *  throws, which is what every command hits before yargs ever sees a flag. */
+  function brokenRepository(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-cli-broken-'));
+    dirs.push(dir);
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', version: '1.0.0' }));
+    fs.writeFileSync(path.join(dir, '.rmanrc.yml'), "plugins: ['does-not-exist-anywhere']\n");
+    return dir;
+  }
+
+  it('prints the version, and nothing else, from a repository that cannot be loaded', async () => {
+    // The one you reach for when something is wrong - to find out which rman is even installed -
+    // and the one a broken `.rmanrc` used to take away, because resolution happens during
+    // `Repository.create`, long before yargs sees the flag.
+    const cwd = brokenRepository();
+    for (const flag of ['-v', '--version']) {
+      const lines = await captureLogs(() => runCli({ argv: [flag], cwd }));
+      expect([flag, lines]).toEqual([flag, [version]]);
+    }
+  });
+
+  it('never even looks at the repository for --version', async () => {
+    /** No `package.json` anywhere, which fails earlier than a bad plugin does. */
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-cli-empty-'));
+    dirs.push(empty);
+    expect(await captureLogs(() => runCli({ argv: ['--version'], cwd: empty }))).toEqual([version]);
+  });
+
+  it('still answers --help, degraded, instead of failing', async () => {
+    const cwd = brokenRepository();
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args.map(String).join(' '));
+    let lines: string[];
+    try {
+      lines = await captureLogs(() => runCli({ argv: ['--help'], cwd }));
+    } finally {
+      console.error = originalError;
+    }
+
+    /** The global options are still there, so `--help` is worth having asked for. */
+    expect(lines.join('\n')).toMatch(/--version/);
+    expect(lines.join('\n')).toMatch(/--help/);
+    /** And the reason the rest is missing is stated - on **stderr**, so `rman --help | less` is
+     *  still just help. */
+    expect(errors.join('\n')).toMatch(/Repository could not be read/);
+    expect(errors.join('\n')).toMatch(/does-not-exist-anywhere/);
+  });
+
+  it('leaves an ordinary command failing, with its exit code', async () => {
+    // The degradation is for those two flags only: a command that needs the repository must still
+    // say so and fail, or a broken repository would look like a working one.
+    const cwd = brokenRepository();
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      await expect(runCli({ argv: ['list'], cwd })).rejects.toThrow(/does-not-exist-anywhere/);
+    } finally {
+      console.error = originalError;
+    }
   });
 });

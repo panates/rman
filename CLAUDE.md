@@ -1088,6 +1088,20 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
 - Don't extend `ALWAYS_APPEND` casually: an always-appending key can never be *un*-said by a closer
   layer, which is only acceptable where the value is a set of contributions rather than a decision.
 
+**`--version` and `--help` must not need a repository.** `rman -v` is what you reach for when
+something is wrong - to find out which rman is even installed - and a broken `.rmanrc` took it away:
+`Repository.create` runs before yargs sees any flag, so `rman -v` in a repository naming a plugin it
+could not resolve answered with that error and exit 1 (measured).
+
+- `--version`/`-v` is answered from `_argv` **before the repository is touched**, and returns.
+- `--help`/`-h` is answered from the `catch`: the command list genuinely needs the repository (every
+  built-in's `initCli` closes over it, and a plugin's commands *are* the repository's), so help
+  degrades to the global options and says why the rest is missing. The reason goes to **stderr**, so
+  `rman --help | less` is still just help.
+- **Nothing else degrades.** An ordinary command in a broken repository must still print the reason
+  and exit 1, or a broken repository looks like a working one - pinned by a spec beside the other
+  three.
+
 **Trap: a setup failure used to exit 0.** `runCli`'s top-level catch printed the message and
 swallowed it, so `rman info` in a directory with no `package.json` reported failure on stdout and
 success to the shell (measured, and true of the published 1.0.10 too). It rethrows now, and the
