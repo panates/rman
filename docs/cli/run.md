@@ -83,7 +83,7 @@ names - so at the repository root, package-facing script config goes under `"[*]
 
 Values may embed [`${{ ... }}` expressions](../rman.md#expressions---), evaluated per package - so one
 declaration can still say something package-specific (`../../coverage/${{ pkg.basename }}`,
-`app:${{ repository.git.shortSha ?? 'local' }}`).
+`app:${{ git.shortSha ?? 'local' }}`).
 
 **Precedence** for `topo`/`progress`/`concurrency`/`logLevel`: explicit CLI flag > package's own
 resolved `.rmanrc` > built-in fallback. **`bail` is the one exception:** a package's own `.rmanrc

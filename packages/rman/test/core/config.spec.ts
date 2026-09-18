@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { defineConfig, readDirConfig, resolveConfig } from '../../src/core/config.js';
+import { createFileScope, defineConfig, readDirConfig, resolveConfig } from '../../src/core/config.js';
 import type { RmanConfig } from '../../src/interfaces/rman-config.interface.js';
 
 function mkTmp(): string {
@@ -237,6 +237,74 @@ describe('core/config', () => {
        *  plugin loaded to type its own fixture. */
       const config: RmanConfig = { logLevel: 'silent', group: false };
       expect(defineConfig(config)).toBe(config);
+    });
+  });
+
+  /**
+   * **A type-level check, run by `tsc` over the test tree rather than by mocha.** The runtime rule
+   * is general - any object node may carry `vars` and scopes its subtree - while a type can only
+   * say it one interface at a time, so the two can drift apart in exactly one direction: a nested
+   * options interface that forgot to extend `ScopedVars`. It did drift, and the assertion below is
+   * what would have caught it - `vars` worked at every level and type-checked at none.
+   *
+   * `tsc --noEmit -p packages/rman/test/tsconfig.json` is what enforces this; `npm test` does not
+   * type-check.
+   */
+  describe('ScopedVars', () => {
+    it('is accepted wherever the runtime scopes it', () => {
+      const config: RmanConfig = {
+        vars: { x: 1 },
+        run: {
+          build: { vars: { x: 3 }, exec: 'tsc -b' },
+        },
+        version: { vars: { x: 4 }, commitMessage: 'release' },
+        changelog: { vars: { x: 5 } },
+        publish: { vars: { x: 6 } },
+        githubRelease: { vars: { x: 7 } },
+      };
+      /** Nothing to assert at runtime: the declaration above either compiles or it does not. */
+      expect(config.run?.build).toEqual({ vars: { x: 3 }, exec: 'tsc -b' });
+
+      /** `run.vars` is the one place the runtime scopes and the type does not - see `RunConfig`
+       *  for the measurement behind that. It needs a cast, and the cast is what this pins. */
+      const withRunVars: RmanConfig = {
+        run: { vars: { x: 2 }, build: { exec: 'tsc' } } as RmanConfig['run'],
+      };
+      expect((withRunVars.run as Record<string, unknown>).vars).toEqual({ x: 2 });
+    });
+  });
+
+  describe('createFileScope()', () => {
+    /**
+     * **Pinned, not merely documented.** `file` is evaluated while the config *resolves*, which
+     * every command does - so a member that changed anything would change it on `rman list`,
+     * `rman info` and `rman config`, once per package, with nothing having asked. A comment saying
+     * so can be contradicted by the next person adding a plausible-sounding `copy`; this fails.
+     *
+     * Work belongs in a step, which is the one thing rman runs on purpose - and a step can be a
+     * function too, so refusing this costs nothing.
+     */
+    it('exposes exactly three members, all of them questions', () => {
+      const scope = createFileScope(tmp());
+      expect(Object.keys(scope).sort()).toEqual(['exists', 'resolve', 'resolveFirst']);
+    });
+
+    it('leaves the directory untouched - nothing here creates, copies or writes', () => {
+      const dir = tmp();
+      fs.writeFileSync(path.join(dir, 'present.txt'), 'x');
+      const before = fs.readdirSync(dir).sort();
+
+      const scope = createFileScope(dir);
+      expect(scope.exists('present.txt')).toBe(path.join(dir, 'present.txt'));
+      /** A miss is `''` rather than `undefined`, so `a || b` picks the first that exists and a miss
+       *  stays clear of the nullish-inside-a-string guard. */
+      expect(scope.exists('missing.txt')).toBe('');
+      expect(scope.resolve('present.txt')).toBe(path.join(dir, 'present.txt'));
+      expect(() => scope.resolve('missing.txt')).toThrow(/found nothing/);
+      expect(scope.resolveFirst('missing.txt', 'present.txt')).toBe(path.join(dir, 'present.txt'));
+      expect(() => scope.resolveFirst('missing.txt', 'gone.txt')).toThrow(/found none of/);
+
+      expect(fs.readdirSync(dir).sort()).toEqual(before);
     });
   });
 });

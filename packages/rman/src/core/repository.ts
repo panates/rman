@@ -3,8 +3,10 @@ import path from 'path';
 import semver from 'semver';
 import { GitHelper } from '../utils/git.js';
 import {
+  type CachedFile,
   type ConfigScope,
   createFileScope,
+  createReadScope,
   DEFERRED_PATHS,
   type GitScope,
   interpolateConfig,
@@ -35,6 +37,18 @@ export class Repository extends Package {
    * An internal cache has no business being walked anyway.
    */
   private _repoScope?: RepositoryScope;
+  /** Cached `${{ git.* }}` facts - see `_gitScope`. Non-enumerable for the same reason as above,
+   *  and because reading it is a subprocess: a deep walk of a package must not spawn one. */
+  private _git?: GitScope;
+  /**
+   * Files `${{ read(...) }}` has parsed, shared by every package's scope and keyed by the identity
+   * of the bytes - see `readStructuredFile`.
+   *
+   * **On the repository rather than per scope, and that is the whole point of it**: `configScope`
+   * is built once per package, so a cache living there would re-read a repository-level file once
+   * for every package that mentions it.
+   */
+  private readonly _readCache = new Map<string, CachedFile>();
 
   protected constructor(
     readonly dirname: string,
@@ -122,16 +136,42 @@ export class Repository extends Package {
    * seeing a value that means nothing to them.
    */
   configScope(pkg: Package, options?: { targetVersion?: string }): ConfigScope {
+    const _this = this;
     return {
       pkg: this._packageScope(pkg, options?.targetVersion),
       repository: this._repositoryScope(),
       /** `pkg.dirname`, not the repository root: a `"[*]"` block asking whether
        *  `tsconfig-build.json` exists has to be answered per package. */
       file: createFileScope(pkg.dirname),
+      /** Same base directory as `file`, so one `"[*]"` declaration reads each package's own copy -
+       *  and the cache is the repository's, so a file they *share* is parsed once. */
+      read: createReadScope(pkg.dirname, this._readCache),
       env: { ...process.env },
       semver,
       path,
+      /**
+       * A getter, and cached on the **repository** rather than in this closure: `configScope` is
+       * called once per package, so a per-scope cache would still shell out once per package in a
+       * monorepo that mentions git at all.
+       *
+       * Enumerable, unlike `pkg.targetVersion` - it has a real answer everywhere, so nothing needs
+       * hiding. What keeps it lazy is `interpolateConfig` building its context from property
+       * descriptors instead of spreading; see the note there.
+       */
+      get git(): GitScope {
+        return _this._gitScope();
+      },
     };
+  }
+
+  /** `${{ git.* }}`, read at most once per repository per process. */
+  protected _gitScope(): GitScope {
+    if (this._git) return this._git;
+    const built = this._readGitScope(this.dirname);
+    /** Defined rather than assigned, so the cache stays out of every enumeration of the repository
+     *  - the same reason `_repoScope` is defined this way. */
+    Object.defineProperty(this, '_git', { value: built, enumerable: false, writable: true });
+    return built;
   }
 
   /**
@@ -250,17 +290,11 @@ export class Repository extends Package {
   protected _repositoryScope(): RepositoryScope {
     if (this._repoScope) return this._repoScope;
     const packageScopes = this.packages.map(p => this._packageScope(p));
-    const repoDir = this.dirname;
-    let gitScope: GitScope | undefined;
-    const _this = this;
     const built: RepositoryScope = {
       ...this._packageScope(this.rootPackage),
       monorepo: this.monorepo,
       packages: packageScopes,
       package: (name: string) => packageScopes.find(p => p.name === name),
-      get git(): GitScope {
-        return (gitScope ??= _this._readGitScope(repoDir));
-      },
     };
     /** Defined rather than assigned, so the cache stays out of every enumeration of this object -
      *  see the field's own doc for what walked into it. */
@@ -329,7 +363,7 @@ export class Repository extends Package {
     }
   }
 
-  /** `git` facts for a `${{ repository.git.* }}` expression. Synchronous on purpose: it backs a lazy
+  /** `git` facts for a `${{ git.* }}` expression. Synchronous on purpose: it backs a lazy
    *  getter, and a getter cannot await. Everything is `undefined` outside a git checkout - not an
    *  error, just a repository without one. */
   protected _readGitScope(dirname: string): GitScope {

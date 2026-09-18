@@ -64,6 +64,35 @@ or between exported declarations.
     only package, so `"[/]"` and `"[*]"` reach it and `"[ws:*]"` reaches nothing.
 - A directory holding no package (an intermediate `packages/`) has none to speak for, so its
   unmarked config still cascades to everything below.
+- **`vars` is declared at any level of the config and scopes its own subtree**
+  (`withScopedVars` in `config.ts`): a fresh copy per level, the level's own block merged **per key**
+  over what the level above resolved to, so `run.vars` covers every script and `run.build.vars`
+  covers one.
+  - **Copied at every node, not only where a block appears**, and that is the difference between
+    scoping and leaking: a value function is handed this object, so a write inside `run.build`
+    would otherwise land in `run`'s object and `run.clean` would read it. Nothing written at a level
+    reaches the level above or a sibling.
+  - A level's own block is resolved **against the outer scope** before being installed, so
+    `vars: { out: '${{ vars.x }}/dist' }` refines the `x` it inherits rather than reading its own
+    half-built scope - which would make the answer depend on key order inside the block.
+  - Installed as a plain property over the context's lazy top-level getter and restored in a
+    `finally`; `walk` is depth-first and synchronous, so the window is exactly that subtree.
+  - **`vars` is reserved at every level**, which costs a script that would have been called `vars` -
+    `run.vars` is a scope. Nothing enumerates `run`'s keys as script names, so that is where the
+    cost stops.
+  - **Every nested options interface extends `ScopedVars`**, and a new one has to remember to: the
+    runtime rule is general (any object node scopes) while a type states it one interface at a time,
+    so they drift in exactly one direction. They *did* - `vars` worked at every level and
+    type-checked at none until this was noticed. `config.spec.ts`'s `ScopedVars` block is a
+    type-level pin, checked by `tsc -p packages/rman/test/tsconfig.json`, **not by mocha**.
+  - **`run.vars` is the one place the runtime scopes and the type deliberately does not.** `run` is
+    keyed by script name, so any encoding that admits `vars` widens the index signature's value type
+    - and TypeScript then stops excess-property-checking *every* script's options. Measured on one
+    file: with the widened index, `run: { build: { exce: 'tsc' } }` compiles clean; with the strict
+    one the typo is caught and `run.vars` is rejected. A key-remapped index
+    (`{ [K in string as K extends 'vars' ? never : K]: ... }`) was tried and does not help - the
+    remap still produces an index signature claiming `vars`. Catching the typo across every script
+    won; a typed JS config casts (`... as RmanConfig['run']`), and YAML is unchecked anyway.
 - **`vars` is the one unmarked key that cascades to every package anyway** - and it is not a hole
   in the rule above, it is a key the rule was never about. The rule exists because a *setting*
   means different things to the two audiences (`run.build.after` on the root is a repo-wide
@@ -108,8 +137,69 @@ repo-wide bookend run once at the repository root. One declaration feeding both 
     `scope`, `unscopedName`, `version`, `basename`, `dirname`, `relativeDir`, `provider`, `manifest`
     (**not** `json` - renamed, see `PackageScope`). `basename` is the *directory*, `name` the
     package - sqb's root is `sqb.v4` in a directory called `sqb`.
-  - `repository` adds `monorepo`, `packages`, `package(name)`, and `git.{branch,sha,shortSha,dirty}`
-    - the last **lazily**, since every command resolves config and most never mention git.
+  - `repository` adds `monorepo`, `packages`, `package(name)` - and **nothing else**. Each of those
+    says something about the repository *as a container of packages*, which is the only thing it
+    knows that `pkg` does not.
+  - **`git.{branch,sha,shortSha,dirty}` is top level, beside `env` - not `repository.git`**, which
+    is where it was through 1.0.x. A branch name describes no package; it describes the working tree
+    every package happens to be sitting in, which is the same kind of ambient fact `env` is. Moving
+    it is a **breaking change** to the expression scope, folded into the same major as the core/plugin
+    split.
+    - **Lazy, and moving it up is what made that fragile.** It shells out to `git rev-parse`, and
+      every command resolves config, so a repository never mentioning git must spawn none. One level
+      down that was free: `interpolateConfig` did `vm.createContext({ ...scope })`, and a spread
+      copies the `repository` *reference* without touching a getter inside it. At the top level the
+      spread reads it. So the context is built from **property descriptors**
+      (`Object.defineProperties({}, Object.getOwnPropertyDescriptors(scope))`), which carries a
+      getter over as a getter. Measured both ways on the same build: 0 git reads with descriptors,
+      1 with a spread, on a config that never mentions git.
+    - Cached on the **`Repository`**, not in `configScope`'s closure - `configScope` is called once
+      per package, so a per-scope cache still means one subprocess per package. Non-enumerable, like
+      `_repoScope`, so no deep walk of a package spawns git.
+    - This is the same trap `pkg.targetVersion` documents from the other side: *it* is a throwing
+      getter, and being enumerable is what made a spread fire it.
+  - **`read(path[, format])`** answers what is *in* a structured file, where `file` answers where one
+    is. `.json`, `.yml`/`.yaml`, `.ini` by extension; a name that says nothing takes the format
+    explicitly (`read('.npmrc', 'ini')`), and an unrecognized extension is an error naming the three
+    rather than a guess at JSON. Resolved against `pkg.dirname` like `file`, and it **throws** when
+    absent like `file.resolve` - `file.exists(p) ? read(p) : fallback` is the optional form, so no
+    second function is needed.
+    - **`.env` is the one exclusion on principle**: `env` is already in scope, and a `.env` file
+      exists to be loaded *into* an environment by something else - reading one as data would mean
+      two different things called the environment. Nothing else is excluded by rule. "No new
+      parsers" was tried as a line and did not survive `xml`, which *is* a new dependency
+      (`@xmldom/xmldom`) and earns its place because a `pom.xml` or `.csproj` holds a version
+      exactly the way a `package.json` does - which is the whole point of a language-agnostic rman.
+      A format asking to be added is asking on those terms, not on the parser's.
+    - **`xml` returns a DOM, not an object, and that asymmetry is deliberate.** An element can
+      repeat, carry attributes and hold text at once, so any flattening picks a convention (`$`?
+      `_text`? array-or-not?) and is wrong for somebody. Recognized by extension for the whole
+      project-file family (`.csproj`, `.props`, `.nuspec`, `.plist`, ...), since a project file is
+      XML whatever its extension calls itself.
+      - **Freezing a DOM is safe - measured, not assumed.** A frozen `@xmldom/xmldom` document still
+        answers `getElementsByTagName` for a tag first asked about *after* the freeze (the
+        live-collection case that would have broken it), reads attributes, resolves namespaces,
+        walks `childNodes` and serialises back.
+      - **A malformed file must throw.** xmldom reports problems through an `onError` handler and
+        otherwise carries on with what it salvaged, so without the check a truncated file came back
+        as a half-parsed DOM and the expression reading it simply found nothing - the silent-wrong
+        shape `read()` exists to avoid for JSON.
+    - **`read('package.json')` works and is the wrong answer.** Which file a package's identity
+      lives in belongs to the ecosystem, so that expression is already wrong in a Cargo package
+      beside a Node one. `pkg.manifest` / `repository.package(n)?.manifest` is the answer.
+    - **Cached on the `Repository`, keyed by `mtimeNs:size` rather than by path.** Both halves were
+      measured. Per repository because `interpolateConfig` runs once *per package*, so a per-pass
+      cache never helps across them - twenty packages reading one shared file would parse it twenty
+      times. Keyed on the stat because **rman writes JSON while it runs**: `version` rewrites every
+      bumped manifest and then re-interpolates its deferred hooks, and a path-keyed cache would hand
+      those back as they were before the write. `statSync` is 1.3µs against 16.1µs for a read and
+      parse, so the guard costs a thirteenth of what it saves; `mtimeNs` is nanoseconds, so a
+      same-millisecond rewrite does not slip through.
+    - **Deeply frozen once on the way into the cache, and shared.** Every package gets the same
+      object, so a mutation would quietly change what the next one sees - the reason `pkg.manifest`
+      has always been a copy. Freezing beats copying here: a copy costs 5.6µs on *every* call,
+      freezing ~1µs *once*, and it turns the mistake into a `TypeError` rather than an effect at a
+      distance.
   - **`${{ }}`, never `{{ }}`**: a config value may carry `{{...}}` for something else entirely
     (`helm template --set tag={{.Values.tag}}`). A bare `{{...}}` is left alone. A literal `${{`
     comes from an expression producing it (`${{ '${{' }}`), as in GitHub Actions.
@@ -720,6 +810,165 @@ its own commit and tag, so whichever group was committed last owns HEAD (measure
 on HEAD with `v1.3.0` one commit behind). Read a release tag with `git describe --match <pattern>`,
 never by what happens to sit on HEAD.
 
+## Functions in config: two kinds, and the key decides which
+
+A config value may be a **function**, and there are two entirely different meanings depending on
+where it sits. Both live in one config, so the rule has to be decidable without looking at the
+function:
+
+| | |
+| --- | --- |
+| `run.<script>`, `run.<script>.before`/`.exec`/`.after`, `run.<script>.if`, `version.before`/`.exec`/`.after` | **code** (`STEP_PATHS`) - left alone, called later by `run`/`version` |
+| `plugins`, and everything below it | **code** (`CODE_SUBTREES`) - an `RmanPlugin` is functions all the way down |
+| everything else | **a value** - called by `interpolateConfig`, exactly where a `${{ }}` would be |
+
+- **The key decides, and it already did.** `run.build.exec: 'tsc -b'` is a shell command and
+  `publish.directory: 'build'` is a path - not because of anything about those strings, but because
+  of where they sit. A function inherits the rule, so there is no marker to remember. **Never
+  replace this with a test on the function** (arity, parameter names): that is the guess
+  `loadPlugins` refuses to make about a module's export, and here guessing wrong means either
+  running build-time code while merely *loading* the repository or silently never running it.
+- **`plugins` has to be in the list, and it was measured the hard way**: with it walked like any
+  other key, resolving the config of a repository that named a plugin called that plugin's yargs
+  builder with the config scope - `Config function in "plugins[0].commands[0].builder" failed:
+  cmd.option is not a function`.
+- **`run.*` (the bare shorthand) and `run.*.if` are in `STEP_PATHS` for reasons that are not
+  symmetry.** `run: { build: fn }` means `{ exec: fn }`, so leaving it out made the short and long
+  spellings disagree about *when* the function runs. And an `if` called at load time collapsed to
+  the boolean it happened to return, which `parseIfExpr` then read as "no condition given" - so the
+  script ran unconditionally (measured).
+- **A string at a step path is still interpolated**, so this is narrower than `DEFERRED_PATHS`:
+  `exec: 'tsc -b ${{ file.resolve(...) }}'` has to keep working.
+- **A caller interpolating a *fragment* must say where it sits.** `interpolateConfig`'s `at` option
+  exists for `version`, which resolves its own `version.<slot>` because those three paths are
+  deferred. Without it the fragment starts at the root, matches no step path, and a function in a
+  version hook was called while the hook was being *prepared* - measured, failing inside the user's
+  own code with `path.join` receiving undefined.
+
+### The value kind: the JS spelling of `${{ }}`
+
+Same question, same moment, same scope - `pkg`, `repository`, `file`, `env`, `semver`, `path`, plus
+the config's own top-level keys - **plus `value`**: what the key resolved to in the layers
+underneath, which is the general form of `+key` and the one thing an expression cannot express.
+
+- **The chain is built during the merge, not at resolution.** Only `mergeConfig` knows the layer
+  order; by the time `interpolateConfig` runs they have collapsed into one object and a closer
+  layer's value has already replaced what it was derived from. `assignMerged` wraps a function in a
+  forwarding wrapper carrying `PREVIOUS_VALUE`.
+- **A forwarding *function*, not a `{fn, prev}` object or a class**, and that is load-bearing: every
+  walker in `merge-config.ts` and `config.ts` branches on `isPlainObject`, which a wrapper object
+  would satisfy - `finalizeConfig` would rebuild it as a plain object and lose the function, and
+  `mergeConfig` would merge into it key by key. A function is not a plain object, so it travels
+  through all of them untouched. The wrapper also copies `name`, since a step's log label is its
+  function's name. The user's own function is never mutated: two packages inheriting the same
+  shared-config function would otherwise share and overwrite one `prev`.
+- **The two contexts expose the same names, and that is an invariant with a test on it.** A value
+  function sees exactly what a `${{ }}` expression sees - every scope binding and the config's own
+  top-level keys - plus `value`, which is function-only because an expression is a string and could
+  not carry an inherited array back anyway (`${{ value }}` is `value is not defined`). They cannot
+  drift by accident, since the argument *is* the expression context with one property added; a
+  member defined straight onto the argument would split them silently, and a config author would
+  find a name that works in one spelling and not the other. The spec enumerates both rather than
+  checking a list someone has to remember to extend.
+- The argument object is built with the interpolation context as its **prototype**, never spread
+  from it. Those top-level keys are lazy memoized getters (so key order in the file means nothing
+  and a cycle is reported rather than half-resolved); spreading would fire every one on every call,
+  and one of them throwing would blame the wrong key.
+- **`value` is `undefined` when nothing below set the key, and is deliberately not defaulted to
+  `[]`** - that would be a guess about the key's type, wrong for every key that is not a list. The
+  case matters because a function written to extend an inherited list is also the *first* layer in a
+  repository that inherits nothing, and V8 reports that as `value is not iterable`, naming neither
+  the key nor the reason. So `callValueFn`'s catch adds the reason itself when `previous` was
+  undefined **and the function actually read it** - recorded through a getter, never inferred from
+  the message. Without that second condition the hint went out with *every* failure of a first-layer
+  function: a frozen-object `TypeError` from `read()` arrived wearing advice about spreading an
+  inherited list, which is precisely the send-the-reader-to-the-wrong-place mistake the hint exists
+  to prevent. Matching on V8's wording is the other way to get this wrong.
+
+**A value function computes and returns; it must never act - and `FileScope` must never gain a way
+to.** Both halves are the same rule, and the rule is about *when*: this runs while the config
+resolves, which every command does, so anything a value function or a `file` member *did* would
+happen on `rman list`, `rman info` and `rman config`, once per package, with nothing having asked
+for it. `file` therefore stays three read-only members (`exists`, `resolve`, `resolveFirst`) - **do
+not add `copy`, `write` or `mkdir`**, however reasonable the request sounds.
+
+It has already been tried, in the only way a function that does not exist can be: a shared config
+reaching for `file.copyMany(...)` made **every** rman command exit 1 (measured, `list` and `info`
+among them). The loud failure was the lucky outcome - had the member existed, `rman list` would have
+quietly copied files. And nothing is lost by refusing: work goes in a step, which is the one thing
+rman runs on purpose, and a step can be a function too.
+
+## Function steps: a step written as JavaScript
+
+[`src/core/run-step.ts`](packages/rman/src/core/run-step.ts). `run.<script>.before`/`.exec`/`.after`,
+`version.before`/`.exec`/`.after` and `run.<script>.if` each take a **function** as well as a string.
+Six step slots and one condition - and that list is the whole surface, because it is exactly the set
+of keys whose value is a shell command the *author wrote*. `rman exec <cmd>` takes its command from
+argv, and `ci`/`publish`/`docker-publish` build theirs from data (`packageManager`, an image name),
+so none of them has anything a function could replace.
+
+- **The reason is *when*, not taste, and it is the whole justification.** A `${{ }}` expression is
+  evaluated while the config resolves - which every command does, `rman list` included - so it can
+  only see the state the config loaded in, and anything it *did* would fire on every invocation.
+  Measured, and it is how this started: a shared config with `after: '${{ file.copyMany(...) }}'`
+  made **every** rman command exit 1, `list` and `info` among them. A function runs when its turn
+  comes. Don't answer "I want to run JS in a step" by adding a side-effecting member to the `file`
+  scope; `file` answers what is on disk and must stay a query.
+- **A string step stays a shell command**, and dropping the `${{ }}` does not turn one into an
+  expression - the string goes to `/bin/sh` verbatim (measured:
+  `syntax error near unexpected token`). There is no third form between the two.
+- **`process.cwd()` is never changed, and cannot be.** A shell step is a child process and gets a
+  real working directory; a function runs inside rman's own, and `run` executes packages
+  **concurrently** - one `process.chdir()` would move the ground under every step running beside it.
+  So `ctx.cwd` is handed over and a relative path in a step resolves against wherever rman was
+  invoked. Measured, and silent: a hook writing `fs.appendFileSync('steps.txt', ...)` landed in the
+  repository root while the shell steps beside it wrote to the package. `ctx.runBin` is pre-bound to
+  `cwd`, so a binary run through it needs no care.
+- **The context is `pkg`, not `package`** - matching `${{ pkg }}` rather than
+  `CommandContext.package`. `package` is a reserved word, so that spelling forces every author to
+  rename while destructuring (`{ package: current }`, as `check.js` does). The two contexts
+  therefore disagree on this one name, deliberately; an object either way, so a member added later
+  breaks nothing.
+- **Failure is a throw**, as a non-zero exit is for a shell step and as `runBin` already rejects. A
+  step that can only report trouble by returning something nobody reads is a step that passes while
+  doing nothing.
+- **`console` is redirected only while the progress panel is on**, which is the same split `exec`
+  already makes (`stdio: 'pipe'` + `onLine` with the panel, `'inherit'` without). A function writing
+  to the real stdout would print *over* the panel it is being rendered inside. Steps should prefer
+  `ctx.logger`.
+- **Only the JS config forms can hold one** - YAML cannot, and don't paper over that with a
+  `js: './file.mjs'` step: it buys nothing over the `node ./file.mjs` a YAML repo would write
+  anyway, and adds a second mechanism. A YAML `.rmanrc.yml` that `extends` a JS config **does** get
+  that config's functions (measured), so a shared config package can use them on behalf of
+  repositories that stay in YAML.
+- `.rmanrc.cjs` is checked before `.mjs`/`.js` and beats `.rmanrc.yml`. **`require('rman')` in a
+  `.cjs` is not safe on every supported Node**: rman is ESM-only and `require(esm)` arrived in
+  20.19, while the engine floor is `>=20.0`. The `/** @type {import('rman').RmanConfig} */` form
+  imports nothing and always works - which is why `@panates/rman-node` uses it.
+
+**Two things this fixed on the way, both of which were bugs on their own:**
+
+- `normalizeScriptValue` used to `return []` for anything it did not recognize, so a function in
+  `after` produced `1 succeeded, 0 failed` with the step never run (measured). It throws now, naming
+  the config path and the index. A configuration mistake has to be loud.
+- **`VersionService` carried a second `normalizeScriptValue`** that joined an array with `' && '`
+  into one shell line and dropped non-strings. Both had to go - a function cannot be a term in a
+  `&&` chain, and `cd x && y` in one process was never the same as two steps. `RunService`'s is the
+  only implementation now, and `runLifecycleSlot` takes a list rather than one joined string.
+
+**Serializing a config is now a thing that can fail, so it goes through `printableConfig`**
+([`src/utils/printable-config.ts`](packages/rman/src/utils/printable-config.ts)): `rman config` and
+`--config` print `[Function: copyDocs]`. This was already broken before functions existed - a
+`plugins` entry in its object form carries the plugin's seams, and `rman config --root` died with
+`unacceptable kind of an object to dump [object Function]` on a repository that merely `extends`-ed
+a plugin package. In `--json` it was worse and quieter: `JSON.stringify` drops a function-valued key
+entirely, so the step simply vanished from the output.
+
+**Known, pre-existing, and not this feature's:** an error thrown from a command handler without the
+`logged` marker is printed **twice** - once to stdout by yargs' `.fail()`, once to stderr by
+`runCli`'s catch. Measured on untouched paths too (`rman version banana` prints it three times).
+Don't take a doubled message as evidence that a new throw site is wrong.
+
 ## A repository's own commands (`.rman/*.mjs`)
 
 [`src/core/custom-command.ts`](src/core/custom-command.ts). A module there becomes `rman <its file
@@ -902,6 +1151,16 @@ no version planner - so a spec that needs one **brings it**.
 - `import { expect } from 'expect'` - the named form. The default import works at runtime through
   CJS interop and produced ~287 type errors, which is why the test tree never type-checked. Both
   `test/tsconfig.json`s are clean now; keep them that way.
+- **`npm run typecheck` is what keeps them that way, and it exists because nothing else looks.**
+  `npm test` runs mocha, which transpiles without type-checking, and `npm run build` compiles `src`
+  only - so a spec can be wrong about a type indefinitely. Measured on the exact mistake that
+  prompted it (a *core* spec typing its fixture with `rman-node`'s `clean`): `typecheck` reports
+  `'clean' does not exist in type 'RmanConfig'`, mocha reports `1 passing`.
+  - One pass per package (`tsc --noEmit -p packages/*/test`) covers `src` too, since each test
+    tsconfig includes `../src/**/*.ts` - and covers it under the settings the *specs* load it with,
+    which is where the one-copy-of-the-core `paths` mapping lives.
+  - In CI as its own job on one Node version, beside `lint`: the answer does not vary by runtime, so
+    running it inside the test matrix would pay for it three times.
 
 ## Linking a built package into another repository
 

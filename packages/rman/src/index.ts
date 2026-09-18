@@ -25,6 +25,7 @@ export { Package } from './core/package.js';
 export type { RmanPlugin } from './core/plugin.js';
 export { definePlugin } from './core/plugin.js';
 export { Repository } from './core/repository.js';
+export type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from './core/run-step.js';
 export type { ChangeKind } from './core/version-scheme.js';
 /** The numbering seam. `VersionScheme` is abstract - `highestVersion`/`highestBump`/`smallestBump`
  *  are implemented from the members around them, so a scheme states only what it must and still

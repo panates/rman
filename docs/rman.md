@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 0e33a0a
-package-version: 1.0.11
-date: 2026-09-16
+git-commit: 546a809
+package-version: 1.1.1
+date: 2026-09-18
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff 0e33a0a..HEAD -- src/
+  git diff 546a809..HEAD -- src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -45,7 +45,11 @@ standalone utilities (`ChangeHashService`, `Logger`). For the CLI itself (comman
   - [`Repository`](#repository)
   - [`Package`](#package)
 - [Configuration (`.rmanrc` / `.rmanrc.yml`)](#configuration-rmanrc--rmanrcyml)
-  - [JS config (`.rmanrc.cjs` / `.rmanrc.mjs` / `.rmanrc.js`)](#js-config-rmanrccjs-rmanrcmjs-rmanrcjs)
+  - [JS config (`.rmanrc.cjs` / `.rmanrc.mjs` / `.rmanrc.js`)](#js-config-rmanrccjs--rmanrcmjs--rmanrcjs)
+  - [Scoped `vars`](#scoped-vars)
+  - [Reading a file (`read`)](#reading-a-file-read)
+  - [Function steps](#function-steps)
+  - [Function values](#function-values)
   - [Editor support (types)](#editor-support-types)
 - [Services](#services)
   - [`VersionService`](#versionservice)
@@ -59,7 +63,7 @@ standalone utilities (`ChangeHashService`, `Logger`). For the CLI itself (comman
   - [`SystemInfo`](#systeminfo)
 - [Shared utilities](#shared-utilities)
   - [`ChangeHashService`](#changehashservice)
-  - [`Logger` / `LogLevel` / `resolveRootLogLevel`](#logger-loglevel-resolverootloglevel)
+  - [`Logger` / `LogLevel` / `resolveRootLogLevel`](#logger--loglevel--resolverootloglevel)
 - [The `logged` error convention](#the-logged-error-convention)
 - [Package filtering (`scope`/`ignore`/`deps`/`dependents`)](#package-filtering-scopeignoredepsdependents)
 
@@ -340,7 +344,7 @@ declaration stay package-specific:
       image: "panates/${{ pkg.basename }}:${{ semver.major(pkg.version) }}"
   run:
     build:
-      exec: "tsc -b ${{ pkg.json.tsconfig ?? 'tsconfig-build.json' }}"
+      exec: "tsc -b ${{ pkg.manifest.tsconfig ?? 'tsconfig-build.json' }}"
 ```
 
 The contents are **real JavaScript**, not a template mini-language, so there is no growing list of
@@ -350,8 +354,17 @@ substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
 | --- | --- |
 | `pkg` | the package the config was resolved for |
 | `repository` | the repository - the root package's own fields, plus repo-level ones |
-| `env` | a copy of `process.env` |
+| `file` | where something is on disk, resolved against `pkg.dirname` - `exists` / `resolve` / `resolveFirst` |
+| `read` | what is *in* a structured file - see [Reading a file](#reading-a-file-read) |
+| `env` | a copy of `process.env`, so writing to it reaches nothing |
 | `semver` | rman's own `semver`, for `semver.major(pkg.version)` and friends |
+| `path` | Node's own `node:path`, the platform's flavour (`path.posix` / `path.win32` through it) |
+| `git` | the checkout: `branch`, `sha`, `shortSha`, `dirty` |
+
+plus **the config's own top-level keys, bare** (`${{ vars.registry }}`, `${{ publish.directory }}`)
+- resolved on demand, so key order in the file means nothing and a cycle is reported rather than
+half-resolved. A scope binding wins a name clash, and a key that is not a valid identifier (a
+`"[selector]"`, a `"lint:fix"`) is not bound at all.
 
 `pkg` and `repository` share one shape, since the repository root *is* a package:
 
@@ -361,8 +374,9 @@ substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
 | `.scope` / `.unscopedName` | `@sqb` / `builder` - `scope` is `undefined` when unscoped |
 | `.version` | its `package.json` version |
 | `.basename` | its directory's last segment - **not** the same as `name`: sqb's root is named `sqb.v4` in a directory called `sqb` |
-| `.dirname` / `.relativeDir` | absolute path / path from the repository root (`packages/builder`) |
-| `.json` | the whole `package.json`, as a copy (`pkg.json.engines.node`) |
+| `.dirname` / `.relativeDir` | absolute path / path from the repository root (`packages/builder`); `relativeDir` is `''` for the root itself |
+| `.provider` | which ecosystem claimed it - `node`, or empty when no plugin did |
+| `.manifest` | the whole manifest, as a copy (`pkg.manifest.engines.node`). **Not `.json`** - which file a package's identity lives in is the ecosystem's business now |
 | `pkg.targetVersion` | the version this run is about to write - **only inside a `version.before`/`.exec`/`.after` hook**; anywhere else, reading it throws |
 
 `repository` adds:
@@ -372,14 +386,32 @@ substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
 | `.monorepo` | boolean |
 | `.packages` | every package, each in the shape above |
 | `.package(name)` | one of them by name, or `undefined` - for reaching a sibling's directory |
-| `.git.branch` / `.sha` / `.shortSha` / `.dirty` | read from git **only if an expression asks**, then remembered - so a repository that never mentions them spawns no git, and every command resolves config. All `undefined` outside a git checkout; `branch` is `undefined` on a detached HEAD. |
+
+and `git` is **top level, not `repository.git`** - which is where it used to be, through 1.0.x:
+
+| | |
+| --- | --- |
+| `git.branch` | `undefined` on a detached HEAD, which a CI checkout often is - so `?? 'detached'` works |
+| `git.sha` / `git.shortSha` | full, and the first 7 characters |
+| `git.dirty` | whether the working tree has uncommitted changes |
+
+It sits beside `env` because that is what it is: `repository` shares its shape with `pkg` since the
+root *is* a package, and its other members (`monorepo`, `packages`, `package()`) say something
+about the repository as a container of packages. A branch name says nothing about any package - it
+describes the working tree all of them happen to be in.
+
+Read from git **only if an expression asks**, then remembered for the whole run: every command
+resolves config, so a repository that never mentions git spawns none (measured - and the same
+measurement is why `interpolateConfig` builds its context from property descriptors rather than
+spreading the scope, since a spread reads every getter). All four are `undefined` outside a
+checkout, which is a state rather than an error.
 
 - **`${{ }}`, deliberately not `{{ }}`.** A config value may legitimately carry `{{...}}` meant for
   something else (`helm template --set tag={{.Values.tag}}`), and with the plainer delimiter rman
   would try to evaluate it. A bare `{{...}}` is therefore left alone. To emit a literal `${{`, let
   an expression produce it, as in GitHub Actions: `${{ '${{' }}`.
 - A string that is **nothing but** one expression keeps that value's own type
-  (`skip: "${{ pkg.json.private === true }}"` → a boolean); embedded in surrounding text it is
+  (`skip: "${{ pkg.manifest.private === true }}"` → a boolean); embedded in surrounding text it is
   stringified. Without this, expressions could only ever produce strings and a setting like
   `run.<script>.skip` would be unreachable from one.
 - A **nullish** result is fine standing alone (it just means "unset") but an **error** embedded in
@@ -466,8 +498,9 @@ file in the repository would (CommonJS by default, ESM under `"type": "module"`)
 
 **Type-checked authoring:** `rman` exports an `RmanConfig` type and a `defineConfig()` identity
 helper (the same pattern Vite/Vitest use) - wrap the config object in it to get full autocomplete
-and type errors in a JS config file, the equivalent of what the [JSON Schema](#editor-support-json-schema)
-gives `.rmanrc`/`.rmanrc.yml`:
+and type errors in a JS config file. There is no equivalent for `.rmanrc`/`.rmanrc.yml`: rman
+shipped a JSON Schema through 1.0.x and it is gone, so those two forms are unchecked - which is the
+argument for a JS config as soon as one is non-trivial.
 
 ```js
 // .rmanrc.mjs
@@ -497,6 +530,298 @@ import type { RmanConfig } from 'rman';
 const config: RmanConfig = { packageManager: 'pnpm' };
 ```
 
+> **Note on `.rmanrc.cjs` and `require('rman')`.** rman is ESM-only, so `require('rman')` in a
+> CommonJS config needs `require(esm)`, which arrived in Node 20.19 - below that it throws
+> `ERR_REQUIRE_ESM`, and rman's own floor is `>=20.0`. The JSDoc form imports nothing and works on
+> every supported version:
+>
+> ```js
+> /** @type {import('rman').RmanConfig} */
+> module.exports = { packageManager: 'pnpm' };
+> ```
+>
+> Use `.rmanrc.mjs` if you want to call `defineConfig()` itself.
+
+### Scoped `vars`
+
+`vars` can be declared at **any level** of the config, and applies to that level's subtree:
+
+```yaml
+vars:
+  x: 1
+"[ws:*]":
+  run:
+    vars:
+      x: 2
+    clean:
+      before: '${{ read(vars.x + ".json") }}'    # reads 2.json
+    build:
+      vars:
+        x: 3
+      before: '${{ read(vars.x + ".json") }}'    # reads 3.json
+```
+
+- **A fresh copy at every level**, with that level's own block merged over what the level above
+  resolved to. Merged **per key**, so redeclaring one var keeps the rest.
+- **Nothing written at a level reaches the level above, or a sibling.** That is what the copy is
+  for: a [value function](#function-values) is handed this object, so one that writes to it
+  (`vars.built = Date.now()`) writes into its own level and nowhere else.
+- A level's own block is resolved **against the level above it**, so
+  `vars: { out: '${{ vars.x }}/dist' }` refines the `x` it is inheriting rather than reading its own
+  half-built scope - which would make the answer depend on key order inside the block.
+
+**`vars` is reserved at every level**, which costs a script that would have been called `vars`:
+`run.vars` is a scope, not a script. Nothing enumerates `run`'s keys as a list of script names, so
+that is where the cost stops.
+
+**One gap, in the types only.** `run.vars` works at runtime and in YAML, but `RmanConfig` cannot
+express it: `run` is keyed by script name, so any encoding that lets `vars` through has to widen the
+index signature - and TypeScript then stops excess-property-checking *every* script's options
+(measured: with the widened index, `run: { build: { exce: 'tsc' } }` compiles clean). Catching that
+typo across every script is worth more than typing one key, so a typed JS config needs a cast:
+
+```js
+run: { vars: { x: 2 }, build: { exec: 'tsc' } } as RmanConfig['run'],
+```
+
+Every other level - `run.<script>.vars`, `version.vars`, `publish.vars`, `changelog.vars`,
+`githubRelease.vars`, and a plugin's own option blocks - is typed through `ScopedVars`.
+
+### Reading a file (`read`)
+
+`file` says where something is; `read` says what is in it.
+
+```yaml
+"[ws:*]":
+  run:
+    build:
+      exec: 'tsc --outDir ${{ read("tsconfig.json").compilerOptions.outDir }}'
+```
+
+| | |
+| --- | --- |
+| `read(path)` | parsed contents, format taken from the extension |
+| `read(path, format)` | for a name that does not say - `read('.npmrc', 'ini')` |
+
+| format | extensions |
+| --- | --- |
+| `json` | `.json` |
+| `yaml` | `.yml`, `.yaml` |
+| `ini` | `.ini` |
+| `xml` | `.xml`, `.csproj`, `.vbproj`, `.fsproj`, `.props`, `.targets`, `.nuspec`, `.plist` |
+
+An extension it does not recognize is an error naming the four, never a guess at JSON.
+
+**`.env` is deliberately absent**, and that is the one exclusion on principle: `env` is already in
+scope, and a `.env` file exists to be loaded *into* an environment by something else, so reading one
+as data would mean two different things called the environment.
+
+**XML comes back as a DOM**, not a plain object - the asymmetry is the honest shape rather than an
+omission. An element can repeat, carry attributes and hold text at the same time, so any flattening
+has to pick a convention and be wrong for somebody. So it reads the way every other XML tool reads:
+
+```yaml
+"[ws:*]":
+  version:
+    stamp: '${{ read("pom.xml").getElementsByTagName("version")[0].textContent }}'
+```
+
+A malformed XML file is an error, not a half-parsed document: `@xmldom/xmldom` reports problems
+through a handler and otherwise carries on with whatever it salvaged, so without that check a
+truncated file would come back as a DOM whose contents are simply missing.
+
+Resolved against `pkg.dirname`, like `file` - so one `"[*]"` declaration reads each package's own
+copy. A repository-level file is reached explicitly:
+
+```yaml
+"[ws:*]":
+  version:
+    stamp: '${{ read(path.join(repository.dirname, "release.json")).stampFiles }}'
+```
+
+**It throws when the file is absent**, as `file.resolve` does. Compose with `file.exists` when the
+absence is a case to handle rather than a mistake - no second function is needed:
+
+```yaml
+outDir: '${{ file.exists("tsconfig.json") ? read("tsconfig.json").compilerOptions.outDir : "build" }}'
+```
+
+**A manifest is `pkg.manifest`, not this.** `read('package.json')` works and is the wrong answer:
+which file a package's identity lives in belongs to the ecosystem, so that expression is already
+wrong in a Cargo package sitting beside a Node one. Use `pkg.manifest`,
+`repository.package(name)?.manifest`, or `repository.manifest`.
+
+#### Caching, and why it is keyed the way it is
+
+A file is parsed **once for the whole repository**, not once per package - config resolution runs
+once per package, so twenty packages reading one shared file would otherwise parse it twenty times.
+
+The cache key is the file's `mtimeNs` and size, not its path, because **rman writes JSON files while
+it runs**: `version` rewrites every bumped manifest and then re-interpolates its own deferred hooks.
+A cache that only remembered the path would hand those back as they were before the write. A `stat`
+costs 1.3µs against 16.1µs for a read and parse, so the check costs a thirteenth of what it saves.
+
+The result is **deeply frozen and shared between packages**. Changing it would quietly change what
+the next package sees, so it raises a `TypeError` instead; spread it first if you need a copy:
+
+```js
+const tweaked = { ...read('tsconfig.json'), extends: undefined };
+```
+
+### Function steps
+
+A `run.<script>` step, a `version` hook and a `run.<script>.if` can each be **a function instead of
+a string**. The string form is a shell command and stays the right shape for one; the function form
+exists for the cases a shell command answers badly.
+
+```js
+// .rmanrc.mjs
+import fs from 'node:fs';
+import path from 'node:path';
+
+export default {
+  '[ws:*]': {
+    run: {
+      build: {
+        exec: 'tsc -b tsconfig-build.json',
+        // a list may mix the two, and runs them in order
+        after: [
+          'chmod +x build/cli.js',
+          function copyDocs({ pkg, repository }) {
+            for (const name of ['README.md', 'LICENSE']) {
+              const from = [pkg.dirname, repository.dirname].map(d => path.join(d, name)).find(fs.existsSync);
+              if (from) fs.copyFileSync(from, path.join(pkg.dirname, 'build', name));
+            }
+          },
+        ],
+      },
+    },
+  },
+};
+```
+
+**Why it exists - and it is about *when*, not about taste.** A `${{ ... }}` expression is evaluated
+while the config resolves, which *every* command does (`rman list` included). So an expression can
+only see the state the config was loaded in, and anything it *did* would happen on every
+invocation. A function step runs when its turn comes. Reach for it when that difference matters, or
+when the work is genuinely code; write a shell command when the step is a shell command.
+
+**The context** (`RunStepContext`), the same object an `if` receives:
+
+| | |
+| --- | --- |
+| `pkg` | the package this step is for - always set, and spelled `pkg` as in `${{ pkg }}` |
+| `repository` | the whole repository |
+| `cwd` | the directory the step is *about* - the package's, or the root for a monorepo bookend |
+| `runBin(bin, argv, opts?)` | the repository's locally installed binaries, already bound to `cwd` and this run's log level |
+| `logger` | at this run's resolved log level |
+
+**Trap: `process.cwd()` is not changed.** A shell step is a child process and gets a real working
+directory; a function runs inside rman's own, and `run` executes packages **concurrently** - one
+step calling `process.chdir()` would move the ground under every step running beside it. So join
+paths yourself:
+
+```js
+fs.writeFileSync('out.txt', data)                     // the repository root. Wrong, and silently so.
+fs.writeFileSync(path.join(ctx.cwd, 'out.txt'), data) // the package
+```
+
+`ctx.runBin` is already bound to `cwd`, so a binary run through it needs no such care.
+
+**Failure is a throw.** The return value means nothing - exactly as a non-zero exit is what fails a
+shell step. **Prefer `ctx.logger` to `console`**: with the live progress panel on, a direct write
+lands beside the panel instead of in the step's own log.
+
+**Only the JS config forms can hold one**, since YAML cannot. A repository whose own `.rmanrc.yml`
+`extends` a JS config still gets the functions that config declares, so a shared config package can
+use them on behalf of repositories that stay in YAML.
+
+`rman config` prints a function as `[Function: copyDocs]`, which is why naming them is worth it.
+
+### Function values
+
+**Any other config value may also be a function** - and that one is the JS spelling of a
+`${{ ... }}` expression: same question, same moment, same scope.
+
+```js
+// .rmanrc.mjs
+import path from 'node:path';
+
+export default {
+  vars: {
+    coveragePath: ({ repository }) => path.join(repository.dirname, 'coverage'),
+    buildDir: 'build',
+  },
+  '[*]': {
+    publish: { directory: ({ vars }) => vars.buildDir },
+    clean: { include: ({ vars }) => [vars.buildDir, '*.tsbuildinfo'] },
+  },
+  '[ws:*]': {
+    // `value` is what the layers underneath resolved to - the general form of `+key`
+    clean: { include: ({ value, vars, pkg }) => [...(value ?? []), path.join(vars.coveragePath, pkg.basename)] },
+  },
+};
+```
+
+It receives one object with **exactly** what an expression can name - `pkg`, `repository`, `file`,
+`read`, `env`, `semver`, `path`, `git`, plus the config's own top-level keys (`vars`, `publish`, …) -
+and one thing an expression has no way to express:
+
+| | |
+| --- | --- |
+| `value` | what this key resolved to in the layers **below** this one |
+
+**`value` is `undefined` when nothing below sets the key**, which is the case a function written to
+extend an inherited list also has to handle - it is the first layer in a repository that inherits
+nothing. Write `value ?? []` (or `?? ''`). It is deliberately not defaulted to `[]`: that would be a
+guess about the key's type and wrong for every key that is not a list. The error says so when a
+spread trips over it, since V8's own `value is not iterable` names neither the key nor the reason.
+
+**Why this is not just a nicer `${{ }}`:** an expression is a string, so it cannot carry a real
+array or object, cannot see what it is overriding, and has to be written in a language with no
+editor support inside a quoted value. A function is checked by TypeScript, refactorable, and can
+import whatever it needs.
+
+> **A value function must compute and return, never act.** It runs while the config resolves -
+> which *every* command does - so one that copies a file copies it on `rman list`, `rman info` and
+> `rman config` as well, once per package, with nothing having asked. This is also why `file` offers
+> only `exists`/`resolve`/`resolveFirst` and will never gain a `copy` or `write`.
+>
+> Work belongs in a **step**, the one thing rman runs on purpose - and a step can be a function too,
+> so nothing is lost by keeping the two apart:
+>
+> ```js
+> clean: { include: ({ vars }) => [vars.buildDir] },            // computes. Right.
+> run: { build: { after: ({ pkg }) => fs.copyFileSync(...) } }, // acts. Also right - it is a step.
+> publish: { directory: () => { fs.mkdirSync('out'); ... } },   // acts at read time. Wrong.
+> ```
+
+#### Which functions are values, and which are code
+
+Both kinds live in one config, and **the key decides** - exactly as the key already decides whether
+a string is a shell command or a path:
+
+| | |
+| --- | --- |
+| `run.<script>`, `run.<script>.before`/`.exec`/`.after`, `run.<script>.if`, `version.before`/`.exec`/`.after` | **code** - left alone, called later by `run`/`version` |
+| `plugins` and anything under it | **code** - a plugin object is functions all the way down |
+| everything else | **a value** - called when the config resolves |
+
+```js
+'[ws:*]': {
+  clean: { include: ({ vars }) => [vars.buildDir] },  // a value: called now
+  run: { build: { after: ({ pkg }) => copy(pkg) } },  // a step: called by `rman build`
+}
+```
+
+No marker to remember, and nothing about the function itself is inspected - arity or parameter
+names would be a guess, and guessing wrong means either running build-time code while merely
+*loading* the repository, or silently never running it.
+
+A command interpolating a fragment of the config on its own must say where that fragment sits
+(`interpolateConfig(value, scope, { at: ['version', slot] })`), or the path matches nothing and a
+step there is mistaken for a value.
+
 ### Config keys reference
 
 | Key | Type | Default | Scope / notes |
@@ -511,7 +836,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
 | `version.stampDockerfile` | `boolean` | `true` | Per-package cascaded. Rewrite this package's Dockerfile `org.opencontainers.image.version` label to the version being written, in the same commit as the bump. Only ever rewrites a label already declared; reads `publish.docker.dockerfile`. |
 | `version.stamp` | `string \| string[]` | none | Per-package cascaded. Source files (relative to the package's own directory) whose `version` constant is rewritten to the version being written, in the same commit. A listed file a package doesn't have is a silent no-op. |
-| `version.before` / `.exec` / `.after` | `string \| string[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). |
+| `version.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). A `RunStepValue` is a shell command **or a function** - see [Function steps](#function-steps). |
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
 | `changelog.template` | `string` (a file **path**, relative to repo root) | built-in template | Per-package cascaded. Throws if the path doesn't exist. |
 | `changelog.filePath` | `string` | `'CHANGELOG.md'` | Per-package cascaded, relative to that package's own directory. CLI `--file-path` wins when given. |
@@ -539,8 +864,8 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 | `run.<script>.logLevel` | `LogLevel` | root's resolved log level | Per-package cascaded. |
 | `run.<script>.changedSince` | `string` | none | Root-level fallback, used only when CLI `--changed-since` isn't given. |
 | `run.<script>.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of running this script entirely. |
-| `run.<script>.if` | `string` (small expression grammar) | none (always runs) | Per-package cascaded. See [`RunService`'s conditional execution](#conditional-execution-if). |
-| `run.<script>.before` / `.exec` / `.after` | `string \| string[]` | none | Per-package cascaded - supplies the command(s) to run when the package's own `package.json` doesn't define this script slot. A bare string in place of the whole `run.<script>` object is shorthand for `exec`. |
+| `run.<script>.if` | `string` (small expression grammar) \| `RunConditionFn` | none (always runs) | Per-package cascaded. See [`RunService`'s conditional execution](#conditional-execution-if) and [Function steps](#function-steps). |
+| `run.<script>.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded - supplies the step(s) to run when the package's own `package.json` doesn't define this script slot. A `RunStepValue` is a shell command **or a function** ([Function steps](#function-steps)); a list may mix them. A bare value in place of the whole `run.<script>` object is shorthand for `exec`. |
 | `run.<script>.override` | `boolean` | `false` | Per-package cascaded - when `true`, the config's script replaces the package's own definition even when it has one. |
 | `extends` | `string \| string[]` | none | Root of each file only. Configs to inherit from - see [above](#inheriting-a-shared-config-extends). |
 | `dependencies` | `string[] \| Record<string, string>` | none | Extra in-repo "dependencies" not present in the package's real `package.json`, purely for rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s task scheduling). Declared from the root through a selector (`"[pkg-a]": { dependencies: [...] }`) or in the package's own `.rmanrc`. |
@@ -840,7 +1165,7 @@ A pnpm/yarn `"workspace:"` range is handled specially:
 
 - A **bare** selector (`"workspace:*"`, `"workspace:^"`, `"workspace:~"`) is left **untouched** -
   it already tracks the dependency's current version dynamically, and gets resolved to a real
-  range only at publish time (see [`PublishService`](#publishservice) below).
+  range only at publish time (see [`PublishService`](node.md#publishservice), in `rman-node`).
 - An **explicit** `"workspace:<range>"` (e.g. `"workspace:^1.0.0"`) *is* bumped, the same way a
   plain range would be: `"workspace:^1.0.0"` → `"workspace:^2.0.0"`.
 

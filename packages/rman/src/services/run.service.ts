@@ -1,13 +1,16 @@
 import os from 'node:os';
+import { inspect } from 'node:util';
 import colors from 'ansi-colors';
 import { tokenize } from 'fast-tokenizer';
 import { Task } from 'power-tasks';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
+import type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from '../core/run-step.js';
 import { exec } from '../utils/exec.js';
-import { LOG_LEVELS, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
+import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { type ProgressItem, ProgressPanel } from '../utils/progress-panel.js';
+import { runBin } from '../utils/run-bin.js';
 
 export namespace RunService {
   export interface Options extends PackageFilterOptions {
@@ -60,18 +63,40 @@ export namespace RunService {
    *   run:
    *     test: mocha          # same as   test: { exec: mocha }
    */
-  /** One command of a script, with the label the progress panel and the per-step log show. */
-  export interface ScriptStep {
+  /**
+   * One step of a script - a shell command, or a function ([`RunStepFn`](../core/run-step.ts)).
+   *
+   * A union rather than one shape with two optional fields, so every consumer is made to say which
+   * it is handling: the executor that forgets is the one that silently runs nothing, which is
+   * exactly the bug this type replaces (a function in `after` used to be dropped by
+   * `normalizeScriptValue` and reported as a step that succeeded).
+   */
+  export type ScriptStep = CommandStep | FunctionStep;
+
+  interface StepBase {
+    /** The slot it came from - `before`/`exec`/`after`, which is what the log line shows. */
     name: string;
-    command: string;
+    /** What the progress panel and the per-step log print: the command itself, or the function's
+     *  own name. */
+    label: string;
   }
 
-  /** The three slots a script is made of, each one command or several run in sequence. The same
-   *  three names a `.rmanrc "run.<script>"` block uses, because they are the same three things. */
+  export interface CommandStep extends StepBase {
+    command: string;
+    run?: undefined;
+  }
+
+  export interface FunctionStep extends StepBase {
+    run: RunStepFn;
+    command?: undefined;
+  }
+
+  /** The three slots a script is made of, each one step or several run in sequence. The same three
+   *  names a `.rmanrc "run.<script>"` block uses, because they are the same three things. */
   export interface ScriptSlots {
-    before?: string[];
-    exec?: string[];
-    after?: string[];
+    before?: RunStepValue[];
+    exec?: RunStepValue[];
+    after?: RunStepValue[];
   }
 
   /**
@@ -131,27 +156,91 @@ export namespace RunService {
    * the copies would sit in the file that writes versions - which now runs no command of its own at
    * all.
    *
-   * `fallback` is the caller's own configured command, **already evaluated**: `version`'s three
+   * `fallback` is the caller's own configured step(s), **already evaluated**: `version`'s three
    * paths are in `DEFERRED_PATHS` precisely because only the caller can bind
    * `${{ pkg.targetVersion }}`, so interpolating here would either be too early or need a scope this
    * service has no business holding.
+   *
+   * **A list, not one joined string.** `VersionService` used to `join(' && ')` an array into a
+   * single shell line, which a function step cannot be part of - and which quietly changed the
+   * semantics of the shell case too, since `cd x && y` in one process is not the same as two.
    */
   export async function runLifecycleSlot(
     pkg: Package,
     script: string,
     slot: keyof ScriptSlots,
-    fallback?: string,
+    fallback?: RunStepValue[],
   ): Promise<void> {
     const own = contributedSlots(pkg, script)?.[slot] ?? [];
-    const commands = own.length ? own : fallback ? [fallback] : [];
-    for (const command of commands) await exec(command, { cwd: pkg.dirname, stdio: 'inherit' });
+    const values = own.length ? own : (fallback ?? []);
+    for (const value of values) {
+      if (typeof value === 'function') {
+        await value(createStepContext(pkg, pkg.dirname));
+        continue;
+      }
+      await exec(value, { cwd: pkg.dirname, stdio: 'inherit' });
+    }
   }
 
   export function getConfig(pkg: Package, script: string): Record<string, unknown> {
     const runCfg = pkg.config?.run;
     const cfg = runCfg && typeof runCfg === 'object' ? (runCfg as Record<string, unknown>)[script] : undefined;
-    if (typeof cfg === 'string' || Array.isArray(cfg)) return { exec: cfg };
+    /** The bare-value shorthand. A function is `typeof 'function'`, not `'object'`, so without
+     *  naming it here `run: { build: myFn }` fell through to the `{}` below - the long form would
+     *  have worked and the short one silently done nothing, an arbitrary difference. */
+    if (typeof cfg === 'string' || typeof cfg === 'function' || Array.isArray(cfg)) return { exec: cfg };
     return cfg && typeof cfg === 'object' ? (cfg as Record<string, unknown>) : {};
+  }
+
+  /**
+   * The context a function step or `if` is handed - see [`RunStepContext`](../core/run-step.ts).
+   *
+   * `runBin` and `logger` are bound to *this run* rather than left to be imported, which is the
+   * whole reason they are handed over: an imported `runBin` knows neither the cwd nor the resolved
+   * log level.
+   */
+  /**
+   * A `run.<script>.before`/`.exec`/`.after` (or `version.<slot>`) value: one step, or several to
+   * run in sequence. A shell command or a function, and a list may mix them.
+   *
+   * **Anything else throws, naming the path.** It used to `return []`, which meant a value rman did
+   * not recognize was dropped with no trace: writing a function here - the obvious guess, and now
+   * the supported form - produced `1 succeeded, 0 failed` with the step never run (measured). A
+   * configuration mistake has to be loud; silence here reads as success.
+   *
+   * Exported, and the only implementation: `VersionService` used to carry a second one that behaved
+   * differently, which is how `version.<slot>` came to join its array with `' && '`.
+   */
+  export function normalizeScriptValue(value: unknown, at: string): RunStepValue[] {
+    const items = Array.isArray(value) ? value : [value];
+    const steps: RunStepValue[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      /** An empty string and an absent value are both "nothing here", which is how a `"[*]"` block
+       *  declaring a slot some packages don't use has always behaved. */
+      if (item === undefined || item === null || item === '') continue;
+      if (typeof item === 'string' || typeof item === 'function') {
+        steps.push(item as RunStepValue);
+        continue;
+      }
+      const where = Array.isArray(value) ? `${at}[${i}]` : at;
+      throw new Error(
+        `"${where}" must be a shell command or a function, but it is ${describeValue(item)}.\n` +
+          `  A list of either (or both) runs them in sequence.`,
+      );
+    }
+    return steps;
+  }
+
+  export function createStepContext(pkg: Package, cwd: string): RunStepContext {
+    const logLevel = resolveRootLogLevel(pkg.repository);
+    return {
+      pkg,
+      repository: pkg.repository,
+      cwd,
+      runBin: (bin, argv, opts) => runBin(bin, argv, { cwd, logLevel, ...opts }),
+      logger: new Logger(logLevel),
+    };
   }
 
   /**
@@ -299,6 +388,7 @@ export namespace RunService {
 
     const runSteps = async (
       ctx: ProgressItem,
+      pkg: Package,
       pkgLabel: string,
       steps: RunService.ScriptStep[],
       cwd: string,
@@ -313,15 +403,12 @@ export namespace RunService {
           ctx.currentStep = step.name;
           ctx.stepIndex = i;
           if (panel.enabled) {
-            await exec(step.command, {
-              cwd,
-              stdio: 'pipe',
-              onLine: (line, stdio) => {
-                ctx.log.push(line);
-                ctx.lastLine = line;
-                void stdio;
-              },
-            });
+            const onLine = (line: string) => {
+              ctx.log.push(line);
+              ctx.lastLine = line;
+            };
+            if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine);
+            else await exec(step.command, { cwd, stdio: 'pipe', onLine });
           } else {
             /** Match the classic rman output: raw command output streams straight through
              *  (unbuffered, unprefixed), followed by our own one-line-per-step summary. */
@@ -329,7 +416,10 @@ export namespace RunService {
             const stepStart = Date.now();
             let stepError: any;
             try {
-              await exec(step.command, { cwd, stdio: 'inherit' });
+              /** No capture with the panel off: the step owns the terminal, exactly as a shell
+               *  step's `stdio: 'inherit'` does. */
+              if (step.run) await runFunctionStep(step.run, pkg, cwd);
+              else await exec(step.command, { cwd, stdio: 'inherit' });
             } catch (e) {
               stepError = e;
             }
@@ -358,9 +448,13 @@ export namespace RunService {
      *  Only in a monorepo. Without one the root *is* the single package, already in the loop below
      *  with the same hooks and the same directory - a bookend would simply run each of them a
      *  second time. */
-    const rootIf = !cwdScope && repository.monorepo && parseIfExpr(rootCfg.if);
-    const rootIfPasses = rootIf ? await evaluateIf(repository, repository.rootPackage, rootIf, ifStatusCache) : true;
-    const rootSkipped = !!cwdScope || !repository.monorepo || rootCfg.skip === true || !rootIfPasses;
+    /** Short-circuited deliberately: a root already out of the run for a structural reason must not
+     *  have its `if` evaluated, now that evaluating one can mean calling the repository's own code. */
+    const rootSkipped =
+      !!cwdScope ||
+      !repository.monorepo ||
+      rootCfg.skip === true ||
+      !(await passesIf(repository, repository.rootPackage, rootCfg.if, repository.dirname, ifStatusCache));
     const rootSteps = rootSkipped ? [] : getScriptSteps(repository.rootPackage, script);
     /** Filtered on the slot, not on `'pre' + script`: the step labels are `before`/`exec`/`after`
      *  now - the same words the config uses - rather than npm's `pre<script>` naming, which moved
@@ -376,10 +470,13 @@ export namespace RunService {
       const pkgBail = resolveBail(options.bail, repository.rootPackage, script, true);
       const pkgLogLevel = resolveLogLevel(options.logLevel, repository.rootPackage, script, logLevelDefault);
       children.push(
-        new Task(() => runSteps(ctx, 'root', rootPre, repository.dirname, pkgBail, pkgLogLevel), {
-          name: ctx.name,
-          exclusive: true,
-        }),
+        new Task(
+          () => runSteps(ctx, repository.rootPackage, 'root', rootPre, repository.dirname, pkgBail, pkgLogLevel),
+          {
+            name: ctx.name,
+            exclusive: true,
+          },
+        ),
       );
     }
 
@@ -387,8 +484,7 @@ export namespace RunService {
     for (const pkg of packages) {
       const pkgCfg = getConfig(pkg, script);
       if (pkgCfg.skip === true) continue;
-      const pkgIf = parseIfExpr(pkgCfg.if);
-      if (pkgIf && !(await evaluateIf(repository, pkg, pkgIf, ifStatusCache))) continue;
+      if (!(await passesIf(repository, pkg, pkgCfg.if, pkg.dirname, ifStatusCache))) continue;
       const steps = getScriptSteps(pkg, script);
       if (steps.length) stepsByPackage.set(pkg.name, steps);
     }
@@ -404,7 +500,7 @@ export namespace RunService {
       const dependencies = pkgTopo ? pkg.dependencies.filter(d => stepsByPackage.has(d.name)).map(d => d.name) : [];
       if (rootPre.length) dependencies.push(rootPreName);
       children.push(
-        new Task(() => runSteps(ctx, pkg.name, steps, pkg.dirname, pkgBail, pkgLogLevel), {
+        new Task(() => runSteps(ctx, pkg, pkg.name, steps, pkg.dirname, pkgBail, pkgLogLevel), {
           name: ctx.name,
           dependencies,
         }),
@@ -416,12 +512,15 @@ export namespace RunService {
       const pkgBail = resolveBail(options.bail, repository.rootPackage, script, true);
       const pkgLogLevel = resolveLogLevel(options.logLevel, repository.rootPackage, script, logLevelDefault);
       children.push(
-        new Task(() => runSteps(ctx, 'root', rootPost, repository.dirname, pkgBail, pkgLogLevel), {
-          name: ctx.name,
-          exclusive: true,
-          /** Must wait for every package task to finish, not just be "exclusive" once it starts. */
-          dependencies: [...stepsByPackage.keys()],
-        }),
+        new Task(
+          () => runSteps(ctx, repository.rootPackage, 'root', rootPost, repository.dirname, pkgBail, pkgLogLevel),
+          {
+            name: ctx.name,
+            exclusive: true,
+            /** Must wait for every package task to finish, not just be "exclusive" once it starts. */
+            dependencies: [...stepsByPackage.keys()],
+          },
+        ),
       );
     }
 
@@ -510,7 +609,7 @@ function printLegacyExecutingLine(commandName: string, pkgLabel: string, step: R
     colors.cyanBright.bold(step.name),
     colors.cyanBright.bold('executing'),
     sep,
-    step.command,
+    step.label,
   );
 }
 
@@ -535,16 +634,90 @@ function printLegacyStepLine(
     colors.cyanBright.bold(step.name),
     status,
     sep,
-    step.command,
+    step.label,
     colors.yellow(` (${durationMs} ms)`),
   );
 }
 
-/** A `run.<script>.before`/`.exec`/`.after` value: one command, or several to run in sequence. */
-function normalizeScriptValue(value: unknown): string[] {
-  if (typeof value === 'string') return value ? [value] : [];
-  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string' && !!v);
-  return [];
+function describeValue(value: unknown): string {
+  if (Array.isArray(value)) return 'a nested array';
+  if (value && typeof value === 'object') return 'an object';
+  return `a ${typeof value} (${JSON.stringify(value)})`;
+}
+
+/** One step, with the label the panel and the per-step log show. A function's own name - so
+ *  `function copyDocs()` and `const copyDocs = () => {}` both read as `copyDocs` - falling back to
+ *  the slot's own word for one passed inline, which has no name at all. */
+function toStep(slot: string, value: RunStepValue): RunService.ScriptStep {
+  if (typeof value === 'function') return { name: slot, label: value.name || `${slot} (js)`, run: value };
+  return { name: slot, label: value, command: value };
+}
+
+/**
+ * Runs a function step.
+ *
+ * **`console` is redirected while it runs, but only when the panel is on** - and that is the same
+ * split a shell step already makes. `exec` hands the panel its output through `stdio: 'pipe'` and
+ * `onLine`, so a function writing straight to the real stdout would print *over* the panel it is
+ * being rendered inside. With the panel off, `exec` uses `stdio: 'inherit'` and the step owns the
+ * terminal; a function gets the same, untouched.
+ *
+ * Restored in a `finally`, because a step that throws must not leave the rest of the run writing
+ * into a log nobody reads.
+ */
+async function runFunctionStep(
+  run: RunStepFn,
+  pkg: Package,
+  cwd: string,
+  onLine?: (line: string) => void,
+): Promise<void> {
+  const context = RunService.createStepContext(pkg, cwd);
+  if (!onLine) {
+    await run(context);
+    return;
+  }
+  const console_ = globalThis.console as unknown as Record<string, (...args: any[]) => void>;
+  const original: Record<string, (...args: any[]) => void> = {};
+  for (const method of CAPTURED_CONSOLE) {
+    original[method] = console_[method];
+    console_[method] = (...args: any[]) => {
+      /** Split, because one `console.log` may carry several lines and the panel's log is a list of
+       *  them - a multi-line entry would render as one unreadable row. */
+      for (const line of format(args).split('\n')) onLine(line);
+    };
+  }
+  try {
+    await run(context);
+  } finally {
+    for (const method of CAPTURED_CONSOLE) console_[method] = original[method];
+  }
+}
+
+const CAPTURED_CONSOLE = ['log', 'info', 'warn', 'error', 'debug'] as const;
+
+function format(args: any[]): string {
+  return args.map(arg => (typeof arg === 'string' ? arg : inspect(arg))).join(' ');
+}
+
+/**
+ * Whether a script runs for `pkg` at all - `run.<script>.if`, in either of its two forms.
+ *
+ * The function form is checked **first**: `parseIfExpr` answers `undefined` for anything that is
+ * not a string, which the caller reads as "no condition given", so a function reaching it would be
+ * a condition that silently always passed.
+ */
+async function passesIf(
+  repository: Repository,
+  pkg: Package,
+  raw: unknown,
+  cwd: string,
+  statusCache: Map<string, Record<string, Repository.PackageStatus>>,
+): Promise<boolean> {
+  if (typeof raw === 'function') {
+    return !!(await (raw as RunConditionFn)(RunService.createStepContext(pkg, cwd)));
+  }
+  const node = RunService.parseIfExpr(raw);
+  return node ? RunService.evaluateIf(repository, pkg, node, statusCache) : true;
 }
 
 /**
@@ -572,17 +745,17 @@ function getScriptSteps(pkg: Package, script: string): RunService.ScriptStep[] {
   const contributed = firstContributed(pkg, script);
 
   const fromConfig: RunService.ScriptSlots = {
-    before: normalizeScriptValue(cfg.before),
-    exec: normalizeScriptValue(cfg.exec),
-    after: normalizeScriptValue(cfg.after),
+    before: RunService.normalizeScriptValue(cfg.before, `run.${script}.before`),
+    exec: RunService.normalizeScriptValue(cfg.exec, `run.${script}.exec`),
+    after: RunService.normalizeScriptValue(cfg.after, `run.${script}.after`),
   };
 
   const steps: RunService.ScriptStep[] = [];
   for (const slot of SCRIPT_SLOTS) {
     const own = contributed?.[slot] ?? [];
     const configured = fromConfig[slot] ?? [];
-    const commands = override ? (configured.length ? configured : own) : own.length ? own : configured;
-    for (const command of commands) steps.push({ name: slot, command });
+    const values = override ? (configured.length ? configured : own) : own.length ? own : configured;
+    for (const value of values) steps.push(toStep(slot, value));
   }
   return steps;
 }

@@ -966,6 +966,542 @@ describe('core/Repository', () => {
     });
   });
 
+  /**
+   * A config value written as a **function** - the JS spelling of a `${{ }}` expression, answering
+   * the same question at the same moment, with the same scope plus `value`.
+   *
+   * Every case goes through a real `.rmanrc.cjs`, because that is the only form able to carry one
+   * and because the point is that it survives loading, merging and resolution.
+   */
+  describe('value functions', () => {
+    /** Writes a repository whose root config is JS source, plus N packages. */
+    function jsFixture(source: string, packages: string[] = ['pkg-a']): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc.cjs'), `module.exports = ${source};\n`);
+      for (const name of packages) writeJson(dir, `packages/${name}/package.json`, { name, version: '1.0.0' });
+      return dir;
+    }
+
+    it('is called with the same scope an expression gets, per package', async () => {
+      const dir = jsFixture(`{ '[ws:*]': { group: ({ pkg, repository }) => pkg.name + '@' + repository.basename } }`, [
+        'pkg-a',
+        'pkg-b',
+      ]);
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.group).toBe(`pkg-a@${path.basename(dir)}`);
+      expect(repo.getPackage('pkg-b')?.config.group).toBe(`pkg-b@${path.basename(dir)}`);
+    });
+
+    it("reads the config's own top-level keys bare, as an expression does", async () => {
+      const dir = jsFixture(
+        `{ vars: { buildDir: 'out' }, '[*]': { changelog: { filePath: ({ vars }) => vars.buildDir } } }`,
+      );
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.changelog?.filePath).toBe('out');
+    });
+
+    it('resolves a function inside vars, which other keys then read', async () => {
+      const dir = jsFixture(
+        `{ vars: { coverage: ({ repository }) => require('node:path').join(repository.dirname, 'coverage') },
+           '[*]': { changelog: { filePath: ({ vars }) => vars.coverage } } }`,
+      );
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.changelog?.filePath).toBe(path.join(dir, 'coverage'));
+    });
+
+    /**
+     * `value` is what the key resolved to in the layers **underneath** - the general form of `+key`,
+     * and the reason the chain is built during the merge rather than after it: by the time the
+     * config is resolved the layers have collapsed, and a closer layer's value has already taken
+     * the place of what it was derived from.
+     */
+    it('hands a layer what the layers below it resolved to, as `value`', async () => {
+      const dir = jsFixture(
+        `{ '[*]':    { version: { stamp: () => ['build'] } },
+           '[ws:*]': { version: { stamp: ({ value, pkg }) => [...value, pkg.name + '.log'] } } }`,
+      );
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['build', 'pkg-a.log']);
+      /** The root is not in `"[ws:*]"`, so it stops at the first layer - which is also the case
+       *  that proves the chain is per-package rather than computed once. */
+      expect(repo.config.version?.stamp).toEqual(['build']);
+    });
+
+    it('resolves the inherited value before handing it over, expressions included', async () => {
+      const dir = jsFixture(
+        `{ '[*]':    { version: { stamp: ['\${{ pkg.name }}-base'] } },
+           '[ws:*]': { version: { stamp: ({ value }) => [...value, 'extra'] } } }`,
+      );
+      const repo = await Repository.create(dir);
+      expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['pkg-a-base', 'extra']);
+    });
+
+    it('gives `value` as undefined when nothing below sets the key, and says so when that throws', async () => {
+      // Undefined rather than `[]`: defaulting would be a guess about the key's type, and wrong for
+      // every key that is not a list. So the error has to name the cause instead - V8's own
+      // "value is not iterable" names neither the key nor the reason.
+      const dir = jsFixture(`{ '[*]': { version: { stamp: ({ value }) => [...value] } } }`);
+      await expect(Repository.create(dir)).rejects.toThrow(/`value` is undefined here/);
+      await expect(Repository.create(dir)).rejects.toThrow(/nothing below this layer sets "version.stamp"/);
+    });
+
+    it('names the config path when a function throws', async () => {
+      const dir = jsFixture(`{ '[*]': { group: () => { throw new Error('nope'); } } }`);
+      await expect(Repository.create(dir)).rejects.toThrow(/Config function in "group" failed: nope/);
+    });
+
+    /**
+     * **The two contexts must expose the same names**, and this enumerates both rather than
+     * checking a list someone has to remember to extend.
+     *
+     * They cannot drift by accident today - the function's argument is `Object.create(context)`, so
+     * it *is* the expression context with one property added - but a member defined straight onto
+     * the argument would split them silently, and a config author would find a name that works in
+     * one spelling and not the other.
+     */
+    it('exposes exactly what an expression does, plus `value`', async () => {
+      const dir = jsFixture(
+        `{ '[*]': {
+             vars: { sample: 'x' },
+             publish: { directory: 'build' },
+             inExpr: '\${{ Object.keys(globalThis).sort().join(",") }}',
+             inFn: s => {
+               const names = new Set();
+               for (let o = s; o && o !== Object.prototype; o = Object.getPrototypeOf(o))
+                 for (const k of Object.keys(o)) names.add(k);
+               return [...names].sort().join(',');
+             },
+           } }`,
+      );
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as unknown as Record<string, string>;
+      const inExpression = new Set(cfg.inExpr.split(','));
+      const inFunction = new Set(cfg.inFn.split(','));
+
+      /** Every scope binding, and the config's own top-level keys, in both. */
+      for (const name of ['pkg', 'repository', 'file', 'read', 'env', 'semver', 'path', 'git', 'vars', 'publish']) {
+        expect([name, inExpression.has(name)]).toEqual([name, true]);
+        expect([name, inFunction.has(name)]).toEqual([name, true]);
+      }
+
+      expect([...inExpression].filter(n => !inFunction.has(n))).toEqual([]);
+      /** `value` is the one deliberate asymmetry: an expression is a string, so it could not carry
+       *  an inherited array back anyway - measured, `${{ value }}` is `value is not defined`. */
+      expect([...inFunction].filter(n => !inExpression.has(n))).toEqual(['value']);
+    });
+
+    it('keeps the `value` hint off a failure that never read `value`', async () => {
+      // The hint used to go out with every failure of a first-layer function, so an unrelated
+      // `TypeError` arrived wearing advice about spreading an inherited list - the exact
+      // send-the-reader-to-the-wrong-place mistake the hint exists to prevent. Whether `value` was
+      // read is *recorded*, not guessed from the message: matching on V8's wording is the other way
+      // to get this wrong.
+      const dir = jsFixture(`{ '[*]': { group: () => { throw new Error('unrelated'); } } }`);
+      await expect(Repository.create(dir)).rejects.toThrow(/failed: unrelated/);
+      await expect(Repository.create(dir)).rejects.not.toThrow(/`value` is undefined here/);
+    });
+
+    /**
+     * The other half of the rule, and the one that makes both halves usable: **the key decides**
+     * whether a function is a value to compute now or code to run later. A step is left alone.
+     */
+    it('leaves a step function alone - run.<script> slots, the shorthand, and `if`', async () => {
+      const dir = jsFixture(
+        `{ '[*]': { run: {
+             build: { before: () => {}, exec: () => {}, after: () => {}, if: () => true },
+             test: function shorthand() {},
+           } } }`,
+      );
+      const repo = await Repository.create(dir);
+      const cfg = repo.getPackage('pkg-a')!.config;
+      for (const slot of ['before', 'exec', 'after', 'if'] as const) {
+        expect(typeof (cfg.run as any).build[slot]).toBe('function');
+      }
+      /** The bare-value shorthand too: `run: { test: fn }` is `{ exec: fn }`, so calling it here
+       *  would make the short spelling run at a different time than the long one. */
+      expect(typeof (cfg.run as any).test).toBe('function');
+    });
+
+    it("leaves a plugin's own functions alone - they are code, not config", async () => {
+      // Measured: with `plugins` walked like any other key, resolving the config called the
+      // plugin's yargs builder with the config scope ("cmd.option is not a function").
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc.cjs'),
+        `module.exports = { plugins: [{ name: 'p', commands: [
+           { command: 'x', describe: 'a command', builder: cmd => cmd.option('y'), handler() {} },
+         ] }] };\n`,
+      );
+      writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const repo = await Repository.create(dir);
+      expect(typeof (repo.config.plugins as any)[0].commands[0].builder).toBe('function');
+    });
+  });
+
+  /**
+   * `git` is bound at the **top level** of the expression scope, beside `env` - not on
+   * `repository`, where it used to be. `repository` shares its shape with `pkg` because the root
+   * *is* a package, and its other members describe the repository as a container of packages; a
+   * branch name describes none of that, only the working tree they all sit in.
+   */
+  /**
+   * `read(path)` - a structured file's **contents**, where `file` answers only where one is.
+   * Resolved against `pkg.dirname` like `file`, so one `"[*]"` declaration reads each package's own.
+   */
+  /**
+   * `vars` declared at any level of the config tree, scoping its own subtree - a fresh copy per
+   * level, the level's own block merged over what the level above resolved to.
+   */
+  describe('scoped vars', () => {
+    function varsFixture(config: unknown): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(config));
+      writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      return dir;
+    }
+
+    it('shadows per level, so each node reads the nearest declaration', async () => {
+      const dir = varsFixture({
+        vars: { x: 1 },
+        '[*]': {
+          top: '${{ vars.x }}',
+          run: {
+            vars: { x: 2 },
+            clean: { probe: '${{ vars.x }}' },
+            build: { vars: { x: 3 }, probe: '${{ vars.x }}' },
+          },
+        },
+      });
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as any;
+      expect(cfg.top).toBe(1);
+      expect(cfg.run.clean.probe).toBe(2);
+      expect(cfg.run.build.probe).toBe(3);
+    });
+
+    it('merges per key, so redeclaring one var keeps the rest', async () => {
+      const dir = varsFixture({
+        vars: { x: 1, keep: 'top' },
+        '[*]': { run: { vars: { x: 2 }, clean: { probe: '${{ vars.keep + ":" + vars.x }}' } } },
+      });
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as any;
+      expect(cfg.run.clean.probe).toBe('top:2');
+    });
+
+    it("resolves a level's own block against the level above it, not against itself", async () => {
+      // `vars: { out: '${{ vars.x }}/dist' }` refines the `x` it is inheriting - reading its own
+      // half-built scope instead would make the answer depend on key order inside the block.
+      const dir = varsFixture({
+        vars: { x: 'outer' },
+        '[*]': {
+          run: { vars: { x: 'inner', derived: '${{ vars.x }}-seen' }, clean: { probe: '${{ vars.derived }}' } },
+        },
+      });
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as any;
+      expect(cfg.run.clean.probe).toBe('outer-seen');
+    });
+
+    /**
+     * **The reason a copy is made at every node rather than only where a block appears.** A value
+     * function is handed this object, so one that writes to it must be writing into its own level -
+     * without a copy per node a write inside `run.build` would land in `run`'s object, and a sibling
+     * would read it.
+     */
+    it('keeps a write inside the level that made it', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc.cjs'),
+        `module.exports = {
+           vars: { x: 1 },
+           '[*]': {
+             run: {
+               vars: { x: 2 },
+               build: {
+                 vars: ({ value }) => ({ ...(value ?? {}), x: 3 }),
+                 probe: ({ vars }) => { vars.addedHere = true; return JSON.stringify(vars); },
+               },
+               clean: { probe: '\${{ JSON.stringify(vars) }}' },
+             },
+             outer: '\${{ JSON.stringify(vars) }}',
+           },
+         };
+`,
+      );
+      writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as any;
+      expect(JSON.parse(cfg.run.build.probe)).toEqual({ x: 3, addedHere: true });
+      /** Neither the shadowed `x` nor the added key reaches a sibling, the level above, or the top. */
+      expect(JSON.parse(cfg.run.clean.probe)).toEqual({ x: 2 });
+      expect(JSON.parse(cfg.outer)).toEqual({ x: 1 });
+      expect(cfg.vars).toEqual({ x: 1 });
+    });
+
+    it('leaves the declaration in the resolved config, where `rman config` can show it', async () => {
+      // `run.vars` is a scope rather than a script, which costs a script that would have been
+      // called `vars` - nothing enumerates `run`'s keys as script names, so the cost stops there.
+      const dir = varsFixture({ '[*]': { run: { vars: { x: 2 }, clean: { probe: '${{ vars.x }}' } } } });
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as any;
+      expect(cfg.run.vars).toEqual({ x: 2 });
+    });
+  });
+
+  describe('${{ read() }}', () => {
+    function readFixture(config: unknown, files: Record<string, string> = {}, packages = ['pkg-a']): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(config));
+      for (const name of packages) writeJson(dir, `packages/${name}/package.json`, { name, version: '1.0.0' });
+      for (const [rel, content] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+        fs.writeFileSync(path.join(dir, rel), content);
+      }
+      return dir;
+    }
+
+    it('parses json, yaml and ini, choosing by extension', async () => {
+      const dir = readFixture(
+        {
+          /** `"[ws:*]"`, not `"[*]"`: these files live in the package, and the root has none of
+           *  them - the documented hazard of `"[*]"` now reaching the root as well. */
+          '[ws:*]': {
+            j: '${{ read("t.json").compilerOptions.outDir }}',
+            y: '${{ read("c.yml").services.db.image }}',
+            i: '${{ read(".npmrc", "ini").registry }}',
+          },
+        },
+        {
+          'packages/pkg-a/t.json': '{"compilerOptions":{"outDir":"lib"}}',
+          'packages/pkg-a/c.yml': 'services:\n  db:\n    image: postgres:16\n',
+          /** No extension to go on, so the caller names the format - the same shape
+           *  `version.stamp`'s `{ file, constant }` uses: infer, but let an entry say. */
+          'packages/pkg-a/.npmrc': 'registry=https://example.test\n',
+        },
+      );
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(cfg.j).toBe('lib');
+      expect(cfg.y).toBe('postgres:16');
+      expect(cfg.i).toBe('https://example.test');
+    });
+
+    /**
+     * XML comes back as a **DOM**, not an object, and that asymmetry is the honest shape rather
+     * than an omission: an element can repeat, carry attributes and hold text at once, so any
+     * flattening picks a convention and is wrong for somebody.
+     */
+    it('parses xml to a DOM, by extension and by the project-file names', async () => {
+      const dir = readFixture(
+        {
+          '[ws:*]': {
+            pom: '${{ read("pom.xml").getElementsByTagName("version")[0].textContent }}',
+            /** A .NET project file is XML whatever its extension calls itself. */
+            csproj: '${{ read("app.csproj").getElementsByTagName("Version")[0].textContent }}',
+            ns: '${{ read("pom.xml").getElementsByTagNameNS("http://maven.apache.org/POM/4.0.0","artifactId")[0].textContent }}',
+          },
+        },
+        {
+          'packages/pkg-a/pom.xml':
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><artifactId>demo</artifactId>' +
+            '<version>2.4.1</version></project>',
+          'packages/pkg-a/app.csproj': '<Project><PropertyGroup><Version>9.0.2</Version></PropertyGroup></Project>',
+        },
+      );
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(cfg.pom).toBe('2.4.1');
+      expect(cfg.csproj).toBe('9.0.2');
+      expect(cfg.ns).toBe('demo');
+    });
+
+    it('survives being frozen, including a tag first queried after the freeze', async () => {
+      // The case that would have broken it: `getElementsByTagName` returns a *live* collection, so
+      // a DOM frozen on the way into the cache has to still answer a tag nobody asked about yet.
+      const dir = readFixture({}, { 'p.xml': '<a><b id="1">x</b><b id="2">y</b></a>' });
+      const repo = await Repository.create(dir);
+      const doc = repo.configScope(repo.getPackages()[0]).read(path.join(dir, 'p.xml')) as Document;
+
+      expect(Object.isFrozen(doc)).toBe(true);
+      const found = doc.getElementsByTagName('b');
+      expect(found.length).toBe(2);
+      expect(found[1].getAttribute('id')).toBe('2');
+      expect(found[0].textContent).toBe('x');
+    });
+
+    it('refuses a malformed xml file instead of handing back what it salvaged', async () => {
+      // xmldom reports problems through a handler and otherwise carries on, so without the guard a
+      // truncated file came back as a half-parsed DOM and the expression reading it found nothing.
+      const dir = readFixture(
+        { '[ws:*]': { v: '${{ read("broken.xml").documentElement.nodeName }}' } },
+        { 'packages/pkg-a/broken.xml': '<project><version>1.0</version>' },
+      );
+      await expect(Repository.create(dir)).rejects.toThrow(/could not parse .*broken\.xml as xml: unclosed xml tag/);
+    });
+
+    it('reads the same file once for the whole repository, not once per package', async () => {
+      // `interpolateConfig` runs once *per package*, so a cache living in one pass would not have
+      // helped across them at all - which is why it lives on the `Repository`.
+      const dir = readFixture(
+        { '[ws:*]': { v: '${{ read(path.join(repository.dirname, "shared.json")).shared }}' } },
+        { 'shared.json': '{"shared":"once"}' },
+        ['pkg-a', 'pkg-b', 'pkg-c'],
+      );
+      const real = fs.readFileSync;
+      let reads = 0;
+      (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = function (file: never, ...rest: never[]) {
+        if (String(file).endsWith('shared.json')) reads++;
+        return (real as (...a: never[]) => string).call(fs, file, ...rest);
+      } as typeof fs.readFileSync;
+      try {
+        const repo = await Repository.create(dir);
+        expect(repo.getPackages().map(p => (p.config as Record<string, unknown>).v)).toEqual(['once', 'once', 'once']);
+        expect(reads).toBe(1);
+      } finally {
+        (fs as { readFileSync: typeof fs.readFileSync }).readFileSync = real;
+      }
+    });
+
+    /**
+     * Keyed on `mtimeNs:size`, not on the path - because **rman writes JSON files while it runs**.
+     * `version` rewrites every bumped manifest and then re-interpolates its own deferred hooks; a
+     * cache that only remembered the path would hand those back as they were before the write.
+     */
+    it('re-reads a file that changed under it', async () => {
+      const dir = readFixture({}, { 'shared.json': '{"v":"before"}' });
+      const repo = await Repository.create(dir);
+      const file = path.join(dir, 'shared.json');
+      const scope = repo.configScope(repo.getPackages()[0]);
+
+      expect((scope.read(file) as { v: string }).v).toBe('before');
+      fs.writeFileSync(file, '{"v":"after"}');
+      expect((scope.read(file) as { v: string }).v).toBe('after');
+    });
+
+    /**
+     * Every package is handed the **same** object, so one config mutating it would quietly change
+     * what the next package sees - the reason `pkg.manifest` has always been a copy. Frozen once on
+     * the way into the cache rather than copied on every call: copying costs 5.6µs per call against
+     * ~1µs once, and freezing turns the mistake into a `TypeError` instead of an effect at a
+     * distance.
+     */
+    it('hands every package the same frozen object', async () => {
+      const dir = readFixture({}, { 'shared.json': '{"list":[1]}' }, ['pkg-a', 'pkg-b']);
+      const repo = await Repository.create(dir);
+      const file = path.join(dir, 'shared.json');
+      const a = repo.configScope(repo.getPackages()[0]).read(file) as { list: number[] };
+      const b = repo.configScope(repo.getPackages()[1]).read(file);
+
+      expect(a).toBe(b);
+      expect(Object.isFrozen(a)).toBe(true);
+      /** Deeply - a nested array is the half a shallow freeze would leave writable. */
+      expect(Object.isFrozen(a.list)).toBe(true);
+      expect(() => a.list.push(2)).toThrow(TypeError);
+    });
+
+    it('throws with the file named, for every way it can fail', async () => {
+      const missing = readFixture({ '[ws:*]': { a: '${{ read("nope.json").x }}' } });
+      await expect(Repository.create(missing)).rejects.toThrow(/read\("nope\.json"\) found nothing at/);
+      /** And points at the composition that handles an absent file, rather than leaving the reader
+       *  to find `file.exists` on their own. */
+      await expect(Repository.create(missing)).rejects.toThrow(/Use file\.exists\(\) first/);
+
+      const unknown = readFixture({ '[ws:*]': { a: '${{ read("x.conf").y }}' } }, { 'packages/pkg-a/x.conf': 'x' });
+      await expect(Repository.create(unknown)).rejects.toThrow(/cannot tell what "x\.conf" is from its name/);
+
+      const broken = readFixture(
+        { '[ws:*]': { a: '${{ read("b.json").y }}' } },
+        { 'packages/pkg-a/b.json': 'not json {' },
+      );
+      /** The parser says what is wrong with the syntax but never which file it was reading - and one
+       *  expression can name several. */
+      await expect(Repository.create(broken)).rejects.toThrow(/read\("b\.json"\) could not parse .*b\.json as json/);
+    });
+
+    it('composes with file.exists for a file that may not be there', async () => {
+      const dir = readFixture({
+        '[ws:*]': { a: '${{ file.exists("maybe.json") ? read("maybe.json").x : "absent" }}' },
+      });
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(cfg.a).toBe('absent');
+    });
+  });
+
+  describe('${{ git }}', () => {
+    function gitFixture(config: unknown, packages = ['pkg-a']): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(config));
+      for (const name of packages) writeJson(dir, `packages/${name}/package.json`, { name, version: '1.0.0' });
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      git('init', '-q');
+      git('config', 'user.email', 't@t.com');
+      git('config', 'user.name', 't');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'init');
+      return dir;
+    }
+
+    it('reads the checkout from the top level', async () => {
+      const dir = gitFixture({ '[*]': { a: '${{ git.shortSha }}', b: '${{ git.dirty }}' } });
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(cfg.a).toMatch(/^[0-9a-f]{7}$/);
+      expect(cfg.b).toBe(false);
+    });
+
+    it('is no longer reachable as repository.git', async () => {
+      const dir = gitFixture({ '[*]': { a: '${{ repository.git }}' } });
+      /** A nullish result standing alone is "unset", so the move shows up as `undefined` here
+       *  rather than an error - which is why the positive case above is the one that matters. */
+      const resolved = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(resolved.a).toBeUndefined();
+    });
+
+    /**
+     * **The cost of moving it up, and the reason `interpolateConfig` builds its context from
+     * property descriptors instead of `{ ...scope }`.** A spread reads every property, so a lazy
+     * getter one level down (where `git` used to live) is untouched by it, while one at the top
+     * level is not: measured, the spread version ran `git rev-parse` on a repository whose config
+     * never mentions git.
+     */
+    it('shells out only when an expression asks, and then once for the whole repository', async () => {
+      const proto = Repository.prototype as unknown as Record<string, (dir: string) => unknown>;
+      const original = proto._readGitScope;
+      let calls = 0;
+      proto._readGitScope = function (this: unknown, dirname: string) {
+        calls++;
+        return original.call(this, dirname);
+      };
+      try {
+        const quiet = gitFixture({ '[*]': { a: 'nothing about git' } }, ['pkg-a', 'pkg-b']);
+        await Repository.create(quiet);
+        expect(calls).toBe(0);
+
+        /** Once, not once per package - the cache is on the `Repository`, and `configScope` is
+         *  called per package. */
+        const asking = gitFixture({ '[*]': { a: '${{ git.sha }}' } }, ['pkg-a', 'pkg-b']);
+        await Repository.create(asking);
+        expect(calls).toBe(1);
+      } finally {
+        proto._readGitScope = original;
+      }
+    });
+
+    it('reports every field as undefined outside a checkout, which is a state and not an error', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { a: "${{ git.branch ?? 'no-git' }}", b: '${{ git.sha }}' } }),
+      );
+      writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const cfg = (await Repository.create(dir)).getPackage('pkg-a')!.config as Record<string, unknown>;
+      expect(cfg.a).toBe('no-git');
+      expect(cfg.b).toBeUndefined();
+    });
+  });
+
   describe('listStatus()', () => {
     let dir: string;
     let originDir: string;

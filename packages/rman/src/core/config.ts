@@ -1,4 +1,6 @@
+import { DOMParser } from '@xmldom/xmldom';
 import fs from 'fs';
+import ini from 'ini';
 import * as yaml from 'js-yaml';
 import { createRequire } from 'module';
 import path from 'path';
@@ -7,7 +9,7 @@ import { pathToFileURL } from 'url';
 import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
-import { finalizeConfig, mergeConfig } from './merge-config.js';
+import { finalizeConfig, mergeConfig, PREVIOUS_VALUE } from './merge-config.js';
 
 /**
  * Identity helper for authoring a `.rmanrc.cjs`/`.mjs`/`.js` config with full type-checking and
@@ -318,6 +320,17 @@ function dirChain(rootDir: string, targetDir: string): string[] {
  *       # first of these that exists, and an error naming the config path if none do
  *       exec: 'tsc -b ${{ file.exists("tsconfig-build.json") || file.resolve("tsconfig.json") }}'
  * ```
+ *
+ * **Every member asks a question, and none may ever change anything - no `copy`, no `write`, no
+ * `mkdir`.** Not a matter of taste: this is evaluated when the config *resolves*, which every
+ * command does, so a member that acted would act on `rman list`, `rman info` and `rman config`.
+ *
+ * That has been tried, in the only way a missing function can be: a shared config reaching for a
+ * `file.copyMany(...)` that does not exist made **every** rman command exit 1 - and had it existed,
+ * the quieter outcome would have been files copied by `rman list`. Work belongs in a step
+ * (`run.<script>`'s slots, `version`'s hooks), which is the one place rman runs anything, and a
+ * step can now be a function - so there is nothing this would enable that is not already possible
+ * at the right moment.
  */
 export interface FileScope {
   /**
@@ -399,10 +412,6 @@ export interface RepositoryScope extends PackageScope {
   packages: PackageScope[];
   /** One package by name, or `undefined` - for reaching a sibling's directory. */
   package(name: string): PackageScope | undefined;
-  /** Read from git only if an expression actually asks for it, then remembered: a repository that
-   *  never mentions these pays nothing, and every command resolves config. All `undefined` outside
-   *  a git checkout, which is a legitimate state rather than an error. */
-  git: GitScope;
 }
 
 export interface GitScope {
@@ -434,6 +443,23 @@ export interface ConfigScope {
   repository: RepositoryScope;
   /** Paths, resolved against the package the config was resolved for. */
   file: FileScope;
+  /**
+   * The **contents** of a structured file - `${{ read('tsconfig.json').compilerOptions.outDir }}` -
+   * where `file` answers only where one is. Resolved against `pkg.dirname` like `file`, so a
+   * `"[*]"` block asks each package about its own; a repository-level file is reached through
+   * `read(path.join(repository.dirname, ...))`.
+   *
+   * `.json`, `.yml`/`.yaml` and `.ini` by extension, or name it for a file that does not say
+   * (`read('.npmrc', 'ini')`). **Throws** when the file is absent, as `file.resolve` does - compose
+   * with `file.exists` when its absence is a case to handle.
+   *
+   * **A manifest is `pkg.manifest`, not this.** `read('package.json')` works and is the wrong
+   * answer: which file a package's identity lives in belongs to the ecosystem, so that expression
+   * is already wrong in a Cargo package sitting beside a Node one.
+   *
+   * The result is **deeply frozen and shared** - see `readStructuredFile`. Spread it to change it.
+   */
+  read: ReadFile;
   env: Record<string, string | undefined>;
   /** rman's own `semver`, for the arithmetic every release config eventually wants
    *  (`semver.major(pkg.version)`). */
@@ -447,6 +473,23 @@ export interface ConfigScope {
    * genuinely needs one of them (a Docker image path, say, which is always posix).
    */
   path: typeof path;
+  /**
+   * The checkout: branch, sha, whether the tree is dirty.
+   *
+   * **Top level, not `repository.git`** - which is where it used to be, and the move is the point.
+   * `repository` shares its shape with `pkg` because the repository root *is* a package, and its
+   * only other members (`monorepo`, `packages`, `package()`) say something about the repository as
+   * a container of packages. A branch name says nothing about any package; it describes the
+   * working tree every one of them happens to be sitting in - the same kind of ambient fact as
+   * `env`, and it belongs beside it.
+   *
+   * **Read from git only if an expression actually asks**, then remembered for the whole run: every
+   * command resolves config, and a repository that never mentions git must not pay for one. See
+   * `Repository.configScope` for the getter, and `interpolateConfig` for why the context is built
+   * from property descriptors rather than a spread - a spread would fire this getter on every
+   * command, which is exactly what moving it up here risked.
+   */
+  git: GitScope;
 }
 
 /**
@@ -491,10 +534,37 @@ export interface ConfigScope {
  * A failing expression throws with the config path that holds it, rather than being left in place:
  * silently passing through a mistake is how a config ends up quietly doing nothing.
  */
-export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: { skip?: string[] }): T {
+export interface InterpolateOptions {
+  /** Config paths to leave entirely untouched - `DEFERRED_PATHS`, when the whole config is walked. */
+  skip?: string[];
+  /** Where `config` sits in the whole config, for a caller interpolating a fragment. */
+  at?: string[];
+}
+
+export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: InterpolateOptions): T {
   const skip = options?.skip ?? [];
-  const context = vm.createContext({ ...scope });
-  if (!config || typeof config !== 'object' || Array.isArray(config)) return walk(config, scope, context, [], skip);
+  /**
+   * Where `config` sits in the whole config, when a caller hands over a fragment rather than the
+   * root - `version` interpolates its own `version.<slot>` value on its own, those three paths being
+   * in `DEFERRED_PATHS`.
+   *
+   * It matters because the path is what decides whether a function is a value to compute or a step
+   * to leave alone (`STEP_PATHS`). Without it, a fragment starts at the root and matches nothing, so
+   * a function in a `version` hook was called while the hook was being *prepared* - measured, and it
+   * failed inside the user's own code with `path.join` receiving undefined.
+   */
+  const base = options?.at ?? [];
+  /**
+   * Built from `scope`'s property **descriptors**, never `{ ...scope }`.
+   *
+   * A spread reads every property, so a lazy getter on the scope is no longer lazy the moment one
+   * is added - and `git` is exactly that: it shells out to `git rev-parse`, and a spread here would
+   * do it on `rman list`, `rman info` and every other command, in a repository whose config never
+   * mentions git. (The same trap `pkg.targetVersion` documents from the other side: it is a
+   * *throwing* getter, and being enumerable is what made a spread fire it.)
+   */
+  const context = vm.createContext(Object.defineProperties({}, Object.getOwnPropertyDescriptors(scope)));
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return walk(config, scope, context, base, skip);
 
   /**
    * The config's own top-level keys, readable bare: `${{ publish.directory }}`. So a value that
@@ -529,7 +599,7 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: { 
     }
     resolving.push(key);
     try {
-      const value = walk((config as Record<string, unknown>)[key], scope, context, [key], skip);
+      const value = walk((config as Record<string, unknown>)[key], scope, context, [...base, key], skip);
       resolved.set(key, value);
       return value;
     } catch (e: any) {
@@ -568,6 +638,61 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: { 
  */
 export const DEFERRED_PATHS = ['version.before', 'version.exec', 'version.after'];
 
+/**
+ * Paths whose value is a **step** - something to run later - rather than a setting to compute now.
+ * `*` matches one path segment (`run.<script>.exec`).
+ *
+ * This is what tells a step function from a value function, and the two live side by side in one
+ * config:
+ *
+ * ```js
+ * '[ws:*]': {
+ *   clean: { include: ({ vars, value }) => [...value, vars.buildDir] },   // a value: called here
+ *   run: { build: { after: ({ pkg }) => copyDocs(pkg) } },                // a step: called by `run`
+ * }
+ * ```
+ *
+ * **The key decides, and it already did.** `run.build.exec: 'tsc -b'` is a shell command and
+ * `publish.directory: 'build'` is a path - not because of anything about the strings, but because of
+ * where they sit. A function inherits the same rule, so nothing new has to be learned and no marker
+ * has to be remembered. The alternative was inspecting the function (arity, parameter names), which
+ * is the kind of guess `loadPlugins` refuses to make about a module's export for the same reason:
+ * guessing wrong here means running build-time code while merely loading the repository, or
+ * silently never running it.
+ *
+ * A **string** at one of these paths is still interpolated - `exec: 'tsc -b ${{ file.resolve(...) }}'`
+ * has to keep working - so this is narrower than `DEFERRED_PATHS`, which skips its paths entirely.
+ */
+export const STEP_PATHS = [
+  /** The bare-value shorthand: `run: { build: fn }` means `{ exec: fn }`, as `run: { build: 'cmd' }`
+   *  means `{ exec: 'cmd' }`. Missing it made the two spellings disagree about *when* the function
+   *  runs, which is worse than not supporting the short one at all. */
+  'run.*',
+  'run.*.before',
+  'run.*.exec',
+  'run.*.after',
+  /** A condition, evaluated per package by `RunService` when the run reaches it. Called here
+   *  instead, it collapsed to the boolean it happened to return at load time - and `parseIfExpr`
+   *  then read that boolean as "no condition given", so the script ran unconditionally (measured). */
+  'run.*.if',
+  'version.before',
+  'version.exec',
+  'version.after',
+];
+
+/**
+ * Keys whose **whole subtree** is code rather than config, so no function under them is a value to
+ * compute. `plugins` is the only one, and it has to be here: an entry may be the plugin *object*
+ * itself, and an `RmanPlugin` is almost entirely functions - `manifest.read`, `workspace.resolve`,
+ * `versionPlanner`, `binPaths`, and every command's `builder` and `handler`.
+ *
+ * Measured, and it is why this exists: with `plugins` walked like any other key, resolving the
+ * config of a repository that named a plugin called that plugin's yargs builder with the config
+ * scope - `Config function in "plugins[0].commands[0].builder" failed: cmd.option is not a
+ * function`. A `plugins` entry is loaded by `loadPlugins`, never read as a setting.
+ */
+export const CODE_SUBTREES = ['plugins'];
+
 const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
 
 /** A config key an expression could actually name. Anything else - a `"[selector]"` block, a
@@ -575,6 +700,53 @@ const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /** The `file` namespace for one package's directory - see `FileScope`. */
+/**
+ * `read` in a `${{ ... }}` expression (and in a value function): a structured file's **contents**,
+ * parsed - where `file` answers only where a path is.
+ *
+ * ```yaml
+ * "[*]":
+ *   run:
+ *     build:
+ *       exec: 'tsc --outDir ${{ read("tsconfig.json").compilerOptions.outDir }}'
+ * ```
+ *
+ * `cache` is shared across every package (see `Repository.configScope`) and keyed by what the file
+ * *is*, not merely where - so the same file read by twenty packages is parsed once, and a file rman
+ * itself rewrites mid-run is re-read rather than remembered. See `readStructuredFile`.
+ */
+export function createReadScope(dirname: string, cache: Map<string, CachedFile>): ReadFile {
+  return (target: string, format?: FileFormat): unknown => {
+    if (typeof target !== 'string' || !target.trim()) {
+      throw new Error('read() needs a path - it was given ' + JSON.stringify(target));
+    }
+    return readStructuredFile(path.resolve(dirname, target), format, cache);
+  };
+}
+
+/**
+ * What `read` can parse.
+ *
+ * **`.env` is deliberately absent, and that is the durable part of this list**: `env` is already in
+ * scope, and a `.env` file exists to be loaded *into* an environment by something else - a config
+ * reading one as data would mean two different things called the environment.
+ *
+ * Nothing else is excluded on principle. `xml` arrived because a `pom.xml` or a `.csproj` holds a
+ * version exactly the way a `package.json` does, and rman is language-agnostic; the earlier line
+ * ("no new parsers") did not survive it, since xmldom *is* a new one.
+ */
+export type FileFormat = 'json' | 'yaml' | 'ini' | 'xml';
+
+/** `read(path)`, or `read(path, 'ini')` for a file whose name does not say what it is (`.npmrc`). */
+export type ReadFile = (target: string, format?: FileFormat) => unknown;
+
+/** One parsed file, kept against the identity of the bytes it came from - see `readStructuredFile`. */
+export interface CachedFile {
+  /** `mtimeNs:size`. */
+  stamp: string;
+  value: unknown;
+}
+
 export function createFileScope(dirname: string): FileScope {
   const locate = (target: string): { path: string; found: boolean } => {
     if (typeof target !== 'string' || !target.trim()) {
@@ -615,14 +787,184 @@ function walk(value: unknown, scope: ConfigScope, context: vm.Context, at: (stri
   /** Compared on the key path rather than the value, so a deferred key's whole subtree - a single
    *  command or an array of them - is handed on untouched. */
   if (at.length && skip.includes(at.filter(p => typeof p === 'string').join('.'))) return value;
+  if (typeof value === 'function') {
+    /** Code, not a value: a step for `run`/`version` to call in its own time, or a plugin's own
+     *  function. Carried through exactly as a command string would be - calling it here would run
+     *  build-time work while merely *loading* the repository, which is the whole distinction the
+     *  function form exists to draw. */
+    if (isCodePath(at)) return value;
+    return callValueFn(value as (arg: unknown) => unknown, scope, context, at, skip);
+  }
   if (typeof value === 'string') return interpolateString(value, context, at);
   if (Array.isArray(value)) return value.map((item, i) => walk(item, scope, context, [...at, i], skip));
   if (value && typeof value === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) result[key] = walk(item, scope, context, [...at, key], skip);
-    return result;
+    return withScopedVars(value as Record<string, unknown>, scope, context, at, skip, () => {
+      const result: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(value)) result[key] = walk(item, scope, context, [...at, key], skip);
+      return result;
+    });
   }
   return value;
+}
+
+/**
+ * Runs `body` with `vars` scoped to this node: **a fresh copy at every level**, with the node's own
+ * `vars` block - if it declares one - merged over what the level above resolved to.
+ *
+ * ```yaml
+ * vars: { x: 1 }
+ * run:
+ *   vars: { x: 2 }
+ *   clean: { before: '${{ read(vars.x + ".json") }}' }     # 2.json
+ *   build:
+ *     vars: { x: 3 }
+ *     before: '${{ read(vars.x + ".json") }}'              # 3.json
+ * ```
+ *
+ * **Copied at every node, not only where a `vars` block appears**, and that is the difference
+ * between scoping and leaking: a value function is handed this object, so one that writes to it
+ * (`vars.built = Date.now()`) must not be writing into the level above. Without a copy per node,
+ * a write inside `run.build` would land in `run`'s object and `run.clean` would see it. Merged per
+ * key rather than replaced, so redeclaring one var keeps the rest - the rule the top-level `vars`
+ * has always followed.
+ *
+ * The node's own block is resolved **against the outer scope** before being installed, so
+ * `vars: { out: '${{ vars.x }}/dist' }` reads the `x` it is refining rather than itself.
+ *
+ * Installed as a plain property over the context's lazy top-level getter and restored afterwards -
+ * `walk` is depth-first and synchronous, so the window is exactly this subtree, and a value function
+ * called inside it reads the same object through its prototype.
+ */
+function withScopedVars<T>(
+  node: Record<string, unknown>,
+  scope: ConfigScope,
+  context: vm.Context,
+  at: (string | number)[],
+  skip: string[],
+  body: () => T,
+): T {
+  const outer = context[VARS_KEY] as Record<string, unknown> | undefined;
+  const own = node[VARS_KEY];
+  /** Nothing to shadow and nothing to protect: a node with no object below it can hold no function
+   *  either, so the copy would be pure cost. */
+  if (own === undefined && !hasObjectChild(node)) return body();
+
+  const resolvedOwn = own === undefined ? undefined : walk(own, scope, context, [...at, VARS_KEY], skip);
+  const scoped = { ...outer, ...(isPlainObject(resolvedOwn) ? resolvedOwn : undefined) };
+
+  const previous = Object.getOwnPropertyDescriptor(context, VARS_KEY);
+  Object.defineProperty(context, VARS_KEY, { value: scoped, enumerable: true, configurable: true, writable: true });
+  try {
+    return body();
+  } finally {
+    if (previous) Object.defineProperty(context, VARS_KEY, previous);
+    else delete context[VARS_KEY];
+  }
+}
+
+function hasObjectChild(node: Record<string, unknown>): boolean {
+  for (const item of Object.values(node)) {
+    if (typeof item === 'function') return true;
+    if (item && typeof item === 'object') return true;
+  }
+  return false;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** The one key that scopes rather than configures - see `withScopedVars`. Reserved at **every**
+ *  level, which costs a script that would have been called `vars`: `run.vars` is a scope, not a
+ *  script. Nothing enumerates `run`'s keys as a list of script names, so the cost stops there. */
+const VARS_KEY = 'vars';
+
+/**
+ * Whether a function at `at` is **code** - a step to run later, or part of a plugin - rather than a
+ * value to compute now.
+ *
+ * Array indices are dropped before matching, so a function inside a *list* of steps is still a
+ * step; `*` in a `STEP_PATHS` entry matches any one segment (`run.<script>.exec`).
+ */
+function isCodePath(at: (string | number)[]): boolean {
+  const segments = at.filter((p): p is string => typeof p === 'string');
+  if (CODE_SUBTREES.includes(segments[0])) return true;
+  return STEP_PATHS.some(pattern => {
+    const parts = pattern.split('.');
+    return parts.length === segments.length && parts.every((part, i) => part === '*' || part === segments[i]);
+  });
+}
+
+/**
+ * Calls a **value** function: the JS spelling of a `${{ }}` expression, and it answers the same
+ * question at the same moment.
+ *
+ * It receives one object carrying everything an expression can name - `pkg`, `repository`, `file`,
+ * `env`, `semver`, `path`, plus the config's own top-level keys - and, in addition, **`value`**: what
+ * this key resolved to in the layers underneath, which is what makes a derived value possible
+ * without restating the base.
+ *
+ * Built with the interpolation context as its **prototype**, not copied from it. The top-level keys
+ * are lazy getters (`resolve`, memoized, so key order in the file means nothing and a cycle is
+ * reported rather than half-resolved); spreading them into a new object would fire every one of
+ * them on every call, including the ones a function never reads - and one of those throwing would
+ * blame the wrong key.
+ *
+ * **It must compute and return, never act.** This runs while the repository's config resolves,
+ * which *every* command does - so a value function that writes a file writes it on `rman list`,
+ * `rman info` and `rman config` too, N times for N packages, with no command having asked for
+ * anything. That is the same reason `FileScope` offers no way to change anything. Work goes in a
+ * step, which is the one thing rman runs on purpose and which can also be a function.
+ */
+function callValueFn(
+  fn: (arg: unknown) => unknown,
+  scope: ConfigScope,
+  context: vm.Context,
+  at: (string | number)[],
+  skip: string[],
+): unknown {
+  const previous = (fn as unknown as Record<symbol, unknown>)[PREVIOUS_VALUE];
+  const arg = Object.create(context);
+  /** Resolved the same way any other value is, so an inherited `${{ }}` string or a function under
+   *  it is already finished by the time this one is handed it. */
+  const resolvedPrevious = previous === undefined ? undefined : walk(previous, scope, context, at, skip);
+  /**
+   * A getter only so the catch below can tell whether the function **actually read `value`**.
+   *
+   * Without that, the "value is undefined" hint went out with *every* failure of a first-layer
+   * function - a frozen-object `TypeError` from `read()` arrived wearing advice about spreading an
+   * inherited list, which is precisely the send-the-reader-to-the-wrong-place mistake the hint
+   * exists to prevent. Recorded rather than inferred from the message, because matching on V8's
+   * wording is the other way to get this wrong.
+   */
+  let valueRead = false;
+  Object.defineProperty(arg, 'value', {
+    enumerable: true,
+    get: () => {
+      valueRead = true;
+      return resolvedPrevious;
+    },
+  });
+  try {
+    return fn(arg);
+  } catch (e: any) {
+    const where = at.length ? formatPath(at) : 'the config root';
+    /**
+     * **`value` is `undefined` when no layer underneath set this key.** A function written to extend
+     * an inherited list (`[...value, x]`) is also the *first* layer in a repository that inherits
+     * nothing, and V8's report for that is `value is not iterable` - which names neither the key nor
+     * the reason, and sends the reader looking at their spread instead of at what is missing.
+     *
+     * Told rather than papered over: defaulting `value` to `[]` would be a guess about the key's
+     * type, and wrong for every key that is not a list.
+     */
+    const hint =
+      valueRead && resolvedPrevious === undefined
+        ? `\n  \`value\` is undefined here - nothing below this layer sets "${where}".` +
+          `\n  Write \`value ?? []\` (or \`?? ''\`) if the function has to work as the first layer too.`
+        : '';
+    throw new Error(`Config function in "${where}" failed: ${e?.message}${hint}`, { cause: e });
+  }
 }
 
 function interpolateString(value: string, context: vm.Context, at: (string | number)[]): unknown {
@@ -672,3 +1014,126 @@ function formatPath(at: (string | number)[]): string {
 /** Guards against an expression that never returns (`while(true)`) taking the whole command with
  *  it - a typo, not an attack, but the failure mode is identical. */
 const EXPRESSION_TIMEOUT = 1000;
+
+/**
+ * Reads and parses one structured file, memoized against **the identity of its contents** rather
+ * than its path alone: the cache key is `mtimeNs:size`.
+ *
+ * Both halves of that were chosen against a measurement.
+ *
+ * - **A stat rather than a re-read**: `statSync` is 1.3µs where `readFileSync` + `JSON.parse` is
+ *   16.1µs on a 2KB manifest - so the check costs a thirteenth of what it saves, and the same file
+ *   read by twenty packages is parsed once. (`interpolateConfig` runs once *per package*, so a
+ *   cache living in one pass would not have helped across them at all.)
+ * - **Keyed on the stat rather than held for the run**: rman writes JSON files while it is running
+ *   - `version` rewrites every bumped manifest, then re-interpolates its own deferred hooks. A
+ *   cache that only remembered the path would hand those back as they were before the write.
+ *   `mtimeNs` is nanoseconds, so a rewrite within the same millisecond does not slip through; the
+ *   size is in the key as well because it costs nothing.
+ *
+ * **Frozen, deeply, once on the way into the cache.** Every package is handed the same object, so
+ * one config mutating it would quietly change what the next package sees - the reason `pkg.manifest`
+ * has always been a copy. Freezing is better than copying here: a copy costs 5.6µs on *every* call,
+ * freezing costs ~1µs *once*, and it turns the mistake into a `TypeError` instead of an effect at a
+ * distance. A caller that wants to change something spreads it first.
+ */
+function readStructuredFile(file: string, format: FileFormat | undefined, cache: Map<string, CachedFile>): unknown {
+  let stat: fs.BigIntStats;
+  try {
+    stat = fs.statSync(file, { bigint: true });
+  } catch {
+    throw new Error(
+      `read("${path.basename(file)}") found nothing at ${file}\n` +
+        `  Use file.exists() first if its absence is a case to handle rather than a mistake.`,
+    );
+  }
+  if (stat.isDirectory()) throw new Error(`read() was given a directory, not a file: ${file}`);
+
+  const stamp = `${stat.mtimeNs}:${stat.size}`;
+  const cached = cache.get(file);
+  if (cached?.stamp === stamp) return cached.value;
+
+  const resolved = format ?? formatOf(file);
+  const text = fs.readFileSync(file, 'utf-8');
+  let value: unknown;
+  try {
+    value = parseStructured(text, resolved);
+  } catch (e: any) {
+    /** The parser's own message says what is wrong with the syntax but never which file it was
+     *  reading - and an expression can name several. */
+    throw new Error(`read("${path.basename(file)}") could not parse ${file} as ${resolved}: ${e?.message}`, {
+      cause: e,
+    });
+  }
+  deepFreeze(value);
+  cache.set(file, { stamp, value });
+  return value;
+}
+
+/** The extension decides, because the caller already wrote it - naming the parser as well would
+ *  restate it and let the two disagree (`json("x.yml")`). A name that says nothing takes the
+ *  explicit argument instead. */
+function formatOf(file: string): FileFormat {
+  const ext = path.extname(file).toLowerCase();
+  if (ext === '.json') return 'json';
+  if (ext === '.yml' || ext === '.yaml') return 'yaml';
+  if (ext === '.ini') return 'ini';
+  if (XML_EXTENSIONS.has(ext)) return 'xml';
+  throw new Error(
+    `read() cannot tell what "${path.basename(file)}" is from its name.\n` +
+      `  Name the format: read("${path.basename(file)}", "json" | "yaml" | "ini" | "xml").`,
+  );
+}
+
+/** The XML family worth recognizing by name: a project file is XML whatever its extension calls
+ *  itself, and `.csproj`/`.pom` are what a .NET or Maven repository actually holds. Anything else
+ *  still reads with an explicit `read(p, 'xml')`. */
+const XML_EXTENSIONS = new Set(['.xml', '.csproj', '.vbproj', '.fsproj', '.props', '.targets', '.nuspec', '.plist']);
+
+function parseStructured(text: string, format: FileFormat): unknown {
+  if (format === 'json') return JSON.parse(text);
+  /** `load`, not `loadAll`: a multi-document stream has no single value to be, and js-yaml says so
+   *  clearly enough ("expected a single document in the stream") to leave alone. */
+  if (format === 'yaml') return yaml.load(text);
+  if (format === 'xml') return parseXml(text);
+  return ini.parse(text);
+}
+
+/**
+ * A **DOM**, not an object - and the asymmetry with the other three formats is the honest shape
+ * rather than an omission.
+ *
+ * XML has no lossless object form: an element can repeat, carry attributes and hold text at the
+ * same time, so any flattening has to pick a convention (`$`? `_text`? array-or-not?) and be wrong
+ * for somebody. A DOM is the shape XML actually has, so a config reads it the way every other XML
+ * tool does:
+ *
+ * ```yaml
+ * version: '${{ read("pom.xml").getElementsByTagName("version")[0].textContent }}'
+ * ```
+ *
+ * **Freezing it is safe** - measured, not assumed: a frozen `@xmldom/xmldom` document still answers
+ * `getElementsByTagName` for a tag first asked about *after* the freeze (the live-collection case
+ * that would have broken it), reads attributes, resolves namespaces, walks `childNodes` and
+ * serialises back.
+ */
+function parseXml(text: string): unknown {
+  /** xmldom reports a malformed document through a handler and otherwise carries on with whatever
+   *  it could salvage - so without this, a broken file would come back as a half-parsed DOM and the
+   *  expression reading it would simply find nothing. `read()` throws for a broken JSON file; it has
+   *  to throw for this one too. */
+  const problems: string[] = [];
+  const doc = new DOMParser({
+    onError: (level, message) => {
+      if (level !== 'warning') problems.push(message.split('\n')[0]);
+    },
+  }).parseFromString(text, 'text/xml');
+  if (problems.length) throw new Error(problems[0]);
+  return doc;
+}
+
+function deepFreeze(value: unknown): void {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return;
+  Object.freeze(value);
+  for (const item of Object.values(value)) deepFreeze(item);
+}

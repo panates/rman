@@ -11,6 +11,16 @@ interface PackageDef {
   scripts?: Record<string, string>;
   dependencies?: Record<string, string>;
   rmanrc?: unknown;
+  /**
+   * The package's config as **JavaScript source**, written to `.rmanrc.cjs` - the only form that
+   * can hold a function, which is what a function step is. Given as source text rather than as an
+   * object because the value has to survive being written to a file, and `JSON.stringify` is
+   * exactly the thing that cannot carry it.
+   *
+   * `.rmanrc.cjs` also wins over the `.rmanrc` the fixture always writes, so a package can be given
+   * one without the other having to be suppressed.
+   */
+  rmanrcJs?: string;
 }
 
 function mkTmp(): string {
@@ -45,6 +55,7 @@ function writeFixture(
       JSON.stringify({ name, version: '1.0.0', dependencies: def.dependencies, scripts: def.scripts }),
     );
     if (def.rmanrc) fs.writeFileSync(path.join(pkgDir, '.rmanrc'), JSON.stringify(def.rmanrc));
+    if (def.rmanrcJs) fs.writeFileSync(path.join(pkgDir, '.rmanrc.cjs'), `module.exports = ${def.rmanrcJs};\n`);
   }
 }
 
@@ -652,5 +663,197 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('pkg-a-ran'))).toBe(true);
       expect(lines.some(l => l.includes('pkg-b-ran'))).toBe(true);
     });
+  });
+
+  /**
+   * A step written as JavaScript instead of a shell command.
+   *
+   * Every case here goes through a real `.rmanrc.cjs`, not a hand-built `pkg.config`: a function
+   * has to survive config *loading* to be worth anything, and the JS forms are the only ones that
+   * can carry one - which is the feature's one real limitation and deserves to be exercised rather
+   * than asserted.
+   */
+  describe('function steps', () => {
+    it('runs the function, in the package it belongs to and its own directory', async () => {
+      const repo = await fixture({
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { exec: function step(ctx) {
+            console.log('ran for', ctx.pkg.name, 'in', ctx.cwd === ctx.pkg.dirname ? 'its own dir' : 'SOMEWHERE ELSE');
+          } } } }`,
+        },
+      });
+      const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      expect(lines.some(l => l.includes('ran for pkg-a in its own dir'))).toBe(true);
+    });
+
+    it('hands the directory over as ctx.cwd rather than changing process.cwd()', async () => {
+      /**
+       * The difference between a function step and a shell one that costs the most to discover late:
+       * a shell step is a child process with a real working directory, a function runs inside
+       * rman's own - which cannot be moved, because `run` executes packages concurrently and one
+       * `process.chdir()` would move the ground under every step running beside it.
+       *
+       * Pinned rather than merely documented: a relative `fs.writeFileSync` inside a step lands in
+       * whatever directory rman was invoked from, and nothing about the code reads as wrong.
+       */
+      const repo = await fixture({
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { exec: function step(ctx) {
+            console.log('cwd is', ctx.cwd === ctx.pkg.dirname ? 'the package' : 'WRONG');
+            console.log('process.cwd is', process.cwd() === ctx.pkg.dirname ? 'MOVED' : 'untouched');
+          } } } }`,
+        },
+      });
+      const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      expect(lines.some(l => l.includes('cwd is the package'))).toBe(true);
+      expect(lines.some(l => l.includes('process.cwd is untouched'))).toBe(true);
+    });
+
+    it('waits for an async function before the next step', async () => {
+      const repo = await fixture({
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: {
+            exec: async function slow() { await new Promise(r => setTimeout(r, 20)); console.log('FIRST'); },
+            after: ${JSON.stringify(quiet('echo SECOND'))},
+          } } }`,
+        },
+      });
+      const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      const first = lines.findIndex(l => l.includes('FIRST'));
+      const second = lines.findIndex(l => l.includes('SECOND'));
+      expect(first).toBeGreaterThanOrEqual(0);
+      expect(second).toBeGreaterThan(first);
+    });
+
+    it('mixes with shell commands in one list, in the order written', async () => {
+      const repo = await fixture({
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { exec: [
+            ${JSON.stringify(quiet('echo ONE'))},
+            function two() { console.log('TWO'); },
+            ${JSON.stringify(quiet('echo THREE'))},
+          ] } } }`,
+        },
+      });
+      const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      const at = (text: string) => lines.findIndex(l => l.includes(text));
+      expect(at('ONE')).toBeGreaterThanOrEqual(0);
+      expect(at('TWO')).toBeGreaterThan(at('ONE'));
+      expect(at('THREE')).toBeGreaterThan(at('TWO'));
+    });
+
+    it('a throw fails the step and the run, exactly as a non-zero exit does', async () => {
+      const repo = await fixture({
+        'pkg-a': { rmanrcJs: `{ run: { build: { exec: function boom() { throw new Error('step exploded'); } } } }` },
+      });
+      const { lines, error } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      expect(error).toBeDefined();
+      expect(lines.some(l => l.includes('failed') && l.includes('boom'))).toBe(true);
+      expect(lines.some(l => l.includes('0 succeeded'))).toBe(true);
+    });
+
+    it("labels the step with the function's own name, so the log says which one ran", async () => {
+      const repo = await fixture({
+        'pkg-a': { rmanrcJs: `{ run: { build: { exec: function copyDocs() {} } } }` },
+      });
+      const { lines } = await captureLogs(() =>
+        RunService.runScript(repo, 'build', { progress: false, logLevel: 'info' }),
+      );
+      expect(lines.some(l => l.includes('copyDocs'))).toBe(true);
+    });
+
+    it('is reached by the bare-value shorthand too, not just the long form', async () => {
+      // `run: { build: fn }` has to mean `run: { build: { exec: fn } }`, as `run: { build: 'cmd' }`
+      // already means `{ exec: 'cmd' }` - a function is `typeof 'function'` rather than `'object'`,
+      // so without naming it the shorthand silently produced an empty config.
+      const repo = await fixture({
+        'pkg-a': { rmanrcJs: `{ run: { build: function shorthand() { console.log('SHORTHAND-RAN'); } } }` },
+      });
+      const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      expect(lines.some(l => l.includes('SHORTHAND-RAN'))).toBe(true);
+    });
+
+    it('runs as a root bookend as well, from the repository root', async () => {
+      const dir = mkTmp();
+      dirs.push(dir);
+      writeFixture(dir, { 'pkg-a': { scripts: { build: quiet('echo pkg-a-ran') } } });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc.cjs'),
+        `module.exports = { run: { build: { before: function rootBookend(ctx) {
+          console.log('ROOT-BOOKEND for', ctx.pkg.name, ctx.cwd === ctx.repository.dirname ? 'at root' : 'ELSEWHERE');
+        } } } };\n`,
+      );
+      const repo = await Repository.create(dir);
+      const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      expect(lines.some(l => l.includes('ROOT-BOOKEND for root at root'))).toBe(true);
+    });
+  });
+
+  describe('if, as a function', () => {
+    it('skips the package when it returns false', async () => {
+      const repo = await fixture({
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { if: () => false, exec: ${JSON.stringify(quiet('echo SHOULD-NOT-RUN'))} } } }`,
+        },
+        'pkg-b': { scripts: { build: quiet('echo pkg-b-ran') } },
+      });
+      const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      expect(lines.some(l => l.includes('SHOULD-NOT-RUN'))).toBe(false);
+      expect(lines.some(l => l.includes('pkg-b-ran'))).toBe(true);
+    });
+
+    it('runs it when it returns true, and hands it the package being decided about', async () => {
+      const repo = await fixture({
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { if: ctx => ctx.pkg.name === 'pkg-a', exec: ${JSON.stringify(quiet('echo A-RAN'))} } } }`,
+        },
+      });
+      const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      expect(lines.some(l => l.includes('A-RAN'))).toBe(true);
+    });
+
+    it('awaits an async condition rather than reading the promise as true', async () => {
+      // A promise is truthy, so a condition that is merely *called* and not awaited passes
+      // unconditionally - which is the failure mode worth pinning: it looks like it works.
+      const repo = await fixture({
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { if: async () => false, exec: ${JSON.stringify(quiet('echo SHOULD-NOT-RUN'))} } } }`,
+        },
+      });
+      const { lines } = await captureLogs(() => RunService.runScript(repo, 'build', { progress: false }));
+      expect(lines.some(l => l.includes('SHOULD-NOT-RUN'))).toBe(false);
+    });
+  });
+});
+
+describe('run: Run.normalizeScriptValue()', () => {
+  useTestEcosystem();
+
+  it('accepts a single command, a single function, and a list mixing them', () => {
+    const fn = () => {};
+    expect(RunService.normalizeScriptValue('tsc -b', 'run.build.exec')).toEqual(['tsc -b']);
+    expect(RunService.normalizeScriptValue(fn, 'run.build.exec')).toEqual([fn]);
+    expect(RunService.normalizeScriptValue(['tsc -b', fn], 'run.build.exec')).toEqual(['tsc -b', fn]);
+  });
+
+  it('treats an absent or empty value as nothing to run', () => {
+    // How a `"[*]"` block declaring a slot that some packages don't use has always behaved.
+    expect(RunService.normalizeScriptValue(undefined, 'run.build.exec')).toEqual([]);
+    expect(RunService.normalizeScriptValue('', 'run.build.exec')).toEqual([]);
+    expect(RunService.normalizeScriptValue([], 'run.build.exec')).toEqual([]);
+    expect(RunService.normalizeScriptValue(['', undefined, null], 'run.build.exec')).toEqual([]);
+  });
+
+  it('throws on a value it does not recognize, naming the config path', () => {
+    // It used to `return []`, so an unrecognized value was dropped with no trace - a function here
+    // (the obvious guess, and now the supported form) reported "1 succeeded" having run nothing.
+    expect(() => RunService.normalizeScriptValue({ cmd: 'x' }, 'run.build.after')).toThrow(
+      /"run\.build\.after" must be a shell command or a function/,
+    );
+    expect(() => RunService.normalizeScriptValue(42, 'version.before')).toThrow(/"version\.before"/);
+  });
+
+  it('names the offending index when the value is a list', () => {
+    expect(() => RunService.normalizeScriptValue(['ok', 42], 'run.build.exec')).toThrow(/"run\.build\.exec\[1\]"/);
   });
 });
