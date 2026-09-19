@@ -1,8 +1,40 @@
 import colors from 'ansi-colors';
 import semver from 'semver';
-import type { Argv } from 'yargs';
-import type { Repository } from '../core/repository.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import { SystemInfo } from '../services/system-info.js';
+
+const COMMAND = 'info' as const;
+
+const config = {
+  json: { target: 'cli', alias: 'j', describe: 'Print output as JSON', type: 'boolean' },
+} satisfies Record<string, RmanConfig.CommandOption>;
+
+type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
+
+/** Reports; declares no config key of its own. */
+const infoCommand = registerCommand(repository => ({
+  command: COMMAND,
+  describe: 'Prints local environment and repository information',
+  config,
+  examples: [
+    { command: '$0 info', description: '# Prints information' },
+    { command: '$0 info --json', description: '# Prints information in JSON format' },
+  ],
+  handler: async (args: Args) => {
+    /** Only the repository - which package manager to report, if any, is a question the core
+     *  cannot ask. `rman-node`'s augmentation reads `.rmanrc "packageManager"` off this. */
+    const systemInfo = await SystemInfo.getSystemInfo({ repository });
+    const repositoryInfo = SystemInfo.getRepositoryInfo(repository);
+    if (args.json) {
+      console.log(JSON.stringify({ ...systemInfo, repository: repositoryInfo }, undefined, 2));
+      return;
+    }
+    printSystemInfo(systemInfo);
+    printRepositoryInfo(repositoryInfo);
+  },
+}));
+
+export default infoCommand;
 
 function printSystemInfo(systemInfo: SystemInfo.SystemInfo): void {
   const maxName = Object.keys(systemInfo).reduce(
@@ -58,30 +90,3 @@ function printRepositoryInfo(info: SystemInfo.RepositoryInfo): void {
  * npm-shaped is asked for or printed, which is the right answer for a repository in any other
  * language.
  */
-export function initCli(repository: Repository, program: Argv) {
-  program.command({
-    command: 'info',
-    describe: 'Prints local environment and repository information',
-    builder: cmd =>
-      cmd
-        .example('$0 info', '# Prints information')
-        .example('$0 info --json', '# Prints information in JSON format')
-        .option('json', {
-          alias: 'j',
-          describe: 'Print output as JSON',
-          type: 'boolean',
-        }),
-    handler: async args => {
-      /** Only the repository - which package manager to report, if any, is a question the core
-       *  cannot ask. `rman-node`'s augmentation reads `.rmanrc "packageManager"` off this. */
-      const systemInfo = await SystemInfo.getSystemInfo({ repository });
-      const repositoryInfo = SystemInfo.getRepositoryInfo(repository);
-      if (args.json) {
-        console.log(JSON.stringify({ ...systemInfo, repository: repositoryInfo }, undefined, 2));
-        return;
-      }
-      printSystemInfo(systemInfo);
-      printRepositoryInfo(repositoryInfo);
-    },
-  });
-}

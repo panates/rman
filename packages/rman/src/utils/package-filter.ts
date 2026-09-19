@@ -1,6 +1,7 @@
 import micromatch from 'micromatch';
 import type { Argv } from 'yargs';
 import type { Package } from '../core/package.js';
+import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
 
 /** Shared by every command that iterates packages (`run`/`build`/`test`/`exec`, `list`, `ci`,
  *  `clean`, `version`, `publish`, `changelog`) - narrows *which* packages a command applies to,
@@ -18,6 +19,71 @@ export interface PackageFilterOptions {
   /** Also include every package that depends on the matched set (transitively) - e.g. to test
    *  everything that could be affected by a scoped library's change. */
   dependents?: boolean;
+}
+
+/**
+ * `--scope`/`--ignore`/`--deps`/`--dependents` as a **declaration** rather than a builder call -
+ * spread into a command's `config` block:
+ *
+ * ```ts
+ * config: { ...packageFilterOptions, ...branchGuardOptions, changelog: { ... } }
+ * ```
+ *
+ * **`satisfies`, never a `: Record<...>` annotation.** An annotation widens `type: 'string'` back to
+ * `string`, and every type derived from the declaration - the config contribution, the option's own
+ * value type - collapses with it. `satisfies` checks the shape and keeps the literals, and it also
+ * catches a misspelled key *here*, at the group's own line, rather than in the ten commands that
+ * spread it. The `Argv` chaining this replaces could not: a typo there was simply a new option.
+ *
+ * **Every option is `target: 'cli'`, including the ones that have a config twin.** A shared group
+ * belongs to no command, so declaring one `'both'` would contribute `version.scope` - a key nothing
+ * reads. Where a `.rmanrc` equivalent exists it is a core key in its own right (`allowBranch`), and
+ * a command that reads it names it in `configKeys`.
+ */
+export const packageFilterOptions = {
+  scope: {
+    target: 'cli',
+    describe: 'Only include packages whose name matches this glob (repeatable)',
+    // Deliberately 'string', not 'array': an array-typed option greedily swallows every
+    // following bare word as its own value, which would eat "exec"'s [command..] positional
+    // whole. yargs still collects repeated "--scope a --scope b" into an array either way.
+    type: 'string',
+  },
+  ignore: {
+    target: 'cli',
+    describe: 'Exclude packages whose name matches this glob (repeatable) - applied after --scope',
+    type: 'string',
+  },
+  deps: {
+    target: 'cli',
+    describe: 'Also include every package the matched set depends on',
+    type: 'boolean',
+  },
+  dependents: {
+    target: 'cli',
+    describe: 'Also include every package that depends on the matched set',
+    type: 'boolean',
+  },
+} satisfies Record<string, RmanConfig.CommandOption>;
+
+/**
+ * `--root`/`-r` - a group of one, and a function because its text is the command's own word for
+ * what it does. Spread it like the others: `...rootOption('Build')`.
+ *
+ * Only where a command scopes by the current directory; see `applyRootOption` for why adding it
+ * elsewhere is worse than leaving it out.
+ */
+export function rootOption(verb: string) {
+  return {
+    root: {
+      target: 'cli',
+      alias: 'r',
+      describe:
+        `${verb} across the whole repository even when the current directory is inside a single ` +
+        'package (which otherwise scopes it to just that package). No effect elsewhere.',
+      type: 'boolean',
+    },
+  } satisfies Record<string, RmanConfig.CommandOption>;
 }
 
 /** `--scope`/`--ignore`/`--deps`/`--dependents`, the same shape and describe text in every command

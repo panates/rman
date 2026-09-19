@@ -1,4 +1,22 @@
 #!/usr/bin/env node
+/**
+ * Imported for their side effect: each module calls `registerCommand`, which pushes its register
+ * function onto `commandRegistry`. Nothing here reads the modules' exports - the registry is what
+ * `runCli` walks - so the import list *is* the built-in command list.
+ */
+import './cmd/build.command.js';
+import './cmd/changed.command.js';
+import './cmd/changelog.command.js';
+import './cmd/config.command.js';
+import './cmd/diff.command.js';
+import './cmd/exec.command.js';
+import './cmd/github-release.command.js';
+import './cmd/import.command.js';
+import './cmd/info.command.js';
+import './cmd/list.command.js';
+import './cmd/run.command.js';
+import './cmd/test.command.js';
+import './cmd/version.command.js';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,23 +24,12 @@ import colors from 'ansi-colors';
 import * as yaml from 'js-yaml';
 import yargs, { type Argv } from 'yargs';
 import { hideBin } from 'yargs/helpers';
-import * as buildCommand from './commands/build.command.js';
-import * as changedCommand from './commands/changed.command.js';
-import * as changelogCommand from './commands/changelog.command.js';
-import * as configCommand from './commands/config.command.js';
-import * as diffCommand from './commands/diff.command.js';
-import * as execCommand from './commands/exec.command.js';
-import * as githubReleaseCommand from './commands/github-release.command.js';
-import * as importCommand from './commands/import.command.js';
-import * as infoCommand from './commands/info.command.js';
-import * as listCommand from './commands/list.command.js';
-import * as runCommand from './commands/run.command.js';
-import * as testCommand from './commands/test.command.js';
-import * as versionCommand from './commands/version.command.js';
 import { version } from './constants.js';
+import { commandName, toYargsCommand } from './core/command-builder.js';
 import { assertNoBuiltinShadowing, type CommandContext, loadCustomCommands } from './core/custom-command.js';
 import type { Package } from './core/package.js';
 import { Repository } from './core/repository.js';
+import { commandRegistry, type RmanConfig } from './interfaces/rman-cfg.interface.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/logger.js';
 import { filterPackages, readPackageFilterOptions, readRootOption } from './utils/package-filter.js';
 import { printableConfig } from './utils/printable-config.js';
@@ -110,19 +117,17 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
      */
     interceptConfigFlag(repository, program);
 
-    infoCommand.initCli(repository, program);
-    listCommand.initCli(repository, program);
-    runCommand.initCli(repository, program);
-    buildCommand.initCli(repository, program);
-    changelogCommand.initCli(repository, program);
-    testCommand.initCli(repository, program);
-    versionCommand.initCli(repository, program);
-    githubReleaseCommand.initCli(repository, program);
-    execCommand.initCli(repository, program);
-    changedCommand.initCli(repository, program);
-    diffCommand.initCli(repository, program);
-    configCommand.initCli(repository, program);
-    importCommand.initCli(repository, program);
+    /**
+     * **Built-ins come from `commandRegistry`, in the order their modules were imported.** Each
+     * entry is a register function that has not run yet - it runs here, with the repository, and
+     * returns the command's declaration; `toYargsCommand` is the only thing that knows how a
+     * declaration becomes a yargs registration.
+     *
+     * The thirteen hand-written `initCli(repository, program)` calls this replaces were the second
+     * place a command had to be listed, and the list the shadow check guards with was a third.
+     */
+    const builtIns = commandRegistry.map(register => register(repository));
+    for (const meta of builtIns) program.command(toYargsCommand(meta));
 
     /**
      * Commands that are not built in, from two places, registered after the built-ins so the clash
@@ -142,7 +147,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     const { commands: localCommands, errors } = await loadCustomCommands(repository.dirname);
     const localNames = new Set(localCommands.map(c => c.name));
     const commands = [...pluginCommands.filter(c => !localNames.has(c.name)), ...localCommands];
-    assertNoBuiltinShadowing(commands, BUILT_IN_COMMANDS);
+    assertNoBuiltinShadowing(commands, builtInNames(builtIns));
     for (const custom of commands) {
       program.command({
         command: custom.command!,
@@ -330,23 +335,19 @@ function isMain(): boolean {
 
 if (isMain()) runCli().catch(() => process.exit(1));
 
-/** Every name a built-in command answers to - what a `.rman/*.mjs` command may not take. Kept here
- *  rather than read back out of yargs (which exposes no such list) and pinned by a test against the
- *  `command:` strings in `src/commands/*.command.ts`, so adding a command can't quietly leave a
- *  repository's own able to shadow it. */
-const BUILT_IN_COMMANDS = [
-  'build',
-  'changed',
-  'changelog',
-  'completion',
-  'config',
-  'diff',
-  'exec',
-  'github-release',
-  'import',
-  'info',
-  'list',
-  'run',
-  'test',
-  'version',
-] as const;
+/**
+ * Every name a repository's own command may not take - **derived from what was actually
+ * registered**, not listed.
+ *
+ * It used to be a hand-maintained array, because yargs exposes no such list, and a spec had to pin
+ * it against the command sources so that adding a command could not quietly leave a repository's
+ * own able to shadow it. With the built-ins coming out of `commandRegistry` the list and the
+ * registrations cannot disagree: they are the same walk.
+ *
+ * Aliases count - `ls` is `list`, and shadowing it would be the same mistake. `completion` is
+ * yargs' own command rather than one of ours, so it is the one name still written here.
+ */
+function builtInNames(metas: RmanConfig.CommandMetadata[]): string[] {
+  const names = metas.flatMap(meta => [commandName(meta.command), ...(meta.aliases ?? [])]);
+  return [...names, 'completion'];
+}

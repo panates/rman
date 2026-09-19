@@ -4,7 +4,7 @@
  * (e.g. `ChangelogService`, `ListService`, `RunService`, `VersionService`),
  * re-exported here via `./services.js`. Purpose-specific functions, not one generic `run`/`get`
  * per domain - CLI-only concerns (argv parsing, `--help` text, and all console/file presentation)
- * stay in `cli.ts` and the individual `commands/*.command.ts` modules, which are not exported here.
+ * stay in `cli.ts` and the individual `cmd/*.command.ts` modules, which are not exported here.
  *
  * **This is also the plugin contract.** A plugin (`rman-node`, say) is an ordinary package that
  * imports from here, so everything a command needs in order to live outside rman has to be

@@ -6,7 +6,7 @@ export const LOG_LEVELS: LogLevel[] = ['silent', 'error', 'info', 'verbose'];
 /**
  * Gates console output by verbosity (`--log-level`/`.rmanrc logLevel`) so a command's routine
  * narration can be turned down without losing failure output - the same semantics `run`'s own
- * classic per-step log already used (see `resolveLogLevel` in `commands/run.ts`), centralized here
+ * classic per-step log already used (see `resolveLogLevel` in `cmd/run.command.ts`), centralized here
  * so every command can respect `--log-level` instead of reimplementing the checks, or ignoring it
  * altogether via plain `console.log`.
  */

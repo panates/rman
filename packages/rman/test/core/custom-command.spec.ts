@@ -106,22 +106,30 @@ describe('core/custom-command', () => {
     });
   });
 
-  it('the built-in list the CLI guards with covers every command it registers', () => {
-    // The list is maintained by hand (yargs exposes no such thing), so adding a command must not
-    // quietly leave a repository's own able to shadow it.
-    const cliSource = fs.readFileSync(path.resolve(path.dirname(srcIndex), 'cli.ts'), 'utf-8');
-    const listed = [...cliSource.matchAll(/^\s{2}'([a-z-]+)',$/gm)].map(m => m[1]);
-    expect(listed.length).toBeGreaterThan(0);
+  /**
+   * **The list of built-ins is derived now, so what needs pinning moved.**
+   *
+   * It used to be a hand-maintained array in `cli.ts`, and this spec compared it against the
+   * command sources so that adding a command could not quietly leave a repository's own able to
+   * shadow it. `builtInNames` reads `commandRegistry` instead, so the guard and the registrations
+   * are the same walk and cannot disagree.
+   *
+   * What *can* still go wrong is one step earlier: a command registers itself as a side effect of
+   * its module being imported, so a new file in `src/cmd/` that `cli.ts` never imports is simply
+   * not a command - no error, no entry in `--help`, and a repository's own command free to take
+   * its name. That is the drift this now pins.
+   */
+  it('the CLI imports every command module, so each one actually registers', () => {
+    const srcDir = path.dirname(srcIndex);
+    const cliSource = fs.readFileSync(path.resolve(srcDir, 'cli.ts'), 'utf-8');
 
-    const commandsDir = path.resolve(path.dirname(srcIndex), 'commands');
-    const registered = fs
-      .readdirSync(commandsDir)
+    const files = fs
+      .readdirSync(path.resolve(srcDir, 'cmd'))
       .filter(f => f.endsWith('.command.ts'))
-      .map(f => fs.readFileSync(path.join(commandsDir, f), 'utf-8'))
-      .map(src => /^\s*command: '([^']+)'/m.exec(src)?.[1]?.split(/\s+/)[0])
-      .filter((n): n is string => !!n);
-    expect(registered.length).toBeGreaterThan(0);
+      .map(f => f.replace(/\.ts$/, '.js'));
+    expect(files.length).toBeGreaterThan(0);
 
-    expect(registered.filter(n => !listed.includes(n))).toEqual([]);
+    const missing = files.filter(f => !cliSource.includes(`import './cmd/${f}'`));
+    expect(missing).toEqual([]);
   });
 });
