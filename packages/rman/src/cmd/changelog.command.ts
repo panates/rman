@@ -1,7 +1,6 @@
 import colors from 'ansi-colors';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
-import { ChangelogService } from '../services/changelog.service.js';
 import { Logger, resolveRootLogLevel } from '../utils/logger.js';
 import { packageFilterOptions, readPackageFilterOptions, rootOption } from '../utils/package-filter.js';
 
@@ -89,9 +88,8 @@ const changelogCommand = registerCommand(app => {
         includeSkipped: args.includeSkipped,
         version: args.releaseVersion,
       };
-      const entries = write
-        ? await ChangelogService.generateToFile(repository, options)
-        : await ChangelogService.getEntries(repository, options);
+      const changelog = app.getService('changelog');
+      const entries = write ? await changelog.generateToFile(options) : await changelog.getEntries(options);
 
       if (!entries.length) {
         logger.info(colors.gray('No unreleased changes.'));

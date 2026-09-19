@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import fastGlob from 'fast-glob';
+import { RmanApplication } from '../core/application.js';
 import { Package } from '../core/package.js';
 import { Repository } from '../core/repository.js';
 import { GitHelper } from '../utils/git.js';
 import { expandReleaseTag, isCalendarVersion, releaseTagPattern } from '../utils/release-version.js';
 import { ChangeHashService } from './change-hash.service.js';
-import { ChangelogService } from './changelog.service.js';
 
 export namespace GithubReleaseService {
   /** Injectable "does this release already exist" check - mainly for tests, so they don't depend
@@ -237,7 +237,7 @@ async function buildReleaseNotes(repository: Repository, git: GitHelper, release
 
   const sections: string[] = [];
   for (const pkg of [...repository.getPackages(), root]) {
-    const entries = await ChangelogService.getEntries(repository, {
+    const entries = await RmanApplication.current().getService('changelog').getEntries({
       from: previous,
       root: true,
       includeSkipped: true,

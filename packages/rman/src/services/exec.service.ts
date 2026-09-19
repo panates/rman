@@ -1,34 +1,17 @@
 import os from 'node:os';
 import colors from 'ansi-colors';
 import { Task } from 'power-tasks';
-import type { Repository } from '../core/repository.js';
+import { Service } from '../core/service.js';
 import { exec as execCommand } from '../utils/exec.js';
 import { Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { type ProgressItem, ProgressPanel } from '../utils/progress-panel.js';
 
-export namespace ExecService {
-  export interface Options extends PackageFilterOptions {
-    /** Max packages at once: `true`/omitted = CPU count, a number = that many, `false` = serial (1). */
-    parallel?: boolean | number;
-    /** Respect the package dependency graph: a package waits for its dependencies and is skipped
-     *  if one fails. Default true. Set false to run in every matching package independently,
-     *  alphabetically, regardless of the dependency graph. */
-    topo?: boolean;
-    bail?: boolean;
-    changed?: boolean;
-    changedSince?: string;
-    /** Show the live progress panel. Default true; auto-disabled when stdout isn't a TTY. */
-    progress?: boolean;
-    /** Verbosity of the classic per-package log (only applies when the live panel is off). Falls
-     *  back to the root's `.rmanrc logLevel`, then 'info' - see `resolveRootLogLevel`. */
-    logLevel?: LogLevel;
-    /** Run across the whole repository even when the current directory is inside a single package
-     *  (which otherwise scopes the run to just that package). Has no effect when already at the
-     *  repository root, or outside any known package. */
-    root?: boolean;
-  }
-
+/**
+ * A service class - see `ListService` for the shape and `Service` for the three measured
+ * consequences a namespace had. `repository` left the signature because the application carries it.
+ */
+export class ExecService extends Service {
   /**
    * `exec`: runs `command` (an arbitrary shell command, not an npm script) directly in every
    * matching package's own directory - unlike `run`, there's no `package.json` script to resolve
@@ -38,7 +21,8 @@ export namespace ExecService {
    * (falling back to a classic one-line-per-package log when it's off), and the same
    * `--scope`/`--ignore`/`--deps`/`--dependents`/`--changed` package filtering.
    */
-  export async function exec(repository: Repository, command: string, options: Options = {}): Promise<void> {
+  async exec(command: string, options: ExecService.Options = {}): Promise<void> {
+    const repository = this.repository;
     const logLevelDefault = resolveRootLogLevel(repository);
     const logger = new Logger(options.logLevel ?? logLevelDefault);
 
@@ -146,5 +130,34 @@ async function execForPackage(
     throw e;
   } finally {
     ctx.finishedAt = Date.now();
+  }
+}
+
+export namespace ExecService {
+  export interface Options extends PackageFilterOptions {
+    /** Max packages at once: `true`/omitted = CPU count, a number = that many, `false` = serial (1). */
+    parallel?: boolean | number;
+    /** Respect the package dependency graph: a package waits for its dependencies and is skipped
+     *  if one fails. Default true. Set false to run in every matching package independently,
+     *  alphabetically, regardless of the dependency graph. */
+    topo?: boolean;
+    bail?: boolean;
+    changed?: boolean;
+    changedSince?: string;
+    /** Show the live progress panel. Default true; auto-disabled when stdout isn't a TTY. */
+    progress?: boolean;
+    /** Verbosity of the classic per-package log (only applies when the live panel is off). Falls
+     *  back to the root's `.rmanrc logLevel`, then 'info' - see `resolveRootLogLevel`. */
+    logLevel?: LogLevel;
+    /** Run across the whole repository even when the current directory is inside a single package
+     *  (which otherwise scopes the run to just that package). Has no effect when already at the
+     *  repository root, or outside any known package. */
+    root?: boolean;
+  }
+}
+
+declare module '../core/service.js' {
+  interface ServiceMap {
+    exec: ExecService;
   }
 }

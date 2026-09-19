@@ -18,8 +18,8 @@ describe('public API (src/index.ts)', () => {
   it("exports Repository, Package, and each domain's namespace (Changelog, List, Run, Version)", () => {
     expect(typeof api.Repository).toBe('function');
     expect(typeof api.Package).toBe('function');
-    expect(typeof api.ChangelogService.getEntries).toBe('function');
-    expect(typeof api.ChangelogService.generateToFile).toBe('function');
+    expect(typeof api.ChangelogService.prototype.getEntries).toBe('function');
+    expect(typeof api.ChangelogService.prototype.generateToFile).toBe('function');
     expect(typeof api.ChangeHashService.detect).toBe('function');
     expect(typeof api.ConventionalCommitsService.parseSubject).toBe('function');
     /** The plan and the writes are separate services: `changed` needs only the first, and used to

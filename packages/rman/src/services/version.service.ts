@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { RmanApplication } from '../core/application.js';
 import { interpolateConfig } from '../core/config.js';
 import { Manifest } from '../core/manifest.js';
 import type { Package } from '../core/package.js';
@@ -9,7 +10,6 @@ import { GitHelper } from '../utils/git.js';
 import { expandReleaseTag, isCalendarVersion } from '../utils/release-version.js';
 import { stampVersionLabel } from '../utils/version-stamp.js';
 import { ChangeHashService } from './change-hash.service.js';
-import { ChangelogService } from './changelog.service.js';
 import { RunService } from './run.service.js';
 import { VersionPlanService } from './version-plan.service.js';
 
@@ -180,7 +180,7 @@ export namespace VersionService {
       for (const entry of bumped) {
         const fromTag = ChangeHashService.expandTag(entry.package, entry.from);
         const from = (await git.tagExists(fromTag)) ? fromTag : undefined;
-        const changelogEntries = await ChangelogService.generateToFile(repository, {
+        const changelogEntries = await RmanApplication.current().getService('changelog').generateToFile({
           scope: entry.package.name,
           root: true,
           from,

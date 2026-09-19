@@ -1,5 +1,4 @@
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
-import { ExecService } from '../services/exec.service.js';
 import { assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { readPackageFilterOptions } from '../utils/package-filter.js';
 import { runOptions } from '../utils/run-options.js';
@@ -70,7 +69,7 @@ const execCommand = registerCommand(app => {
         const err: any = new Error('No command given - e.g. "rman exec ls" or "rman exec -- eslint --bail"');
         throw err;
       }
-      await ExecService.exec(repository, tokens.join(' '), {
+      await app.getService('exec').exec(tokens.join(' '), {
         ...readPackageFilterOptions(args),
         parallel: args.parallel,
         topo: args.topo,

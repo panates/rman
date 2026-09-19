@@ -3,8 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { Repository } from '../../src/core/repository.js';
-import { ExecService } from '../../src/services/exec.service.js';
-import { useTestEcosystem } from '../_fixture.js';
+import { service, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-exec-test-'));
@@ -62,9 +61,9 @@ describe('services/exec', () => {
     fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
     writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-    const repo = await Repository.create(dir);
+    await Repository.create(dir);
 
-    await captureLogs(() => ExecService.exec(repo, appendCommand(marker, 'ran'), { progress: false }));
+    await captureLogs(() => service('exec').exec(appendCommand(marker, 'ran'), { progress: false }));
 
     const calls = fs.readFileSync(marker, 'utf-8').trim().split('\n');
     expect(calls.length).toBe(2);
@@ -77,11 +76,11 @@ describe('services/exec', () => {
      *  since it runs before the plugins that would know what a package is. */
     fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-    const repo = await Repository.create(dir);
+    await Repository.create(dir);
 
     const marker = path.join(dir, 'cwd.log');
     await captureLogs(() =>
-      ExecService.exec(repo, `node -e 'require("fs").writeFileSync(${JSON.stringify(marker)}, process.cwd())'`, {
+      service('exec').exec(`node -e 'require("fs").writeFileSync(${JSON.stringify(marker)}, process.cwd())'`, {
         progress: false,
       }),
     );
@@ -101,10 +100,10 @@ describe('services/exec', () => {
       version: '1.0.0',
       dependencies: { 'pkg-a': '1.0.0' },
     });
-    const repo = await Repository.create(dir);
+    await Repository.create(dir);
 
     await captureLogs(() =>
-      ExecService.exec(repo, `node -e 'require("fs").appendFileSync(${JSON.stringify(marker)}, process.cwd()+"\\n")'`, {
+      service('exec').exec(`node -e 'require("fs").appendFileSync(${JSON.stringify(marker)}, process.cwd()+"\\n")'`, {
         progress: false,
         parallel: false,
       }),
@@ -127,11 +126,11 @@ describe('services/exec', () => {
       version: '1.0.0',
       dependencies: { 'pkg-a': '1.0.0' },
     });
-    const repo = await Repository.create(dir);
+    await Repository.create(dir);
 
     await captureLogs(async () => {
       await expect(
-        ExecService.exec(repo, `bash -c "[ $(basename $(pwd)) = a ] && exit 1 || echo ran >> ${marker}"`, {
+        service('exec').exec(`bash -c "[ $(basename $(pwd)) = a ] && exit 1 || echo ran >> ${marker}"`, {
           progress: false,
           parallel: false,
         }),
@@ -149,9 +148,9 @@ describe('services/exec', () => {
     fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
     writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-    const repo = await Repository.create(dir);
+    await Repository.create(dir);
 
-    await captureLogs(() => ExecService.exec(repo, appendCommand(marker, 'ran'), { progress: false, scope: 'pkg-a' }));
+    await captureLogs(() => service('exec').exec(appendCommand(marker, 'ran'), { progress: false, scope: 'pkg-a' }));
     expect(fs.readFileSync(marker, 'utf-8').trim().split('\n').length).toBe(1);
   });
 
@@ -162,10 +161,10 @@ describe('services/exec', () => {
      *  since it runs before the plugins that would know what a package is. */
     fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-    const repo = await Repository.create(dir);
+    await Repository.create(dir);
 
     const lines = await captureLogs(() =>
-      ExecService.exec(repo, 'echo should-not-run', { progress: false, scope: 'nothing-matches-this' }),
+      service('exec').exec('echo should-not-run', { progress: false, scope: 'nothing-matches-this' }),
     );
     expect(lines.some(l => l.includes('No package matched.'))).toBe(true);
   });

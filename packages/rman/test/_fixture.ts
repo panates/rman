@@ -4,6 +4,7 @@ import glob from 'fast-glob';
 import { RmanApplication } from '../src/core/application.js';
 import type { ManifestProvider } from '../src/core/manifest.js';
 import type { Package } from '../src/core/package.js';
+import type { ServiceMap } from '../src/core/service.js';
 import { baseTechStack, type TechStack } from '../src/core/tech-stack.js';
 import { Workspace } from '../src/core/workspace.js';
 import { ChangeHashService } from '../src/services/change-hash.service.js';
@@ -248,3 +249,15 @@ export const registryVersions = new Map<string, string>();
 export const registryCalls: string[] = [];
 
 const DEPENDENCY_KEYS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const;
+
+/**
+ * The service a spec is exercising, from the application the fixture's repository attached itself
+ * to.
+ *
+ * `Repository.create` attaches, so a spec that has built one already has the application this
+ * reaches - which is why the old `SomeService.method(repo, ...)` shape disappears rather than
+ * moving: the repository was always available, the parameter only restated it.
+ */
+export function service<K extends keyof ServiceMap>(name: K): ServiceMap[K] {
+  return RmanApplication.current().getService(name);
+}

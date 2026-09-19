@@ -1,7 +1,6 @@
 import path from 'node:path';
 import colors from 'ansi-colors';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
-import { ImportService } from '../services/import.service.js';
 
 const COMMAND = 'import <path>' as const;
 
@@ -34,7 +33,7 @@ const importCommand = registerCommand(app => {
     handler: async (args: Args) => {
       /** `<path>` is required by the command string, so yargs refuses the call without it - the
        *  non-null assertion states what the grammar already guarantees. */
-      const result = await ImportService.importRepo(repository, args.path!, { dest: args.dest });
+      const result = await app.getService('import').importRepo(args.path!, { dest: args.dest });
       console.log(
         colors.green('imported'),
         colors.cyan(result.name),

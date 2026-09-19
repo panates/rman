@@ -5,8 +5,8 @@ import path from 'node:path';
 import { expect } from 'expect';
 import { Repository } from '../../src/core/repository.js';
 import { ChangeHashService } from '../../src/services/change-hash.service.js';
-import { ChangelogService } from '../../src/services/changelog.service.js';
-import { registryVersions, useTestEcosystem } from '../_fixture.js';
+import type { ChangelogService } from '../../src/services/changelog.service.js';
+import { registryVersions, service, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-changelog-test-'));
@@ -85,9 +85,9 @@ describe('services/changelog', () => {
 
   it('generates a changelog per package from commits not yet pushed, grouped Features/Bug Fixes/Other', async () => {
     const { dir } = fixtureWithUnpushedCommits();
-    const repo = await Repository.create(dir);
+    await Repository.create(dir);
 
-    const output = content(await ChangelogService.getEntries(repo, {}));
+    const output = content(await service('changelog').getEntries({}));
 
     expect(output).toContain('## pkg-a 1.0.0');
     expect(output).toContain('### ✨ Features');
@@ -122,8 +122,8 @@ describe('services/changelog', () => {
     run('add', '-A');
     run('commit', '-q', '-m', 'docs: a root-level change');
 
-    const repo = await Repository.create(dir);
-    const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+    await Repository.create(dir);
+    const output = content(await service('changelog').getEntries({ from: baseHash }));
     expect(output).toContain(`## ${path.basename(dir)} repository`);
     expect(output).not.toContain('sqb.v4');
   });
@@ -152,8 +152,8 @@ describe('services/changelog', () => {
     run('add', '-A');
     run('commit', '-q', '-m', 'docs: refresh every README');
 
-    const repo = await Repository.create(dir);
-    const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+    await Repository.create(dir);
+    const output = content(await service('changelog').getEntries({ from: baseHash }));
 
     expect(output).toContain(`## ${path.basename(dir)} repository`);
     expect(output).toContain('- docs: refresh every README');
@@ -185,8 +185,8 @@ describe('services/changelog', () => {
     run('add', '-A');
     run('commit', '-q', '-m', 'feat(pkg-a): a normal change');
 
-    const repo = await Repository.create(dir);
-    const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+    await Repository.create(dir);
+    const output = content(await service('changelog').getEntries({ from: baseHash }));
     expect(output).toContain('## pkg-a');
     expect(output).not.toContain('## root');
   });
@@ -213,8 +213,8 @@ describe('services/changelog', () => {
     run('add', '-A');
     run('commit', '-q', '-m', "feat(pkg-a): a normal change in the repo's only package");
 
-    const repo = await Repository.create(dir);
-    const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+    await Repository.create(dir);
+    const output = content(await service('changelog').getEntries({ from: baseHash }));
     expect(output).toContain('## pkg-a');
     expect(output).not.toContain('## root');
   });
@@ -237,8 +237,8 @@ describe('services/changelog', () => {
     run('add', '-A');
     run('commit', '-q', '-m', 'just a plain message');
 
-    const repo = await Repository.create(dir);
-    const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+    await Repository.create(dir);
+    const output = content(await service('changelog').getEntries({ from: baseHash }));
     expect(output).toContain('- just a plain message');
   });
 
@@ -264,8 +264,8 @@ describe('services/changelog', () => {
     run('add', '-A');
     run('commit', '-q', '-m', '6.0.1');
 
-    const repo = await Repository.create(dir);
-    const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+    await Repository.create(dir);
+    const output = content(await service('changelog').getEntries({ from: baseHash }));
     expect(output).toContain('- a real change');
     expect(output).not.toContain('6.0.1');
   });
@@ -289,8 +289,8 @@ describe('services/changelog', () => {
     run('add', '-A');
     run('commit', '-q', '-m', 'v2.3.0-beta.1');
 
-    const repo = await Repository.create(dir);
-    const entries = await ChangelogService.getEntries(repo, { from: baseHash });
+    await Repository.create(dir);
+    const entries = await service('changelog').getEntries({ from: baseHash });
     expect(entries).toEqual([]);
   });
 
@@ -322,8 +322,8 @@ describe('services/changelog', () => {
 
     it('excludes the package by default - no heading, even though it has real changes', async () => {
       const { dir, baseHash } = fixtureWithSkippedPackage();
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({ from: baseHash }));
       expect(output).not.toContain('## pkg-a');
       expect(output).not.toContain('a feature in the skipped package');
       expect(output).toContain('## pkg-b');
@@ -332,8 +332,8 @@ describe('services/changelog', () => {
 
     it('--include-skipped (includeSkipped: true) generates it anyway', async () => {
       const { dir, baseHash } = fixtureWithSkippedPackage();
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, { from: baseHash, includeSkipped: true }));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({ from: baseHash, includeSkipped: true }));
       expect(output).toContain('## pkg-a');
       expect(output).toContain('a feature in the skipped package');
     });
@@ -369,8 +369,8 @@ describe('services/changelog', () => {
       run('add', '-A');
       run('commit', '-q', '-m', 'dev: tweak a local script');
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({ from: baseHash }));
       expect(output).toContain('- a real feature');
       expect(output).not.toContain('bump a dependency');
       expect(output).not.toContain('tweak a local script');
@@ -396,8 +396,8 @@ describe('services/changelog', () => {
       run('add', '-A');
       run('commit', '-q', '-m', 'a plain, non-conventional message');
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({ from: baseHash }));
       expect(output).toContain('- a plain, non-conventional message');
     });
 
@@ -426,8 +426,8 @@ describe('services/changelog', () => {
       run('add', '-A');
       run('commit', '-q', '-m', 'chore(pkg-b): tidy up');
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({ from: baseHash }));
       expect(output).not.toContain('## pkg-a'); // its only commit was ignored -> no entry
       expect(output).toContain('## pkg-b');
       expect(output).toContain('chore(pkg-b): tidy up');
@@ -442,8 +442,8 @@ describe('services/changelog', () => {
     run('add', '-A');
     run('commit', '-q', '-m', 'feat(pkg-a): another feature');
 
-    const repo = await Repository.create(dir);
-    const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+    await Repository.create(dir);
+    const output = content(await service('changelog').getEntries({ from: baseHash }));
     expect(output).toContain('- **pkg-a:** add a feature');
     expect(output).toContain('- **pkg-a:** another feature');
   });
@@ -462,17 +462,17 @@ describe('services/changelog', () => {
     run('commit', '-q', '-m', 'init');
     run('tag', 'v1.0.0'); // released right here - so there is genuinely nothing since
 
-    const repo = await Repository.create(dir);
-    const entries = await ChangelogService.getEntries(repo, {});
+    await Repository.create(dir);
+    const entries = await service('changelog').getEntries({});
     expect(entries).toEqual([]);
   });
 
   describe('--write', () => {
     it('prepends the entry into CHANGELOG.md, creating it with a "# Changelog" header if missing', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      const repo = await Repository.create(dir);
+      await Repository.create(dir);
 
-      await ChangelogService.generateToFile(repo, {});
+      await service('changelog').generateToFile({});
 
       const fileContent = fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf-8');
       expect(fileContent.startsWith('# Changelog\n')).toBe(true);
@@ -481,8 +481,8 @@ describe('services/changelog', () => {
 
     it('a second run prepends above the first entry, leaving it intact below', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      const repo = await Repository.create(dir);
-      await ChangelogService.generateToFile(repo, {});
+      await Repository.create(dir);
+      await service('changelog').generateToFile({});
 
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       // commit the CHANGELOG.md files the first --write left uncommitted, then push everything
@@ -495,8 +495,8 @@ describe('services/changelog', () => {
       run('add', '-A');
       run('commit', '-q', '-m', 'feat(pkg-a): a second feature');
       // re-create the Repository so the new commit is picked up by "not yet pushed" status.
-      const repo2 = await Repository.create(dir);
-      await ChangelogService.generateToFile(repo2, {});
+      await Repository.create(dir);
+      await service('changelog').generateToFile({});
 
       const fileContent = fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf-8');
       const firstIdx = fileContent.indexOf('add a feature');
@@ -510,9 +510,9 @@ describe('services/changelog', () => {
   describe('--file-path (where --write prepends into)', () => {
     it('defaults to "CHANGELOG.md" in each package\'s own directory', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      const repo = await Repository.create(dir);
+      await Repository.create(dir);
 
-      const entries = await ChangelogService.generateToFile(repo, {});
+      const entries = await service('changelog').generateToFile({});
 
       expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(true);
       expect(entries.find(e => e.label === 'pkg-a')?.filePath).toBe('CHANGELOG.md');
@@ -520,9 +520,9 @@ describe('services/changelog', () => {
 
     it('an explicit filePath applies the same way to every package, replacing the default filename', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      const repo = await Repository.create(dir);
+      await Repository.create(dir);
 
-      await ChangelogService.generateToFile(repo, { filePath: 'HISTORY.md' });
+      await service('changelog').generateToFile({ filePath: 'HISTORY.md' });
 
       expect(fs.existsSync(path.join(dir, 'packages/a/HISTORY.md'))).toBe(true);
       expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
@@ -532,9 +532,9 @@ describe('services/changelog', () => {
 
     it('a nested filePath (e.g. "docs/CHANGELOG.md") creates any missing parent directory', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      const repo = await Repository.create(dir);
+      await Repository.create(dir);
 
-      await ChangelogService.generateToFile(repo, { filePath: 'docs/CHANGELOG.md' });
+      await service('changelog').generateToFile({ filePath: 'docs/CHANGELOG.md' });
 
       expect(fs.existsSync(path.join(dir, 'packages/a/docs/CHANGELOG.md'))).toBe(true);
     });
@@ -547,9 +547,9 @@ describe('services/changelog', () => {
         path.join(dir, 'packages/b/.rmanrc'),
         JSON.stringify({ changelog: { filePath: 'CHANGELOG.md' } }),
       );
-      const repo = await Repository.create(dir);
+      await Repository.create(dir);
 
-      await ChangelogService.generateToFile(repo, {});
+      await service('changelog').generateToFile({});
 
       expect(fs.existsSync(path.join(dir, 'packages/a/HISTORY.md'))).toBe(true);
       expect(fs.existsSync(path.join(dir, 'packages/b/CHANGELOG.md'))).toBe(true);
@@ -558,9 +558,9 @@ describe('services/changelog', () => {
     it('an explicit option filePath wins over .rmanrc "changelog.filePath"', async () => {
       const { dir } = fixtureWithUnpushedCommits();
       fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { changelog: { filePath: 'HISTORY.md' } } }));
-      const repo = await Repository.create(dir);
+      await Repository.create(dir);
 
-      await ChangelogService.generateToFile(repo, { filePath: 'NOTES.md' });
+      await service('changelog').generateToFile({ filePath: 'NOTES.md' });
 
       expect(fs.existsSync(path.join(dir, 'packages/a/NOTES.md'))).toBe(true);
       expect(fs.existsSync(path.join(dir, 'packages/a/HISTORY.md'))).toBe(false);
@@ -576,8 +576,8 @@ describe('services/changelog', () => {
         JSON.stringify({ '[*]': { changelog: { template: './my-template.md' } } }),
       );
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, {}));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({}));
       expect(output).toContain('Release notes for pkg-a v1.0.0');
       expect(output).toContain('- **pkg-a:** add a feature');
       // the default template's own heading shouldn't appear when a custom one is used.
@@ -590,24 +590,24 @@ describe('services/changelog', () => {
         path.join(dir, '.rmanrc'),
         JSON.stringify({ '[*]': { changelog: { template: './missing-template.md' } } }),
       );
-      const repo = await Repository.create(dir);
-      await expect(ChangelogService.getEntries(repo, {})).rejects.toThrow(/changelog\.template not found/);
+      await Repository.create(dir);
+      await expect(service('changelog').getEntries({})).rejects.toThrow(/changelog\.template not found/);
     });
   });
 
   describe('cwd scoping (Repository.currentPackage)', () => {
     it("running from inside a single package only generates that package's changelog", async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      const repo = await Repository.create(path.join(dir, 'packages/a'));
-      const output = content(await ChangelogService.getEntries(repo, {}));
+      await Repository.create(path.join(dir, 'packages/a'));
+      const output = content(await service('changelog').getEntries({}));
       expect(output).toContain('## pkg-a');
       expect(output).not.toContain('## pkg-b');
     });
 
     it('--root generates for the whole repository even from inside a single package', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      const repo = await Repository.create(path.join(dir, 'packages/a'));
-      const output = content(await ChangelogService.getEntries(repo, { root: true }));
+      await Repository.create(path.join(dir, 'packages/a'));
+      const output = content(await service('changelog').getEntries({ root: true }));
       expect(output).toContain('## pkg-a');
       expect(output).toContain('## pkg-b');
     });
@@ -616,8 +616,8 @@ describe('services/changelog', () => {
   describe('{{version}} resolution from git tags (not package.json)', () => {
     it("falls back to package.json's version when no tag matches anything", async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, {}));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({}));
       expect(output).toContain('## pkg-a 1.0.0');
     });
 
@@ -631,8 +631,8 @@ describe('services/changelog', () => {
       // too (it's the newest tag, sitting right at HEAD - nothing "since" it by definition).
       run('tag', 'v6.0.8');
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({ from: baseHash }));
       expect(output).toContain('## pkg-a 6.0.8');
       expect(output).toContain('## pkg-b 6.0.8');
       expect(output).not.toContain('1.0.0');
@@ -646,8 +646,8 @@ describe('services/changelog', () => {
       // pkg-b is never tagged - it should still fall back to its own package.json version.
       fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { changelog: { tagPattern: '{name}@*' } } }));
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({ from: baseHash }));
       expect(output).toContain('## pkg-a 3.1.0');
       expect(output).toContain('## pkg-b 2.0.0');
     });
@@ -672,8 +672,8 @@ describe('services/changelog', () => {
       run('add', '-A');
       run('commit', '-q', '-m', 'feat: something new');
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({ from: baseHash }));
       expect(output).toContain('## @sqb/builder 1.2.3');
     });
 
@@ -684,8 +684,8 @@ describe('services/changelog', () => {
       run('tag', 'pkg-a@9.9.9'); // pkg-a's own override
       fs.writeFileSync(path.join(dir, 'packages/a/.rmanrc'), JSON.stringify({ changelog: { tagPattern: '{name}@*' } }));
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, { from: baseHash }));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({ from: baseHash }));
       expect(output).toContain('## pkg-a 9.9.9');
       expect(output).toContain('## pkg-b 6.0.8');
     });
@@ -718,8 +718,8 @@ describe('services/changelog', () => {
       run('add', '-A');
       run('commit', '-q', '-m', 'feat: a brand new unreleased change');
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, {}));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({}));
       expect(output).toContain('a brand new unreleased change');
       expect(output).not.toContain('an already-published change');
     });
@@ -746,20 +746,20 @@ describe('services/changelog', () => {
       run('add', '-A');
       run('commit', '-q', '-m', 'feat: a brand new unreleased change');
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, { from: ChangeHashService.AUTO }));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({ from: ChangeHashService.AUTO }));
       expect(output).toContain('a brand new unreleased change');
       expect(output).not.toContain('an already-published change');
     });
 
     it('falls back to not-yet-pushed commits when the published version has no matching tag in this repo', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      const repo = await Repository.create(dir);
+      await Repository.create(dir);
       // "9.9.9" was never tagged here - tagging must have lagged behind the publish, so the
       // borrowed version maps onto a tag that does not exist and resolves nothing.
       registryVersions.set('pkg-a', '9.9.9');
       registryVersions.set('pkg-b', '9.9.9');
-      const output = content(await ChangelogService.getEntries(repo, {}));
+      const output = content(await service('changelog').getEntries({}));
       expect(output).toContain('- **pkg-a:** add a feature');
       expect(output).toContain('- **pkg-b:** correct a bug');
     });
@@ -800,8 +800,8 @@ describe('services/changelog', () => {
       run('commit', '-q', '-m', 'feat: a feature in the never-published docker package');
       run('push', '-q');
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, {}));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({}));
       expect(output).toContain('a feature in the never-published docker package');
     });
 
@@ -839,8 +839,8 @@ describe('services/changelog', () => {
       run('add', '-A');
       run('commit', '-q', '-m', 'feat(pkg-b): unreleased since 2.0.0');
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, {}));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({}));
       expect(output).toContain('unreleased since 1.0.0');
       expect(output).not.toContain('already published at 1.0.0');
       expect(output).toContain('unreleased since 2.0.0');
@@ -882,9 +882,9 @@ describe('services/changelog', () => {
       run('add', '-A');
       run('commit', '-q', '-m', 'chore: add rmanrc');
 
-      const repo = await Repository.create(dir);
+      await Repository.create(dir);
       registryVersions.set('pkg-a', '1.5.0');
-      const output = content(await ChangelogService.getEntries(repo, {}));
+      const output = content(await service('changelog').getEntries({}));
       expect(output).toContain('released in 1.2.0, never documented');
       expect(output).toContain('released in 1.5.0');
     });
@@ -893,14 +893,14 @@ describe('services/changelog', () => {
   describe('ChangelogService.getEntries() - the pure computation ChangelogService.generateToFile() writes on top of', () => {
     it('returns structured entries and never touches the console or CHANGELOG.md files', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      const repo = await Repository.create(dir);
+      await Repository.create(dir);
 
       const originalLog = console.log;
       const logged: unknown[] = [];
       console.log = (...args: unknown[]) => logged.push(args);
       let entries: ChangelogService.Entry[];
       try {
-        entries = await ChangelogService.getEntries(repo, {});
+        entries = await service('changelog').getEntries({});
       } finally {
         console.log = originalLog;
       }
@@ -936,8 +936,8 @@ describe('services/changelog', () => {
       run('commit', '-q', '-m', 'init');
       run('tag', 'v1.0.0'); // released right here - so there is genuinely nothing since
 
-      const repo = await Repository.create(dir);
-      const entries = await ChangelogService.getEntries(repo, {});
+      await Repository.create(dir);
+      const entries = await service('changelog').getEntries({});
       expect(entries).toEqual([]);
     });
 
@@ -958,8 +958,8 @@ describe('services/changelog', () => {
       run('add', '-A');
       run('commit', '-q', '-m', 'feat(pkg-a): the very first feature');
 
-      const repo = await Repository.create(dir);
-      const output = content(await ChangelogService.getEntries(repo, {}));
+      await Repository.create(dir);
+      const output = content(await service('changelog').getEntries({}));
       expect(output).toContain('the very first feature');
     });
   });
@@ -967,14 +967,14 @@ describe('services/changelog', () => {
   describe('ChangelogService.getEntries()/generateToFile() never touch the console themselves', () => {
     it('produces no console output at all, with or without --write', async () => {
       const { dir } = fixtureWithUnpushedCommits();
-      const repo = await Repository.create(dir);
+      await Repository.create(dir);
 
       const originalLog = console.log;
       const logged: unknown[] = [];
       console.log = (...args: unknown[]) => logged.push(args);
       try {
-        await ChangelogService.getEntries(repo, {});
-        await ChangelogService.generateToFile(repo, {});
+        await service('changelog').getEntries({});
+        await service('changelog').generateToFile({});
       } finally {
         console.log = originalLog;
       }

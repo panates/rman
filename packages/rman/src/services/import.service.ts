@@ -1,23 +1,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { Repository } from '../core/repository.js';
+import { Service } from '../core/service.js';
 import { GitHelper } from '../utils/git.js';
 
-export namespace ImportService {
-  export interface Options {
-    /** Subdirectory (relative to the repository root) the new package is placed under - default `'packages'`. */
-    dest?: string;
-  }
-
-  export interface Result {
-    /** The imported package's name (from its own `package.json`, or its directory basename). */
-    name: string;
-    /** Where it was placed, absolute. */
-    targetDir: string;
-    commitCount: number;
-  }
-
+/**
+ * A service class - see `ListService` for the shape and `Service` for the three measured
+ * consequences a namespace had. `repository` left the signature because the application carries it.
+ */
+export class ImportService extends Service {
   /**
    * Imports `sourcePath` (a local clone of some other git repository) as a new package under this
    * repository, preserving its **entire commit history** - every original commit, author, date and
@@ -33,7 +24,8 @@ export namespace ImportService {
    * merge (which real `git subtree` would give, at the cost of far less predictable behavior
    * across git versions - the reason this - and lerna - avoid it).
    */
-  export async function importRepo(repository: Repository, sourcePath: string, options: Options = {}): Promise<Result> {
+  async importRepo(sourcePath: string, options: ImportService.Options = {}): Promise<ImportService.Result> {
+    const repository = this.repository;
     const absSource = path.resolve(sourcePath);
     if (!fs.existsSync(path.join(absSource, '.git'))) {
       throw new Error(`"${sourcePath}" is not a git repository (no .git found) - clone it locally first`);
@@ -96,4 +88,25 @@ function rewritePatchPaths(patchFile: string, prefix: string): void {
     .replace(/^rename from (.+)$/gm, (_m, p) => `rename from ${prefix}/${p}`)
     .replace(/^rename to (.+)$/gm, (_m, p) => `rename to ${prefix}/${p}`);
   fs.writeFileSync(patchFile, rewritten);
+}
+
+export namespace ImportService {
+  export interface Options {
+    /** Subdirectory (relative to the repository root) the new package is placed under - default `'packages'`. */
+    dest?: string;
+  }
+
+  export interface Result {
+    /** The imported package's name (from its own `package.json`, or its directory basename). */
+    name: string;
+    /** Where it was placed, absolute. */
+    targetDir: string;
+    commitCount: number;
+  }
+}
+
+declare module '../core/service.js' {
+  interface ServiceMap {
+    import: ImportService;
+  }
 }

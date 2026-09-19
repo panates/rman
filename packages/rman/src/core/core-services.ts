@@ -1,3 +1,6 @@
+import { ChangelogService } from '../services/changelog.service.js';
+import { ExecService } from '../services/exec.service.js';
+import { ImportService } from '../services/import.service.js';
 import { ListService } from '../services/list.service.js';
 import type { RmanApplication } from './application.js';
 
@@ -14,5 +17,8 @@ import type { RmanApplication } from './application.js';
  * from its own package, with `app.setService`.
  */
 export function registerCoreServices(app: RmanApplication): void {
+  app.setService('changelog', a => new ChangelogService(a));
+  app.setService('exec', a => new ExecService(a));
+  app.setService('import', a => new ImportService(a));
   app.setService('list', a => new ListService(a));
 }
