@@ -113,19 +113,6 @@ export namespace RunService {
    */
   export type StepSource = (pkg: Package, script: string) => ScriptSlots | undefined;
 
-  /**
-   * Registers a source. Called by `loadPlugins` for each plugin's `runSteps`, in `plugins`
-   * declaration order - never as an import side effect, so what is registered is exactly what the
-   * repository's `.rmanrc` asked for.
-   */
-  export function addStepSource(source: StepSource): void {
-    /** Idempotent per source: a plugin both declares `runSteps` (registered by `loadPlugins`) and
-     *  may call its own `augmentRun()` for programmatic callers, so the same function arrives
-     *  twice. Pushing twice is harmless - the first match wins - but it makes the registry lie
-     *  about what is in it. */
-    RmanApplication.current().stepSources.add(source);
-  }
-
   /** For tests, which would otherwise leak a source into every later case in the process. */
   export function clearStepSources(): void {
     RmanApplication.reset();
@@ -143,7 +130,7 @@ export namespace RunService {
    * A plugin for another ecosystem gets its own lifecycle hooks the moment it contributes steps.
    */
   export function contributedSlots(pkg: Package, script: string): ScriptSlots | undefined {
-    return firstContributed(pkg, script);
+    return contributedSlotsFor(pkg, script);
   }
 
   /**
@@ -742,7 +729,7 @@ async function passesIf(
 function getScriptSteps(pkg: Package, script: string): RunService.ScriptStep[] {
   const cfg = RunService.getConfig(pkg, script);
   const override = cfg.override === true;
-  const contributed = firstContributed(pkg, script);
+  const contributed = contributedSlotsFor(pkg, script);
 
   const fromConfig: RunService.ScriptSlots = {
     before: RunService.normalizeScriptValue(cfg.before, `run.${script}.before`),
@@ -760,14 +747,19 @@ function getScriptSteps(pkg: Package, script: string): RunService.ScriptStep[] {
   return steps;
 }
 
-/** The first source that says this package declares the script at all. Declaration order, so a
- *  repository listing two plugins gets a predictable answer rather than a merged one. */
-function firstContributed(pkg: Package, script: string): RunService.ScriptSlots | undefined {
-  for (const source of RmanApplication.current().stepSources) {
-    const slots = source(pkg, script);
-    if (slots && (slots.before?.length || slots.exec?.length || slots.after?.length)) return slots;
-  }
-  return undefined;
+/**
+ * What this package's own technology says it declares for `script`.
+ *
+ * **Its own, not every registered one.** This walked all the contributed sources and took the first
+ * that answered, which in a polyglot repository meant npm's `package.json#scripts` reader was handed
+ * a Cargo package and asked whether it declared `build` - its first line is
+ * `pkg.manifest.raw?.scripts`, so it was reading a manifest another technology produced. The package
+ * already knows which technology claimed it; asking anyone else was only ever a way of finding that
+ * out again.
+ */
+function contributedSlotsFor(pkg: Package, script: string): RunService.ScriptSlots | undefined {
+  const slots = pkg.techStack.runSteps?.(pkg, script);
+  return slots && (slots.before?.length || slots.exec?.length || slots.after?.length) ? slots : undefined;
 }
 
 /** In execution order - `before`, the script itself, then `after`. */

@@ -20,12 +20,16 @@ export { defineCommand } from './core/custom-command.js';
 export type { ManifestProvider } from './core/manifest.js';
 /** Both the shape and the registry: `const m: Manifest` and `Manifest.read(dir)` - merged onto one
  *  name so a plugin can augment it the way it augments `SystemInfo`. */
+export { RmanApplication } from './core/application.js';
 export { Manifest } from './core/manifest.js';
 export { Package } from './core/package.js';
 export type { RmanPlugin } from './core/plugin.js';
 export { definePlugin } from './core/plugin.js';
+export { Registry } from './core/registry.js';
 export { Repository } from './core/repository.js';
 export type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from './core/run-step.js';
+export { Service, type ServiceFactory, type ServiceMap } from './core/service.js';
+export { baseTechStack, type TechStack } from './core/tech-stack.js';
 export type { ChangeKind } from './core/version-scheme.js';
 /** The numbering seam. `VersionScheme` is abstract - `highestVersion`/`highestBump`/`smallestBump`
  *  are implemented from the members around them, so a scheme states only what it must and still

@@ -1,13 +1,10 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
-import { RunService } from '../services/run.service.js';
-import { VersionPlanService } from '../services/version-plan.service.js';
-import { BinPath } from '../utils/bin-path.js';
+import { RmanApplication } from './application.js';
 import type { CustomCommand, LoadedCommand } from './custom-command.js';
-import { Manifest, type ManifestProvider } from './manifest.js';
 import { resolveConfigTarget } from './resolve-target.js';
-import { Workspace } from './workspace.js';
+import type { TechStack } from './tech-stack.js';
 
 /** The `.rmanrc` key naming plugin packages to load. */
 export const PLUGINS_KEY = 'plugins';
@@ -25,53 +22,19 @@ export interface RmanPlugin {
   name: string;
   commands?: CustomCommand[];
   /**
-   * Where `run` can find a package's steps besides its `.rmanrc` - `rman-node` contributes
-   * `package.json#scripts` here, with npm's `pre`/`post` lifecycle.
+   * The technologies this plugin brings - `rman-node` contributes one, `'node'`.
    *
-   * Registered in `plugins` declaration order, and only for plugins the repository actually named:
-   * what a script resolves to is then a function of the config rather than of what happened to be
-   * imported.
-   */
-  runSteps?: RunService.StepSource;
-  /**
-   * How this ecosystem's repositories are laid out - `rman-node` reads `workspaces` from the root
-   * `package.json` here.
+   * **One field where there were five.** `manifest`, `workspace`, `runSteps`, `binPaths` and
+   * `versionPlanner` were independent, and declaring any of them without the others type-checked
+   * while making no sense: npm's step source reads `pkg.manifest.raw?.scripts`, so contributing it
+   * without npm's manifest reader left it parsing whatever another technology produced. See
+   * `TechStack` - the coupling was always real, only the type failed to say so.
    *
    * Loaded **before any package is known**, since this is what finds them: `Repository.create`
    * reads the root config, loads the plugins it names, and only then asks. A repository naming no
-   * plugin therefore has no packages beyond itself.
+   * plugin therefore has no packages beyond itself, and its packages get `baseTechStack`.
    */
-  workspace?: Workspace.Provider;
-  /**
-   * Where a package's name and version are written, and how it is numbered - `rman-node`
-   * contributes `package.json` here.
-   *
-   * Registered before any package is constructed, since `Package` reads through it. A repository
-   * naming no plugin therefore gets packages named after their own directories at version
-   * `0.0.0` - see `readManifest`.
-   */
-  manifest?: ManifestProvider;
-  /**
-   * How a release is planned - which packages have changed since their last release and what
-   * version each gets. `rman-node` contributes `NodeVersionPlanService` here.
-   *
-   * **`VersionPlanService` is abstract, so `version`/`changed` do not work without one** (they fail
-   * naming this key). Unlike `manifest` and `workspace`, which degrade to honest defaults, a plan is
-   * either right or it quietly releases the wrong set of packages - see `VersionPlanService`.
-   *
-   * Consulted when a command asks, not at load time, so this is declared and nothing else has to
-   * happen as the plugin's module is imported.
-   */
-  versionPlanner?: VersionPlanService;
-  /**
-   * Where this ecosystem keeps a repository's locally installed executables - `rman-node`
-   * contributes npm's `node_modules/.bin`, walked up the directory chain.
-   *
-   * Prepended to PATH for every `exec`/`runBin` child process, so a command an author wrote runs
-   * against the repository's own pinned tools. **Every plugin's entries are used**, not just the
-   * first - see `BinPath`.
-   */
-  binPaths?: BinPath.Provider;
+  techStacks?: TechStack[];
 }
 
 /**
@@ -208,11 +171,12 @@ async function loadInto(commands: LoadedCommand[], config: RmanConfig, from: str
 function register(commands: LoadedCommand[], plugin: RmanPlugin, label: string, specifier: string, seen: Seen): void {
   if (seen.names.has(plugin.name)) return;
   seen.names.add(plugin.name);
-  if (plugin.runSteps) RunService.addStepSource(plugin.runSteps);
-  if (plugin.manifest) Manifest.addProvider(plugin.manifest);
-  if (plugin.workspace) Workspace.addProvider(plugin.workspace);
-  if (plugin.binPaths) BinPath.addProvider(plugin.binPaths);
-  if (plugin.versionPlanner) VersionPlanService.setPlanner(plugin.versionPlanner);
+  for (const stack of plugin.techStacks ?? []) {
+    RmanApplication.current().techStacks.add(stack);
+    /** Still one answer per application rather than one per stack: `getPlanner()` is asked without
+     *  a package in places, so per-package planning waits for those call sites to carry one. */
+    if (stack.versionPlanner) RmanApplication.current().versionPlanner = stack.versionPlanner;
+  }
   for (const command of plugin.commands ?? []) {
     commands.push(toLoadedCommand(command, label || specifier, specifier));
   }

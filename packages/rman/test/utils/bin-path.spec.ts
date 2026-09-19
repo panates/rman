@@ -1,6 +1,20 @@
 import path from 'node:path';
 import { expect } from 'expect';
+import { RmanApplication } from '../../src/core/application.js';
+import { baseTechStack } from '../../src/core/tech-stack.js';
+import type { BinPath as BinPathTypes } from '../../src/utils/bin-path.js';
 import { BinPath } from '../../src/utils/bin-path.js';
+
+/** A technology that contributes nothing but directories - which is a real shape (a PATH
+ *  contributor recognizes no package), and how a provider reaches the application now that
+ *  `addProvider` is gone and a technology is declared as a whole. */
+function addBinPaths(provider: BinPathTypes.Provider, name = 'test'): void {
+  RmanApplication.current().techStacks.add({
+    name,
+    manifestProvider: baseTechStack.manifestProvider,
+    binPathsProvider: provider,
+  });
+}
 
 /**
  * The core's half: composing whatever the providers offer into a PATH. **No npm anywhere** - the
@@ -15,7 +29,7 @@ describe('utils/BinPath', () => {
   });
 
   it("prepends a provider's directories, keeping the inherited PATH at the end", () => {
-    BinPath.addProvider(cwd => [path.join(cwd, 'vendor/bin')]);
+    addBinPaths(cwd => [path.join(cwd, 'vendor/bin')]);
     const env = BinPath.env({ cwd: '/repo', env: { PATH: '/usr/bin', FOO: 'bar' } });
     expect(env.PATH).toBe(['/repo/vendor/bin', '/usr/bin'].join(path.delimiter));
     /** Everything else is carried through untouched - `exec` hands this straight to a child. */
@@ -23,21 +37,25 @@ describe('utils/BinPath', () => {
   });
 
   it('uses every provider, in registration order', () => {
-    BinPath.addProvider(() => ['/first']);
-    BinPath.addProvider(() => ['/second']);
+    addBinPaths(() => ['/first'], 'first');
+    addBinPaths(() => ['/second'], 'second');
     expect(BinPath.resolve('/repo')).toEqual(['/first', '/second']);
   });
 
-  it('ignores a repeated registration of the same provider', () => {
-    const provider = () => ['/once'];
-    BinPath.addProvider(provider);
-    BinPath.addProvider(provider);
+  it('ignores a repeated registration of the same technology', () => {
+    const stack = {
+      name: 'twice',
+      manifestProvider: baseTechStack.manifestProvider,
+      binPathsProvider: () => ['/once'],
+    };
+    RmanApplication.current().techStacks.add(stack);
+    RmanApplication.current().techStacks.add(stack);
     expect(BinPath.resolve('/repo')).toEqual(['/once']);
   });
 
   it('resolves cwd to an absolute path before asking a provider', () => {
     let seen = '';
-    BinPath.addProvider(cwd => {
+    addBinPaths(cwd => {
       seen = cwd;
       return [];
     });
@@ -46,7 +64,7 @@ describe('utils/BinPath', () => {
   });
 
   it('omits PATH entirely when nothing inherited one', () => {
-    BinPath.addProvider(() => ['/only']);
+    addBinPaths(() => ['/only']);
     const env = BinPath.env({ cwd: '/repo', env: {} });
     expect(env.PATH).toBe('/only');
   });

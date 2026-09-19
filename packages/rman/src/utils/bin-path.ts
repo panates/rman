@@ -34,12 +34,6 @@ export namespace BinPath {
     readonly env?: ProcessEnv;
   }
 
-  /** Registers a provider. Called by `loadPlugins` for each plugin's `binPaths`, in `plugins`
-   *  declaration order - so what is on PATH is a function of the repository's own config. */
-  export function addProvider(provider: Provider): void {
-    RmanApplication.current().binPathProviders.add(provider);
-  }
-
   /** For tests, which would otherwise leak a provider into every later case in the process. */
   export function clearProviders(): void {
     RmanApplication.reset();
@@ -50,7 +44,7 @@ export namespace BinPath {
    *  honest answer rather than a guess at some ecosystem's layout. */
   export function resolve(cwd: string): string[] {
     const dir = path.resolve(cwd);
-    return RmanApplication.current().binPathProviders.all.flatMap(provider => provider(dir));
+    return [...RmanApplication.current().techStacks].flatMap(stack => stack.binPathsProvider?.(dir) ?? []);
   }
 
   /**

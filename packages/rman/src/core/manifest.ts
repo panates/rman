@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { RmanApplication } from './application.js';
 import type { Package } from './package.js';
+import { baseTechStack, type TechStack } from './tech-stack.js';
 import { semverScheme, type VersionScheme } from './version-scheme.js';
 
 /**
@@ -152,18 +153,6 @@ export interface ManifestProvider {
  */
 export namespace Manifest {
   /**
-   * Registers a provider. Called by `loadPlugins` for each plugin's `manifest`, in `plugins`
-   * declaration order - so which one answers is a function of the repository's own config.
-   *
-   * **Stored on the application, not here.** This was a module-scope array, which made it
-   * process-global: two repositories in one process shared it, and whichever spec registered first
-   * decided the answer for every later one. The API is unchanged; only where it keeps things moved.
-   */
-  export function addProvider(provider: ManifestProvider): void {
-    RmanApplication.current().manifestProviders.add(provider);
-  }
-
-  /**
    * Starts a fresh application, which is what "clear the providers" now means.
    *
    * Kept under its old name because that is what `support/mocha-root-hooks.ts` and both fixtures
@@ -188,16 +177,17 @@ export namespace Manifest {
     manifest: Manifest;
     versionScheme: VersionScheme;
     fileName: string;
-    provider: string;
+    techStack: TechStack;
   } {
-    for (const provider of RmanApplication.current().manifestProviders) {
+    for (const techStack of RmanApplication.current().techStacks) {
+      const provider = techStack.manifestProvider;
       const manifest = provider.read(dir);
       if (manifest) {
         return {
           manifest,
           versionScheme: provider.versionScheme ?? semverScheme,
           fileName: provider.fileName,
-          provider: provider.name,
+          techStack,
         };
       }
     }
@@ -207,17 +197,17 @@ export namespace Manifest {
       /** Nothing was read, so nothing can be named - a caller listing "the file I changed" has no
        *  file to list, which is correct rather than a placeholder that does not exist. */
       fileName: '',
-      /** Same reasoning: no provider claimed this directory, so it belongs to no ecosystem. Empty
-       *  rather than a sentinel like `'unknown'`, which would read as an ecosystem's name and could
-       *  collide with a real provider's. */
-      provider: '',
+      /** Same reasoning: no stack claimed this directory, so it belongs to no technology. The
+       *  base stack's name is empty rather than a sentinel like `'unknown'`, which would read as a
+       *  technology's name and could collide with a real one's. */
+      techStack: baseTechStack,
     };
   }
 
   /** Writes through whichever provider recognizes `dir`. Throws when none does: a write that lands
    *  nowhere is worse than one that fails, since the caller has already decided the new version. */
   export function write(dir: string, manifest: Manifest): void {
-    for (const provider of RmanApplication.current().manifestProviders) {
+    for (const provider of manifestProviders()) {
       if (provider.read(dir)) {
         provider.write(dir, manifest);
         return;
@@ -243,7 +233,7 @@ export namespace Manifest {
   /** `${{ pkg.scope }}`/`${{ pkg.unscopedName }}`, by whichever provider recognizes `dir` - and
    *  "no scope, the name is its own unscoped form" when none has an opinion. */
   export function splitName(dir: string, name: string): { scope?: string; unscopedName: string } {
-    for (const provider of RmanApplication.current().manifestProviders) {
+    for (const provider of manifestProviders()) {
       if (!provider.read(dir)) continue;
       return provider.splitName?.(name) ?? { unscopedName: name };
     }
@@ -292,7 +282,13 @@ export namespace Manifest {
 
   /** The file names providers look for, for an error message that can say what was expected. */
   export function fileNames(): string[] {
-    return RmanApplication.current().manifestProviders.all.map(p => p.fileName);
+    return manifestProviders().map(p => p.fileName);
+  }
+
+  /** Every registered stack's manifest provider, in declaration order - the list this namespace's
+   *  own code used to keep. */
+  function manifestProviders(): ManifestProvider[] {
+    return [...RmanApplication.current().techStacks].map(stack => stack.manifestProvider);
   }
 
   /**
@@ -303,10 +299,11 @@ export namespace Manifest {
    * was registered, which `Repository.create` cannot produce (plugins load first) but a test
    * arranging providers by hand can.
    */
+  /** The package's own stack answers directly now - it *is* the technology that claimed the
+   *  directory, so there is nothing left to look up. The probe stays for a package constructed
+   *  before any stack was registered, which only a test arranging things by hand can produce. */
   function providerOf(pkg: Package): ManifestProvider | undefined {
-    const byName = pkg.provider
-      ? RmanApplication.current().manifestProviders.all.find(p => p.name === pkg.provider)
-      : undefined;
-    return byName ?? RmanApplication.current().manifestProviders.all.find(p => p.read(pkg.dirname));
+    if (pkg.techStack.name) return pkg.techStack.manifestProvider;
+    return manifestProviders().find(p => p.read(pkg.dirname));
   }
 }

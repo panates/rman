@@ -1,13 +1,9 @@
-import type { RunService } from '../services/run.service.js';
 import type { VersionPlanService } from '../services/version-plan.service.js';
-import type { BinPath } from '../utils/bin-path.js';
 import { Logger, type LogLevel } from '../utils/logger.js';
-import type { ManifestProvider } from './manifest.js';
 import { Registry } from './registry.js';
 import type { Repository } from './repository.js';
 import type { ServiceFactory, ServiceMap } from './service.js';
 import { baseTechStack, type TechStack } from './tech-stack.js';
-import type { Workspace } from './workspace.js';
 
 /**
  * **One rman invocation, and everything it holds.** Created before anything else, handed to every
@@ -30,19 +26,6 @@ export class RmanApplication {
    * `TechStack`.
    */
   readonly techStacks = new Registry<TechStack>();
-
-  /**
-   * The five contributions that were module-level arrays, now per application.
-   *
-   * Still reached through the `Manifest`/`Workspace`/`BinPath`/`RunService` namespaces, which
-   * delegate here - so every existing caller is unchanged and only the *storage* moved. Grouping
-   * them into `TechStack` comes with the plugin shape; this step is only about them ceasing to
-   * accumulate across repositories.
-   */
-  readonly manifestProviders = new Registry<ManifestProvider>();
-  readonly workspaceProviders = new Registry<Workspace.Provider>();
-  readonly binPathProviders = new Registry<BinPath.Provider>();
-  readonly stepSources = new Registry<RunService.StepSource>();
 
   /** One answer, not a sum - so a field rather than a registry, and last registration wins. */
   versionPlanner?: VersionPlanService;

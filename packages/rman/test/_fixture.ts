@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import glob from 'fast-glob';
-import { Manifest, type ManifestProvider } from '../src/core/manifest.js';
+import { RmanApplication } from '../src/core/application.js';
+import type { ManifestProvider } from '../src/core/manifest.js';
 import type { Package } from '../src/core/package.js';
+import { baseTechStack, type TechStack } from '../src/core/tech-stack.js';
 import { Workspace } from '../src/core/workspace.js';
 import { ChangeHashService } from '../src/services/change-hash.service.js';
 import { RunService } from '../src/services/run.service.js';
 import { VersionPlanService } from '../src/services/version-plan.service.js';
-import { BinPath } from '../src/utils/bin-path.js';
 import type { GitHelper } from '../src/utils/git.js';
 import { stampVersionConstant } from '../src/utils/version-stamp.js';
 
@@ -182,16 +183,23 @@ export function useTestEcosystem(): void {
  */
 export function useLocalBin(): void {
   beforeEach(() => {
-    BinPath.addProvider(cwd => {
-      const dirs: string[] = [];
-      let previous: string | undefined;
-      let dir = path.resolve(cwd);
-      while (previous !== dir) {
-        dirs.push(path.join(dir, 'local-bin'));
-        previous = dir;
-        dir = path.resolve(dir, '..');
-      }
-      return dirs;
+    /** Its own stack, so it can be added to a repository that already has `testTechStack` - a
+     *  technology contributing only binaries is exactly what the base stack's optional fields
+     *  allow, and the manifest provider that recognizes nothing keeps it from claiming packages. */
+    RmanApplication.current().techStacks.add({
+      name: 'local-bin',
+      manifestProvider: baseTechStack.manifestProvider,
+      binPathsProvider: cwd => {
+        const dirs: string[] = [];
+        let previous: string | undefined;
+        let dir = path.resolve(cwd);
+        while (previous !== dir) {
+          dirs.push(path.join(dir, 'local-bin'));
+          previous = dir;
+          dir = path.resolve(dir, '..');
+        }
+        return dirs;
+      },
     });
   });
 }
@@ -206,11 +214,25 @@ export function useLocalBin(): void {
 export function registerTestEcosystem(): void {
   registryVersions.clear();
   registryCalls.length = 0;
-  Manifest.addProvider(testManifest);
-  Workspace.addProvider(testWorkspace);
-  RunService.addStepSource(testSteps);
-  VersionPlanService.setPlanner(new TestVersionPlanService());
+  RmanApplication.current().techStacks.add(testTechStack);
+  RmanApplication.current().versionPlanner = testTechStack.versionPlanner;
 }
+
+/**
+ * The core's synthetic technology, as one thing.
+ *
+ * Named `'test'` rather than `'node'` on purpose: a core spec must not be able to pass because
+ * `rman-node`'s answers happened to be right. Declaring it as one `TechStack` is also what the
+ * four separate registrations could never say - that these answers belong together, and that a
+ * package claimed by this manifest provider is the one whose steps and binaries these are.
+ */
+export const testTechStack: TechStack = {
+  name: 'test',
+  manifestProvider: testManifest,
+  workspaceProvider: testWorkspace,
+  runSteps: testSteps,
+  versionPlanner: new TestVersionPlanService(),
+};
 
 /**
  * What the fixture provider answers `publishedVersion` with, keyed by package name - empty unless a

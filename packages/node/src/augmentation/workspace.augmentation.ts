@@ -41,8 +41,3 @@ export const npmWorkspace: Workspace.Provider = (root: string): Workspace.Layout
   }
   return { root, packageDirs };
 };
-
-/** Registers the provider with rman. Called by the plugin entry point, once. */
-export function augmentWorkspace(): void {
-  Workspace.addProvider(npmWorkspace);
-}

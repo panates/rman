@@ -31,8 +31,3 @@ export const npmBinPaths: BinPath.Provider = (cwd: string): string[] => {
   result.push(path.resolve(cwd, process.execPath, '..'));
   return result;
 };
-
-/** Registers the provider with rman. Called by the plugin entry point, once. */
-export function augmentBinPath(): void {
-  BinPath.addProvider(npmBinPaths);
-}

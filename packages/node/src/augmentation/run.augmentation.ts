@@ -43,11 +43,6 @@ export const packageJsonSteps: RunService.StepSource = (pkg: Package, script: st
   return slots;
 };
 
-/** Registers the source with rman's `run`. Called by the plugin entry point, once. */
-export function augmentRun(): void {
-  RunService.addStepSource(packageJsonSteps);
-}
-
 /** npm's lifecycle names, mapped onto rman's three slots. */
 function slotOf(stepName: string, script: string): keyof RunService.ScriptSlots | undefined {
   if (stepName === 'pre' + script) return 'before';

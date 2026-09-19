@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BinPath, Manifest, RunService, VersionPlanService, Workspace } from 'rman';
+import { RmanApplication, Workspace } from 'rman';
 import { runCli as rmanRunCli } from 'rman/cli';
 /**
  * The **plugin**, by name - not the module's default export, which is an rman *config* that carries
@@ -81,10 +81,9 @@ export function runCli(options?: { argv?: string[]; cwd?: string }): Promise<voi
  */
 export function useNodeEcosystem(): void {
   beforeEach(() => {
-    if (nodePlugin.manifest) Manifest.addProvider(nodePlugin.manifest);
-    if (nodePlugin.workspace) Workspace.addProvider(nodePlugin.workspace);
-    if (nodePlugin.runSteps) RunService.addStepSource(nodePlugin.runSteps);
-    if (nodePlugin.binPaths) BinPath.addProvider(nodePlugin.binPaths);
-    if (nodePlugin.versionPlanner) VersionPlanService.setPlanner(nodePlugin.versionPlanner);
+    for (const stack of nodePlugin.techStacks ?? []) {
+      RmanApplication.current().techStacks.add(stack);
+      if (stack.versionPlanner) RmanApplication.current().versionPlanner = stack.versionPlanner;
+    }
   });
 }

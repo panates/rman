@@ -127,8 +127,3 @@ export const packageJsonManifest: ManifestProvider = {
 /** npm's four dependency fields. Was `rman`'s `DEPENDENCY_KEYS`, which made the core carry npm's
  *  field names - `publish` imports it from here now. */
 export const DEPENDENCY_KEYS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const;
-
-/** Registers the provider with rman. Called by the plugin entry point, once. */
-export function augmentManifest(): void {
-  Manifest.addProvider(packageJsonManifest);
-}

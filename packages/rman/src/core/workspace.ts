@@ -42,14 +42,6 @@ export namespace Workspace {
    */
   export type Provider = (root: string) => Layout | undefined;
 
-  /**
-   * Registers a provider. Called by `loadPlugins` for each plugin's `workspace`, in `plugins`
-   * declaration order - so which provider answers is a function of the repository's own config.
-   */
-  export function addProvider(provider: Provider): void {
-    RmanApplication.current().workspaceProviders.add(provider);
-  }
-
   /** For tests, which would otherwise leak a provider into every later case in the process. */
   export function clearProviders(): void {
     RmanApplication.reset();
@@ -57,8 +49,8 @@ export namespace Workspace {
 
   /** The first provider that recognizes `root`, in declaration order. */
   export function resolve(root: string): Layout | undefined {
-    for (const provider of RmanApplication.current().workspaceProviders) {
-      const layout = provider(root);
+    for (const stack of RmanApplication.current().techStacks) {
+      const layout = stack.workspaceProvider?.(root);
       if (layout) return layout;
     }
     return undefined;

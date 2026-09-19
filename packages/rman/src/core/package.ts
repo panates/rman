@@ -2,6 +2,7 @@ import path from 'path';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { Manifest } from './manifest.js';
 import type { Repository } from './repository.js';
+import type { TechStack } from './tech-stack.js';
 import { semverScheme, type VersionScheme } from './version-scheme.js';
 
 export class Package {
@@ -60,26 +61,37 @@ export class Package {
   manifestFileName: string;
 
   /**
-   * **Which ecosystem this package belongs to** - `'node'` for one read by `rman-node`, from the
-   * `ManifestProvider.name` that claimed the directory. Empty when no provider did.
+   * **The technology this package belongs to** - the stack whose manifest provider claimed the
+   * directory, or `baseTechStack` when none did.
+   *
+   * Per *package*, not per repository: the question is asked per directory, so a polyglot monorepo
+   * can hold a `node` package beside a `cargo` one and a command sweeping `getPackages()` can tell
+   * them apart. It is also what carries the rest of the technology's answers - where its binaries
+   * live, where its scripts come from, how its releases are planned - so anything that used to walk
+   * four separate registries asking "is this yours?" now asks the package it already has.
+   */
+  techStack: TechStack;
+
+  /**
+   * **Which ecosystem this package belongs to** - `'node'` for one read by `rman-node`. Empty when
+   * no stack claimed the directory.
    *
    * The escape hatch for code that legitimately knows one technology: `if (pkg.provider === 'node')`
-   * before reaching into `manifest.raw` for something only npm has. Per *package*, not per
-   * repository, because `Manifest.read` asks per directory - a polyglot monorepo can hold a `node`
-   * package beside a `cargo` one, and a command sweeping over `getPackages()` has to be able to
-   * tell.
+   * before reaching into `manifest.raw` for something only npm has.
    *
    * Not a union type on purpose: the set of ecosystems is whatever the repository's `plugins`
    * contribute, so narrowing it here would mean the core listing plugins it cannot know about.
    */
-  provider: string;
+  get provider(): string {
+    return this.techStack.name;
+  }
 
   constructor(readonly dirname: string) {
-    const { manifest, versionScheme, fileName, provider } = Manifest.read(dirname);
+    const { manifest, versionScheme, fileName, techStack } = Manifest.read(dirname);
     this.manifest = manifest;
     this.versionScheme = versionScheme;
     this.manifestFileName = fileName ? path.join(dirname, fileName) : '';
-    this.provider = provider;
+    this.techStack = techStack;
   }
 
   get basename(): string {
@@ -101,11 +113,11 @@ export class Package {
   /** Re-reads from disk - for a command that has just written the manifest itself and wants the
    *  package to agree with the file again. */
   reloadManifest(): Manifest {
-    const { manifest, versionScheme, fileName, provider } = Manifest.read(this.dirname);
+    const { manifest, versionScheme, fileName, techStack } = Manifest.read(this.dirname);
     this.manifest = manifest;
     this.versionScheme = versionScheme;
     this.manifestFileName = fileName ? path.join(this.dirname, fileName) : '';
-    this.provider = provider;
+    this.techStack = techStack;
     return this.manifest;
   }
 

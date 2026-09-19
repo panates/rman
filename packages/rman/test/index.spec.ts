@@ -44,14 +44,26 @@ describe('public API (src/index.ts)', () => {
     }
   });
 
-  /** The seams a plugin contributes through. `VersionScheme` is abstract, so a class rather than a
-   *  factory, and `SemverScheme` is exported to subclass rather than restate. */
+  /**
+   * The seams a plugin contributes through.
+   *
+   * **There are no longer five `addProvider`-shaped ones.** A plugin declares a `TechStack` - the
+   * manifest reader, the workspace layout, the step source, the bin directories and the version
+   * planner as one thing - because declaring any of them apart from the others was never meaningful:
+   * npm's step source reads `pkg.manifest.raw?.scripts`, so without npm's manifest reader it parses
+   * whatever another technology produced.
+   *
+   * `VersionScheme` is abstract, so a class rather than a factory, and `SemverScheme` is exported to
+   * subclass rather than restate.
+   */
   it('exports every plugin seam', () => {
-    expect(typeof api.Manifest.addProvider).toBe('function');
-    expect(typeof api.Workspace.addProvider).toBe('function');
-    expect(typeof api.BinPath.addProvider).toBe('function');
-    expect(typeof api.RunService.addStepSource).toBe('function');
-    expect(typeof api.VersionPlanService.setPlanner).toBe('function');
+    expect(typeof api.RmanApplication).toBe('function');
+    expect(typeof api.Registry).toBe('function');
+    expect(typeof api.Service).toBe('function');
+    expect(api.baseTechStack.name).toBe('');
+    expect(typeof api.Manifest.read).toBe('function');
+    expect(typeof api.Workspace.resolve).toBe('function');
+    expect(typeof api.BinPath.env).toBe('function');
     expect(typeof api.VersionScheme).toBe('function');
     expect(typeof api.SemverScheme).toBe('function');
     expect(api.semverScheme.bumpNames).toEqual(['patch', 'minor', 'major']);

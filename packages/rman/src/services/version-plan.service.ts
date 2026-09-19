@@ -505,10 +505,6 @@ export namespace VersionPlanService {
    * repository layering its own policy plugin after `rman-node` could never take effect - which is
    * the only reason to name two in the first place.
    */
-  export function setPlanner(planner: VersionPlanService): void {
-    RmanApplication.current().versionPlanner = planner;
-  }
-
   /** Starts a fresh application, which is what "clear the planner" now means - see
    *  `Manifest.clearProviders`. */
   export function clearPlanner(): void {

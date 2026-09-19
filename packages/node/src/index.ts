@@ -1,27 +1,27 @@
 import './augmentation/rman.augmentation.js';
-import { definePlugin } from 'rman';
-import { augmentManifest, packageJsonManifest } from './augmentation/manifest.augmentation.js';
-import { augmentRun, packageJsonSteps } from './augmentation/run.augmentation.js';
+import { definePlugin, RmanApplication, type TechStack } from 'rman';
+import { packageJsonManifest } from './augmentation/manifest.augmentation.js';
+import { packageJsonSteps } from './augmentation/run.augmentation.js';
 import { augmentSystemInfo } from './augmentation/system-info.augmentation.js';
-import { augmentWorkspace, npmWorkspace } from './augmentation/workspace.augmentation.js';
+import { npmWorkspace } from './augmentation/workspace.augmentation.js';
 import * as ciCommand from './commands/ci.command.js';
 import * as cleanCommand from './commands/clean.command.js';
 import * as publishCommand from './commands/publish.command.js';
 import { defineConfig } from './interfaces/rman-config.interface.js';
-import { augmentVersionPlan, nodeVersionPlanner } from './services/version-plan.service.js';
-import { augmentBinPath, npmBinPaths } from './utils/npm-run-path.js';
+import { nodeVersionPlanner } from './services/version-plan.service.js';
+import { npmBinPaths } from './utils/npm-run-path.js';
 
-export { augmentManifest, DEPENDENCY_KEYS, packageJsonManifest } from './augmentation/manifest.augmentation.js';
-export { augmentRun, packageJsonSteps } from './augmentation/run.augmentation.js';
+export { DEPENDENCY_KEYS, packageJsonManifest } from './augmentation/manifest.augmentation.js';
+export { packageJsonSteps } from './augmentation/run.augmentation.js';
 export { augmentSystemInfo } from './augmentation/system-info.augmentation.js';
-export { augmentWorkspace, npmWorkspace } from './augmentation/workspace.augmentation.js';
+export { npmWorkspace } from './augmentation/workspace.augmentation.js';
 export type { NodeConfigKeys, RmanNodeConfig } from './interfaces/rman-config.interface.js';
 export { defineConfig } from './interfaces/rman-config.interface.js';
 export { CiService } from './services/ci.service.js';
 export { CleanService } from './services/clean.service.js';
 export { PublishService } from './services/publish.service.js';
-export { augmentVersionPlan, nodeVersionPlanner, NodeVersionPlanService } from './services/version-plan.service.js';
-export { augmentBinPath, npmBinPaths } from './utils/npm-run-path.js';
+export { nodeVersionPlanner, NodeVersionPlanService } from './services/version-plan.service.js';
+export { npmBinPaths } from './utils/npm-run-path.js';
 export type { ParsedWorkspaceRange } from './utils/workspace-range.js';
 export { parseWorkspaceRange, resolveWorkspaceRange } from './utils/workspace-range.js';
 
@@ -66,33 +66,49 @@ export const version = '1';
 /** Applied as the plugin module loads - before any command runs, since `loadPlugins` imports this
  *  during CLI startup. Augmentations go here rather than inside a command so that `rman info`,
  *  which is a *core* command, is affected too. */
-augmentManifest();
 augmentSystemInfo();
-augmentRun();
-augmentWorkspace();
-augmentVersionPlan();
-augmentBinPath();
+
+/** Everything this package contributes to rman, as one plugin. Exported by name as well, for code
+ *  registering it directly instead of through a config. */
+/**
+ * **Node, as one technology.** What a package's name and version are, where the packages are, where
+ * its scripts come from, where its binaries live, and how its releases are planned - five answers
+ * that only make sense together. `packageJsonSteps` reads `pkg.manifest.raw?.scripts`, so it is
+ * meaningless without `packageJsonManifest` having produced that manifest; the old five independent
+ * plugin fields let them be declared apart.
+ */
+export const nodeTechStack: TechStack = {
+  name: 'node',
+  manifestProvider: packageJsonManifest,
+  workspaceProvider: npmWorkspace,
+  runSteps: packageJsonSteps,
+  binPathsProvider: npmBinPaths,
+  versionPlanner: nodeVersionPlanner,
+};
 
 /** Everything this package contributes to rman, as one plugin. Exported by name as well, for code
  *  registering it directly instead of through a config. */
 export const nodePlugin = definePlugin({
   name: 'rman-node',
   commands: [publishCommand.command, ciCommand.command, cleanCommand.command],
-  /** Declared as well as registered by `augmentRun()` above - `addStepSource` is idempotent per
-   *  source, and a plugin loaded through `plugins` should not need an import side effect to work. */
-  runSteps: packageJsonSteps,
-  /** What finds the packages at all - see `Repository.create` for why this has to be declared
-   *  rather than only registered by an import. */
-  workspace: npmWorkspace,
-  /** What a package's name and version even are - read before anything else. */
-  manifest: packageJsonManifest,
-  /** What `version`/`changed` compute a release with. `VersionPlanService` is abstract, so without
-   *  this the two commands have nothing to ask - see `NodeVersionPlanService`. */
-  versionPlanner: nodeVersionPlanner,
-  /** `node_modules/.bin` on PATH for every `exec`/`runBin`, so a repository's pinned `eslint`/`tsc`
-   *  is the one that runs. */
-  binPaths: npmBinPaths,
+  techStacks: [nodeTechStack],
 });
+
+/**
+ * Registers the stack for a programmatic caller that never goes through `plugins` - replacing the
+ * four `augmentRun`/`augmentWorkspace`/`augmentVersionPlan`/`augmentBinPath` calls, which is what
+ * declaring the technology as a whole buys.
+ *
+ * **Not called as this module loads**, unlike `augmentSystemInfo()` above. Those four were, and a
+ * technology cannot be: the application is reset between runs (and between tests), so a
+ * registration performed once at import would be gone by the time anything asked - and an import
+ * side effect is the wrong shape anyway, since which technologies a repository has is what its
+ * `plugins` says. A caller outside the CLI calls this itself.
+ */
+export function augmentTechStack(): void {
+  RmanApplication.current().techStacks.add(nodeTechStack);
+  RmanApplication.current().versionPlanner = nodeVersionPlanner;
+}
 
 /**
  * **An `.rmanrc` config, not a plugin** - which is what a package naming itself in `plugins` should

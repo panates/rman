@@ -52,13 +52,6 @@ export class NodeVersionPlanService extends VersionPlanService {
   }
 }
 
-/** Registers the planner with rman. Called by the plugin entry point, once - and declared in the
- *  plugin object as well, since a plugin loaded through `plugins` should not need an import side
- *  effect to work. */
-export function augmentVersionPlan(): void {
-  VersionPlanService.setPlanner(nodeVersionPlanner);
-}
-
 /** The instance the plugin registers. One is enough: a planner holds no per-run state, and a test
  *  wanting a different registry answer registers its own `ManifestProvider` instead - which
  *  exercises the real path rather than a bypass. */
