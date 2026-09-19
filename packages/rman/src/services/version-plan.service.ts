@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import { assertOneScheme, type ChangeKind, semverScheme, VersionScheme } from '../core/version-scheme.js';
@@ -505,12 +506,13 @@ export namespace VersionPlanService {
    * the only reason to name two in the first place.
    */
   export function setPlanner(planner: VersionPlanService): void {
-    current = planner;
+    RmanApplication.current().versionPlanner = planner;
   }
 
-  /** For tests, which would otherwise leak a planner into every later case in the process. */
+  /** Starts a fresh application, which is what "clear the planner" now means - see
+   *  `Manifest.clearProviders`. */
   export function clearPlanner(): void {
-    current = undefined;
+    RmanApplication.reset();
   }
 
   /**
@@ -521,16 +523,15 @@ export namespace VersionPlanService {
    * plausible and untrue.
    */
   export function getPlanner(): VersionPlanService {
-    if (!current) {
+    const planner = RmanApplication.current().versionPlanner;
+    if (!planner) {
       throw new Error(
         'No version planner is registered, so no version plan can be computed. Name a plugin that ' +
           'contributes one in .rmanrc "plugins" - "rman-node" for a Node repository.',
       );
     }
-    return current;
+    return planner;
   }
-
-  let current: VersionPlanService | undefined;
 }
 
 /** What one commit says happened, with no reference to any version format - `VersionScheme.bumpFor`

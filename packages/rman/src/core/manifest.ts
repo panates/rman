@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { RmanApplication } from './application.js';
 import type { Package } from './package.js';
 import { semverScheme, type VersionScheme } from './version-scheme.js';
 
@@ -150,16 +151,26 @@ export interface ManifestProvider {
  * same way instead of as another top-level export.
  */
 export namespace Manifest {
-  /** Registers a provider. Called by `loadPlugins` for each plugin's `manifest`, in `plugins`
-   *  declaration order - so which one answers is a function of the repository's own config. */
+  /**
+   * Registers a provider. Called by `loadPlugins` for each plugin's `manifest`, in `plugins`
+   * declaration order - so which one answers is a function of the repository's own config.
+   *
+   * **Stored on the application, not here.** This was a module-scope array, which made it
+   * process-global: two repositories in one process shared it, and whichever spec registered first
+   * decided the answer for every later one. The API is unchanged; only where it keeps things moved.
+   */
   export function addProvider(provider: ManifestProvider): void {
-    if (providers.includes(provider)) return;
-    providers.push(provider);
+    RmanApplication.current().manifestProviders.add(provider);
   }
 
-  /** For tests, which would otherwise leak a provider into every later case in the process. */
+  /**
+   * Starts a fresh application, which is what "clear the providers" now means.
+   *
+   * Kept under its old name because that is what `support/mocha-root-hooks.ts` and both fixtures
+   * call, and it does strictly more than it used to - every registry goes, not just this one.
+   */
   export function clearProviders(): void {
-    providers.length = 0;
+    RmanApplication.reset();
   }
 
   /**
@@ -179,7 +190,7 @@ export namespace Manifest {
     fileName: string;
     provider: string;
   } {
-    for (const provider of providers) {
+    for (const provider of RmanApplication.current().manifestProviders) {
       const manifest = provider.read(dir);
       if (manifest) {
         return {
@@ -206,7 +217,7 @@ export namespace Manifest {
   /** Writes through whichever provider recognizes `dir`. Throws when none does: a write that lands
    *  nowhere is worse than one that fails, since the caller has already decided the new version. */
   export function write(dir: string, manifest: Manifest): void {
-    for (const provider of providers) {
+    for (const provider of RmanApplication.current().manifestProviders) {
       if (provider.read(dir)) {
         provider.write(dir, manifest);
         return;
@@ -232,7 +243,7 @@ export namespace Manifest {
   /** `${{ pkg.scope }}`/`${{ pkg.unscopedName }}`, by whichever provider recognizes `dir` - and
    *  "no scope, the name is its own unscoped form" when none has an opinion. */
   export function splitName(dir: string, name: string): { scope?: string; unscopedName: string } {
-    for (const provider of providers) {
+    for (const provider of RmanApplication.current().manifestProviders) {
       if (!provider.read(dir)) continue;
       return provider.splitName?.(name) ?? { unscopedName: name };
     }
@@ -281,10 +292,8 @@ export namespace Manifest {
 
   /** The file names providers look for, for an error message that can say what was expected. */
   export function fileNames(): string[] {
-    return providers.map(p => p.fileName);
+    return RmanApplication.current().manifestProviders.all.map(p => p.fileName);
   }
-
-  const providers: ManifestProvider[] = [];
 
   /**
    * The provider that claimed `pkg`, found by the name it reported as `pkg.provider` - exact, and
@@ -295,7 +304,9 @@ export namespace Manifest {
    * arranging providers by hand can.
    */
   function providerOf(pkg: Package): ManifestProvider | undefined {
-    const byName = pkg.provider ? providers.find(p => p.name === pkg.provider) : undefined;
-    return byName ?? providers.find(p => p.read(pkg.dirname));
+    const byName = pkg.provider
+      ? RmanApplication.current().manifestProviders.all.find(p => p.name === pkg.provider)
+      : undefined;
+    return byName ?? RmanApplication.current().manifestProviders.all.find(p => p.read(pkg.dirname));
   }
 }

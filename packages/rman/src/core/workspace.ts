@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { RmanApplication } from './application.js';
 
 /**
  * How a repository is laid out, and who decides.
@@ -46,18 +47,17 @@ export namespace Workspace {
    * declaration order - so which provider answers is a function of the repository's own config.
    */
   export function addProvider(provider: Provider): void {
-    if (providers.includes(provider)) return;
-    providers.push(provider);
+    RmanApplication.current().workspaceProviders.add(provider);
   }
 
   /** For tests, which would otherwise leak a provider into every later case in the process. */
   export function clearProviders(): void {
-    providers.length = 0;
+    RmanApplication.reset();
   }
 
   /** The first provider that recognizes `root`, in declaration order. */
   export function resolve(root: string): Layout | undefined {
-    for (const provider of providers) {
+    for (const provider of RmanApplication.current().workspaceProviders) {
       const layout = provider(root);
       if (layout) return layout;
     }
@@ -109,6 +109,4 @@ export namespace Workspace {
   function hasRmanConfig(dir: string): boolean {
     return CONFIG_FILES.some(name => fs.existsSync(path.join(dir, name)));
   }
-
-  const providers: Provider[] = [];
 }

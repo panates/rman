@@ -1,25 +1,21 @@
-import { BinPath, Manifest, RunService, VersionPlanService, Workspace } from '../packages/rman/src/index.js';
+import { RmanApplication } from '../packages/rman/src/core/application.js';
 
 /**
- * Empties every plugin registry before each test.
+ * A fresh application before every case.
  *
- * **Mocha runs every package's specs in one process**, and the registries are module-global by
- * design (a repository names its plugins once, at startup). Without this, whichever spec ran first
- * decides the answer for the ones after it: `Manifest.read` takes the *first* provider that
- * recognizes a directory, so `rman-node`'s `package.json` provider - registered the moment one of
- * its specs calls `runCli` - would answer for rman's core specs too, and the core would appear to
- * work in tests that never registered anything.
+ * This used to be five `clear*()` calls - `Manifest`, `Workspace`, `RunService`, `BinPath` and
+ * `VersionPlanService` each kept their contributions in a module-scope array, so two repositories
+ * in one process shared them. Without the clearing, whichever spec registered first decided the
+ * answer for every later one: `Manifest.read` takes the first provider that recognizes a directory,
+ * so `rman-node`'s answered for core specs that had registered nothing, and the core *appeared* to
+ * work in tests that never set it up.
  *
- * Clearing rather than isolating processes because it is exactly what the `clear*` members exist
- * for, and because each spec then declares its own ecosystem explicitly: rman's core specs through
- * `useTestEcosystem()`, `rman-node`'s through `declarePlugin()` and a real `plugins` load.
+ * One line now, and it is a different statement: not "empty the five things I remembered to list"
+ * but "nothing from the last case survives". A registry added later is covered without anyone
+ * having to come back here.
  */
 export const mochaHooks = {
   beforeEach(): void {
-    Manifest.clearProviders();
-    Workspace.clearProviders();
-    RunService.clearStepSources();
-    BinPath.clearProviders();
-    VersionPlanService.clearPlanner();
+    RmanApplication.reset();
   },
 };

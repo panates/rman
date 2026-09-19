@@ -3,6 +3,7 @@ import { inspect } from 'node:util';
 import colors from 'ansi-colors';
 import { tokenize } from 'fast-tokenizer';
 import { Task } from 'power-tasks';
+import { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from '../core/run-step.js';
@@ -122,13 +123,12 @@ export namespace RunService {
      *  may call its own `augmentRun()` for programmatic callers, so the same function arrives
      *  twice. Pushing twice is harmless - the first match wins - but it makes the registry lie
      *  about what is in it. */
-    if (stepSources.includes(source)) return;
-    stepSources.push(source);
+    RmanApplication.current().stepSources.add(source);
   }
 
   /** For tests, which would otherwise leak a source into every later case in the process. */
   export function clearStepSources(): void {
-    stepSources.length = 0;
+    RmanApplication.reset();
   }
 
   /**
@@ -763,7 +763,7 @@ function getScriptSteps(pkg: Package, script: string): RunService.ScriptStep[] {
 /** The first source that says this package declares the script at all. Declaration order, so a
  *  repository listing two plugins gets a predictable answer rather than a merged one. */
 function firstContributed(pkg: Package, script: string): RunService.ScriptSlots | undefined {
-  for (const source of stepSources) {
+  for (const source of RmanApplication.current().stepSources) {
     const slots = source(pkg, script);
     if (slots && (slots.before?.length || slots.exec?.length || slots.after?.length)) return slots;
   }
@@ -772,8 +772,6 @@ function firstContributed(pkg: Package, script: string): RunService.ScriptSlots 
 
 /** In execution order - `before`, the script itself, then `after`. */
 const SCRIPT_SLOTS = ['before', 'exec', 'after'] as const;
-
-const stepSources: RunService.StepSource[] = [];
 
 /**
  * Splits on whitespace, but a `(...)` group collapses to a single token holding its inner text

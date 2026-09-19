@@ -1,8 +1,12 @@
+import type { RunService } from '../services/run.service.js';
+import type { VersionPlanService } from '../services/version-plan.service.js';
+import type { BinPath } from '../utils/bin-path.js';
 import { Logger, type LogLevel } from '../utils/logger.js';
 import type { ManifestProvider } from './manifest.js';
 import { Registry } from './registry.js';
 import type { Repository } from './repository.js';
 import type { ServiceFactory, ServiceMap } from './service.js';
+import { baseTechStack, type TechStack } from './tech-stack.js';
 import type { Workspace } from './workspace.js';
 
 /**
@@ -18,15 +22,59 @@ import type { Workspace } from './workspace.js';
  * registered nothing. An application starts empty and is thrown away whole.
  */
 export class RmanApplication {
-  /** Which technology claims a directory - asked of every contributor until one answers, because
-   *  before a package is read there is nothing else to go on. */
-  readonly manifestProviders = new Registry<ManifestProvider>();
+  /**
+   * The technologies this invocation knows about, in `plugins` declaration order.
+   *
+   * One registry rather than the four it replaces (`manifest`, `workspace`, `binPaths`,
+   * `runSteps`): a technology is a whole, and declaring part of one was never meaningful - see
+   * `TechStack`.
+   */
+  readonly techStacks = new Registry<TechStack>();
 
-  /** How a repository's packages are laid out. Also "first that answers" today; a polyglot
-   *  repository wants the union, which is what moving these onto `TechStack` opens up. */
+  /**
+   * The five contributions that were module-level arrays, now per application.
+   *
+   * Still reached through the `Manifest`/`Workspace`/`BinPath`/`RunService` namespaces, which
+   * delegate here - so every existing caller is unchanged and only the *storage* moved. Grouping
+   * them into `TechStack` comes with the plugin shape; this step is only about them ceasing to
+   * accumulate across repositories.
+   */
+  readonly manifestProviders = new Registry<ManifestProvider>();
   readonly workspaceProviders = new Registry<Workspace.Provider>();
+  readonly binPathProviders = new Registry<BinPath.Provider>();
+  readonly stepSources = new Registry<RunService.StepSource>();
+
+  /** One answer, not a sum - so a field rather than a registry, and last registration wins. */
+  versionPlanner?: VersionPlanService;
 
   readonly logger: Logger;
+
+  /** Which stack claims a directory - the first whose manifest provider recognizes it, because
+   *  before a package is read there is nothing else to go on. */
+  techStackFor(dir: string): TechStack {
+    return this.techStacks.first(stack => (stack.manifestProvider.read(dir) ? stack : undefined)) ?? baseTechStack;
+  }
+
+  /**
+   * The application this invocation is using, created on demand.
+   *
+   * **A single slot, and deliberately not the end state.** The registries it replaces were arrays
+   * that *accumulated*, which is what made one spec decide the answer for the next; one reference
+   * that is swapped whole has no such failure. It is here so the storage could move without
+   * rewriting 312 `Repository.create(dir)` call sites in the same change, and it goes away as those
+   * take an application explicitly.
+   */
+  static current(): RmanApplication {
+    return (RmanApplication._current ??= new RmanApplication());
+  }
+
+  /** Starts a fresh application - what a test does between cases, and what `runCli` does per run. */
+  static reset(app: RmanApplication = new RmanApplication()): RmanApplication {
+    RmanApplication._current = app;
+    return app;
+  }
+
+  private static _current?: RmanApplication;
 
   /**
    * **Not a constructor field, and that is forced by the order things happen in.** Plugins are what

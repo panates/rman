@@ -1,5 +1,6 @@
 import path from 'node:path';
 import process from 'node:process';
+import { RmanApplication } from '../core/application.js';
 
 /**
  * Where a repository's **locally installed executables** live, so a command an author wrote
@@ -36,13 +37,12 @@ export namespace BinPath {
   /** Registers a provider. Called by `loadPlugins` for each plugin's `binPaths`, in `plugins`
    *  declaration order - so what is on PATH is a function of the repository's own config. */
   export function addProvider(provider: Provider): void {
-    if (providers.includes(provider)) return;
-    providers.push(provider);
+    RmanApplication.current().binPathProviders.add(provider);
   }
 
   /** For tests, which would otherwise leak a provider into every later case in the process. */
   export function clearProviders(): void {
-    providers.length = 0;
+    RmanApplication.reset();
   }
 
   /** Every provider's directories for `cwd`, concatenated in declaration order. Empty for a
@@ -50,7 +50,7 @@ export namespace BinPath {
    *  honest answer rather than a guess at some ecosystem's layout. */
   export function resolve(cwd: string): string[] {
     const dir = path.resolve(cwd);
-    return providers.flatMap(provider => provider(dir));
+    return RmanApplication.current().binPathProviders.all.flatMap(provider => provider(dir));
   }
 
   /**
@@ -89,6 +89,4 @@ export namespace BinPath {
         .find(key => key.toUpperCase() === 'PATH') || 'Path'
     );
   }
-
-  const providers: Provider[] = [];
 }
