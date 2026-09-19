@@ -55,52 +55,55 @@ const config = {
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 
-const changelogCommand = registerCommand(repository => ({
-  command: COMMAND,
-  describe: 'Generates a changelog per package from unreleased commits',
-  /** Read, not owned: `publish.skip` is `publish`'s key, reused here on purpose - a package that is
-   *  never distributed gets no release notes either. */
-  configKeys: ['publish.skip'],
-  config,
-  examples: [
-    { command: '$0 changelog', description: "# Auto-detects each package's own last release tag (or npm version)" },
-    { command: '$0 changelog --from <hash> --write', description: '# Since a specific commit, written to file' },
-  ],
-  handler: async (args: Args) => {
-    const from = args.from;
-    const write = args.write;
-    const logger = new Logger(args.logLevel ?? resolveRootLogLevel(repository));
+const changelogCommand = registerCommand(app => {
+  const repository = app.repository;
+  return {
+    command: COMMAND,
+    describe: 'Generates a changelog per package from unreleased commits',
+    /** Read, not owned: `publish.skip` is `publish`'s key, reused here on purpose - a package that is
+     *  never distributed gets no release notes either. */
+    configKeys: ['publish.skip'],
+    config,
+    examples: [
+      { command: '$0 changelog', description: "# Auto-detects each package's own last release tag (or npm version)" },
+      { command: '$0 changelog --from <hash> --write', description: '# Since a specific commit, written to file' },
+    ],
+    handler: async (args: Args) => {
+      const from = args.from;
+      const write = args.write;
+      const logger = new Logger(args.logLevel ?? resolveRootLogLevel(repository));
 
-    if (!from || from === ChangeHashService.AUTO) {
-      // Auto-detection is mostly local git work, but the registry fallback it can reach for
-      // (only when a package has no tag at all, and only if the package's own ecosystem provides
-      // one) is a network round trip per package - without this, the command looks hung for that
-      // stretch instead of just busy.
-      logger.info(colors.gray("Detecting each package's last release..."));
-    }
+      if (!from || from === ChangeHashService.AUTO) {
+        // Auto-detection is mostly local git work, but the registry fallback it can reach for
+        // (only when a package has no tag at all, and only if the package's own ecosystem provides
+        // one) is a network round trip per package - without this, the command looks hung for that
+        // stretch instead of just busy.
+        logger.info(colors.gray("Detecting each package's last release..."));
+      }
 
-    const options = {
-      ...readPackageFilterOptions(args),
-      from,
-      filePath: args.filePath,
-      root: args.root,
-      includeSkipped: args.includeSkipped,
-      version: args.releaseVersion,
-    };
-    const entries = write
-      ? await ChangelogService.generateToFile(repository, options)
-      : await ChangelogService.getEntries(repository, options);
+      const options = {
+        ...readPackageFilterOptions(args),
+        from,
+        filePath: args.filePath,
+        root: args.root,
+        includeSkipped: args.includeSkipped,
+        version: args.releaseVersion,
+      };
+      const entries = write
+        ? await ChangelogService.generateToFile(repository, options)
+        : await ChangelogService.getEntries(repository, options);
 
-    if (!entries.length) {
-      logger.info(colors.gray('No unreleased changes.'));
-      return;
-    }
-    for (const entry of entries) {
-      if (write) logger.info(colors.green('updated'), colors.cyan(entry.label), entry.filePath);
-      else console.log(entry.content);
-    }
-  },
-}));
+      if (!entries.length) {
+        logger.info(colors.gray('No unreleased changes.'));
+        return;
+      }
+      for (const entry of entries) {
+        if (write) logger.info(colors.green('updated'), colors.cyan(entry.label), entry.filePath);
+        else console.log(entry.content);
+      }
+    },
+  };
+});
 
 export default changelogCommand;
 

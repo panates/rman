@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'path';
 import semver from 'semver';
 import { GitHelper } from '../utils/git.js';
+import { RmanApplication } from './application.js';
 import {
   type CachedFile,
   type ConfigScope,
@@ -421,6 +422,9 @@ export class Repository extends Package {
     const repo = new Repository(layout?.root ?? rootDir, packages.length > 0, packages, from);
     repo.pluginCommands = pluginCommands;
     repo._linkPackages();
+    /** The application is what the plugins registered into a moment ago; from here on it can hand
+     *  out services, which need the repository to work on. */
+    RmanApplication.current().attachRepository(repo);
     return Repository._init(repo);
   }
 

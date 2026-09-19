@@ -12,27 +12,30 @@ const config = {
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 
 /** Reports; declares no config key of its own. */
-const infoCommand = registerCommand(repository => ({
-  command: COMMAND,
-  describe: 'Prints local environment and repository information',
-  config,
-  examples: [
-    { command: '$0 info', description: '# Prints information' },
-    { command: '$0 info --json', description: '# Prints information in JSON format' },
-  ],
-  handler: async (args: Args) => {
-    /** Only the repository - which package manager to report, if any, is a question the core
-     *  cannot ask. `rman-node`'s augmentation reads `.rmanrc "packageManager"` off this. */
-    const systemInfo = await SystemInfo.getSystemInfo({ repository });
-    const repositoryInfo = SystemInfo.getRepositoryInfo(repository);
-    if (args.json) {
-      console.log(JSON.stringify({ ...systemInfo, repository: repositoryInfo }, undefined, 2));
-      return;
-    }
-    printSystemInfo(systemInfo);
-    printRepositoryInfo(repositoryInfo);
-  },
-}));
+const infoCommand = registerCommand(app => {
+  const repository = app.repository;
+  return {
+    command: COMMAND,
+    describe: 'Prints local environment and repository information',
+    config,
+    examples: [
+      { command: '$0 info', description: '# Prints information' },
+      { command: '$0 info --json', description: '# Prints information in JSON format' },
+    ],
+    handler: async (args: Args) => {
+      /** Only the repository - which package manager to report, if any, is a question the core
+       *  cannot ask. `rman-node`'s augmentation reads `.rmanrc "packageManager"` off this. */
+      const systemInfo = await SystemInfo.getSystemInfo({ repository });
+      const repositoryInfo = SystemInfo.getRepositoryInfo(repository);
+      if (args.json) {
+        console.log(JSON.stringify({ ...systemInfo, repository: repositoryInfo }, undefined, 2));
+        return;
+      }
+      printSystemInfo(systemInfo);
+      printRepositoryInfo(repositoryInfo);
+    },
+  };
+});
 
 export default infoCommand;
 

@@ -22,41 +22,44 @@ const config = {
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 
 /** Prints config; declares none of its own, so it contributes nothing to `RmanConfig`. */
-const configCommand = registerCommand(repository => ({
-  command: COMMAND,
-  describe: 'Prints the effective .rmanrc config for the package of the current directory',
-  config,
-  examples: [
-    { command: '$0 config', description: '# The config of the package you are standing in' },
-    { command: '$0 config --root', description: "# The repository root's own config instead" },
-    { command: '$0 config --json | jq .version', description: '# Machine-readable' },
-  ],
-  handler: (args: Args) => {
-    const target = (!readRootOption(args) && repository.currentPackage) || repository.rootPackage;
+const configCommand = registerCommand(app => {
+  const repository = app.repository;
+  return {
+    command: COMMAND,
+    describe: 'Prints the effective .rmanrc config for the package of the current directory',
+    config,
+    examples: [
+      { command: '$0 config', description: '# The config of the package you are standing in' },
+      { command: '$0 config --root', description: "# The repository root's own config instead" },
+      { command: '$0 config --json | jq .version', description: '# Machine-readable' },
+    ],
+    handler: (args: Args) => {
+      const target = (!readRootOption(args) && repository.currentPackage) || repository.rootPackage;
 
-    if (args.json) {
-      console.log(JSON.stringify(printableConfig(target.config), undefined, 2));
-      return;
-    }
+      if (args.json) {
+        console.log(JSON.stringify(printableConfig(target.config), undefined, 2));
+        return;
+      }
 
-    /**
-     * **Colour only on a terminal, and here that is correctness rather than taste.** The header
-     * and notes are YAML `#` comments so the whole output stays loadable - and an escape sequence
-     * inside one makes it *unloadable*: `rman config > rmanrc.yml` wrote a file js-yaml rejects
-     * with "the stream contains non-printable characters" (measured; `ansi-colors` does not turn
-     * itself off for a pipe here). The repository's own convention for this is
-     * `process.stdout.isTTY`, as `run`/`exec`'s progress panel uses.
-     */
-    const comment = (text: string) => (process.stdout.isTTY ? colors.gray(text) : text);
-    const relativeDir = path.relative(repository.dirname, target.dirname) || '.';
-    console.log(comment(`# ${target.name} (${relativeDir})`));
-    for (const note of deferredNotes(target)) console.log(comment(`# ${note}`));
-    /** `noRefs`: a value appearing twice in the config is the *same object* after merging, and
-     *  js-yaml would otherwise emit the second as an `*anchor` reference - valid YAML that reads
-     *  as a mistake in something meant to be looked at. */
-    console.log(yaml.dump(printableConfig(target.config), { noRefs: true, lineWidth: 100 }).trimEnd());
-  },
-}));
+      /**
+       * **Colour only on a terminal, and here that is correctness rather than taste.** The header
+       * and notes are YAML `#` comments so the whole output stays loadable - and an escape sequence
+       * inside one makes it *unloadable*: `rman config > rmanrc.yml` wrote a file js-yaml rejects
+       * with "the stream contains non-printable characters" (measured; `ansi-colors` does not turn
+       * itself off for a pipe here). The repository's own convention for this is
+       * `process.stdout.isTTY`, as `run`/`exec`'s progress panel uses.
+       */
+      const comment = (text: string) => (process.stdout.isTTY ? colors.gray(text) : text);
+      const relativeDir = path.relative(repository.dirname, target.dirname) || '.';
+      console.log(comment(`# ${target.name} (${relativeDir})`));
+      for (const note of deferredNotes(target)) console.log(comment(`# ${note}`));
+      /** `noRefs`: a value appearing twice in the config is the *same object* after merging, and
+       *  js-yaml would otherwise emit the second as an `*anchor` reference - valid YAML that reads
+       *  as a mistake in something meant to be looked at. */
+      console.log(yaml.dump(printableConfig(target.config), { noRefs: true, lineWidth: 100 }).trimEnd());
+    },
+  };
+});
 
 export default configCommand;
 

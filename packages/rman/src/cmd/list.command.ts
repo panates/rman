@@ -2,7 +2,7 @@ import colors from 'ansi-colors';
 import EasyTable from 'easy-table';
 import type { Repository } from '../core/repository.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
-import { ListService } from '../services/list.service.js';
+import type { ListService } from '../services/list.service.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
 /** `[options...]` is yargs-meaningless - its variadic marker is two dots, and this command declares
@@ -47,30 +47,32 @@ const config = {
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 
-const listCommand = registerCommand(repository => ({
-  command: COMMAND,
-  aliases: ['ls'],
-  describe: 'Lists packages in repository',
-  config,
-  examples: [
-    { command: '$0 list', description: '# List all packages' },
-    { command: '$0 list --json', description: '# List all packages in JSON format' },
-  ],
-  handler: async (args: Args) => {
-    const items = await ListService.getPackages(repository, {
-      ...readPackageFilterOptions(args),
-      toposort: args.toposort,
-      changed: args.changed,
-      changedSince: args.changedSince,
-    });
+const listCommand = registerCommand(app => {
+  return {
+    command: COMMAND,
+    aliases: ['ls'],
+    describe: 'Lists packages in repository',
+    config,
+    examples: [
+      { command: '$0 list', description: '# List all packages' },
+      { command: '$0 list --json', description: '# List all packages in JSON format' },
+    ],
+    handler: async (args: Args) => {
+      const items = await app.getService('list').getPackages({
+        ...readPackageFilterOptions(args),
+        toposort: args.toposort,
+        changed: args.changed,
+        changedSince: args.changedSince,
+      });
 
-    if (args.graph) printGraph(items);
-    else if (args.json) console.log(JSON.stringify(items, undefined, 2));
-    else if (args.parseable) printParseable(items);
-    else if (args.short) for (const it of items) console.log(it.name);
-    else printTable(items);
-  },
-}));
+      if (args.graph) printGraph(items);
+      else if (args.json) console.log(JSON.stringify(items, undefined, 2));
+      else if (args.parseable) printParseable(items);
+      else if (args.short) for (const it of items) console.log(it.name);
+      else printTable(items);
+    },
+  };
+});
 
 export default listCommand;
 

@@ -25,6 +25,7 @@ import * as yaml from 'js-yaml';
 import yargs, { type Argv } from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { version } from './constants.js';
+import { RmanApplication } from './core/application.js';
 import { commandName, toYargsCommand } from './core/command-builder.js';
 import { assertNoBuiltinShadowing, type CommandContext, loadCustomCommands } from './core/custom-command.js';
 import type { Package } from './core/package.js';
@@ -126,7 +127,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
      * The thirteen hand-written `initCli(repository, program)` calls this replaces were the second
      * place a command had to be listed, and the list the shadow check guards with was a third.
      */
-    const builtIns = commandRegistry.map(register => register(repository));
+    const builtIns = commandRegistry.map(register => register(RmanApplication.current()));
     for (const meta of builtIns) program.command(toYargsCommand(meta));
 
     /**

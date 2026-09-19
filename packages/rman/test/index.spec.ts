@@ -29,7 +29,10 @@ describe('public API (src/index.ts)', () => {
     // Docker publishing is core: any language's project can publish an image, so it does not
     // belong to the Node plugin even though `publish` is what drives it today.
     expect(typeof api.DockerPublishService.getPlan).toBe('function');
-    expect(typeof api.ListService.getPackages).toBe('function');
+    /** A class now, reached through the application - `api.ListService` is the constructor, and
+     *  `app.getService('list')` is how a command gets the one instance. */
+    expect(typeof api.ListService).toBe('function');
+    expect(typeof api.ListService.prototype.getPackages).toBe('function');
     expect(typeof api.RunService.runScript).toBe('function');
     expect(api.LOG_LEVELS).toEqual(['silent', 'error', 'info', 'verbose']);
     expect(typeof api.defineConfig).toBe('function');
@@ -102,13 +105,15 @@ describe('public API (src/index.ts)', () => {
         cwd: dir,
       });
 
-      const repo = await api.Repository.create(dir);
+      /** Still created, and still the thing under test: `Repository.create` is what attaches the
+       *  repository to the application the service then works on. */
+      await api.Repository.create(dir);
       const originalLog = console.log;
       const logged: unknown[] = [];
       console.log = (...args: unknown[]) => logged.push(args);
       let packages: api.ListService.Item[];
       try {
-        packages = await api.ListService.getPackages(repo);
+        packages = await api.RmanApplication.current().getService('list').getPackages();
       } finally {
         console.log = originalLog;
       }

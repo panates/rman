@@ -1,5 +1,6 @@
 import type { VersionPlanService } from '../services/version-plan.service.js';
 import { Logger, type LogLevel } from '../utils/logger.js';
+import { registerCoreServices } from './core-services.js';
 import { Registry } from './registry.js';
 import type { Repository } from './repository.js';
 import type { ServiceFactory, ServiceMap } from './service.js';
@@ -82,6 +83,7 @@ export class RmanApplication {
    *  since reading the config is itself work the application does. */
   constructor(options?: { logLevel?: LogLevel }) {
     this.logger = new Logger(options?.logLevel ?? 'info');
+    registerCoreServices(this);
   }
 
   /**
@@ -120,9 +122,16 @@ export class RmanApplication {
     this.factories.set(name as string, factory as ServiceFactory<unknown>);
   }
 
-  /** Called once by `Repository.create`, after the plugins that find the packages have run. */
+  /**
+   * Called by `Repository.create`, after the plugins that find the packages have run.
+   *
+   * **Last one wins, which is a consequence of `current()` being shared and not of the design.**
+   * One invocation means one application and one repository, and this refused a second - but a spec
+   * that builds two repositories in a single test is using one application for both, so the rule
+   * fired on ordinary use. It comes back as a refusal once call sites take an application
+   * explicitly, which is the same change that removes `current()`.
+   */
   attachRepository(repository: Repository): void {
-    if (this._repository) throw new Error('This application already has a repository');
     this._repository = repository;
   }
 

@@ -32,54 +32,57 @@ const config = {
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 
-const execCommand = registerCommand(repository => ({
-  command: COMMAND,
-  describe: 'Runs an arbitrary shell command in each package - unlike run, not tied to any npm script',
-  /**
-   * The two parser switches this command cannot work without: `populate--` keeps everything after
-   * `--` out of `exec`'s own options, and `unknown-options-as-args` passes the flags of the command
-   * being run through untouched.
-   */
-  parserConfiguration: { 'populate--': true, 'unknown-options-as-args': true },
-  config,
-  positionals: {
-    command: {
-      describe:
-        "The command (and its own arguments) to run in each package - its own flags don't need to be " +
-        'escaped unless one happens to share a name with one of these options below, in which case put ' +
-        '"--" first',
-      type: 'string',
+const execCommand = registerCommand(app => {
+  const repository = app.repository;
+  return {
+    command: COMMAND,
+    describe: 'Runs an arbitrary shell command in each package - unlike run, not tied to any npm script',
+    /**
+     * The two parser switches this command cannot work without: `populate--` keeps everything after
+     * `--` out of `exec`'s own options, and `unknown-options-as-args` passes the flags of the command
+     * being run through untouched.
+     */
+    parserConfiguration: { 'populate--': true, 'unknown-options-as-args': true },
+    config,
+    positionals: {
+      command: {
+        describe:
+          "The command (and its own arguments) to run in each package - its own flags don't need to be " +
+          'escaped unless one happens to share a name with one of these options below, in which case put ' +
+          '"--" first',
+        type: 'string',
+      },
     },
-  },
-  examples: [
-    { command: '$0 exec rm -rf dist', description: '# Not an npm script - runs directly in every package' },
-    {
-      command: '$0 exec --scope pkg-a -- ls -la',
-      description: '# "--" needed only if the command shares a flag name with exec\'s own',
+    examples: [
+      { command: '$0 exec rm -rf dist', description: '# Not an npm script - runs directly in every package' },
+      {
+        command: '$0 exec --scope pkg-a -- ls -la',
+        description: '# "--" needed only if the command shares a flag name with exec\'s own',
+      },
+    ],
+    handler: async (args: Args) => {
+      await assertAllowedBranch(repository, readBranchGuardOptions(args));
+      const afterDashDash = args['--'];
+      /** `command` is variadic (`[command..]`), so it arrives as a list - `ArgsOf` reads that off the
+       *  command string rather than being told. */
+      const tokens = afterDashDash?.length ? afterDashDash.map(String) : args.command;
+      if (!tokens?.length) {
+        const err: any = new Error('No command given - e.g. "rman exec ls" or "rman exec -- eslint --bail"');
+        throw err;
+      }
+      await ExecService.exec(repository, tokens.join(' '), {
+        ...readPackageFilterOptions(args),
+        parallel: args.parallel,
+        topo: args.topo,
+        bail: args.bail,
+        progress: args.progress,
+        changed: args.changed,
+        changedSince: args.changedSince,
+        logLevel: args.logLevel,
+        root: args.root,
+      });
     },
-  ],
-  handler: async (args: Args) => {
-    await assertAllowedBranch(repository, readBranchGuardOptions(args));
-    const afterDashDash = args['--'];
-    /** `command` is variadic (`[command..]`), so it arrives as a list - `ArgsOf` reads that off the
-     *  command string rather than being told. */
-    const tokens = afterDashDash?.length ? afterDashDash.map(String) : args.command;
-    if (!tokens?.length) {
-      const err: any = new Error('No command given - e.g. "rman exec ls" or "rman exec -- eslint --bail"');
-      throw err;
-    }
-    await ExecService.exec(repository, tokens.join(' '), {
-      ...readPackageFilterOptions(args),
-      parallel: args.parallel,
-      topo: args.topo,
-      bail: args.bail,
-      progress: args.progress,
-      changed: args.changed,
-      changedSince: args.changedSince,
-      logLevel: args.logLevel,
-      root: args.root,
-    });
-  },
-}));
+  };
+});
 
 export default execCommand;

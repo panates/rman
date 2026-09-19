@@ -1,5 +1,5 @@
 import type * as yargs from 'yargs';
-import { Repository } from '../core/repository.js';
+import type { RmanApplication } from '../core/application.js';
 
 /**
  * What a `.rmanrc` may hold. The keys here are the ones no command owns; everything a command
@@ -53,7 +53,14 @@ export namespace RmanConfig {
     vars?: Record<string, unknown>;
   }
 
-  export type CommandRegisterFunction = (repository: Repository) => CommandMetadata;
+  /**
+   * Called during init, with the application - not at import, and not with just the repository.
+   *
+   * The application is what a command reaches services through (`app.getService('changelog')`), and
+   * `app.repository` is still there for the metadata that reads it: `version`'s help names its own
+   * scheme's bump words, which cannot be known before a repository exists.
+   */
+  export type CommandRegisterFunction = (app: RmanApplication) => CommandMetadata;
 
   /** One declared option: everything yargs takes, plus where it may be set from. */
   export type CommandOption = yargs.Options & {
@@ -298,9 +305,9 @@ export namespace RmanConfig {
  * help - measured; that trick only applies where the constraint sits on the generic parameter.
  */
 export function registerCommand<M extends RmanConfig.CommandMetadata>(
-  def: (repository: Repository) => M & ValidMeta<M>,
-): (repository: Repository) => M {
-  const fn = def as (repository: Repository) => M;
+  def: (app: RmanApplication) => M & ValidMeta<M>,
+): (app: RmanApplication) => M {
+  const fn = def as (app: RmanApplication) => M;
   commandRegistry.push(fn);
   return fn;
 }

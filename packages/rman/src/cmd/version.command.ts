@@ -87,7 +87,8 @@ const config = {
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 
-const versionCommand = registerCommand(repository => {
+const versionCommand = registerCommand(app => {
+  const repository = app.repository;
   /** `rman version <bump|version>` is validated by the root's scheme (see `getPlan`), so the help
    *  has to name that scheme's own words rather than semver's - otherwise `--help` in a repository
    *  numbering some other way documents keywords its own planner would reject. A four-part scheme
