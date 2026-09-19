@@ -145,7 +145,7 @@ const versionCommand = registerCommand(app => {
     handler: async (args: Args) => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));
       const bump = args.bump;
-      const plan = await VersionPlanService.getPlanner().getPlan(repository, {
+      const plan = await VersionPlanService.getPlanner(app).getPlan(repository, {
         ...readPackageFilterOptions(args),
         bump,
         ignoreDirty: args.ignoreDirty,

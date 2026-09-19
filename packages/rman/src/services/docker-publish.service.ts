@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import type { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import { Service } from '../core/service.js';
@@ -103,8 +104,13 @@ export class DockerPublishService extends Service {
     const toPublish = plan.filter(e => e.status === 'publish');
     if (!toPublish.length) return plan;
 
-    await dockerLogin(repository.dirname);
-    await exec('docker buildx create --use', { cwd: repository.dirname, stdio: 'inherit', throwOnError: false });
+    await dockerLogin(repository.app, repository.dirname);
+    await exec('docker buildx create --use', {
+      cwd: repository.dirname,
+      app: repository.app,
+      stdio: 'inherit',
+      throwOnError: false,
+    });
 
     const result: DockerPublishService.Entry[] = [];
     for (const entry of plan) {
@@ -162,13 +168,17 @@ function expandEnvValue(value: string): string {
   return match ? (process.env[match[1]] ?? '') : value;
 }
 
-async function dockerLogin(cwd: string): Promise<void> {
+async function dockerLogin(app: RmanApplication, cwd: string): Promise<void> {
   const username = process.env.DOCKERHUB_USERNAME;
   const password = process.env.DOCKERHUB_PASSWORD;
   if (!username || !password) {
     throw new Error('DOCKERHUB_USERNAME/DOCKERHUB_PASSWORD environment variables are required to publish to Docker');
   }
-  await exec(`echo "${password}" | docker login --username "${username}" --password-stdin`, { cwd, stdio: 'inherit' });
+  await exec(`echo "${password}" | docker login --username "${username}" --password-stdin`, {
+    cwd,
+    app,
+    stdio: 'inherit',
+  });
 }
 
 async function buildAndPush(repository: Repository, entry: DockerPublishService.Entry): Promise<void> {
@@ -196,7 +206,7 @@ async function buildAndPush(repository: Repository, entry: DockerPublishService.
     '.',
   );
 
-  await exec(`docker ${args.join(' ')}`, { cwd, stdio: 'inherit' });
+  await exec(`docker ${args.join(' ')}`, { cwd, app: repository.app, stdio: 'inherit' });
 }
 
 async function updateDescription(entry: DockerPublishService.Entry): Promise<void> {

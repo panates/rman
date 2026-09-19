@@ -3,8 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Repository, VersionPlanService } from 'rman';
-import { service, useNodeEcosystem } from '../_fixture.js';
+import { createRepository, planner, service, useNodeEcosystem } from '../_fixture.js';
 
 function git(dir: string, ...args: string[]): void {
   execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
@@ -62,8 +61,8 @@ describe('augmentation/manifest - dependency ranges after a bump', () => {
     fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
     git(dir, 'add', '-A');
     git(dir, 'commit', '-q', '-m', 'feat!: a breaking change in pkg-a');
-    const repo = await Repository.create(dir);
-    const plan = await VersionPlanService.getPlanner().getPlan(repo);
+    const repo = await createRepository(dir);
+    const plan = await planner().getPlan(repo);
     await service('version').applyPlan(plan);
   }
 

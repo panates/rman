@@ -2,9 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Repository } from '../../src/core/repository.js';
 import { Logger, resolveRootLogLevel } from '../../src/utils/logger.js';
-import { useTestEcosystem } from '../_fixture.js';
+import { createRepository, useTestEcosystem } from '../_fixture.js';
 
 /** Runs `fn` with console.log captured (plain-text lines) instead of printed. */
 function captureLogs(fn: () => void): string[] {
@@ -78,7 +77,7 @@ describe('utils/resolveRootLogLevel', () => {
   it('defaults to "info" when .rmanrc has no logLevel', async () => {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'root', private: true });
-    const repo = await Repository.create(dir);
+    const repo = await createRepository(dir);
     expect(resolveRootLogLevel(repo)).toBe('info');
   });
 
@@ -86,7 +85,7 @@ describe('utils/resolveRootLogLevel', () => {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'root', private: true });
     writeJson(dir, '.rmanrc', { logLevel: 'silent' });
-    const repo = await Repository.create(dir);
+    const repo = await createRepository(dir);
     expect(resolveRootLogLevel(repo)).toBe('silent');
   });
 
@@ -94,7 +93,7 @@ describe('utils/resolveRootLogLevel', () => {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'root', private: true });
     writeJson(dir, '.rmanrc', { logLevel: 'chatty' });
-    const repo = await Repository.create(dir);
+    const repo = await createRepository(dir);
     expect(resolveRootLogLevel(repo)).toBe('info');
   });
 });

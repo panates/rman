@@ -8,7 +8,6 @@ import {
   type Package,
   readBranchGuardOptions,
   readPackageFilterOptions,
-  RmanApplication,
   type RmanConfig,
 } from 'rman';
 import { CiService } from '../services/ci.service.js';
@@ -116,7 +115,7 @@ export const command: CustomCommand = {
     };
     const npmPlan = targets.has('npm') ? await PublishService.getPlan(repository, npmOptions) : [];
     const dockerPlan = targets.has('docker')
-      ? await RmanApplication.current().getService('dockerPublish').getPlan(dockerOptions)
+      ? await repository.app.getService('dockerPublish').getPlan(dockerOptions)
       : [];
 
     if (args.json) {
@@ -181,7 +180,7 @@ export const command: CustomCommand = {
         })
       : [];
     const appliedDocker = targets.has('docker')
-      ? await RmanApplication.current().getService('dockerPublish').applyPlan(dockerPlan)
+      ? await repository.app.getService('dockerPublish').applyPlan(dockerPlan)
       : [];
 
     let failed = false;

@@ -2,9 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Repository } from 'rman';
 import { CleanService } from '../../src/services/clean.service.js';
-import { useNodeEcosystem } from '../_fixture.js';
+import { createRepository, useNodeEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-clean-test-'));
@@ -86,7 +85,7 @@ describe('services/clean', () => {
         writeFile(dir, `packages/a/${sub}/foo.js.map`);
         writeFile(dir, `packages/a/${sub}/foo.d.ts`);
       }
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       await captureLogs(() => CleanService.clean(repo));
 
@@ -106,7 +105,7 @@ describe('services/clean', () => {
       fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeFile(dir, 'packages/a/src/globals.d.ts');
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       await captureLogs(() => CleanService.clean(repo));
 
@@ -126,7 +125,7 @@ describe('services/clean', () => {
       writeFile(dir, 'packages/a/src/keep/thing.ts', 'export {}');
       writeFile(dir, 'packages/a/src/keep/thing.js');
       writeFile(dir, 'packages/a/src/keep/readme.md', 'not build output');
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       await captureLogs(() => CleanService.clean(repo));
 
@@ -154,7 +153,7 @@ describe('services/clean', () => {
       writeJson(dir, 'packages/pkg2/package.json', { name: 'pkg2', version: '1.0.0' });
       writeFile(dir, 'packages/pkg1/build/out.js');
       writeFile(dir, 'packages/pkg2/build/out.js');
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       await captureLogs(() => CleanService.clean(repo));
 
@@ -180,7 +179,7 @@ describe('services/clean', () => {
       writeFile(dir, 'packages/pkg1/cache/entry.tmp');
       writeFile(dir, 'packages/pkg1/build/out.js');
       writeFile(dir, 'packages/pkg1/build/meta.json');
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       await captureLogs(() => CleanService.clean(repo));
 
@@ -197,7 +196,7 @@ describe('services/clean', () => {
        *  since it runs before the plugins that would know what a package is. */
       fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       const lines = await captureLogs(() => CleanService.clean(repo, { progress: false }));
       expect(lines.some(l => l.includes('clean'))).toBe(true);
@@ -212,7 +211,7 @@ describe('services/clean', () => {
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       fs.writeFileSync(path.join(dir, 'packages/a/.rmanrc'), JSON.stringify({ clean: { skip: true } }));
       writeFile(dir, 'packages/a/src/foo.js'); // would otherwise be removed as a ts artifact
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       const lines = await captureLogs(() => CleanService.clean(repo));
 
@@ -232,7 +231,7 @@ describe('services/clean', () => {
       writeFile(dir, 'packages/a/tsconfig.tsbuildinfo');
       writeFile(dir, 'packages/a/dist/tsconfig.build.tsbuildinfo');
       writeFile(dir, 'packages/a/node_modules/dep/tsconfig.tsbuildinfo');
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       await captureLogs(() => CleanService.clean(repo));
 
@@ -256,7 +255,7 @@ describe('services/clean', () => {
       writeFile(dir, 'packages/a/tsconfig.tsbuildinfo');
       writeFile(dir, 'build/out.js');
 
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
       const lines = await captureLogs(() => CleanService.clean(repo, { dryRun: true, progress: false }));
 
       expect(exists(dir, 'packages/a/src/foo.js')).toBe(true);
@@ -277,7 +276,7 @@ describe('services/clean', () => {
        *  since it runs before the plugins that would know what a package is. */
       fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       const { result: lines } = await withLivePanel(() => captureLogs(() => CleanService.clean(repo)));
       expect(lines.some(l => l.includes('clean') && l.includes('pkg-a'))).toBe(false);
@@ -293,7 +292,7 @@ describe('services/clean', () => {
        *  since it runs before the plugins that would know what a package is. */
       fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       const { result: lines } = await withLivePanel(() =>
         captureLogs(() => CleanService.clean(repo, { progress: false })),
@@ -308,7 +307,7 @@ describe('services/clean', () => {
        *  since it runs before the plugins that would know what a package is. */
       fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       const lines = await captureLogs(() => CleanService.clean(repo));
       expect(lines.some(l => /\d+ succeeded/.test(l))).toBe(true);
@@ -327,7 +326,7 @@ describe('services/clean', () => {
       writeFile(dir, 'packages/a/src/foo.js');
       writeFile(dir, 'packages/b/src/bar.js');
 
-      const repo = await Repository.create(path.join(dir, 'packages/a'));
+      const repo = await createRepository(path.join(dir, 'packages/a'));
       const lines = await captureLogs(() => CleanService.clean(repo));
 
       expect(exists(dir, 'packages/a/src/foo.js')).toBe(false);
@@ -346,7 +345,7 @@ describe('services/clean', () => {
       writeFile(dir, 'packages/a/src/foo.js');
       writeFile(dir, 'packages/b/src/bar.js');
 
-      const repo = await Repository.create(path.join(dir, 'packages/a'));
+      const repo = await createRepository(path.join(dir, 'packages/a'));
       await captureLogs(() => CleanService.clean(repo, { root: true }));
 
       expect(exists(dir, 'packages/a/src/foo.js')).toBe(false);
@@ -366,7 +365,7 @@ describe('services/clean', () => {
       fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeFile(dir, 'packages/a/src/foo.js');
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       const lines = await captureLogs(() => CleanService.clean(repo, { logLevel: 'silent', progress: false }));
       expect(lines.some(l => l.includes('pkg-a'))).toBe(false);
@@ -382,7 +381,7 @@ describe('services/clean', () => {
       fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeFile(dir, 'packages/a/src/foo.js');
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       const lines = await captureLogs(() => CleanService.clean(repo, { progress: false }));
       expect(lines.some(l => l.includes('pkg-a'))).toBe(true);
@@ -397,7 +396,7 @@ describe('services/clean', () => {
       fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ logLevel: 'silent' }));
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeFile(dir, 'packages/a/src/foo.js');
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
 
       const lines = await captureLogs(() => CleanService.clean(repo, { progress: false }));
       expect(lines.some(l => l.includes('pkg-a'))).toBe(false);

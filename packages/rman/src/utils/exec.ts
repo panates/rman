@@ -1,8 +1,18 @@
 import { spawn, type SpawnOptions } from 'node:child_process';
+import type { RmanApplication } from '../core/application.js';
 import { BinPath } from './bin-path.js';
 import { trackChild } from './child-tracker.js';
 
 export interface ExecOptions {
+  /**
+   * The application whose technologies put a repository's locally installed binaries on PATH -
+   * `node_modules/.bin` for a Node repository, whatever another technology uses.
+   *
+   * Passed rather than looked up, so a command run against one repository can never pick up the
+   * binaries of another in the same process. Omitted (a caller outside any repository) leaves the
+   * inherited PATH exactly as it was, which is also what a repository naming no plugin gets.
+   */
+  app?: RmanApplication;
   /** 'inherit' streams the child directly to our stdio (used for non-TTY/CI passthrough).
    *  'pipe' (default) captures output so the caller can drive a live view via onLine. */
   stdio?: 'inherit' | 'pipe';
@@ -37,7 +47,7 @@ export async function exec(command: string, options?: ExecOptions): Promise<Exec
     ...options,
   };
   opts.env = {
-    ...BinPath.env({ cwd: opts.cwd }),
+    ...BinPath.env({ cwd: opts.cwd, app: opts.app }),
     ...opts.env,
   };
   opts.cwd = opts.cwd || process.cwd();

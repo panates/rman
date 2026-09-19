@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import glob from 'fast-glob';
+import { runCli as cliRunCli } from '../src/cli.js';
 import { RmanApplication } from '../src/core/application.js';
 import type { ManifestProvider } from '../src/core/manifest.js';
 import type { Package } from '../src/core/package.js';
+import { Repository } from '../src/core/repository.js';
 import type { ServiceMap } from '../src/core/service.js';
 import { baseTechStack, type TechStack } from '../src/core/tech-stack.js';
 import { Workspace } from '../src/core/workspace.js';
@@ -156,39 +158,39 @@ export class TestVersionPlanService extends VersionPlanService {
 }
 
 /**
- * Registers the fixture ecosystem for every test in the enclosing `describe`.
+ * Arms the fixture ecosystem for every test in the enclosing `describe`.
  *
- * Call it inside a `describe`, not at module scope: the root hook in
- * [`support/mocha-root-hooks.ts`](../../../support/mocha-root-hooks.ts) empties every registry
- * before each test, so registration has to happen *after* that - which is what a `beforeEach`
- * declared here does (mocha runs hooks outermost-first, and the root hook is the outermost).
- *
- * `Repository.create` only ever *adds* what `plugins` names, never clears, so a repository built by
- * a spec - directly or through `runCli` - sees these.
+ * Nothing is registered globally any more - there is nowhere to register. This records what the
+ * next `createRepository()` should build its application with, and the record is cleared between
+ * cases so nothing survives one.
  */
 export function useTestEcosystem(): void {
-  beforeEach(registerTestEcosystem);
+  beforeEach(() => {
+    registryVersions.clear();
+    registryCalls.length = 0;
+    extraStacks.length = 0;
+    lastApp = undefined;
+  });
 }
 
 /**
- * Registers a `BinPath` provider offering `<dir>/local-bin` at **every level from `cwd` upward**,
- * for a spec that stubs an executable.
+ * Registers a `TechStack` offering `<dir>/local-bin` at **every level from `cwd` upward**, for a
+ * spec that stubs an executable.
  *
- * Walking up is the part that is easy to get wrong: `exec` runs a step in the *package's* directory,
- * so a provider offering only `<cwd>/local-bin` serves a command run at the repository root and
- * nothing else. Measured - a stubbed `docker` sitting at the root was invisible from
- * `packages/a`, and the **real** `docker` ran instead.
+ * Walking up is the part that is easy to get wrong: a step runs in the *package's* directory, so a
+ * provider offering only `<cwd>/local-bin` serves a command run at the repository root and nothing
+ * else. Measured - a stubbed `docker` sitting at the root was invisible from `packages/a`, and the
+ * **real** `docker` ran instead.
  *
  * The directory is `local-bin`, deliberately not `node_modules/.bin`: that is npm's layout, and
  * `rman-node` is what contributes it. A core spec must not depend on it.
  */
 export function useLocalBin(): void {
   beforeEach(() => {
-    /** Its own stack, so it can be added to a repository that already has `testTechStack` - a
-     *  technology contributing only binaries is exactly what the base stack's optional fields
-     *  allow, and the manifest provider that recognizes nothing keeps it from claiming packages. */
-    RmanApplication.current().techStacks.add({
+    extraStacks.push({
       name: 'local-bin',
+      /** A technology contributing only directories is a real shape - a PATH contributor
+       *  recognizes no package - and the base stack's reader is what keeps it from claiming any. */
       manifestProvider: baseTechStack.manifestProvider,
       binPathsProvider: cwd => {
         const dirs: string[] = [];
@@ -206,26 +208,61 @@ export function useLocalBin(): void {
 }
 
 /**
- * The same registration without mocha's hooks - for a **subprocess**.
+ * A repository, on an application carrying the fixture's technologies - what a spec calls instead
+ * of `Repository.create`.
  *
- * `version --interactive` can only be tested by driving a real stdin, so those specs spawn a child
- * that imports `runCli` itself. That child has no mocha and no `beforeEach`, and the repository it
- * runs in names no plugin, so without calling this it has no manifest provider and no planner.
+ * The application is what a technology is registered into, so a spec cannot get one by creating a
+ * repository and hoping something registered earlier is still there. That was exactly the old
+ * failure: registries were module-global, so whichever spec ran first decided the answer for the
+ * rest, and the core appeared to work in tests that had set nothing up.
  */
-export function registerTestEcosystem(): void {
-  registryVersions.clear();
-  registryCalls.length = 0;
-  RmanApplication.current().techStacks.add(testTechStack);
-  RmanApplication.current().versionPlanner = testTechStack.versionPlanner;
+export function createRepository(root?: string, options?: { deep?: number }): Promise<Repository> {
+  const app = createApp();
+  return Repository.create(root, { ...options, app });
+}
+
+/**
+ * An application carrying the fixture's technologies - for a spec that exercises something below
+ * the repository, like `runBin`, which needs the bin directories but no packages.
+ */
+export function createApp(): RmanApplication {
+  const app = new RmanApplication();
+  app.techStacks.add(testTechStack);
+  app.versionPlanner = testTechStack.versionPlanner;
+  for (const stack of extraStacks) app.techStacks.add(stack);
+  lastApp = app;
+  return app;
+}
+
+/** The version planner the last `createRepository()`'s application carries - what a spec asks for
+ *  a plan with, now that there is no registry to read one out of. */
+export function planner(): VersionPlanService {
+  if (!lastApp) throw new Error('No application yet - call createRepository() first.');
+  return VersionPlanService.getPlanner(lastApp);
+}
+
+/**
+ * `runCli` on an application carrying the fixture's technologies.
+ *
+ * The CLI builds its own application per run, so a spec driving it has to hand one over for the
+ * same reason `createRepository` does: a technology is registered *into* an application, and there
+ * is no longer anywhere else for one to be.
+ */
+export function runCli(options?: { argv?: string[]; cwd?: string }): Promise<void> {
+  return cliRunCli({ ...options, app: createApp() });
+}
+
+/** The service a spec is exercising, from the application the last `createRepository()` built. */
+export function service<K extends keyof ServiceMap>(name: K): ServiceMap[K] {
+  if (!lastApp) throw new Error('No application yet - call createRepository() first.');
+  return lastApp.getService(name);
 }
 
 /**
  * The core's synthetic technology, as one thing.
  *
  * Named `'test'` rather than `'node'` on purpose: a core spec must not be able to pass because
- * `rman-node`'s answers happened to be right. Declaring it as one `TechStack` is also what the
- * four separate registrations could never say - that these answers belong together, and that a
- * package claimed by this manifest provider is the one whose steps and binaries these are.
+ * `rman-node`'s answers happened to be right.
  */
 export const testTechStack: TechStack = {
   name: 'test',
@@ -234,6 +271,10 @@ export const testTechStack: TechStack = {
   runSteps: testSteps,
   versionPlanner: new TestVersionPlanService(),
 };
+
+/** Stacks a spec asked for on top of the fixture's own - see `useLocalBin`. */
+const extraStacks: TechStack[] = [];
+let lastApp: RmanApplication | undefined;
 
 /**
  * What the fixture provider answers `publishedVersion` with, keyed by package name - empty unless a
@@ -249,15 +290,3 @@ export const registryVersions = new Map<string, string>();
 export const registryCalls: string[] = [];
 
 const DEPENDENCY_KEYS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const;
-
-/**
- * The service a spec is exercising, from the application the fixture's repository attached itself
- * to.
- *
- * `Repository.create` attaches, so a spec that has built one already has the application this
- * reaches - which is why the old `SomeService.method(repo, ...)` shape disappears rather than
- * moving: the repository was always available, the parameter only restated it.
- */
-export function service<K extends keyof ServiceMap>(name: K): ServiceMap[K] {
-  return RmanApplication.current().getService(name);
-}

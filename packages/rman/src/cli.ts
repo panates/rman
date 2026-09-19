@@ -36,7 +36,7 @@ import { filterPackages, readPackageFilterOptions, readRootOption } from './util
 import { printableConfig } from './utils/printable-config.js';
 import { runBin } from './utils/run-bin.js';
 
-export async function runCli(options?: { argv?: string[]; cwd?: string }) {
+export async function runCli(options?: { argv?: string[]; cwd?: string; app?: RmanApplication }) {
   const _argv = options?.argv || hideBin(process.argv);
 
   /**
@@ -53,7 +53,10 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
   }
 
   try {
-    const repository = await Repository.create(options?.cwd);
+    /** One application per run, made here so `--log-level` reaches its logger, and handed to
+     *  `Repository.create` rather than found through a global. */
+    const app = options?.app ?? new RmanApplication();
+    const repository = await Repository.create(options?.cwd, { app });
 
     const program = yargs(_argv)
       .scriptName('rman')
@@ -127,7 +130,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
      * The thirteen hand-written `initCli(repository, program)` calls this replaces were the second
      * place a command had to be listed, and the list the shadow check guards with was a third.
      */
-    const builtIns = commandRegistry.map(register => register(RmanApplication.current()));
+    const builtIns = commandRegistry.map(register => register(app));
     for (const meta of builtIns) program.command(toYargsCommand(meta));
 
     /**
@@ -164,7 +167,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
           const context: CommandContext = {
             repository,
             package: repository.currentPackage,
-            runBin: (bin, argv, opts) => runBin(bin, argv, { cwd: repository.dirname, logLevel, ...opts }),
+            runBin: (bin, argv, opts) => runBin(bin, argv, { cwd: repository.dirname, logLevel, app, ...opts }),
             logger: new Logger(logLevel),
           };
           return custom.handler(context, args);

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import * as api from '../src/index.js';
-import { useTestEcosystem } from './_fixture.js';
+import { testTechStack, useTestEcosystem } from './_fixture.js';
 
 /**
  * A smoke test for the public programmatic API (`src/index.ts`) - it locks in the exported
@@ -90,7 +90,7 @@ describe('public API (src/index.ts)', () => {
     expect(typeof api.resolveRootLogLevel).toBe('function');
   });
 
-  it('Repository.create() + List.getPackages() work when imported from the public entry point, returning data with no console output', async () => {
+  it('createRepository() + List.getPackages() work when imported from the public entry point, returning data with no console output', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-api-test-'));
     try {
       fs.writeFileSync(
@@ -107,13 +107,17 @@ describe('public API (src/index.ts)', () => {
 
       /** Still created, and still the thing under test: `Repository.create` is what attaches the
        *  repository to the application the service then works on. */
-      await api.Repository.create(dir);
+      /** The public entry point, used the way a consumer would: one application, one repository,
+       *  and the service reached through it. */
+      const app = new api.RmanApplication();
+      app.techStacks.add(testTechStack);
+      await api.Repository.create(dir, { app });
       const originalLog = console.log;
       const logged: unknown[] = [];
       console.log = (...args: unknown[]) => logged.push(args);
       let packages: api.ListService.Item[];
       try {
-        packages = await api.RmanApplication.current().getService('list').getPackages();
+        packages = await app.getService('list').getPackages();
       } finally {
         console.log = originalLog;
       }

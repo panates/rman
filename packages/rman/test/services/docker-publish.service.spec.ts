@@ -3,9 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Repository } from '../../src/core/repository.js';
 import { DockerPublishService } from '../../src/services/docker-publish.service.js';
-import { service, useLocalBin, useTestEcosystem } from '../_fixture.js';
+import { createRepository, service, useLocalBin, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-docker-publish-test-'));
@@ -56,7 +55,7 @@ describe('services/docker-publish', () => {
        *  since it runs before the plugins that would know what a package is. */
       fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      await Repository.create(dir);
+      await createRepository(dir);
 
       const plan = await service('dockerPublish').getPlan({}, registry(false));
       expect(plan.some(e => e.package.name === 'pkg-a')).toBe(false);
@@ -74,7 +73,7 @@ describe('services/docker-publish', () => {
         private: true,
         rman: { publish: { skip: true, target: ['docker'], docker: { image: 'myorg/pkg-a' } } },
       });
-      await Repository.create(dir);
+      await createRepository(dir);
 
       const plan = await service('dockerPublish').getPlan({}, registry(false));
       expect(plan.some(e => e.package.name === 'pkg-a')).toBe(false);
@@ -92,7 +91,7 @@ describe('services/docker-publish', () => {
         private: true,
         rman: { publish: { target: ['docker'] } },
       });
-      await Repository.create(dir);
+      await createRepository(dir);
 
       const plan = await service('dockerPublish').getPlan({}, registry(false));
       expect(entryFor(plan, 'pkg-a')).toMatchObject({
@@ -113,7 +112,7 @@ describe('services/docker-publish', () => {
         private: true,
         rman: { publish: { target: ['docker'], docker: { image: 'myorg/pkg-a' } } },
       });
-      await Repository.create(dir);
+      await createRepository(dir);
 
       const plan = await service('dockerPublish').getPlan({}, registry(false));
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish', image: 'myorg/pkg-a' });
@@ -131,7 +130,7 @@ describe('services/docker-publish', () => {
         private: true,
         rman: { publish: { target: ['docker'], docker: { image: 'myorg/pkg-a' } } },
       });
-      await Repository.create(dir);
+      await createRepository(dir);
 
       const plan = await service('dockerPublish').getPlan({}, registry(true));
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'up-to-date' });
@@ -149,7 +148,7 @@ describe('services/docker-publish', () => {
         private: true,
         rman: { publish: { target: ['docker'], docker: { image: 'pkg-a' } } },
       });
-      await Repository.create(dir);
+      await createRepository(dir);
 
       delete process.env.DOCKERHUB_NAMESPACE;
       const viaOption = await service('dockerPublish').getPlan({ namespace: 'myorg' }, registry(false));
@@ -172,7 +171,7 @@ describe('services/docker-publish', () => {
         private: true,
         rman: { publish: { target: ['docker'], docker: { image: 'pkg-a' } } },
       });
-      await Repository.create(dir);
+      await createRepository(dir);
 
       delete process.env.DOCKERHUB_NAMESPACE;
       const plan = await service('dockerPublish').getPlan({}, registry(false));
@@ -192,7 +191,7 @@ describe('services/docker-publish', () => {
         private: true,
         rman: { publish: { target: ['docker'], docker: { image: 'someregistry.io/team/pkg-a' } } },
       });
-      await Repository.create(dir);
+      await createRepository(dir);
 
       delete process.env.DOCKERHUB_NAMESPACE;
       const plan = await service('dockerPublish').getPlan({}, registry(false));
@@ -217,7 +216,7 @@ describe('services/docker-publish', () => {
         cwd: dir,
       });
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'dirty');
-      await Repository.create(dir);
+      await createRepository(dir);
 
       const plan = await service('dockerPublish').getPlan({}, registry(false));
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'error', reason: 'uncommitted local changes' });
@@ -276,7 +275,7 @@ describe('services/docker-publish', () => {
           },
         },
       });
-      await Repository.create(dir);
+      await createRepository(dir);
       const { logFile } = stubDockerBin(dir);
       process.env.DOCKERHUB_USERNAME = 'u';
       process.env.DOCKERHUB_PASSWORD = 'p';

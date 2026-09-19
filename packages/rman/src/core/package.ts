@@ -1,5 +1,6 @@
 import path from 'path';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
+import type { RmanApplication } from './application.js';
 import { Manifest } from './manifest.js';
 import type { Repository } from './repository.js';
 import type { TechStack } from './tech-stack.js';
@@ -86,8 +87,21 @@ export class Package {
     return this.techStack.name;
   }
 
-  constructor(readonly dirname: string) {
-    const { manifest, versionScheme, fileName, techStack } = Manifest.read(dirname);
+  /**
+   * **Takes the application but does not keep it.** A package needs it once, to find out which
+   * technology claims its directory; afterwards it holds only data, so nothing that has a package
+   * can reach a service through it. Data down, behaviour up - the work belongs to services, and a
+   * piece of code holding only a package is not doing any.
+   *
+   * It also keeps the package out of every spread and serialization the application would
+   * otherwise be dragged into: `{...pkg}` and `pkg.manifest.raw` are both real, and an `app` field
+   * here would carry the whole world into them.
+   */
+  constructor(
+    readonly dirname: string,
+    app: RmanApplication,
+  ) {
+    const { manifest, versionScheme, fileName, techStack } = Manifest.read(app, dirname);
     this.manifest = manifest;
     this.versionScheme = versionScheme;
     this.manifestFileName = fileName ? path.join(dirname, fileName) : '';
@@ -112,17 +126,18 @@ export class Package {
 
   /** Re-reads from disk - for a command that has just written the manifest itself and wants the
    *  package to agree with the file again. */
+  /** Re-reads from disk through **its own** technology's provider - no search, since the package
+   *  already knows which one claimed it, and a second opinion on a re-read was never wanted. */
   reloadManifest(): Manifest {
-    const { manifest, versionScheme, fileName, techStack } = Manifest.read(this.dirname);
-    this.manifest = manifest;
-    this.versionScheme = versionScheme;
-    this.manifestFileName = fileName ? path.join(this.dirname, fileName) : '';
-    this.techStack = techStack;
+    const provider = this.techStack.manifestProvider;
+    this.manifest = provider.read(this.dirname) ?? { name: path.basename(this.dirname), version: '0.0.0', raw: {} };
+    this.versionScheme = provider.versionScheme ?? this.versionScheme;
+    this.manifestFileName = provider.fileName ? path.join(this.dirname, provider.fileName) : '';
     return this.manifest;
   }
 
   /** Writes the current manifest back through its provider. */
   writeManifest(): void {
-    Manifest.write(this.dirname, this.manifest);
+    this.techStack.manifestProvider.write(this.dirname, this.manifest);
   }
 }

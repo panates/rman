@@ -505,11 +505,6 @@ export namespace VersionPlanService {
    * repository layering its own policy plugin after `rman-node` could never take effect - which is
    * the only reason to name two in the first place.
    */
-  /** Starts a fresh application, which is what "clear the planner" now means - see
-   *  `Manifest.clearProviders`. */
-  export function clearPlanner(): void {
-    RmanApplication.reset();
-  }
 
   /**
    * The registered planner. **Throws** when there is none, rather than falling back to some
@@ -518,8 +513,8 @@ export namespace VersionPlanService {
    * merely a diminished one - a wrong cascade or a wrong boundary reports a release that is
    * plausible and untrue.
    */
-  export function getPlanner(): VersionPlanService {
-    const planner = RmanApplication.current().versionPlanner;
+  export function getPlanner(app: RmanApplication): VersionPlanService {
+    const planner = app.versionPlanner;
     if (!planner) {
       throw new Error(
         'No version planner is registered, so no version plan can be computed. Name a plugin that ' +

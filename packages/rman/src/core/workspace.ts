@@ -42,14 +42,9 @@ export namespace Workspace {
    */
   export type Provider = (root: string) => Layout | undefined;
 
-  /** For tests, which would otherwise leak a provider into every later case in the process. */
-  export function clearProviders(): void {
-    RmanApplication.reset();
-  }
-
   /** The first provider that recognizes `root`, in declaration order. */
-  export function resolve(root: string): Layout | undefined {
-    for (const stack of RmanApplication.current().techStacks) {
+  export function resolve(app: RmanApplication, root: string): Layout | undefined {
+    for (const stack of app.techStacks) {
       const layout = stack.workspaceProvider?.(root);
       if (layout) return layout;
     }

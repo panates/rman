@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import fastGlob from 'fast-glob';
-import { RmanApplication } from '../core/application.js';
 import { Package } from '../core/package.js';
 import { Repository } from '../core/repository.js';
 import { Service } from '../core/service.js';
@@ -215,7 +214,7 @@ async function buildReleaseNotes(repository: Repository, git: GitHelper, release
 
   const sections: string[] = [];
   for (const pkg of [...repository.getPackages(), root]) {
-    const entries = await RmanApplication.current().getService('changelog').getEntries({
+    const entries = await repository.app.getService('changelog').getEntries({
       from: previous,
       root: true,
       includeSkipped: true,

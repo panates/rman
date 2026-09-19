@@ -5,7 +5,7 @@ import path from 'node:path';
 import { expect } from 'expect';
 import { Package, Repository, resolveRootLogLevel } from '../../src/index.js';
 import { resolveBool, resolveLogLevel, resolveNumber, RunService } from '../../src/services/run.service.js';
-import { service, useTestEcosystem } from '../_fixture.js';
+import { createRepository, service, useTestEcosystem } from '../_fixture.js';
 
 interface PackageDef {
   scripts?: Record<string, string>;
@@ -177,7 +177,7 @@ describe('run: Run.runScript() integration', () => {
     const dir = mkTmp();
     dirs.push(dir);
     writeFixture(dir, packages, root);
-    return Repository.create(dir);
+    return createRepository(dir);
   }
   after(() => {
     for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
@@ -601,7 +601,7 @@ describe('run: Run.runScript() integration', () => {
       git('commit', '-q', '-m', 'init');
       fs.writeFileSync(path.join(dir, 'packages/pkg-a/extra.txt'), 'dirty');
 
-      await Repository.create(dir);
+      await createRepository(dir);
       const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false, changed: true }));
       expect(lines.some(l => l.includes('pkg-a-ran'))).toBe(true);
       expect(lines.some(l => l.includes('pkg-b'))).toBe(false);
@@ -613,7 +613,7 @@ describe('run: Run.runScript() integration', () => {
       const dir = mkTmp();
       dirs.push(dir);
       // writeFixture() directly (not the fixture() helper, which always creates the Repository
-      // from the root dir) - this test needs Repository.create() from inside a package instead.
+      // from the root dir) - this test needs createRepository() from inside a package instead.
       writeFixture(
         dir,
         {
@@ -623,7 +623,7 @@ describe('run: Run.runScript() integration', () => {
         { scripts: { prebuild: quiet('echo ROOT-PRE-RAN') } },
       );
 
-      await Repository.create(path.join(dir, 'packages', 'pkg-a'));
+      await createRepository(path.join(dir, 'packages', 'pkg-a'));
       const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
 
       expect(lines.some(l => l.includes('pkg-a-ran'))).toBe(true);
@@ -639,7 +639,7 @@ describe('run: Run.runScript() integration', () => {
         'pkg-b': { scripts: { build: quiet('echo pkg-b-ran') } },
       });
 
-      await Repository.create(path.join(dir, 'packages', 'pkg-a'));
+      await createRepository(path.join(dir, 'packages', 'pkg-a'));
       const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false, root: true }));
 
       expect(lines.some(l => l.includes('pkg-a-ran'))).toBe(true);
@@ -654,7 +654,7 @@ describe('run: Run.runScript() integration', () => {
         'pkg-b': { scripts: { build: quiet('echo pkg-b-ran') } },
       });
 
-      await Repository.create(dir);
+      await createRepository(dir);
       const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
 
       expect(lines.some(l => l.includes('pkg-a-ran'))).toBe(true);
@@ -780,7 +780,7 @@ describe('run: Run.runScript() integration', () => {
           console.log('ROOT-BOOKEND for', ctx.pkg.name, ctx.cwd === ctx.repository.dirname ? 'at root' : 'ELSEWHERE');
         } } } };\n`,
       );
-      await Repository.create(dir);
+      await createRepository(dir);
       const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
       expect(lines.some(l => l.includes('ROOT-BOOKEND for root at root'))).toBe(true);
     });

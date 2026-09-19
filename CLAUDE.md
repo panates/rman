@@ -1131,30 +1131,40 @@ entry point exits 1. Any new throw path before `parseAsync` inherits that - keep
 The core has no manifest provider, no workspace provider, no step source, no `BinPath` provider and
 no version planner - so a spec that needs one **brings it**.
 
-- **`support/mocha-root-hooks.ts` empties every registry before each test.** Mocha runs both
-  packages' specs in one process and the registries are module-global by design, so without this
-  whichever spec ran first decided the answer for the rest: `Manifest.read` takes the first provider
-  that recognizes a directory, so `rman-node`'s would answer for core specs that registered
-  nothing, and the core would *appear* to work in tests that never set it up. Registration therefore
-  belongs in a `beforeEach` **inside** the `describe` (the root hook is the outermost, and mocha runs
-  hooks outermost-first) - never at module scope.
+- **There is no root hook any more, and that is what `RmanApplication` bought.** There used to be
+  one (`support/mocha-root-hooks.ts`), emptying five module-global registries before every single
+  test: mocha runs both packages' specs in one process, so without it whichever spec ran first
+  decided the answer for the rest - `Manifest.read` takes the first provider that recognizes a
+  directory, so `rman-node`'s answered for core specs that registered nothing, and the core
+  *appeared* to work in tests that never set it up. Every registry lives on an application now and
+  each `createRepository` builds its own, so there is nothing left that could survive a case. The
+  file is deleted; don't reintroduce a global registry that would need it back.
+- **A spec never calls `Repository.create` directly** - it calls the fixture's `createRepository`,
+  which is what seeds the application with the fixture's technologies. Anything else that spawns or
+  reads a manifest takes an app too: `createApp()` for a bare `new Package(dir, app)` or an
+  `exec(cmd, { cwd, app })`, and `Repository.app` (non-enumerable) wherever one is already in hand.
 - **[`packages/rman/test/_fixture.ts`](packages/rman/test/_fixture.ts)** is the core's synthetic
-  ecosystem: `useTestEcosystem()` registers a provider named `'test'` (not `'node'`), a workspace
-  provider, a step source and a `TestVersionPlanService`. **It must not import `rman-node`** - that
-  package depends on this one, so borrowing its plugin would invert the build order and make the
-  core's tests pass because its own plugin happened to be right.
+  ecosystem: `useTestEcosystem()` arranges a `testTechStack` named `'test'` (not `'node'`) - a
+  manifest reader, a workspace provider and a step source in one - plus a `TestVersionPlanService`,
+  and `createApp()`/`createRepository()`/`runCli()` put them on a fresh application.
+  `service(name)`/`planner()` read one back off the last application built. **It must not import
+  `rman-node`** - that package depends on this one, so borrowing its plugin would invert the build
+  order and make the core's tests pass because its own plugin happened to be right.
   - `registryVersions` / `registryCalls` replace the old `npmViewVersion` injections: a spec fills
     the map instead of stubbing a function, so `ChangeHashService.detect` is exercised through the
     real provider - and `registryCalls` can assert the registry was **not** consulted, which a
     throwing stub only ever did by accident.
-  - `useLocalBin()` registers a `BinPath` provider offering `<dir>/local-bin` **at every level from
+  - `useLocalBin()` adds a bin-only `TechStack` offering `<dir>/local-bin` **at every level from
     cwd upward**. Walking up is not decoration: `exec` runs a step in the *package's* directory, so a
     provider offering only `<cwd>/local-bin` serves a command run at the repository root and nothing
     else. Measured, and the failure was dangerous - a stubbed `docker` was invisible from
     `packages/a`, the **real** `docker` ran, and it got as far as `registry-1.docker.io`. A test must
     never be one credential away from pushing an image.
-  - `registerTestEcosystem()` is the hook-free form, for the `version --interactive` specs that
-    drive a real stdin through a subprocess.
+    - **It only reaches a child process that was handed the application.** A stack contributes
+      directories through `BinPath`, which is asked *of an app*, so an `exec`/`runBin` call with no
+      `app` gets the inherited PATH and the real binary. That is how `docker-publish`'s specs found
+      the real `docker` again the moment the service stopped threading it - every spawn site inside
+      a service must pass `pkg.repository.app` (or `this.repository.app`).
 - **`packages/node/test/_fixture.ts`**: `declarePlugin()`/`runCli()` for the command path (a real
   `plugins` load, which is the only way a plugin's *commands* exist), `useNodeEcosystem()` for specs
   that call a service directly. `declarePlugin` writes to `Workspace.findRoot(dir)`, not to `dir` -

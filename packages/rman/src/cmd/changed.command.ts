@@ -22,7 +22,7 @@ const changedCommand = registerCommand(app => {
     config,
     examples: [{ command: '$0 changed' }, { command: '$0 changed --json' }],
     handler: async (args: Args) => {
-      const plan = await VersionPlanService.getPlanner().getPlan(repository, readPackageFilterOptions(args));
+      const plan = await VersionPlanService.getPlanner(app).getPlan(repository, readPackageFilterOptions(args));
       const changed = plan.filter(e => e.status === 'bump');
 
       if (args.json) {

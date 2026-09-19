@@ -3,9 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Repository } from '../../src/core/repository.js';
 import { GithubReleaseService } from '../../src/services/github-release.service.js';
-import { service, useTestEcosystem } from '../_fixture.js';
+import { createRepository, service, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-github-release-test-'));
@@ -74,7 +73,7 @@ describe('services/github-release', () => {
       // Every other "should this ship?" question in rman is opt-in; this one deliberately isn't.
       // A release isn't somewhere a package ships to, so there is nothing to opt a package into.
       const dir = fixture({ rootRman: {} });
-      await Repository.create(dir);
+      await createRepository(dir);
       const plan = await service('githubRelease').getPlan({}, releases(false));
       expect(plan).toHaveLength(1);
       expect(plan[0]).toMatchObject({ status: 'publish', tag: 'v1.2.0' });
@@ -82,7 +81,7 @@ describe('services/github-release', () => {
 
     it('produces exactly one entry - a release belongs to the repository, not a package', async () => {
       const dir = fixture();
-      await Repository.create(dir);
+      await createRepository(dir);
       const plan = await service('githubRelease').getPlan({}, releases(false));
       expect(plan).toHaveLength(1);
       expect(plan[0]).toMatchObject({
@@ -96,7 +95,7 @@ describe('services/github-release', () => {
 
     it('a release already exists for that tag -> "up-to-date"', async () => {
       const dir = fixture();
-      await Repository.create(dir);
+      await createRepository(dir);
       const plan = await service('githubRelease').getPlan({}, releases(true));
       expect(plan[0]).toMatchObject({ status: 'up-to-date' });
     });
@@ -105,7 +104,7 @@ describe('services/github-release', () => {
       // Several version lines mean no shared number, so the release needs a name of its own - and
       // one that can't be mistaken for a package tag (see releaseTagPattern).
       const dir = fixture({ rootVersion: '2026.9.15-1430' });
-      await Repository.create(dir);
+      await createRepository(dir);
       const plan = await service('githubRelease').getPlan({}, releases(false));
       expect(plan[0]).toMatchObject({ tag: 'release-2026.9.15-1430', version: '2026.9.15-1430' });
     });
@@ -126,7 +125,7 @@ describe('services/github-release', () => {
       initGit(dir);
       git(dir, 'tag', 'v1.2.0');
 
-      await Repository.create(dir);
+      await createRepository(dir);
       const plan = await service('githubRelease').getPlan({}, releases(false));
       expect(plan).toHaveLength(1);
       expect(plan[0]).toMatchObject({ status: 'publish', tag: 'v1.2.0' });
@@ -136,21 +135,21 @@ describe('services/github-release', () => {
       const dir = fixture({
         rootRman: { githubRelease: { repository: 'panates/elsewhere' } },
       });
-      await Repository.create(dir);
+      await createRepository(dir);
       const plan = await service('githubRelease').getPlan({}, releases(false));
       expect(plan[0]).toMatchObject({ repository: 'panates/elsewhere' });
     });
 
     it('an https remote resolves to the same "owner/repo" an ssh one does', async () => {
       const dir = fixture({ remote: 'https://github.com/panates/example.git' });
-      await Repository.create(dir);
+      await createRepository(dir);
       const plan = await service('githubRelease').getPlan({}, releases(false));
       expect(plan[0]).toMatchObject({ repository: 'panates/example' });
     });
 
     it('no resolvable "owner/repo" at all is an error, not a silent skip', async () => {
       const dir = fixture({ remote: '' });
-      await Repository.create(dir);
+      await createRepository(dir);
       const plan = await service('githubRelease').getPlan({}, releases(false));
       expect(plan[0]).toMatchObject({ status: 'error' });
       expect(plan[0].reason).toMatch(/owner\/repo/);
@@ -158,7 +157,7 @@ describe('services/github-release', () => {
 
     it('a failing release lookup (bad token, typo\'d repo) is an error, never "never released"', async () => {
       const dir = fixture();
-      await Repository.create(dir);
+      await createRepository(dir);
       const plan = await service('githubRelease').getPlan(
         {},
         {
@@ -175,7 +174,7 @@ describe('services/github-release', () => {
       // silently produce notes covering everything ever, since the *previous* release tag needed to
       // bound them can't be found either.
       const dir = fixture({ tagged: false });
-      await Repository.create(dir);
+      await createRepository(dir);
       const plan = await service('githubRelease').getPlan({}, releases(false));
       expect(plan[0]).toMatchObject({ status: 'error' });
       expect(plan[0].reason).toMatch(/does not exist here/);
@@ -184,7 +183,7 @@ describe('services/github-release', () => {
     it('uncommitted changes abort the plan, unless ignoreDirty downgrades it to a skip', async () => {
       const dir = fixture();
       fs.writeFileSync(path.join(dir, 'packages/a/dirty.txt'), 'uncommitted');
-      await Repository.create(dir);
+      await createRepository(dir);
 
       expect((await service('githubRelease').getPlan({}, releases(false)))[0]).toMatchObject({
         status: 'error',

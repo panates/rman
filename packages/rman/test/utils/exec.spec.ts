@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { exec } from '../../src/utils/exec.js';
-import { useLocalBin } from '../_fixture.js';
+import { createApp, useLocalBin } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-exec-test-'));
@@ -101,7 +101,7 @@ describe('utils/exec', () => {
       fs.writeFileSync(script, '#!/usr/bin/env node\nconsole.log("local-tool-ran");\n');
       fs.chmodSync(script, 0o755);
 
-      const result = await exec('my-local-tool', { cwd: dir });
+      const result = await exec('my-local-tool', { cwd: dir, app: createApp() });
       expect(result.stdout?.trim()).toBe('local-tool-ran');
       fs.rmSync(dir, { recursive: true, force: true });
     });

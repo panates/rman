@@ -267,7 +267,11 @@ export namespace PublishService {
       const publishDir = resolvePublishDir(pkg, options.contents);
       const restore = preparePublishManifest(pkg, publishDir, packagesByName);
       try {
-        await exec(buildPublishCommand(packageManager, options), { cwd: publishDir, stdio: 'inherit' });
+        await exec(buildPublishCommand(packageManager, options), {
+          cwd: publishDir,
+          app: pkg.repository.app,
+          stdio: 'inherit',
+        });
         result.push(entry);
       } catch (e: any) {
         failed.add(pkg.name);

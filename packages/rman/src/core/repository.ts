@@ -51,7 +51,19 @@ export class Repository extends Package {
    */
   private readonly _readCache = new Map<string, CachedFile>();
 
+  /**
+   * The application this repository belongs to - its services, its technologies, its logger.
+   *
+   * **Non-enumerable**, like `_repoScope` and `_git` beside it: the two things that walk a
+   * repository are `{...pkg}` spreads and the config scope, and an enumerable back-reference to the
+   * whole application would be dragged into both. A `Package` deliberately has no such field at
+   * all; a repository is never spread or serialized, which is what makes this one safe - measured,
+   * rather than assumed.
+   */
+  readonly app!: RmanApplication;
+
   protected constructor(
+    app: RmanApplication,
     readonly dirname: string,
     readonly monorepo: boolean,
     readonly packages: Package[],
@@ -60,8 +72,9 @@ export class Repository extends Package {
      *  really was. Used by `currentPackage` to scope commands to "the package I'm standing in". */
     readonly cwd: string = dirname,
   ) {
-    super(dirname);
-    this.rootPackage = new Package(dirname);
+    super(dirname, app);
+    Object.defineProperty(this, 'app', { value: app, enumerable: false, writable: false });
+    this.rootPackage = new Package(dirname, app);
     if (!monorepo) this.packages = [this.rootPackage];
     // Config resolution can load a `.rmanrc.cjs`/`.mjs`/`.js` module (dynamic `import()`, always
     // async) - a constructor can't `await`, so `create()` finishes this instance off via `_init()`
@@ -247,7 +260,7 @@ export class Repository extends Package {
     // than refusing it - so the scope has to survive one too.
     const name = pkg.name ?? '';
     /** Splitting `@scope/name` is npm's convention, not a universal - the provider decides. */
-    const { scope: nameScope, unscopedName } = Manifest.splitName(pkg.dirname, name);
+    const { scope: nameScope, unscopedName } = Manifest.splitName(this.app, pkg.dirname, name);
     const scope = {
       name,
       scope: nameScope,
@@ -408,23 +421,32 @@ export class Repository extends Package {
    * boundary working rather than failing: `workspaces` in a `package.json` is npm's idea, so it
    * takes `plugins: ['rman-node']` to be read as one.
    */
-  static async create(root?: string, options?: { deep?: number }): Promise<Repository> {
+  static async create(root?: string, options?: { deep?: number; app?: RmanApplication }): Promise<Repository> {
     const from = root || process.cwd();
     const rootDir = Workspace.findRoot(from, options?.deep ?? 10);
+
+    /**
+     * One application per repository, made here unless the caller brought one.
+     *
+     * `runCli` passes its own so that `--log-level` reaches the logger; a spec that only wants a
+     * repository lets this make one, which is also what keeps two repositories in a single process
+     * from sharing anything - the thing that used to need five `clear*()` calls before every test.
+     */
+    const app = options?.app ?? new RmanApplication();
 
     /** The root's own config, raw: `plugins` is a list of package names, so it needs neither the
      *  package list (which does not exist yet) nor expression interpolation. */
     const rootConfig = await readDirConfig(rootDir);
-    const pluginCommands = await loadPlugins(rootDir, rootConfig);
+    const pluginCommands = await loadPlugins(app, rootDir, rootConfig);
 
-    const layout = Workspace.resolve(rootDir);
-    const packages = (layout?.packageDirs ?? []).map(dir => new Package(dir));
-    const repo = new Repository(layout?.root ?? rootDir, packages.length > 0, packages, from);
+    const layout = Workspace.resolve(app, rootDir);
+    const packages = (layout?.packageDirs ?? []).map(dir => new Package(dir, app));
+    const repo = new Repository(app, layout?.root ?? rootDir, packages.length > 0, packages, from);
     repo.pluginCommands = pluginCommands;
     repo._linkPackages();
     /** The application is what the plugins registered into a moment ago; from here on it can hand
      *  out services, which need the repository to work on. */
-    RmanApplication.current().attachRepository(repo);
+    app.attachRepository(repo);
     return Repository._init(repo);
   }
 

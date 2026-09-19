@@ -2,8 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Repository } from '../../src/core/repository.js';
-import { service, useTestEcosystem } from '../_fixture.js';
+import { createRepository, service, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-exec-test-'));
@@ -61,7 +60,7 @@ describe('services/exec', () => {
     fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
     writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-    await Repository.create(dir);
+    await createRepository(dir);
 
     await captureLogs(() => service('exec').exec(appendCommand(marker, 'ran'), { progress: false }));
 
@@ -76,7 +75,7 @@ describe('services/exec', () => {
      *  since it runs before the plugins that would know what a package is. */
     fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-    await Repository.create(dir);
+    await createRepository(dir);
 
     const marker = path.join(dir, 'cwd.log');
     await captureLogs(() =>
@@ -100,7 +99,7 @@ describe('services/exec', () => {
       version: '1.0.0',
       dependencies: { 'pkg-a': '1.0.0' },
     });
-    await Repository.create(dir);
+    await createRepository(dir);
 
     await captureLogs(() =>
       service('exec').exec(`node -e 'require("fs").appendFileSync(${JSON.stringify(marker)}, process.cwd()+"\\n")'`, {
@@ -126,7 +125,7 @@ describe('services/exec', () => {
       version: '1.0.0',
       dependencies: { 'pkg-a': '1.0.0' },
     });
-    await Repository.create(dir);
+    await createRepository(dir);
 
     await captureLogs(async () => {
       await expect(
@@ -148,7 +147,7 @@ describe('services/exec', () => {
     fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
     writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
-    await Repository.create(dir);
+    await createRepository(dir);
 
     await captureLogs(() => service('exec').exec(appendCommand(marker, 'ran'), { progress: false, scope: 'pkg-a' }));
     expect(fs.readFileSync(marker, 'utf-8').trim().split('\n').length).toBe(1);
@@ -161,7 +160,7 @@ describe('services/exec', () => {
      *  since it runs before the plugins that would know what a package is. */
     fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
     writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-    await Repository.create(dir);
+    await createRepository(dir);
 
     const lines = await captureLogs(() =>
       service('exec').exec('echo should-not-run', { progress: false, scope: 'nothing-matches-this' }),

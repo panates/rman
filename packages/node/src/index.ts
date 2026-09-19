@@ -109,9 +109,9 @@ export const nodePlugin = definePlugin({
  * side effect is the wrong shape anyway, since which technologies a repository has is what its
  * `plugins` says. A caller outside the CLI calls this itself.
  */
-export function augmentTechStack(): void {
-  RmanApplication.current().techStacks.add(nodeTechStack);
-  RmanApplication.current().versionPlanner = nodeVersionPlanner;
+export function augmentTechStack(app: RmanApplication): void {
+  app.techStacks.add(nodeTechStack);
+  app.versionPlanner = nodeVersionPlanner;
 }
 
 /**

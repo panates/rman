@@ -3,9 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Repository } from '../../src/core/repository.js';
 import { VersionPlanService } from '../../src/services/version-plan.service.js';
-import { registryCalls, registryVersions, service, useTestEcosystem } from '../_fixture.js';
+import { createRepository, planner, registryCalls, registryVersions, service, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-version-test-'));
@@ -59,8 +58,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', from: '1.0.0', to: '1.0.1' });
     });
 
@@ -72,8 +71,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'feat: a feature');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.1.0' });
     });
 
@@ -87,8 +86,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'y.txt'), 'y');
       commitAll(dir, 'feat!: a breaking feature');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0' });
     });
 
@@ -100,8 +99,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'feat: a feature\n\nBREAKING CHANGE: drops the old API entirely');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0' });
     });
 
@@ -114,8 +113,8 @@ describe('services/version', () => {
         fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
         commitAll(dir, 'feat: needs to ship now, not wait for the rest of the minor\n\nRelease-As: patch');
 
-        const repo = await Repository.create(dir);
-        const plan = await VersionPlanService.getPlanner().getPlan(repo);
+        const repo = await createRepository(dir);
+        const plan = await planner().getPlan(repo);
         expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
       });
 
@@ -129,8 +128,8 @@ describe('services/version', () => {
         fs.writeFileSync(path.join(dir, 'y.txt'), 'y');
         commitAll(dir, 'feat: a real, un-overridden feature');
 
-        const repo = await Repository.create(dir);
-        const plan = await VersionPlanService.getPlanner().getPlan(repo);
+        const repo = await createRepository(dir);
+        const plan = await planner().getPlan(repo);
         expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.1.0' });
       });
 
@@ -142,8 +141,8 @@ describe('services/version', () => {
         fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
         commitAll(dir, 'fix: actually a breaking fix\n\nRelease-As: major');
 
-        const repo = await Repository.create(dir);
-        const plan = await VersionPlanService.getPlanner().getPlan(repo);
+        const repo = await createRepository(dir);
+        const plan = await planner().getPlan(repo);
         expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0' });
       });
 
@@ -155,8 +154,8 @@ describe('services/version', () => {
         fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
         commitAll(dir, 'feat: ship now\n\nrelease-as: PATCH');
 
-        const repo = await Repository.create(dir);
-        const plan = await VersionPlanService.getPlanner().getPlan(repo);
+        const repo = await createRepository(dir);
+        const plan = await planner().getPlan(repo);
         expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
       });
     });
@@ -169,8 +168,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'just a plain message');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
     });
 
@@ -181,8 +180,8 @@ describe('services/version', () => {
       commitAll(dir, 'init');
       git(dir, 'tag', 'v1.0.0');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'no-change', from: '1.0.0' });
     });
 
@@ -195,8 +194,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'pkg-a', version: '1.0.1' }));
       commitAll(dir, '1.0.1');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'no-change' });
     });
 
@@ -206,8 +205,8 @@ describe('services/version', () => {
       initGit(dir);
       commitAll(dir, 'feat: first ever commit');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.1.0' });
     });
   });
@@ -222,8 +221,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'feat: would normally be minor');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo, { bump: 'major' });
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo, { bump: 'major' });
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ to: '2.0.0' });
     });
 
@@ -233,8 +232,8 @@ describe('services/version', () => {
       initGit(dir);
       commitAll(dir, 'init');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo, { bump: '9.9.9' });
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo, { bump: '9.9.9' });
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '9.9.9' });
     });
 
@@ -243,10 +242,8 @@ describe('services/version', () => {
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
       initGit(dir);
       commitAll(dir, 'init');
-      const repo = await Repository.create(dir);
-      await expect(VersionPlanService.getPlanner().getPlan(repo, { bump: 'nonsense' })).rejects.toThrow(
-        /Invalid "bump"/,
-      );
+      const repo = await createRepository(dir);
+      await expect(planner().getPlan(repo, { bump: 'nonsense' })).rejects.toThrow(/Invalid "bump"/);
     });
   });
 
@@ -259,8 +256,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo, { preid: 'beta' });
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo, { preid: 'beta' });
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1-beta.0' });
     });
 
@@ -270,8 +267,8 @@ describe('services/version', () => {
       initGit(dir);
       commitAll(dir, 'init');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo, { bump: 'major', preid: 'beta' });
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo, { bump: 'major', preid: 'beta' });
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0-beta.0' });
     });
 
@@ -284,8 +281,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo, { preid: 'beta' });
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo, { preid: 'beta' });
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1-beta.1' });
     });
 
@@ -298,8 +295,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo, { preid: 'rc' });
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo, { preid: 'rc' });
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.2-rc.0' });
     });
 
@@ -309,8 +306,8 @@ describe('services/version', () => {
       initGit(dir);
       commitAll(dir, 'init');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo, { bump: '9.9.9', preid: 'beta' });
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo, { bump: '9.9.9', preid: 'beta' });
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '9.9.9' });
     });
   });
@@ -339,8 +336,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'fix: a bug in pkg-a');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
       expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'no-change', from: '1.0.0' });
     });
@@ -350,8 +347,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'feat: a feature in pkg-a');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.1.0' });
       expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'bump', to: '1.1.0' });
     });
@@ -370,8 +367,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'feat!: a breaking change in pkg-a only');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0' });
       expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'bump', to: '2.0.0' });
     });
@@ -390,8 +387,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'fix: bump from the higher baseline');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ to: '1.5.1' });
     });
   });
@@ -413,8 +410,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'feat: a feature');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       // pkg-b has no dependency on pkg-a, so only minor's *dependent* cascade wouldn't apply -
       // but they share a named group, so this is really "unrelated packages, same group" (like the
       // repo-wide default group) - only the changed one moves unless severity forces the rest.
@@ -437,8 +434,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/b/x.txt'), 'x');
       commitAll(dir, 'feat!: breaking in solo pkg-b');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       // pkg-b's own major bump must never sweep pkg-a in - they aren't in the same group at all.
       expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'bump', to: '6.0.0' });
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'no-change' });
@@ -465,8 +462,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'feat!: breaking change in pkg-a');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ to: '2.0.0' });
       // pkg-c does NOT jump to 2.0.0 - it gets a plain patch from its own group's own version line.
       expect(entryFor(plan, 'pkg-c')).toMatchObject({ status: 'bump', to: '3.0.1' });
@@ -497,8 +494,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'fix: patch in pkg-a');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-c')).toMatchObject({ status: 'bump', to: '3.0.1' }); // forced patch
       expect(entryFor(plan, 'pkg-d')).toMatchObject({ status: 'no-change' }); // group-mate, but unrelated - never swept
     });
@@ -517,8 +514,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'root')).toMatchObject({ status: 'bump', to: '1.0.1' });
     });
 
@@ -539,8 +536,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'fix: only pkg-a changes');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo, { now: () => new Date(2026, 8, 15, 14, 30) });
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo, { now: () => new Date(2026, 8, 15, 14, 30) });
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ to: '1.0.1' });
       expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'no-change' });
       expect(entryFor(plan, 'root')).toMatchObject({ status: 'bump', to: '2026.9.15-1430' });
@@ -561,8 +558,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo, { now: () => new Date(2026, 8, 16, 9, 5) });
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo, { now: () => new Date(2026, 8, 16, 9, 5) });
       expect(entryFor(plan, 'root')).toMatchObject({ status: 'bump', to: '2026.9.16-905' });
     });
 
@@ -574,8 +571,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(plan.some(e => e.package.name === 'root')).toBe(false);
       expect(entryFor(plan, 'solo')).toMatchObject({ status: 'bump', to: '1.0.1' });
     });
@@ -591,8 +588,8 @@ describe('services/version', () => {
       commitAll(dir, 'init');
       git(dir, 'tag', 'v1.0.0');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'root')).toMatchObject({ status: 'no-change' });
     });
   });
@@ -609,8 +606,8 @@ describe('services/version', () => {
       commitAll(dir, 'init');
       fs.writeFileSync(path.join(dir, 'packages/a/dirty.txt'), 'uncommitted');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'error' });
     });
 
@@ -625,8 +622,8 @@ describe('services/version', () => {
       commitAll(dir, 'init');
       fs.writeFileSync(path.join(dir, 'packages/a/dirty.txt'), 'uncommitted');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo, { ignoreDirty: true });
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo, { ignoreDirty: true });
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'skip' });
     });
   });
@@ -647,8 +644,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
     });
   });
@@ -663,8 +660,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       /** A tag resolved the boundary, so the package's own ecosystem is never asked - the registry
        *  fallback exists for a package with *no* tag, and nothing else. */
       expect(registryCalls).toEqual([]);
@@ -688,9 +685,9 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
+      const repo = await createRepository(dir);
       registryVersions.set('pkg-a', '1.0.0');
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1', reason: 'changed since v1.0.0' });
     });
   });
@@ -725,8 +722,8 @@ describe('services/version', () => {
 
     it("writes the new version and refreshes a dependent's range, commits once per group, and tags", async () => {
       const { dir } = fixtureWithOrigin();
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       await service('version').applyPlan(plan);
 
       const a = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
@@ -749,8 +746,8 @@ describe('services/version', () => {
       fs.writeFileSync(dockerfile, 'FROM node:22\nLABEL org.opencontainers.image.version="1.0.0"\n');
       commitAll(dir, 'chore: add a Dockerfile');
 
-      const repo = await Repository.create(dir);
-      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
 
       expect(fs.readFileSync(dockerfile, 'utf-8')).toContain('org.opencontainers.image.version="1.1.0"');
       // In the bump commit, not left behind as a local edit for "publish" to trip over.
@@ -770,8 +767,8 @@ describe('services/version', () => {
       fs.writeFileSync(dockerfile, 'LABEL org.opencontainers.image.version="1.0.0"\n');
       commitAll(dir, 'chore: add a Dockerfile');
 
-      const repo = await Repository.create(dir);
-      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
       expect(fs.readFileSync(dockerfile, 'utf-8')).toContain('org.opencontainers.image.version="1.1.0"');
     });
 
@@ -786,8 +783,8 @@ describe('services/version', () => {
       fs.writeFileSync(dockerfile, 'LABEL org.opencontainers.image.version="1.0.0"\n');
       commitAll(dir, 'chore: add a Dockerfile');
 
-      const repo = await Repository.create(dir);
-      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
       expect(fs.readFileSync(dockerfile, 'utf-8')).toContain('org.opencontainers.image.version="1.0.0"');
     });
 
@@ -805,8 +802,8 @@ describe('services/version', () => {
       fs.writeFileSync(constants, "export const version = '1';\n");
       commitAll(dir, 'chore: add constants');
 
-      const repo = await Repository.create(dir);
-      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
 
       expect(fs.readFileSync(constants, 'utf-8')).toBe("export const version = '1.1.0';\n");
       expect(git(dir, 'status', '--porcelain')).toBe('');
@@ -835,8 +832,8 @@ describe('services/version', () => {
       );
       commitAll(dir, 'chore: add a version hook');
 
-      const repo = await Repository.create(dir);
-      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
 
       /** Written *before* the bump, which is what `before` means - the assertion would pass either
        *  way if it only checked the file existed. */
@@ -866,8 +863,8 @@ describe('services/version', () => {
       );
       commitAll(dir, 'chore: add version hooks');
 
-      const repo = await Repository.create(dir);
-      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
 
       // In order, and interleaved with the shell steps - which is what "not joined with &&" buys.
       const steps = fs.readFileSync(path.join(dir, 'packages/a/steps.txt'), 'utf-8').trim().split('\n');
@@ -885,8 +882,8 @@ describe('services/version', () => {
       });
       commitAll(dir, 'chore: no constants file here');
 
-      const repo = await Repository.create(dir);
-      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
       expect(git(dir, 'status', '--porcelain')).toBe('');
     });
 
@@ -907,8 +904,8 @@ describe('services/version', () => {
       fs.writeFileSync(file, 'const Version = "1.0.0"\n');
       commitAll(dir, 'chore: add a Go constant');
 
-      const repo = await Repository.create(dir);
-      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
 
       expect(fs.readFileSync(file, 'utf-8')).toBe('const Version = "1.1.0"\n');
       expect(git(dir, 'status', '--porcelain')).toBe('');
@@ -933,8 +930,8 @@ describe('services/version', () => {
       fs.writeFileSync(constants, "export const VERSION = '1';\n");
       commitAll(dir, 'chore: add constants');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       await expect(service('version').applyPlan(plan)).rejects.toThrow(/nothing in it could be rewritten/);
 
       /** Nothing was written: the manifest still reads the old version and the tree is clean. */
@@ -958,8 +955,8 @@ describe('services/version', () => {
       });
       commitAll(dir, 'chore: add a hook');
 
-      const repo = await Repository.create(dir);
-      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
       expect(fs.readFileSync(marker, 'utf-8')).toBe('app:1.1.0 was 1.0.0');
     });
 
@@ -974,20 +971,20 @@ describe('services/version', () => {
       });
       commitAll(dir, 'chore: misplace it');
 
-      await expect(Repository.create(dir)).rejects.toThrow(/targetVersion is only available while "version"/);
+      await expect(createRepository(dir)).rejects.toThrow(/targetVersion is only available while "version"/);
     });
 
     it('a package with no Dockerfile at all is unaffected', async () => {
       const { dir } = fixtureWithOrigin();
-      const repo = await Repository.create(dir);
-      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
       expect(git(dir, 'status', '--porcelain')).toBe('');
     });
 
     it('never pushes unless options.push is set', async () => {
       const { dir, originDir } = fixtureWithOrigin();
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       await service('version').applyPlan(plan);
 
       const remoteTags = execFileSync('git', ['tag', '--list'], { cwd: originDir }).toString().trim();
@@ -996,8 +993,8 @@ describe('services/version', () => {
 
     it('options.push: true pushes the resulting commit(s) and tag(s)', async () => {
       const { dir, originDir } = fixtureWithOrigin();
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       await service('version').applyPlan(plan, { push: true });
 
       const remoteTags = execFileSync('git', ['tag', '--list'], { cwd: originDir }).toString().trim();
@@ -1012,8 +1009,8 @@ describe('services/version', () => {
     describe('the result it reports', () => {
       it('names every commit it made, the root sync included, with its sha', async () => {
         const { dir } = fixtureWithOrigin();
-        const repo = await Repository.create(dir);
-        const result = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+        const repo = await createRepository(dir);
+        const result = await service('version').applyPlan(await planner().getPlan(repo));
 
         /** Two: the root's informational sync, then the group's release - which is why `updated`
          *  does not count the root. A single "updated 2 packages" line used to imply two writes. */
@@ -1028,8 +1025,8 @@ describe('services/version', () => {
 
       it('reports the tags it created, and says so when one was already there', async () => {
         const { dir } = fixtureWithOrigin();
-        const repo0 = await Repository.create(dir);
-        const created = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo0));
+        const repo0 = await createRepository(dir);
+        const created = await service('version').applyPlan(await planner().getPlan(repo0));
         expect(created.tags).toEqual([{ name: 'v1.1.0', created: true }]);
 
         /**
@@ -1046,20 +1043,20 @@ describe('services/version', () => {
         git(other.dir, 'tag', '-a', 'v1.1.0', '-m', 'v1.1.0');
         git(other.dir, 'checkout', '-q', 'main');
 
-        const repo = await Repository.create(other.dir);
-        const result = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+        const repo = await createRepository(other.dir);
+        const result = await service('version').applyPlan(await planner().getPlan(repo));
         expect(result.tags).toEqual([{ name: 'v1.1.0', created: false }]);
       });
 
       it('says whether it pushed, which is otherwise indistinguishable', async () => {
         const a = fixtureWithOrigin();
-        const repoA = await Repository.create(a.dir);
-        const quiet = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repoA));
+        const repoA = await createRepository(a.dir);
+        const quiet = await service('version').applyPlan(await planner().getPlan(repoA));
         expect(quiet.pushed).toBe(false);
 
         const b = fixtureWithOrigin();
-        const repoB = await Repository.create(b.dir);
-        const pushed = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repoB), {
+        const repoB = await createRepository(b.dir);
+        const pushed = await service('version').applyPlan(await planner().getPlan(repoB), {
           push: true,
         });
         expect(pushed.pushed).toBe(true);
@@ -1067,8 +1064,8 @@ describe('services/version', () => {
 
       it('counts only the packages actually written in "updated"', async () => {
         const { dir } = fixtureWithOrigin();
-        const repo = await Repository.create(dir);
-        const result = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
+        const repo = await createRepository(dir);
+        const result = await service('version').applyPlan(await planner().getPlan(repo));
 
         /** The plan holds the monorepo root's `'bump'` entry too - informational, never written, so
          *  three entries bump and two packages are updated. Reporting three was the old output's
@@ -1099,8 +1096,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       await service('version').applyPlan(plan);
 
       expect(fs.existsSync(marker)).toBe(true);
@@ -1119,8 +1116,8 @@ describe('services/version', () => {
       commitAll(dir, 'init');
       git(dir, 'tag', 'v1.0.0');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       const before = git(dir, 'rev-parse', 'HEAD');
       await service('version').applyPlan(plan);
       expect(git(dir, 'rev-parse', 'HEAD')).toBe(before);
@@ -1138,8 +1135,8 @@ describe('services/version', () => {
       fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
       commitAll(dir, 'fix: a bug');
 
-      const repo = await Repository.create(dir);
-      const plan = await VersionPlanService.getPlanner().getPlan(repo);
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
       await service('version').applyPlan(plan);
 
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'));

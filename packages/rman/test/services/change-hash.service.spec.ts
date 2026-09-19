@@ -6,7 +6,7 @@ import { expect } from 'expect';
 import { Package } from '../../src/core/package.js';
 import { ChangeHashService } from '../../src/services/change-hash.service.js';
 import { GitHelper } from '../../src/utils/git.js';
-import { registryCalls, registryVersions, useTestEcosystem } from '../_fixture.js';
+import { createApp, registryCalls, registryVersions, useTestEcosystem } from '../_fixture.js';
 
 describe('utils/detectChangeHash', () => {
   useTestEcosystem();
@@ -24,7 +24,7 @@ describe('utils/detectChangeHash', () => {
   function makePackage(dir: string, name = 'pkg-a', extraJson: Record<string, unknown> = {}): Package {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name, version: '1.0.0', ...extraJson }));
-    return new Package(dir);
+    return new Package(dir, createApp());
   }
 
   function initRepo(dir: string): void {

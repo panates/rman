@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RmanApplication, type ServiceMap, Workspace } from 'rman';
+import { Repository, RmanApplication, type ServiceMap, VersionPlanService, Workspace } from 'rman';
 import { runCli as rmanRunCli } from 'rman/cli';
 /**
  * The **plugin**, by name - not the module's default export, which is an rman *config* that carries
@@ -71,34 +71,53 @@ export function runCli(options?: { argv?: string[]; cwd?: string }): Promise<voi
  * calls a **service** directly instead of going through the CLI.
  *
  * `declarePlugin`/`runCli` cover the command path, where `loadPlugins` does this from the
- * repository's own config. A service call has no config to read, and the root hook in
- * `support/mocha-root-hooks.ts` empties the registries before each test - so the plugin's own
- * import-time `augment*()` calls, which ran once when this module was first loaded, are gone by the
- * time a test body runs. Declaring them here is what puts them back.
+ * repository's own config. A service call has no config to read, and each `createRepository`
+ * builds its own `RmanApplication` - which starts empty, since the plugin's technologies live on
+ * an application rather than in a module-global registry. Declaring them here is what puts them
+ * on the application a test's repository is going to be built on.
  *
  * Reads them off the `definePlugin` object rather than calling `augment*()` again, so the specs
  * exercise exactly what a repository naming `rman-node` in `plugins` would get.
  */
 export function useNodeEcosystem(): void {
   beforeEach(() => {
-    /** Runs the plugin's own `init`, so the specs exercise exactly what a repository naming
-     *  `rman-node` in `plugins` would get - rather than a second list of what it contributes,
-     *  which is the thing that drifts. Commands are dropped: a spec calling a service directly has
-     *  no CLI to register them with, and `declarePlugin()` is what covers the command path. */
-    const app = RmanApplication.current();
-    void nodePlugin.init({
-      app,
-      addTechStack(stack) {
-        app.techStacks.add(stack);
-        if (stack.versionPlanner) app.versionPlanner = stack.versionPlanner;
-      },
-      addCommand() {},
-    });
+    lastApp = undefined;
   });
 }
 
-/** The service a spec is exercising, from the application its repository attached itself to - the
- *  same helper the core's fixture exposes, for the same reason. */
-export function service<K extends keyof ServiceMap>(name: K): ServiceMap[K] {
-  return RmanApplication.current().getService(name);
+/**
+ * A repository on an application carrying **this plugin's** technology - what a spec calls instead
+ * of `Repository.create`.
+ *
+ * It runs `nodePlugin.init` rather than reading a second list of what the plugin contributes, so
+ * the specs exercise exactly what a repository naming `rman-node` in `plugins` would get. Commands
+ * are dropped: a spec calling a service directly has no CLI to register them with, and
+ * `declarePlugin()` is what covers the command path.
+ */
+export function createRepository(root?: string, options?: { deep?: number }): Promise<Repository> {
+  const app = new RmanApplication();
+  void nodePlugin.init({
+    app,
+    addTechStack(stack) {
+      app.techStacks.add(stack);
+      if (stack.versionPlanner) app.versionPlanner = stack.versionPlanner;
+    },
+    addCommand() {},
+  });
+  lastApp = app;
+  return Repository.create(root, { ...options, app });
 }
+
+/** The version planner the last `createRepository()`'s application carries. */
+export function planner(): VersionPlanService {
+  if (!lastApp) throw new Error('No application yet - call createRepository() first.');
+  return VersionPlanService.getPlanner(lastApp);
+}
+
+/** The service a spec is exercising, from the application the last `createRepository()` built. */
+export function service<K extends keyof ServiceMap>(name: K): ServiceMap[K] {
+  if (!lastApp) throw new Error('No application yet - call createRepository() first.');
+  return lastApp.getService(name);
+}
+
+let lastApp: RmanApplication | undefined;

@@ -1,6 +1,7 @@
 import os from 'node:os';
 import colors from 'ansi-colors';
 import { Task } from 'power-tasks';
+import type { RmanApplication } from '../core/application.js';
 import { Service } from '../core/service.js';
 import { exec as execCommand } from '../utils/exec.js';
 import { Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
@@ -62,7 +63,15 @@ export class ExecService extends Service {
       const dependencies = topo ? pkg.dependencies.filter(d => names.has(d.name)).map(d => d.name) : [];
       return new Task(
         () =>
-          execForPackage(ctx, panel.enabled, pkg.dirname, command, logger, bail ? () => rootTask?.abort() : () => {}),
+          execForPackage(
+            this.app,
+            ctx,
+            panel.enabled,
+            pkg.dirname,
+            command,
+            logger,
+            bail ? () => rootTask?.abort() : () => {},
+          ),
         { name: pkg.name, dependencies },
       );
     });
@@ -93,6 +102,7 @@ export class ExecService extends Service {
 }
 
 async function execForPackage(
+  app: RmanApplication,
   ctx: ProgressItem,
   panelEnabled: boolean,
   cwd: string,
@@ -106,6 +116,7 @@ async function execForPackage(
     if (panelEnabled) {
       await execCommand(command, {
         cwd,
+        app,
         stdio: 'pipe',
         onLine: line => {
           ctx.log.push(line);
@@ -116,7 +127,7 @@ async function execForPackage(
       logger.info(colors.cyan('exec'), colors.cyan(ctx.name), command);
       const t = Date.now();
       try {
-        await execCommand(command, { cwd, stdio: 'inherit' });
+        await execCommand(command, { cwd, app, stdio: 'inherit' });
         logger.info(colors.green('success'), colors.cyan(ctx.name), colors.yellow(`(${Date.now() - t} ms)`));
       } catch (e) {
         logger.error(colors.red('failed'), colors.cyan(ctx.name), colors.yellow(`(${Date.now() - t} ms)`));

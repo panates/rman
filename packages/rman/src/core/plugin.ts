@@ -101,10 +101,14 @@ export function definePlugin(plugin: RmanPlugin): RmanPlugin {
  * `rman publish` would simply not exist, and "not a known command" sends the reader looking in the
  * wrong place entirely.
  */
-export async function loadPlugins(rootDir: string, rootConfig: RmanConfig): Promise<LoadedCommand[]> {
+export async function loadPlugins(
+  app: RmanApplication,
+  rootDir: string,
+  rootConfig: RmanConfig,
+): Promise<LoadedCommand[]> {
   const commands: LoadedCommand[] = [];
   /** Resolved against the repository root, where the `.rmanrc` declaring them lives. */
-  await loadInto(commands, rootConfig, path.join(rootDir, '.rmanrc'), { files: new Set(), names: new Set() });
+  await loadInto(app, commands, rootConfig, path.join(rootDir, '.rmanrc'), { files: new Set(), names: new Set() });
   return commands;
 }
 
@@ -124,7 +128,13 @@ export async function loadPlugins(rootDir: string, rootConfig: RmanConfig): Prom
  * way into a repository is `extends`, which is the key that says "merge this underneath mine".
  * Reading them here would make a plugin able to configure a repository by being installed.
  */
-async function loadInto(commands: LoadedCommand[], config: RmanConfig, from: string, seen: Seen): Promise<void> {
+async function loadInto(
+  app: RmanApplication,
+  commands: LoadedCommand[],
+  config: RmanConfig,
+  from: string,
+  seen: Seen,
+): Promise<void> {
   const declared = (config as Record<string, unknown> | undefined)?.[PLUGINS_KEY];
   if (declared === undefined) return;
 
@@ -141,7 +151,7 @@ async function loadInto(commands: LoadedCommand[], config: RmanConfig, from: str
       if (typeof entry.name !== 'string' || !entry.name) {
         throw new Error(`A plugin object in "${PLUGINS_KEY}" has no "name" - every other message is keyed by it.`);
       }
-      await register(commands, entry as RmanPlugin, entry.name, from, seen);
+      await register(app, commands, entry as RmanPlugin, entry.name, from, seen);
       continue;
     }
     if (typeof entry !== 'string' || !entry.trim()) {
@@ -174,7 +184,7 @@ async function loadInto(commands: LoadedCommand[], config: RmanConfig, from: str
           describeExport(exported),
       );
     }
-    await loadInto(commands, exported as RmanConfig, file, seen);
+    await loadInto(app, commands, exported as RmanConfig, file, seen);
   }
 }
 
@@ -186,6 +196,7 @@ async function loadInto(commands: LoadedCommand[], config: RmanConfig, from: str
  * running `init` twice would define its commands twice, which yargs does not survive.
  */
 async function register(
+  app: RmanApplication,
   commands: LoadedCommand[],
   plugin: RmanPlugin,
   label: string,
@@ -194,7 +205,6 @@ async function register(
 ): Promise<void> {
   if (seen.names.has(plugin.name)) return;
   seen.names.add(plugin.name);
-  const app = RmanApplication.current();
   await plugin.init({
     app,
     addTechStack(stack) {

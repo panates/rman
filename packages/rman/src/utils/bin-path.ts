@@ -28,23 +28,21 @@ export namespace BinPath {
   export type Provider = (cwd: string) => string[];
 
   export interface EnvOptions {
+    /** The application whose technologies contribute directories. Omitted where a caller genuinely
+     *  has none - `exec` outside a repository - which leaves the inherited PATH untouched. */
+    readonly app?: RmanApplication;
     /** The directory the command will run in. Default `process.cwd()`. */
     readonly cwd?: string;
     /** The environment to derive from, like `process.env`. Default `process.env`. */
     readonly env?: ProcessEnv;
   }
 
-  /** For tests, which would otherwise leak a provider into every later case in the process. */
-  export function clearProviders(): void {
-    RmanApplication.reset();
-  }
-
   /** Every provider's directories for `cwd`, concatenated in declaration order. Empty for a
    *  repository that names no plugin - the inherited PATH then stands on its own, which is the
    *  honest answer rather than a guess at some ecosystem's layout. */
-  export function resolve(cwd: string): string[] {
+  export function resolve(app: RmanApplication, cwd: string): string[] {
     const dir = path.resolve(cwd);
-    return [...RmanApplication.current().techStacks].flatMap(stack => stack.binPathsProvider?.(dir) ?? []);
+    return [...app.techStacks].flatMap(stack => stack.binPathsProvider?.(dir) ?? []);
   }
 
   /**
@@ -58,7 +56,9 @@ export namespace BinPath {
     const cwd = options.cwd || process.cwd();
     const result = { ...(options.env || process.env) };
     const key = pathKey({ env: result });
-    const entries = resolve(cwd);
+    /** No application means no technologies, so nothing is prepended and the inherited PATH stands
+     *  on its own - the same answer a repository naming no plugin has always got. */
+    const entries = options.app ? resolve(options.app, cwd) : [];
     if (!entries.length) return result;
     const inherited = result[key];
     result[key] = [...entries, ...(inherited ? [inherited] : [])].join(path.delimiter);

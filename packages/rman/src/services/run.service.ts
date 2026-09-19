@@ -3,7 +3,6 @@ import { inspect } from 'node:util';
 import colors from 'ansi-colors';
 import { tokenize } from 'fast-tokenizer';
 import { Task } from 'power-tasks';
-import { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from '../core/run-step.js';
@@ -89,7 +88,7 @@ export class RunService extends Service {
               ctx.lastLine = line;
             };
             if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine);
-            else await exec(step.command, { cwd, stdio: 'pipe', onLine });
+            else await exec(step.command, { cwd, stdio: 'pipe', onLine, app: pkg.repository.app });
           } else {
             /** Match the classic rman output: raw command output streams straight through
              *  (unbuffered, unprefixed), followed by our own one-line-per-step summary. */
@@ -100,7 +99,7 @@ export class RunService extends Service {
               /** No capture with the panel off: the step owns the terminal, exactly as a shell
                *  step's `stdio: 'inherit'` does. */
               if (step.run) await runFunctionStep(step.run, pkg, cwd);
-              else await exec(step.command, { cwd, stdio: 'inherit' });
+              else await exec(step.command, { cwd, stdio: 'inherit', app: pkg.repository.app });
             } catch (e) {
               stepError = e;
             }
@@ -371,11 +370,6 @@ export namespace RunService {
    */
   export type StepSource = (pkg: Package, script: string) => ScriptSlots | undefined;
 
-  /** For tests, which would otherwise leak a source into every later case in the process. */
-  export function clearStepSources(): void {
-    RmanApplication.reset();
-  }
-
   /**
    * What the *package itself* declares for the lifecycle `script`, from the contributed sources
    * alone - no `.rmanrc` involved. `undefined` when it declares nothing.
@@ -423,7 +417,7 @@ export namespace RunService {
         await value(createStepContext(pkg, pkg.dirname));
         continue;
       }
-      await exec(value, { cwd: pkg.dirname, stdio: 'inherit' });
+      await exec(value, { cwd: pkg.dirname, stdio: 'inherit', app: pkg.repository.app });
     }
   }
 
@@ -483,7 +477,7 @@ export namespace RunService {
       pkg,
       repository: pkg.repository,
       cwd,
-      runBin: (bin, argv, opts) => runBin(bin, argv, { cwd, logLevel, ...opts }),
+      runBin: (bin, argv, opts) => runBin(bin, argv, { cwd, logLevel, app: pkg.repository.app, ...opts }),
       logger: new Logger(logLevel),
     };
   }

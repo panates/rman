@@ -13,10 +13,11 @@ import { baseTechStack, type TechStack } from './tech-stack.js';
  *
  * The point is that nothing is process-global any more. `Manifest`, `Workspace`, `BinPath`,
  * `RunService` and `VersionPlanService` each kept their contributions in a module-scope array, so
- * two repositories in one process shared them - `support/mocha-root-hooks.ts` exists solely to
- * empty five of them before every test, and CLAUDE.md records the failure it prevents: whichever
- * spec ran first decided the answer for the rest, and the core appeared to work in tests that had
- * registered nothing. An application starts empty and is thrown away whole.
+ * two repositories in one process shared them - which the test suite could only survive with a
+ * root hook emptying five of them before every test, and the failure that hook prevented was:
+ * whichever spec ran first decided the answer for the rest, and the core appeared to work in tests
+ * that had registered nothing. An application starts empty and is thrown away whole, so the hook
+ * is gone.
  */
 export class RmanApplication {
   /**
@@ -38,27 +39,6 @@ export class RmanApplication {
   techStackFor(dir: string): TechStack {
     return this.techStacks.first(stack => (stack.manifestProvider.read(dir) ? stack : undefined)) ?? baseTechStack;
   }
-
-  /**
-   * The application this invocation is using, created on demand.
-   *
-   * **A single slot, and deliberately not the end state.** The registries it replaces were arrays
-   * that *accumulated*, which is what made one spec decide the answer for the next; one reference
-   * that is swapped whole has no such failure. It is here so the storage could move without
-   * rewriting 312 `Repository.create(dir)` call sites in the same change, and it goes away as those
-   * take an application explicitly.
-   */
-  static current(): RmanApplication {
-    return (RmanApplication._current ??= new RmanApplication());
-  }
-
-  /** Starts a fresh application - what a test does between cases, and what `runCli` does per run. */
-  static reset(app: RmanApplication = new RmanApplication()): RmanApplication {
-    RmanApplication._current = app;
-    return app;
-  }
-
-  private static _current?: RmanApplication;
 
   /**
    * **Not a constructor field, and that is forced by the order things happen in.** Plugins are what
@@ -125,13 +105,13 @@ export class RmanApplication {
   /**
    * Called by `Repository.create`, after the plugins that find the packages have run.
    *
-   * **Last one wins, which is a consequence of `current()` being shared and not of the design.**
-   * One invocation means one application and one repository, and this refused a second - but a spec
-   * that builds two repositories in a single test is using one application for both, so the rule
-   * fired on ordinary use. It comes back as a refusal once call sites take an application
-   * explicitly, which is the same change that removes `current()`.
+   * **One application, one repository**, and a second is refused. It was briefly "last one wins",
+   * because a single shared application made two repositories in one test collide; each
+   * `Repository.create` makes its own now, so the rule holds again and nothing in a process is
+   * shared by accident.
    */
   attachRepository(repository: Repository): void {
+    if (this._repository) throw new Error('This application already has a repository');
     this._repository = repository;
   }
 

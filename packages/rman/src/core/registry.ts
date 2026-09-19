@@ -3,13 +3,12 @@
  *
  * Every registry rman had was a module-level array (`const providers: Provider[] = []` in
  * `manifest.ts`, `workspace.ts`, `bin-path.ts`, `run.service.ts`), which made it process-global:
- * two repositories in one process shared it. That is why `support/mocha-root-hooks.ts` clears five
- * of them before every single test, and CLAUDE.md records what happened without that - whichever
- * spec ran first decided the answer for the rest, so the core appeared to work in tests that had
- * registered nothing.
+ * two repositories in one process shared it. The test suite needed a root hook emptying five of
+ * them before every single test, and without it whichever spec ran first decided the answer for
+ * the rest - so the core appeared to work in tests that had registered nothing.
  *
  * An instance per `RmanApplication` closes the whole class: a new application starts empty, and
- * nothing has to be cleaned up afterwards.
+ * nothing has to be cleaned up afterwards - the root hook is deleted.
  *
  * **Registry, not service.** The distinction is multiplicity: a registry is for a question whose
  * answer is the *sum* of what was contributed (every provider's bin directories, the first provider

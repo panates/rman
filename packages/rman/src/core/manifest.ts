@@ -153,16 +153,6 @@ export interface ManifestProvider {
  */
 export namespace Manifest {
   /**
-   * Starts a fresh application, which is what "clear the providers" now means.
-   *
-   * Kept under its old name because that is what `support/mocha-root-hooks.ts` and both fixtures
-   * call, and it does strictly more than it used to - every registry goes, not just this one.
-   */
-  export function clearProviders(): void {
-    RmanApplication.reset();
-  }
-
-  /**
    * Reads `dir`'s manifest through the first provider that recognizes it, with the scheme that
    * provider brings.
    *
@@ -173,13 +163,16 @@ export namespace Manifest {
    * `rman list` fail in a repository whose `.rmanrc` simply names no plugin yet, which is exactly
    * when someone needs to run them.
    */
-  export function read(dir: string): {
+  export function read(
+    app: RmanApplication,
+    dir: string,
+  ): {
     manifest: Manifest;
     versionScheme: VersionScheme;
     fileName: string;
     techStack: TechStack;
   } {
-    for (const techStack of RmanApplication.current().techStacks) {
+    for (const techStack of app.techStacks) {
       const provider = techStack.manifestProvider;
       const manifest = provider.read(dir);
       if (manifest) {
@@ -206,8 +199,8 @@ export namespace Manifest {
 
   /** Writes through whichever provider recognizes `dir`. Throws when none does: a write that lands
    *  nowhere is worse than one that fails, since the caller has already decided the new version. */
-  export function write(dir: string, manifest: Manifest): void {
-    for (const provider of manifestProviders()) {
+  export function write(app: RmanApplication, dir: string, manifest: Manifest): void {
+    for (const provider of manifestProviders(app)) {
       if (provider.read(dir)) {
         provider.write(dir, manifest);
         return;
@@ -232,8 +225,8 @@ export namespace Manifest {
 
   /** `${{ pkg.scope }}`/`${{ pkg.unscopedName }}`, by whichever provider recognizes `dir` - and
    *  "no scope, the name is its own unscoped form" when none has an opinion. */
-  export function splitName(dir: string, name: string): { scope?: string; unscopedName: string } {
-    for (const provider of manifestProviders()) {
+  export function splitName(app: RmanApplication, dir: string, name: string): { scope?: string; unscopedName: string } {
+    for (const provider of manifestProviders(app)) {
       if (!provider.read(dir)) continue;
       return provider.splitName?.(name) ?? { unscopedName: name };
     }
@@ -281,29 +274,25 @@ export namespace Manifest {
   }
 
   /** The file names providers look for, for an error message that can say what was expected. */
-  export function fileNames(): string[] {
-    return manifestProviders().map(p => p.fileName);
+  export function fileNames(app: RmanApplication): string[] {
+    return manifestProviders(app).map(p => p.fileName);
   }
 
   /** Every registered stack's manifest provider, in declaration order - the list this namespace's
    *  own code used to keep. */
-  function manifestProviders(): ManifestProvider[] {
-    return [...RmanApplication.current().techStacks].map(stack => stack.manifestProvider);
+  function manifestProviders(app: RmanApplication): ManifestProvider[] {
+    return [...app.techStacks].map(stack => stack.manifestProvider);
   }
 
   /**
-   * The provider that claimed `pkg`, found by the name it reported as `pkg.provider` - exact, and
-   * without re-reading the manifest off disk to work it out again.
+   * The provider that claimed `pkg` - its own technology's, with nothing to look up.
    *
-   * The probe is the fallback, not the rule: it covers a package constructed *before* its provider
-   * was registered, which `Repository.create` cannot produce (plugins load first) but a test
-   * arranging providers by hand can.
+   * This used to search the registry by `pkg.provider` and fall back to re-reading the directory,
+   * because a package could be constructed before the provider that would claim it was registered.
+   * It cannot now: a package is handed its `TechStack` at construction, by the application that
+   * resolved it.
    */
-  /** The package's own stack answers directly now - it *is* the technology that claimed the
-   *  directory, so there is nothing left to look up. The probe stays for a package constructed
-   *  before any stack was registered, which only a test arranging things by hand can produce. */
   function providerOf(pkg: Package): ManifestProvider | undefined {
-    if (pkg.techStack.name) return pkg.techStack.manifestProvider;
-    return manifestProviders().find(p => p.read(pkg.dirname));
+    return pkg.techStack.name ? pkg.techStack.manifestProvider : undefined;
   }
 }

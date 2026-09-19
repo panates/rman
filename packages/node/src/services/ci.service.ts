@@ -13,6 +13,7 @@ import {
   ProgressPanel,
   type Repository,
   resolveRootLogLevel,
+  type RmanApplication,
 } from 'rman';
 
 export namespace CiService {
@@ -138,6 +139,7 @@ const LOCK_FILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.loc
  *  log uses. `logLine` is expected to go through a `Logger` (so it respects `--log-level`), not a
  *  raw `console.log`. */
 async function runStep(
+  app: RmanApplication,
   item: ProgressItem,
   panelEnabled: boolean,
   cwd: string,
@@ -146,6 +148,7 @@ async function runStep(
 ): Promise<void> {
   if (panelEnabled) {
     await exec(command, {
+      app,
       cwd,
       stdio: 'pipe',
       onLine: line => {
@@ -155,7 +158,7 @@ async function runStep(
     });
   } else {
     logLine();
-    await exec(command, { cwd, stdio: 'inherit' });
+    await exec(command, { cwd, app, stdio: 'inherit' });
   }
 }
 
@@ -190,7 +193,7 @@ async function ciForPackage(pkg: Package, item: ProgressItem, panelEnabled: bool
     const script = pkg.manifest.raw.scripts?.ci;
     if (typeof script === 'string' && script) {
       item.currentStep = 'ci';
-      await runStep(item, panelEnabled, pkg.dirname, script, () =>
+      await runStep(pkg.repository.app, item, panelEnabled, pkg.dirname, script, () =>
         logger.info(colors.cyan('run'), colors.cyan(item.name), script),
       );
     } else {
@@ -222,7 +225,7 @@ async function ciForRoot(
     const script = repository.rootPackage.manifest.raw.scripts?.ci;
     if (typeof script === 'string' && script) {
       item.currentStep = 'ci';
-      await runStep(item, panelEnabled, repository.dirname, script, () =>
+      await runStep(repository.app, item, panelEnabled, repository.dirname, script, () =>
         logger.info(colors.cyan('run'), colors.cyan('root'), script),
       );
     } else {
@@ -235,7 +238,7 @@ async function ciForRoot(
 
       item.stepIndex = 1;
       item.currentStep = 'install';
-      await runStep(item, panelEnabled, repository.dirname, `${packageManager} install`, () =>
+      await runStep(repository.app, item, panelEnabled, repository.dirname, `${packageManager} install`, () =>
         logger.info(colors.cyan('install'), `Running "${packageManager} install"`),
       );
     }

@@ -2,9 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { runCli } from '../src/cli.js';
 import { version } from '../src/constants.js';
-import { useTestEcosystem } from './_fixture.js';
+import { runCli, useTestEcosystem } from './_fixture.js';
 
 /** Runs `fn` with console.log captured (plain, unmodified) instead of printed - proves what the
  *  CLI actually logged without spamming test output. */
