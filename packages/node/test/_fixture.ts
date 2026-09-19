@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RmanApplication, Workspace } from 'rman';
+import { RmanApplication, type ServiceMap, Workspace } from 'rman';
 import { runCli as rmanRunCli } from 'rman/cli';
 /**
  * The **plugin**, by name - not the module's default export, which is an rman *config* that carries
@@ -86,4 +86,10 @@ export function useNodeEcosystem(): void {
       if (stack.versionPlanner) RmanApplication.current().versionPlanner = stack.versionPlanner;
     }
   });
+}
+
+/** The service a spec is exercising, from the application its repository attached itself to - the
+ *  same helper the core's fixture exposes, for the same reason. */
+export function service<K extends keyof ServiceMap>(name: K): ServiceMap[K] {
+  return RmanApplication.current().getService(name);
 }

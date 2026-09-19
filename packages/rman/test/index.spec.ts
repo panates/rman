@@ -25,15 +25,15 @@ describe('public API (src/index.ts)', () => {
     /** The plan and the writes are separate services: `changed` needs only the first, and used to
      *  have to reach through the writer to get it. */
     expect(typeof api.VersionPlanService.getPlanner).toBe('function');
-    expect(typeof api.VersionService.applyPlan).toBe('function');
+    expect(typeof api.VersionService.prototype.applyPlan).toBe('function');
     // Docker publishing is core: any language's project can publish an image, so it does not
     // belong to the Node plugin even though `publish` is what drives it today.
-    expect(typeof api.DockerPublishService.getPlan).toBe('function');
+    expect(typeof api.DockerPublishService.prototype.getPlan).toBe('function');
     /** A class now, reached through the application - `api.ListService` is the constructor, and
      *  `app.getService('list')` is how a command gets the one instance. */
     expect(typeof api.ListService).toBe('function');
     expect(typeof api.ListService.prototype.getPackages).toBe('function');
-    expect(typeof api.RunService.runScript).toBe('function');
+    expect(typeof api.RunService.prototype.runScript).toBe('function');
     expect(api.LOG_LEVELS).toEqual(['silent', 'error', 'info', 'verbose']);
     expect(typeof api.defineConfig).toBe('function');
     expect(typeof api.definePlugin).toBe('function');

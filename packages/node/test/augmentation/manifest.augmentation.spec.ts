@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Repository, VersionPlanService, VersionService } from 'rman';
-import { useNodeEcosystem } from '../_fixture.js';
+import { Repository, VersionPlanService } from 'rman';
+import { service, useNodeEcosystem } from '../_fixture.js';
 
 function git(dir: string, ...args: string[]): void {
   execFileSync('git', args, { cwd: dir, stdio: 'ignore' });
@@ -64,7 +64,7 @@ describe('augmentation/manifest - dependency ranges after a bump', () => {
     git(dir, 'commit', '-q', '-m', 'feat!: a breaking change in pkg-a');
     const repo = await Repository.create(dir);
     const plan = await VersionPlanService.getPlanner().getPlan(repo);
-    await VersionService.applyPlan(repo, plan);
+    await service('version').applyPlan(plan);
   }
 
   function readDeps(dir: string, rel: string): Record<string, string> {

@@ -4,40 +4,17 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
+import { Service } from '../core/service.js';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { exec } from '../utils/exec.js';
 import { GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 
-export namespace DockerPublishService {
-  /** Injectable "does this tag already exist" check - mainly for tests, so they don't depend on
-   *  network access or a real Docker daemon. Same shape as `PublishService.Deps.npmViewVersion`. */
-  export interface Deps {
-    imageExists?: (image: string, tag: string) => Promise<boolean>;
-  }
-
-  export interface Options extends PackageFilterOptions {
-    /** A package with uncommitted local changes is excluded (status `'skip'`) instead of aborting
-     *  the whole plan (status `'error'`) - same as `version`/`publish --target npm`'s own option. */
-    ignoreDirty?: boolean;
-    /** Prefixed onto a bare (no `/`) `publish.docker.image` - falls back to the
-     *  `DOCKERHUB_NAMESPACE` environment variable. */
-    namespace?: string;
-  }
-
-  export type ApplyOptions = Options;
-
-  /** One package's outcome in a docker-publish plan - see `getPlan`. */
-  export interface Entry {
-    package: Package;
-    version: string;
-    status: 'publish' | 'skip' | 'up-to-date' | 'error';
-    /** The fully-qualified `<namespace>/<image>` this entry publishes to - unset only when the
-     *  package's own `publish.docker.image` config is missing entirely (an `'error'` entry). */
-    image?: string;
-    reason?: string;
-  }
-
+/**
+ * A service class - see `ListService` for the shape and `Service` for the three measured
+ * consequences a namespace had. `repository` left the signature because the application carries it.
+ */
+export class DockerPublishService extends Service {
   /**
    * Computes what `publish --target docker` *would* do. Unlike the npm side (opt-out via
    * `"private"`), the docker target is opt-in: only packages whose own (cascaded) `.rmanrc
@@ -51,7 +28,11 @@ export namespace DockerPublishService {
    * already exists on the registry (via `docker manifest inspect`, queried concurrently) decides
    * the rest: `'up-to-date'` if so, `'publish'` if not.
    */
-  export async function getPlan(repository: Repository, options: Options = {}, deps: Deps = {}): Promise<Entry[]> {
+  async getPlan(
+    options: DockerPublishService.Options = {},
+    deps: DockerPublishService.Deps = {},
+  ): Promise<DockerPublishService.Entry[]> {
+    const repository = this.repository;
     const git = new GitHelper({ cwd: repository.dirname });
     const packages = filterPackages(repository.getPackages({ toposort: true }), options).filter(
       pkg => targetsDocker(pkg) && !pkg.config.publish?.skip,
@@ -60,7 +41,7 @@ export namespace DockerPublishService {
     const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
     const imageExists = deps.imageExists ?? defaultImageExists;
 
-    const entries = new Map<string, Entry>();
+    const entries = new Map<string, DockerPublishService.Entry>();
     const toCheck: { pkg: Package; image: string }[] = [];
     for (const pkg of packages) {
       const docker = pkg.config.publish?.docker;
@@ -117,14 +98,15 @@ export namespace DockerPublishService {
    * `DOCKER_README.md`), if present, updates the DockerHub repo description afterward. A package's
    * own failure doesn't stop unrelated packages elsewhere in the plan.
    */
-  export async function applyPlan(repository: Repository, plan: Entry[]): Promise<Entry[]> {
+  async applyPlan(plan: DockerPublishService.Entry[]): Promise<DockerPublishService.Entry[]> {
+    const repository = this.repository;
     const toPublish = plan.filter(e => e.status === 'publish');
     if (!toPublish.length) return plan;
 
     await dockerLogin(repository.dirname);
     await exec('docker buildx create --use', { cwd: repository.dirname, stdio: 'inherit', throwOnError: false });
 
-    const result: Entry[] = [];
+    const result: DockerPublishService.Entry[] = [];
     for (const entry of plan) {
       if (entry.status !== 'publish') {
         result.push(entry);
@@ -243,4 +225,40 @@ async function updateDescription(entry: DockerPublishService.Entry): Promise<voi
     body: JSON.stringify({ description: pkg.manifest.raw.description, full_description: readme }),
   });
   if (!res.ok) throw new Error(`DockerHub description update failed: ${res.status}`);
+}
+
+export namespace DockerPublishService {
+  /** Injectable "does this tag already exist" check - mainly for tests, so they don't depend on
+   *  network access or a real Docker daemon. Same shape as `PublishService.Deps.npmViewVersion`. */
+  export interface Deps {
+    imageExists?: (image: string, tag: string) => Promise<boolean>;
+  }
+
+  export interface Options extends PackageFilterOptions {
+    /** A package with uncommitted local changes is excluded (status `'skip'`) instead of aborting
+     *  the whole plan (status `'error'`) - same as `version`/`publish --target npm`'s own option. */
+    ignoreDirty?: boolean;
+    /** Prefixed onto a bare (no `/`) `publish.docker.image` - falls back to the
+     *  `DOCKERHUB_NAMESPACE` environment variable. */
+    namespace?: string;
+  }
+
+  export type ApplyOptions = Options;
+
+  /** One package's outcome in a docker-publish plan - see `getPlan`. */
+  export interface Entry {
+    package: Package;
+    version: string;
+    status: 'publish' | 'skip' | 'up-to-date' | 'error';
+    /** The fully-qualified `<namespace>/<image>` this entry publishes to - unset only when the
+     *  package's own `publish.docker.image` config is missing entirely (an `'error'` entry). */
+    image?: string;
+    reason?: string;
+  }
+}
+
+declare module '../core/service.js' {
+  interface ServiceMap {
+    dockerPublish: DockerPublishService;
+  }
 }

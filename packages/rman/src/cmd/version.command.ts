@@ -2,7 +2,7 @@ import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
 import EasyTable from 'easy-table';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
-import { VersionService } from '../services/version.service.js';
+import type { VersionService } from '../services/version.service.js';
 import { VersionPlanService } from '../services/version-plan.service.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
@@ -184,7 +184,7 @@ const versionCommand = registerCommand(app => {
       if (!apply) return;
 
       const changelog = args.changelog ?? repository.config?.version?.changelog ?? false;
-      const applied = await VersionService.applyPlan(repository, plan, {
+      const applied = await app.getService('version').applyPlan(plan, {
         push: args.push,
         message: args.message,
         changelog,

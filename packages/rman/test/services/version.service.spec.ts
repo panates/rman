@@ -4,9 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { Repository } from '../../src/core/repository.js';
-import { VersionService } from '../../src/services/version.service.js';
 import { VersionPlanService } from '../../src/services/version-plan.service.js';
-import { registryCalls, registryVersions, useTestEcosystem } from '../_fixture.js';
+import { registryCalls, registryVersions, service, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-version-test-'));
@@ -728,7 +727,7 @@ describe('services/version', () => {
       const { dir } = fixtureWithOrigin();
       const repo = await Repository.create(dir);
       const plan = await VersionPlanService.getPlanner().getPlan(repo);
-      await VersionService.applyPlan(repo, plan);
+      await service('version').applyPlan(plan);
 
       const a = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
       const b = JSON.parse(fs.readFileSync(path.join(dir, 'packages/b/package.json'), 'utf-8'));
@@ -751,7 +750,7 @@ describe('services/version', () => {
       commitAll(dir, 'chore: add a Dockerfile');
 
       const repo = await Repository.create(dir);
-      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
 
       expect(fs.readFileSync(dockerfile, 'utf-8')).toContain('org.opencontainers.image.version="1.1.0"');
       // In the bump commit, not left behind as a local edit for "publish" to trip over.
@@ -772,7 +771,7 @@ describe('services/version', () => {
       commitAll(dir, 'chore: add a Dockerfile');
 
       const repo = await Repository.create(dir);
-      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
       expect(fs.readFileSync(dockerfile, 'utf-8')).toContain('org.opencontainers.image.version="1.1.0"');
     });
 
@@ -788,7 +787,7 @@ describe('services/version', () => {
       commitAll(dir, 'chore: add a Dockerfile');
 
       const repo = await Repository.create(dir);
-      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
       expect(fs.readFileSync(dockerfile, 'utf-8')).toContain('org.opencontainers.image.version="1.0.0"');
     });
 
@@ -807,7 +806,7 @@ describe('services/version', () => {
       commitAll(dir, 'chore: add constants');
 
       const repo = await Repository.create(dir);
-      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
 
       expect(fs.readFileSync(constants, 'utf-8')).toBe("export const version = '1.1.0';\n");
       expect(git(dir, 'status', '--porcelain')).toBe('');
@@ -837,7 +836,7 @@ describe('services/version', () => {
       commitAll(dir, 'chore: add a version hook');
 
       const repo = await Repository.create(dir);
-      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
 
       /** Written *before* the bump, which is what `before` means - the assertion would pass either
        *  way if it only checked the file existed. */
@@ -868,7 +867,7 @@ describe('services/version', () => {
       commitAll(dir, 'chore: add version hooks');
 
       const repo = await Repository.create(dir);
-      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
 
       // In order, and interleaved with the shell steps - which is what "not joined with &&" buys.
       const steps = fs.readFileSync(path.join(dir, 'packages/a/steps.txt'), 'utf-8').trim().split('\n');
@@ -887,7 +886,7 @@ describe('services/version', () => {
       commitAll(dir, 'chore: no constants file here');
 
       const repo = await Repository.create(dir);
-      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
       expect(git(dir, 'status', '--porcelain')).toBe('');
     });
 
@@ -909,7 +908,7 @@ describe('services/version', () => {
       commitAll(dir, 'chore: add a Go constant');
 
       const repo = await Repository.create(dir);
-      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
 
       expect(fs.readFileSync(file, 'utf-8')).toBe('const Version = "1.1.0"\n');
       expect(git(dir, 'status', '--porcelain')).toBe('');
@@ -936,7 +935,7 @@ describe('services/version', () => {
 
       const repo = await Repository.create(dir);
       const plan = await VersionPlanService.getPlanner().getPlan(repo);
-      await expect(VersionService.applyPlan(repo, plan)).rejects.toThrow(/nothing in it could be rewritten/);
+      await expect(service('version').applyPlan(plan)).rejects.toThrow(/nothing in it could be rewritten/);
 
       /** Nothing was written: the manifest still reads the old version and the tree is clean. */
       expect(JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8')).version).toBe('1.0.0');
@@ -960,7 +959,7 @@ describe('services/version', () => {
       commitAll(dir, 'chore: add a hook');
 
       const repo = await Repository.create(dir);
-      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
       expect(fs.readFileSync(marker, 'utf-8')).toBe('app:1.1.0 was 1.0.0');
     });
 
@@ -981,7 +980,7 @@ describe('services/version', () => {
     it('a package with no Dockerfile at all is unaffected', async () => {
       const { dir } = fixtureWithOrigin();
       const repo = await Repository.create(dir);
-      await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+      await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
       expect(git(dir, 'status', '--porcelain')).toBe('');
     });
 
@@ -989,7 +988,7 @@ describe('services/version', () => {
       const { dir, originDir } = fixtureWithOrigin();
       const repo = await Repository.create(dir);
       const plan = await VersionPlanService.getPlanner().getPlan(repo);
-      await VersionService.applyPlan(repo, plan);
+      await service('version').applyPlan(plan);
 
       const remoteTags = execFileSync('git', ['tag', '--list'], { cwd: originDir }).toString().trim();
       expect(remoteTags.split(/\s+/)).not.toContain('v1.1.0');
@@ -999,7 +998,7 @@ describe('services/version', () => {
       const { dir, originDir } = fixtureWithOrigin();
       const repo = await Repository.create(dir);
       const plan = await VersionPlanService.getPlanner().getPlan(repo);
-      await VersionService.applyPlan(repo, plan, { push: true });
+      await service('version').applyPlan(plan, { push: true });
 
       const remoteTags = execFileSync('git', ['tag', '--list'], { cwd: originDir }).toString().trim();
       expect(remoteTags.split(/\s+/)).toContain('v1.1.0');
@@ -1014,7 +1013,7 @@ describe('services/version', () => {
       it('names every commit it made, the root sync included, with its sha', async () => {
         const { dir } = fixtureWithOrigin();
         const repo = await Repository.create(dir);
-        const result = await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+        const result = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
 
         /** Two: the root's informational sync, then the group's release - which is why `updated`
          *  does not count the root. A single "updated 2 packages" line used to imply two writes. */
@@ -1030,7 +1029,7 @@ describe('services/version', () => {
       it('reports the tags it created, and says so when one was already there', async () => {
         const { dir } = fixtureWithOrigin();
         const repo0 = await Repository.create(dir);
-        const created = await VersionService.applyPlan(repo0, await VersionPlanService.getPlanner().getPlan(repo0));
+        const created = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo0));
         expect(created.tags).toEqual([{ name: 'v1.1.0', created: true }]);
 
         /**
@@ -1048,19 +1047,19 @@ describe('services/version', () => {
         git(other.dir, 'checkout', '-q', 'main');
 
         const repo = await Repository.create(other.dir);
-        const result = await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+        const result = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
         expect(result.tags).toEqual([{ name: 'v1.1.0', created: false }]);
       });
 
       it('says whether it pushed, which is otherwise indistinguishable', async () => {
         const a = fixtureWithOrigin();
         const repoA = await Repository.create(a.dir);
-        const quiet = await VersionService.applyPlan(repoA, await VersionPlanService.getPlanner().getPlan(repoA));
+        const quiet = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repoA));
         expect(quiet.pushed).toBe(false);
 
         const b = fixtureWithOrigin();
         const repoB = await Repository.create(b.dir);
-        const pushed = await VersionService.applyPlan(repoB, await VersionPlanService.getPlanner().getPlan(repoB), {
+        const pushed = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repoB), {
           push: true,
         });
         expect(pushed.pushed).toBe(true);
@@ -1069,7 +1068,7 @@ describe('services/version', () => {
       it('counts only the packages actually written in "updated"', async () => {
         const { dir } = fixtureWithOrigin();
         const repo = await Repository.create(dir);
-        const result = await VersionService.applyPlan(repo, await VersionPlanService.getPlanner().getPlan(repo));
+        const result = await service('version').applyPlan(await VersionPlanService.getPlanner().getPlan(repo));
 
         /** The plan holds the monorepo root's `'bump'` entry too - informational, never written, so
          *  three entries bump and two packages are updated. Reporting three was the old output's
@@ -1102,7 +1101,7 @@ describe('services/version', () => {
 
       const repo = await Repository.create(dir);
       const plan = await VersionPlanService.getPlanner().getPlan(repo);
-      await VersionService.applyPlan(repo, plan);
+      await service('version').applyPlan(plan);
 
       expect(fs.existsSync(marker)).toBe(true);
       const a = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
@@ -1123,7 +1122,7 @@ describe('services/version', () => {
       const repo = await Repository.create(dir);
       const plan = await VersionPlanService.getPlanner().getPlan(repo);
       const before = git(dir, 'rev-parse', 'HEAD');
-      await VersionService.applyPlan(repo, plan);
+      await service('version').applyPlan(plan);
       expect(git(dir, 'rev-parse', 'HEAD')).toBe(before);
     });
 
@@ -1141,7 +1140,7 @@ describe('services/version', () => {
 
       const repo = await Repository.create(dir);
       const plan = await VersionPlanService.getPlanner().getPlan(repo);
-      await VersionService.applyPlan(repo, plan);
+      await service('version').applyPlan(plan);
 
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'));
       expect(pkg.version).toBe('1.0.1');

@@ -1,5 +1,4 @@
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
-import { RunService } from '../services/run.service.js';
 import { assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { readRunOptions, runOptions } from '../utils/run-options.js';
 
@@ -18,7 +17,7 @@ const testCommand = registerCommand(app => {
     examples: [{ command: '$0 test', description: '# Tests packages' }],
     handler: async (args: Args) => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));
-      await RunService.runScript(repository, 'test', { ...readRunOptions(args), commandName: 'test' });
+      await app.getService('run').runScript('test', { ...readRunOptions(args), commandName: 'test' });
     },
   };
 });

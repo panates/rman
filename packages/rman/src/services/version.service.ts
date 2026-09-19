@@ -6,6 +6,7 @@ import { Manifest } from '../core/manifest.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import type { RunStepValue } from '../core/run-step.js';
+import { Service } from '../core/service.js';
 import { GitHelper } from '../utils/git.js';
 import { expandReleaseTag, isCalendarVersion } from '../utils/release-version.js';
 import { stampVersionLabel } from '../utils/version-stamp.js';
@@ -23,59 +24,19 @@ import { VersionPlanService } from './version-plan.service.js';
  * `RunService.runLifecycleSlot` - this module only supplies the `.rmanrc version.<slot>` fallback,
  * which is its own config. What is left is git, that config, and the version stamps.
  */
-export namespace VersionService {
-  export interface ApplyOptions {
-    /** Push the resulting commit(s) and tag(s) to the remote once applied. Default false - same
-     *  as a plain `npm version`, which never pushes on its own either. */
-    push?: boolean;
-    /** Overrides `.rmanrc version.commitMessage` (and the built-in default) for every group's
-     *  commit this run produces - `{version}` is still substituted the same way. */
-    message?: string;
-    /** Also writes each bumped package's `CHANGELOG.md` (via `ChangelogService.generateToFile`,
-     *  scoped to just the packages this run actually bumped) and folds those file changes into the
-     *  same per-group commit, instead of requiring a separate `rman changelog --write` run. */
-    changelog?: boolean;
-  }
-
-  /**
-   * **What `applyPlan` actually did** - which is not derivable from the plan it was given.
-   *
-   * It used to return that plan, untouched, so the one caller could only re-print the table it had
-   * already shown while the commits, the tags and the push stayed silent - the three things a
-   * reader does not already know. A `version` run can produce several commits (one per group, plus
-   * the root's informational one), tag each group, add a repository release tag, and skip a tag that
-   * already existed; none of that is visible from the outside.
-   */
-  export interface ApplyResult {
-    /** The plan, as given - `'bump'` entries included, so a caller can still relate the rest to it. */
-    entries: VersionPlanService.Entry[];
-    /** The entries whose manifest was actually written. **Not every `'bump'` entry**: a monorepo
-     *  root's is informational, and `updated` is the number worth reporting. */
-    updated: VersionPlanService.Entry[];
-    commits: Commit[];
-    /** Every tag this run considered, in creation order. `created: false` means it was already
-     *  there and left alone - which is a different outcome from having made it. */
-    tags: Tag[];
-    /** Whether `git push` ran. `false` is the default and the common case, and saying so is the
-     *  point: a release that is committed but not pushed looks identical otherwise. */
-    pushed: boolean;
-  }
-
-  export interface Commit {
-    /** Short sha. */
-    sha: string;
-    message: string;
-    /** The packages whose version this commit carries - empty for the root's informational sync. */
-    packages: string[];
-  }
-
-  export interface Tag {
-    name: string;
-    created: boolean;
-    /** True for the repository's own release tag, which belongs to no single package. */
-    release?: boolean;
-  }
-
+/**
+ * A service class - see `ListService` for the shape and `Service` for the three measured
+ * consequences a namespace had.
+ *
+ * **Only `applyPlan` became a method**, because only it takes a repository. `buildCommitMessage`,
+ * `stampDockerfile`, `stampSourceFiles` and `normalizeScriptValue` take a `Package` or nothing and
+ * stay functions on the namespace below - the same rule that leaves `ChangeHashService` a namespace
+ * entirely.
+ *
+ * **Declared before the namespace**, which TypeScript requires: the other order is
+ * `A namespace declaration cannot be located prior to a class with which it is merged`.
+ */
+export class VersionService extends Service {
   /**
    * Writes every `'bump'` entry's new version into its own manifest (and refreshes any other bumped
    * package's dependency range on it), runs that package's own version-lifecycle hooks or its
@@ -84,11 +45,11 @@ export namespace VersionService {
    * commit spanning unrelated version lines. Pushes only when `options.push` is set - same as a
    * plain `npm version`, this never reaches the network on its own otherwise.
    */
-  export async function applyPlan(
-    repository: Repository,
+  async applyPlan(
     plan: VersionPlanService.Entry[],
-    options: ApplyOptions = {},
-  ): Promise<ApplyResult> {
+    options: VersionService.ApplyOptions = {},
+  ): Promise<VersionService.ApplyResult> {
+    const repository = this.repository;
     const git = new GitHelper({ cwd: repository.dirname });
     // The root's own entry is only ever a real package to write/commit like any other when this
     // *isn't* a monorepo (see `getPlan`) - in a monorepo it's the separate, purely informational
@@ -149,9 +110,10 @@ export namespace VersionService {
       await hook('exec');
       pkg.writeManifest();
       // Before the `after` hook, so a script reacting to the bump sees the whole new state.
-      const stamped = [stampDockerfile(pkg, entry.to!), ...stampSourceFiles(pkg, entry.to!)].filter(
-        (f): f is string => !!f,
-      );
+      const stamped = [
+        VersionService.stampDockerfile(pkg, entry.to!),
+        ...VersionService.stampSourceFiles(pkg, entry.to!),
+      ].filter((f): f is string => !!f);
       if (stamped.length) {
         stampedByPackage.set(
           pkg.name,
@@ -206,8 +168,8 @@ export namespace VersionService {
      *  *before* the group commits, so the last commit this makes is always a tagged release commit -
      *  otherwise the tag sits one commit behind HEAD and every `git tag --points-at HEAD` consumer
      *  (CI capturing the tag it just released, say) comes up empty in a monorepo. */
-    const commits: Commit[] = [];
-    const tagged: Tag[] = [];
+    const commits: VersionService.Commit[] = [];
+    const tagged: VersionService.Tag[] = [];
 
     if (rootEntry?.status === 'bump') {
       const message = `chore: sync root version to ${rootEntry.to}`;
@@ -233,7 +195,7 @@ export namespace VersionService {
         if (changelogFile) files.push(changelogFile);
         files.push(...(stampedByPackage.get(e.package.name) ?? []));
       }
-      const message = buildCommitMessage(repository, groupEntries, options.message);
+      const message = VersionService.buildCommitMessage(repository, groupEntries, options.message);
       const sha = await git.commit(files, message);
       commits.push({ sha, message, packages: groupEntries.map(e => e.package.name) });
       const tags = new Set(groupEntries.map(e => ChangeHashService.expandTag(e.package, e.to!)));
@@ -264,6 +226,60 @@ export namespace VersionService {
     const pushed = !!options.push && bumped.length > 0;
     if (pushed) await git.push();
     return { entries: plan, updated: bumped, commits, tags: tagged, pushed };
+  }
+}
+
+export namespace VersionService {
+  export interface ApplyOptions {
+    /** Push the resulting commit(s) and tag(s) to the remote once applied. Default false - same
+     *  as a plain `npm version`, which never pushes on its own either. */
+    push?: boolean;
+    /** Overrides `.rmanrc version.commitMessage` (and the built-in default) for every group's
+     *  commit this run produces - `{version}` is still substituted the same way. */
+    message?: string;
+    /** Also writes each bumped package's `CHANGELOG.md` (via `ChangelogService.generateToFile`,
+     *  scoped to just the packages this run actually bumped) and folds those file changes into the
+     *  same per-group commit, instead of requiring a separate `rman changelog --write` run. */
+    changelog?: boolean;
+  }
+
+  /**
+   * **What `applyPlan` actually did** - which is not derivable from the plan it was given.
+   *
+   * It used to return that plan, untouched, so the one caller could only re-print the table it had
+   * already shown while the commits, the tags and the push stayed silent - the three things a
+   * reader does not already know. A `version` run can produce several commits (one per group, plus
+   * the root's informational one), tag each group, add a repository release tag, and skip a tag that
+   * already existed; none of that is visible from the outside.
+   */
+  export interface ApplyResult {
+    /** The plan, as given - `'bump'` entries included, so a caller can still relate the rest to it. */
+    entries: VersionPlanService.Entry[];
+    /** The entries whose manifest was actually written. **Not every `'bump'` entry**: a monorepo
+     *  root's is informational, and `updated` is the number worth reporting. */
+    updated: VersionPlanService.Entry[];
+    commits: Commit[];
+    /** Every tag this run considered, in creation order. `created: false` means it was already
+     *  there and left alone - which is a different outcome from having made it. */
+    tags: Tag[];
+    /** Whether `git push` ran. `false` is the default and the common case, and saying so is the
+     *  point: a release that is committed but not pushed looks identical otherwise. */
+    pushed: boolean;
+  }
+
+  export interface Commit {
+    /** Short sha. */
+    sha: string;
+    message: string;
+    /** The packages whose version this commit carries - empty for the root's informational sync. */
+    packages: string[];
+  }
+
+  export interface Tag {
+    name: string;
+    created: boolean;
+    /** True for the repository's own release tag, which belongs to no single package. */
+    release?: boolean;
   }
 
   /** `.rmanrc version.commitMessage` (root-level; `{version}` is replaced when every bumped package
@@ -427,5 +443,11 @@ function assertStampable(pkg: Package, version: string): void {
           : `  This package belongs to no ecosystem (no plugin claimed it), so nothing knows how a ` +
             `version is declared in it. Name a plugin in .rmanrc "plugins".`),
     );
+  }
+}
+
+declare module '../core/service.js' {
+  interface ServiceMap {
+    version: VersionService;
   }
 }

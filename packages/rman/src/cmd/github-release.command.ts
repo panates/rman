@@ -1,7 +1,6 @@
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
-import { GithubReleaseService } from '../services/github-release.service.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 
 const COMMAND = 'github-release' as const;
@@ -64,7 +63,7 @@ const githubReleaseCommand = registerCommand(app => {
 
       // No package filtering: a release belongs to the repository, not to a package, so there is
       // nothing for --scope/--ignore to narrow down.
-      const plan = await GithubReleaseService.getPlan(repository, {
+      const plan = await app.getService('githubRelease').getPlan({
         ignoreDirty: args.ignoreDirty,
         repository: args.repository,
       });
@@ -127,7 +126,7 @@ const githubReleaseCommand = registerCommand(app => {
       }
       if (!proceed) return;
 
-      const applied = await GithubReleaseService.applyPlan(repository, plan);
+      const applied = await app.getService('githubRelease').applyPlan(plan);
       const failed = applied.find(e => e.status === 'error');
       if (failed) {
         console.log(colors.red('failed'), colors.cyan(failed.tag ?? ''), colors.red(failed.reason ?? ''));

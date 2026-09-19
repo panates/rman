@@ -1,5 +1,4 @@
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
-import { RunService } from '../services/run.service.js';
 import { assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { readRunOptions, runOptions } from '../utils/run-options.js';
 
@@ -22,7 +21,7 @@ const buildCommand = registerCommand(app => {
     examples: [{ command: '$0 build', description: '# Builds packages' }],
     handler: async (args: Args) => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));
-      await RunService.runScript(repository, 'build', { ...readRunOptions(args), commandName: 'build' });
+      await app.getService('run').runScript('build', { ...readRunOptions(args), commandName: 'build' });
     },
   };
 });

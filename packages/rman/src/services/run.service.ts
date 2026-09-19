@@ -7,11 +7,269 @@ import { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from '../core/run-step.js';
+import { Service } from '../core/service.js';
 import { exec } from '../utils/exec.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { type ProgressItem, ProgressPanel } from '../utils/progress-panel.js';
 import { runBin } from '../utils/run-bin.js';
+
+/**
+ * A service class - see `ListService` for the shape and `Service` for the three measured
+ * consequences a namespace had.
+ *
+ * **Only `runScript` became a method**, because only it takes a repository. `getConfig`,
+ * `parseIfExpr`, `normalizeScriptValue` and the rest take a `Package` or a raw value and stay
+ * functions on the namespace below - the same rule that leaves `ChangeHashService` a namespace
+ * entirely. Declared before the namespace, which TypeScript requires for the merge.
+ */
+export class RunService extends Service {
+  async runScript(script: string, options: RunService.Options & { commandName?: string } = {}): Promise<void> {
+    const repository = this.repository;
+    const commandName = options.commandName || 'run';
+    const rootCfg = RunService.getConfig(repository.rootPackage, script);
+    const logLevelDefault = resolveRootLogLevel(repository);
+
+    /** Standing inside a single package's own directory scopes the run to just that package
+     *  (and drops the root bookend below) unless `--root` asks for the whole repository anyway -
+     *  a no-op when already at the root, or outside any known package. */
+    const cwdScope = options.root ? undefined : repository.currentPackage;
+
+    /** Global fallback for topo - individual packages can still override their own linking below,
+     *  but the initial sort (topological vs alphabetical) has to be decided for the whole list at once. */
+    const topo = resolveBool(options.topo, repository.rootPackage, script, 'topo', true);
+    let packages = repository.getPackages({ toposort: topo, scope: cwdScope?.name });
+    if (!topo) packages = [...packages].sort((a, b) => a.name.localeCompare(b.name));
+    packages = filterPackages(packages, options);
+
+    const changed = resolveBool(options.changed, repository.rootPackage, script, 'changed', false);
+    const changedSince =
+      options.changedSince ?? (typeof rootCfg.changedSince === 'string' ? rootCfg.changedSince : undefined);
+    if (changed || changedSince) {
+      const status = await repository.listStatus({ hash: changedSince });
+      packages = packages.filter(p => status[p.name] !== 'clean');
+    }
+
+    const concurrency =
+      options.parallel === false
+        ? 1
+        : typeof options.parallel === 'number'
+          ? options.parallel
+          : options.parallel === true
+            ? os.cpus().length
+            : resolveNumber(undefined, repository.rootPackage, script, 'concurrency', os.cpus().length);
+
+    const progress = resolveBool(options.progress, repository.rootPackage, script, 'progress', true);
+    const panel = new ProgressPanel(`RUN ${script}`, !!process.stdout.isTTY && progress);
+
+    /** Set once the aggregate Task exists, so a package's own failure can trigger a manual
+     *  abort using *its own* resolved bail setting (see `runSteps` below) - power-tasks' own
+     *  `bail` is a single blanket policy for the whole batch, it can't vary per package. */
+    let rootTask: Task | undefined;
+
+    const runSteps = async (
+      ctx: ProgressItem,
+      pkg: Package,
+      pkgLabel: string,
+      steps: RunService.ScriptStep[],
+      cwd: string,
+      pkgBail: boolean,
+      pkgLogLevel: LogLevel,
+    ) => {
+      ctx.status = 'running';
+      ctx.startedAt = Date.now();
+      try {
+        for (let i = 0; i < steps.length; i++) {
+          const step = steps[i];
+          ctx.currentStep = step.name;
+          ctx.stepIndex = i;
+          if (panel.enabled) {
+            const onLine = (line: string) => {
+              ctx.log.push(line);
+              ctx.lastLine = line;
+            };
+            if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine);
+            else await exec(step.command, { cwd, stdio: 'pipe', onLine });
+          } else {
+            /** Match the classic rman output: raw command output streams straight through
+             *  (unbuffered, unprefixed), followed by our own one-line-per-step summary. */
+            printLegacyExecutingLine(commandName, pkgLabel, step, pkgLogLevel);
+            const stepStart = Date.now();
+            let stepError: any;
+            try {
+              /** No capture with the panel off: the step owns the terminal, exactly as a shell
+               *  step's `stdio: 'inherit'` does. */
+              if (step.run) await runFunctionStep(step.run, pkg, cwd);
+              else await exec(step.command, { cwd, stdio: 'inherit' });
+            } catch (e) {
+              stepError = e;
+            }
+            printLegacyStepLine(commandName, pkgLabel, step, Date.now() - stepStart, pkgLogLevel, stepError);
+            if (stepError) throw stepError;
+          }
+        }
+        ctx.status = 'success';
+      } catch (e) {
+        ctx.status = 'failed';
+        if (pkgBail) rootTask?.abort();
+        throw e;
+      } finally {
+        ctx.finishedAt = Date.now();
+      }
+    };
+
+    const children: Task[] = [];
+    /** Shared across all `if: changed[ = hash]` evaluations so the same reference is only `git`-queried once. */
+    const ifStatusCache = new Map<string, Record<string, Repository.PackageStatus>>();
+
+    /** Repo-wide bookend: root's own pre/post hooks run once each, exclusively, around every package
+     *  (unless root itself opts out via `run.<script>.skip`, fails its own `run.<script>.if`, or the
+     *  run is scoped to a single package by `cwdScope` - a repo-wide bookend has no place there).
+     *
+     *  Only in a monorepo. Without one the root *is* the single package, already in the loop below
+     *  with the same hooks and the same directory - a bookend would simply run each of them a
+     *  second time. */
+    /** Short-circuited deliberately: a root already out of the run for a structural reason must not
+     *  have its `if` evaluated, now that evaluating one can mean calling the repository's own code. */
+    const rootSkipped =
+      !!cwdScope ||
+      !repository.monorepo ||
+      rootCfg.skip === true ||
+      !(await passesIf(repository, repository.rootPackage, rootCfg.if, repository.dirname, ifStatusCache));
+    const rootSteps = rootSkipped ? [] : getScriptSteps(repository.rootPackage, script);
+    /** Filtered on the slot, not on `'pre' + script`: the step labels are `before`/`exec`/`after`
+     *  now - the same words the config uses - rather than npm's `pre<script>` naming, which moved
+     *  out with the package.json source. */
+    const rootPre = rootSteps.filter(s => s.name === 'before');
+    const rootPost = rootSteps.filter(s => s.name === 'after');
+
+    const rootPreName = 'root (pre)';
+    const rootPostName = 'root (post)';
+
+    if (rootPre.length) {
+      const ctx = panel.addItem(rootPreName, rootPre.length);
+      const pkgBail = resolveBail(options.bail, repository.rootPackage, script, true);
+      const pkgLogLevel = resolveLogLevel(options.logLevel, repository.rootPackage, script, logLevelDefault);
+      children.push(
+        new Task(
+          () => runSteps(ctx, repository.rootPackage, 'root', rootPre, repository.dirname, pkgBail, pkgLogLevel),
+          {
+            name: ctx.name,
+            exclusive: true,
+          },
+        ),
+      );
+    }
+
+    const stepsByPackage = new Map<string, RunService.ScriptStep[]>();
+    for (const pkg of packages) {
+      const pkgCfg = RunService.getConfig(pkg, script);
+      if (pkgCfg.skip === true) continue;
+      if (!(await passesIf(repository, pkg, pkgCfg.if, pkg.dirname, ifStatusCache))) continue;
+      const steps = getScriptSteps(pkg, script);
+      if (steps.length) stepsByPackage.set(pkg.name, steps);
+    }
+    for (const pkg of packages) {
+      const steps = stepsByPackage.get(pkg.name);
+      if (!steps) continue;
+      const ctx = panel.addItem(pkg.name, steps.length);
+      const pkgTopo = resolveBool(options.topo, pkg, script, 'topo', topo);
+      const pkgBail = resolveBail(options.bail, pkg, script, true);
+      const pkgLogLevel = resolveLogLevel(options.logLevel, pkg, script, logLevelDefault);
+      /** power-tasks identifies a task by its name string, so the graph is handed over as names -
+       *  the references are what rman reasons with, the names are what the scheduler wants. */
+      const dependencies = pkgTopo ? pkg.dependencies.filter(d => stepsByPackage.has(d.name)).map(d => d.name) : [];
+      if (rootPre.length) dependencies.push(rootPreName);
+      children.push(
+        new Task(() => runSteps(ctx, pkg, pkg.name, steps, pkg.dirname, pkgBail, pkgLogLevel), {
+          name: ctx.name,
+          dependencies,
+        }),
+      );
+    }
+
+    if (rootPost.length) {
+      const ctx = panel.addItem(rootPostName, rootPost.length);
+      const pkgBail = resolveBail(options.bail, repository.rootPackage, script, true);
+      const pkgLogLevel = resolveLogLevel(options.logLevel, repository.rootPackage, script, logLevelDefault);
+      children.push(
+        new Task(
+          () => runSteps(ctx, repository.rootPackage, 'root', rootPost, repository.dirname, pkgBail, pkgLogLevel),
+          {
+            name: ctx.name,
+            exclusive: true,
+            /** Must wait for every package task to finish, not just be "exclusive" once it starts. */
+            dependencies: [...stepsByPackage.keys()],
+          },
+        ),
+      );
+    }
+
+    if (!children.length) {
+      /**
+       * Two different nothings, and only one of them is fine.
+       *
+       * Nobody in the repository defines this script at all: the name is a mistake - a typo, or a
+       * script that used to exist - and `npm run` fails on exactly this. Staying silent is how
+       * `rman run qc` sat in a CI pipeline for months reporting success while running nothing, with
+       * `qc` defined only on the root (whose own scripts a monorepo never runs, only its
+       * `pre`/`post` bookends).
+       *
+       * Everything was filtered out instead - `--scope`, `--changed`, `run.<script>.skip`, an
+       * `if:` that didn't match: zero is the correct answer to what was asked, and asking "build
+       * only what changed" when nothing changed must not fail a pipeline.
+       */
+      /** `getPackages()` and nothing else - in a monorepo that excludes the root, which is the
+       *  point: the root contributes only `pre`/`post` bookends, never the script itself, so a
+       *  `qc` defined *only* there is exactly the mistake above rather than an excuse for it. (And
+       *  had the root contributed a bookend, `children` wouldn't be empty.) In a single-package
+       *  repository the root *is* the one package, and is covered. */
+      const definedSomewhere = repository.getPackages().some(pkg => getScriptSteps(pkg, script).length > 0);
+      if (definedSomewhere) {
+        console.log(colors.gray(`Nothing to run - every package was filtered out of "${script}".`));
+        return;
+      }
+      const message = `No package defines a "${script}" script.`;
+      console.log(colors.red(message));
+      const err: any = new Error(message);
+      err.logged = true;
+      throw err;
+    }
+
+    panel.start();
+
+    try {
+      /** bail:false here - each package's own resolved bail setting decides whether to call
+       *  `rootTask.abort()` itself (see `runSteps`), since power-tasks' own `bail` can't vary per package. */
+      rootTask = new Task(children, { concurrency, bail: false });
+      await rootTask.toPromise();
+    } catch {
+      // Swallowed on purpose: whether the root promise rejected says nothing reliable about the
+      // run - see below. The per-package tallies are what decide.
+    } finally {
+      /** A package's own `bail` aborts the root task, which settles its promise *immediately* while
+       *  the packages already in flight keep running. Waiting for every child here is what makes
+       *  the summary below describe a finished run rather than a snapshot of one still going -
+       *  measured: it printed "0 succeeded, 1 failed, 3 skipped" and then three of those "skipped"
+       *  packages went on to succeed. */
+      await Promise.allSettled(children.map(child => child.toPromise()));
+      panel.stop();
+    }
+
+    const summary = panel.printSummary();
+
+    /** The tallies, never `rootTask.toPromise()`'s own outcome: with a sibling still in flight at
+     *  the moment one package failed, that promise *resolves*, and this command used to exit 0 on a
+     *  run it had just reported as failed - non-deterministically, since it came down to which
+     *  packages happened to still be running (measured: `1 0 1 1 0` across five identical runs).
+     *  A single failed package must fail the command, every time. */
+    if (summary.failedCount > 0) {
+      const err: any = new Error(`"${script}" failed`);
+      err.logged = true;
+      throw err;
+    }
+  }
+}
 
 export namespace RunService {
   export interface Options extends PackageFilterOptions {
@@ -326,255 +584,6 @@ export namespace RunService {
     }
     return evaluateIfAtom(repository, pkg, node.name, node.value, statusCache);
   }
-
-  export async function runScript(
-    repository: Repository,
-    script: string,
-    options: Options & { commandName?: string } = {},
-  ): Promise<void> {
-    const commandName = options.commandName || 'run';
-    const rootCfg = getConfig(repository.rootPackage, script);
-    const logLevelDefault = resolveRootLogLevel(repository);
-
-    /** Standing inside a single package's own directory scopes the run to just that package
-     *  (and drops the root bookend below) unless `--root` asks for the whole repository anyway -
-     *  a no-op when already at the root, or outside any known package. */
-    const cwdScope = options.root ? undefined : repository.currentPackage;
-
-    /** Global fallback for topo - individual packages can still override their own linking below,
-     *  but the initial sort (topological vs alphabetical) has to be decided for the whole list at once. */
-    const topo = resolveBool(options.topo, repository.rootPackage, script, 'topo', true);
-    let packages = repository.getPackages({ toposort: topo, scope: cwdScope?.name });
-    if (!topo) packages = [...packages].sort((a, b) => a.name.localeCompare(b.name));
-    packages = filterPackages(packages, options);
-
-    const changed = resolveBool(options.changed, repository.rootPackage, script, 'changed', false);
-    const changedSince =
-      options.changedSince ?? (typeof rootCfg.changedSince === 'string' ? rootCfg.changedSince : undefined);
-    if (changed || changedSince) {
-      const status = await repository.listStatus({ hash: changedSince });
-      packages = packages.filter(p => status[p.name] !== 'clean');
-    }
-
-    const concurrency =
-      options.parallel === false
-        ? 1
-        : typeof options.parallel === 'number'
-          ? options.parallel
-          : options.parallel === true
-            ? os.cpus().length
-            : resolveNumber(undefined, repository.rootPackage, script, 'concurrency', os.cpus().length);
-
-    const progress = resolveBool(options.progress, repository.rootPackage, script, 'progress', true);
-    const panel = new ProgressPanel(`RUN ${script}`, !!process.stdout.isTTY && progress);
-
-    /** Set once the aggregate Task exists, so a package's own failure can trigger a manual
-     *  abort using *its own* resolved bail setting (see `runSteps` below) - power-tasks' own
-     *  `bail` is a single blanket policy for the whole batch, it can't vary per package. */
-    let rootTask: Task | undefined;
-
-    const runSteps = async (
-      ctx: ProgressItem,
-      pkg: Package,
-      pkgLabel: string,
-      steps: RunService.ScriptStep[],
-      cwd: string,
-      pkgBail: boolean,
-      pkgLogLevel: LogLevel,
-    ) => {
-      ctx.status = 'running';
-      ctx.startedAt = Date.now();
-      try {
-        for (let i = 0; i < steps.length; i++) {
-          const step = steps[i];
-          ctx.currentStep = step.name;
-          ctx.stepIndex = i;
-          if (panel.enabled) {
-            const onLine = (line: string) => {
-              ctx.log.push(line);
-              ctx.lastLine = line;
-            };
-            if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine);
-            else await exec(step.command, { cwd, stdio: 'pipe', onLine });
-          } else {
-            /** Match the classic rman output: raw command output streams straight through
-             *  (unbuffered, unprefixed), followed by our own one-line-per-step summary. */
-            printLegacyExecutingLine(commandName, pkgLabel, step, pkgLogLevel);
-            const stepStart = Date.now();
-            let stepError: any;
-            try {
-              /** No capture with the panel off: the step owns the terminal, exactly as a shell
-               *  step's `stdio: 'inherit'` does. */
-              if (step.run) await runFunctionStep(step.run, pkg, cwd);
-              else await exec(step.command, { cwd, stdio: 'inherit' });
-            } catch (e) {
-              stepError = e;
-            }
-            printLegacyStepLine(commandName, pkgLabel, step, Date.now() - stepStart, pkgLogLevel, stepError);
-            if (stepError) throw stepError;
-          }
-        }
-        ctx.status = 'success';
-      } catch (e) {
-        ctx.status = 'failed';
-        if (pkgBail) rootTask?.abort();
-        throw e;
-      } finally {
-        ctx.finishedAt = Date.now();
-      }
-    };
-
-    const children: Task[] = [];
-    /** Shared across all `if: changed[ = hash]` evaluations so the same reference is only `git`-queried once. */
-    const ifStatusCache = new Map<string, Record<string, Repository.PackageStatus>>();
-
-    /** Repo-wide bookend: root's own pre/post hooks run once each, exclusively, around every package
-     *  (unless root itself opts out via `run.<script>.skip`, fails its own `run.<script>.if`, or the
-     *  run is scoped to a single package by `cwdScope` - a repo-wide bookend has no place there).
-     *
-     *  Only in a monorepo. Without one the root *is* the single package, already in the loop below
-     *  with the same hooks and the same directory - a bookend would simply run each of them a
-     *  second time. */
-    /** Short-circuited deliberately: a root already out of the run for a structural reason must not
-     *  have its `if` evaluated, now that evaluating one can mean calling the repository's own code. */
-    const rootSkipped =
-      !!cwdScope ||
-      !repository.monorepo ||
-      rootCfg.skip === true ||
-      !(await passesIf(repository, repository.rootPackage, rootCfg.if, repository.dirname, ifStatusCache));
-    const rootSteps = rootSkipped ? [] : getScriptSteps(repository.rootPackage, script);
-    /** Filtered on the slot, not on `'pre' + script`: the step labels are `before`/`exec`/`after`
-     *  now - the same words the config uses - rather than npm's `pre<script>` naming, which moved
-     *  out with the package.json source. */
-    const rootPre = rootSteps.filter(s => s.name === 'before');
-    const rootPost = rootSteps.filter(s => s.name === 'after');
-
-    const rootPreName = 'root (pre)';
-    const rootPostName = 'root (post)';
-
-    if (rootPre.length) {
-      const ctx = panel.addItem(rootPreName, rootPre.length);
-      const pkgBail = resolveBail(options.bail, repository.rootPackage, script, true);
-      const pkgLogLevel = resolveLogLevel(options.logLevel, repository.rootPackage, script, logLevelDefault);
-      children.push(
-        new Task(
-          () => runSteps(ctx, repository.rootPackage, 'root', rootPre, repository.dirname, pkgBail, pkgLogLevel),
-          {
-            name: ctx.name,
-            exclusive: true,
-          },
-        ),
-      );
-    }
-
-    const stepsByPackage = new Map<string, RunService.ScriptStep[]>();
-    for (const pkg of packages) {
-      const pkgCfg = getConfig(pkg, script);
-      if (pkgCfg.skip === true) continue;
-      if (!(await passesIf(repository, pkg, pkgCfg.if, pkg.dirname, ifStatusCache))) continue;
-      const steps = getScriptSteps(pkg, script);
-      if (steps.length) stepsByPackage.set(pkg.name, steps);
-    }
-    for (const pkg of packages) {
-      const steps = stepsByPackage.get(pkg.name);
-      if (!steps) continue;
-      const ctx = panel.addItem(pkg.name, steps.length);
-      const pkgTopo = resolveBool(options.topo, pkg, script, 'topo', topo);
-      const pkgBail = resolveBail(options.bail, pkg, script, true);
-      const pkgLogLevel = resolveLogLevel(options.logLevel, pkg, script, logLevelDefault);
-      /** power-tasks identifies a task by its name string, so the graph is handed over as names -
-       *  the references are what rman reasons with, the names are what the scheduler wants. */
-      const dependencies = pkgTopo ? pkg.dependencies.filter(d => stepsByPackage.has(d.name)).map(d => d.name) : [];
-      if (rootPre.length) dependencies.push(rootPreName);
-      children.push(
-        new Task(() => runSteps(ctx, pkg, pkg.name, steps, pkg.dirname, pkgBail, pkgLogLevel), {
-          name: ctx.name,
-          dependencies,
-        }),
-      );
-    }
-
-    if (rootPost.length) {
-      const ctx = panel.addItem(rootPostName, rootPost.length);
-      const pkgBail = resolveBail(options.bail, repository.rootPackage, script, true);
-      const pkgLogLevel = resolveLogLevel(options.logLevel, repository.rootPackage, script, logLevelDefault);
-      children.push(
-        new Task(
-          () => runSteps(ctx, repository.rootPackage, 'root', rootPost, repository.dirname, pkgBail, pkgLogLevel),
-          {
-            name: ctx.name,
-            exclusive: true,
-            /** Must wait for every package task to finish, not just be "exclusive" once it starts. */
-            dependencies: [...stepsByPackage.keys()],
-          },
-        ),
-      );
-    }
-
-    if (!children.length) {
-      /**
-       * Two different nothings, and only one of them is fine.
-       *
-       * Nobody in the repository defines this script at all: the name is a mistake - a typo, or a
-       * script that used to exist - and `npm run` fails on exactly this. Staying silent is how
-       * `rman run qc` sat in a CI pipeline for months reporting success while running nothing, with
-       * `qc` defined only on the root (whose own scripts a monorepo never runs, only its
-       * `pre`/`post` bookends).
-       *
-       * Everything was filtered out instead - `--scope`, `--changed`, `run.<script>.skip`, an
-       * `if:` that didn't match: zero is the correct answer to what was asked, and asking "build
-       * only what changed" when nothing changed must not fail a pipeline.
-       */
-      /** `getPackages()` and nothing else - in a monorepo that excludes the root, which is the
-       *  point: the root contributes only `pre`/`post` bookends, never the script itself, so a
-       *  `qc` defined *only* there is exactly the mistake above rather than an excuse for it. (And
-       *  had the root contributed a bookend, `children` wouldn't be empty.) In a single-package
-       *  repository the root *is* the one package, and is covered. */
-      const definedSomewhere = repository.getPackages().some(pkg => getScriptSteps(pkg, script).length > 0);
-      if (definedSomewhere) {
-        console.log(colors.gray(`Nothing to run - every package was filtered out of "${script}".`));
-        return;
-      }
-      const message = `No package defines a "${script}" script.`;
-      console.log(colors.red(message));
-      const err: any = new Error(message);
-      err.logged = true;
-      throw err;
-    }
-
-    panel.start();
-
-    try {
-      /** bail:false here - each package's own resolved bail setting decides whether to call
-       *  `rootTask.abort()` itself (see `runSteps`), since power-tasks' own `bail` can't vary per package. */
-      rootTask = new Task(children, { concurrency, bail: false });
-      await rootTask.toPromise();
-    } catch {
-      // Swallowed on purpose: whether the root promise rejected says nothing reliable about the
-      // run - see below. The per-package tallies are what decide.
-    } finally {
-      /** A package's own `bail` aborts the root task, which settles its promise *immediately* while
-       *  the packages already in flight keep running. Waiting for every child here is what makes
-       *  the summary below describe a finished run rather than a snapshot of one still going -
-       *  measured: it printed "0 succeeded, 1 failed, 3 skipped" and then three of those "skipped"
-       *  packages went on to succeed. */
-      await Promise.allSettled(children.map(child => child.toPromise()));
-      panel.stop();
-    }
-
-    const summary = panel.printSummary();
-
-    /** The tallies, never `rootTask.toPromise()`'s own outcome: with a sibling still in flight at
-     *  the moment one package failed, that promise *resolves*, and this command used to exit 0 on a
-     *  run it had just reported as failed - non-deterministically, since it came down to which
-     *  packages happened to still be running (measured: `1 0 1 1 0` across five identical runs).
-     *  A single failed package must fail the command, every time. */
-    if (summary.failedCount > 0) {
-      const err: any = new Error(`"${script}" failed`);
-      err.logged = true;
-      throw err;
-    }
-  }
 }
 
 /**
@@ -866,4 +875,10 @@ export function resolveLogLevel(
   if (cliValue !== undefined) return cliValue;
   const v = RunService.getConfig(pkg, script).logLevel;
   return typeof v === 'string' && (LOG_LEVELS as string[]).includes(v) ? (v as LogLevel) : fallback;
+}
+
+declare module '../core/service.js' {
+  interface ServiceMap {
+    run: RunService;
+  }
 }

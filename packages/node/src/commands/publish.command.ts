@@ -5,10 +5,10 @@ import {
   applyPackageFilterOptions,
   assertAllowedBranch,
   type CustomCommand,
-  DockerPublishService,
   type Package,
   readBranchGuardOptions,
   readPackageFilterOptions,
+  RmanApplication,
   type RmanConfig,
 } from 'rman';
 import { CiService } from '../services/ci.service.js';
@@ -115,7 +115,9 @@ export const command: CustomCommand = {
       namespace: args.dockerNamespace as string | undefined,
     };
     const npmPlan = targets.has('npm') ? await PublishService.getPlan(repository, npmOptions) : [];
-    const dockerPlan = targets.has('docker') ? await DockerPublishService.getPlan(repository, dockerOptions) : [];
+    const dockerPlan = targets.has('docker')
+      ? await RmanApplication.current().getService('dockerPublish').getPlan(dockerOptions)
+      : [];
 
     if (args.json) {
       console.log(
@@ -178,7 +180,9 @@ export const command: CustomCommand = {
           contents: args.contents as string | undefined,
         })
       : [];
-    const appliedDocker = targets.has('docker') ? await DockerPublishService.applyPlan(repository, dockerPlan) : [];
+    const appliedDocker = targets.has('docker')
+      ? await RmanApplication.current().getService('dockerPublish').applyPlan(dockerPlan)
+      : [];
 
     let failed = false;
     for (const entry of appliedNpm) {

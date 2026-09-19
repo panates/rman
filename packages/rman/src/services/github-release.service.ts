@@ -4,43 +4,16 @@ import fastGlob from 'fast-glob';
 import { RmanApplication } from '../core/application.js';
 import { Package } from '../core/package.js';
 import { Repository } from '../core/repository.js';
+import { Service } from '../core/service.js';
 import { GitHelper } from '../utils/git.js';
 import { expandReleaseTag, isCalendarVersion, releaseTagPattern } from '../utils/release-version.js';
 import { ChangeHashService } from './change-hash.service.js';
 
-export namespace GithubReleaseService {
-  /** Injectable "does this release already exist" check - mainly for tests, so they don't depend
-   *  on network access or a real GitHub token. Same shape as `DockerPublishService.Deps`' own
-   *  `imageExists`. */
-  export interface Deps {
-    releaseExists?: (repository: string, tag: string) => Promise<boolean>;
-  }
-
-  export interface Options {
-    /** Uncommitted local changes anywhere in the repository make the release `'skip'` instead of
-     *  `'error'` - same as `version`/`publish`'s other targets. */
-    ignoreDirty?: boolean;
-    /** `owner/repo` override - otherwise the root's own `githubRelease.repository`, falling back
-     *  to the `origin` remote's URL. */
-    repository?: string;
-  }
-
-  /** The repository's release outcome - see `getPlan`. At most one of these: a GitHub Release
-   *  belongs to the repository, not to a package. */
-  export interface Entry {
-    /** Always the repository root - a release covers the whole source tree, not one package. */
-    package: Package;
-    /** The repository's own release version (see `buildRootEntry`). */
-    version: string;
-    status: 'publish' | 'skip' | 'up-to-date' | 'error';
-    /** The tag this release belongs to - the repository release tag on a calendar version, the
-     *  single shared version's tag otherwise. */
-    tag?: string;
-    /** `owner/repo` this release lands in - unset only when it couldn't be resolved (an `'error'`). */
-    repository?: string;
-    reason?: string;
-  }
-
+/**
+ * A service class - see `ListService` for the shape and `Service` for the three measured
+ * consequences a namespace had. `repository` left the signature because the application carries it.
+ */
+export class GithubReleaseService extends Service {
   /**
    * Computes what `github-release` *would* do - **one** release per run.
    *
@@ -62,7 +35,11 @@ export namespace GithubReleaseService {
    * such release", is `'error'` too - a blocking misconfiguration rather than a silent "not
    * released yet" that only fails later.
    */
-  export async function getPlan(repository: Repository, options: Options = {}, deps: Deps = {}): Promise<Entry[]> {
+  async getPlan(
+    options: GithubReleaseService.Options = {},
+    deps: GithubReleaseService.Deps = {},
+  ): Promise<GithubReleaseService.Entry[]> {
+    const repository = this.repository;
     const root = repository.rootPackage;
     const git = new GitHelper({ cwd: repository.dirname });
     const base = { package: root, version: root.version };
@@ -138,7 +115,8 @@ export namespace GithubReleaseService {
    * An existing release for the tag is updated rather than treated as a failure, so a re-run after
    * a partial failure converges.
    */
-  export async function applyPlan(repository: Repository, plan: Entry[]): Promise<Entry[]> {
+  async applyPlan(plan: GithubReleaseService.Entry[]): Promise<GithubReleaseService.Entry[]> {
+    const repository = this.repository;
     const entry = plan.find(e => e.status === 'publish');
     if (!entry) return plan;
 
@@ -305,5 +283,45 @@ async function uploadAssets(repository: Repository, repo: string, releaseId: num
       );
       if (!res.ok) throw new Error(`Unable to upload asset "${name}": ${res.status} ${res.statusText}`);
     }
+  }
+}
+
+export namespace GithubReleaseService {
+  /** Injectable "does this release already exist" check - mainly for tests, so they don't depend
+   *  on network access or a real GitHub token. Same shape as `DockerPublishService.Deps`' own
+   *  `imageExists`. */
+  export interface Deps {
+    releaseExists?: (repository: string, tag: string) => Promise<boolean>;
+  }
+
+  export interface Options {
+    /** Uncommitted local changes anywhere in the repository make the release `'skip'` instead of
+     *  `'error'` - same as `version`/`publish`'s other targets. */
+    ignoreDirty?: boolean;
+    /** `owner/repo` override - otherwise the root's own `githubRelease.repository`, falling back
+     *  to the `origin` remote's URL. */
+    repository?: string;
+  }
+
+  /** The repository's release outcome - see `getPlan`. At most one of these: a GitHub Release
+   *  belongs to the repository, not to a package. */
+  export interface Entry {
+    /** Always the repository root - a release covers the whole source tree, not one package. */
+    package: Package;
+    /** The repository's own release version (see `buildRootEntry`). */
+    version: string;
+    status: 'publish' | 'skip' | 'up-to-date' | 'error';
+    /** The tag this release belongs to - the repository release tag on a calendar version, the
+     *  single shared version's tag otherwise. */
+    tag?: string;
+    /** `owner/repo` this release lands in - unset only when it couldn't be resolved (an `'error'`). */
+    repository?: string;
+    reason?: string;
+  }
+}
+
+declare module '../core/service.js' {
+  interface ServiceMap {
+    githubRelease: GithubReleaseService;
   }
 }

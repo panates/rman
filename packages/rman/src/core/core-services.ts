@@ -1,7 +1,11 @@
 import { ChangelogService } from '../services/changelog.service.js';
+import { DockerPublishService } from '../services/docker-publish.service.js';
 import { ExecService } from '../services/exec.service.js';
+import { GithubReleaseService } from '../services/github-release.service.js';
 import { ImportService } from '../services/import.service.js';
 import { ListService } from '../services/list.service.js';
+import { RunService } from '../services/run.service.js';
+import { VersionService } from '../services/version.service.js';
 import type { RmanApplication } from './application.js';
 
 /**
@@ -18,7 +22,11 @@ import type { RmanApplication } from './application.js';
  */
 export function registerCoreServices(app: RmanApplication): void {
   app.setService('changelog', a => new ChangelogService(a));
+  app.setService('dockerPublish', a => new DockerPublishService(a));
+  app.setService('githubRelease', a => new GithubReleaseService(a));
   app.setService('exec', a => new ExecService(a));
   app.setService('import', a => new ImportService(a));
   app.setService('list', a => new ListService(a));
+  app.setService('run', a => new RunService(a));
+  app.setService('version', a => new VersionService(a));
 }
