@@ -1221,14 +1221,14 @@ describe('core/Repository', () => {
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       fs.writeFileSync(
         path.join(dir, '.rmanrc.cjs'),
-        `module.exports = { plugins: [{ name: 'p', commands: [
-           { command: 'x', describe: 'a command', builder: cmd => cmd.option('y'), handler() {} },
-         ] }] };\n`,
+        `module.exports = { plugins: [{ name: 'p', init(ctx) {
+           ctx.addCommand({ command: 'x', describe: 'a command', builder: cmd => cmd.option('y'), handler() {} });
+         } }] };\n`,
       );
       writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
 
       const repo = await Repository.create(dir);
-      expect(typeof (repo.config.plugins as any)[0].commands[0].builder).toBe('function');
+      expect(typeof (repo.config.plugins as any)[0].init).toBe('function');
     });
   });
 

@@ -85,10 +85,10 @@ describe('core/plugin', () => {
 
   /** A module exporting a *config* whose `plugins` hold the plugin - the shape `rman-node` uses. */
   function configModule(name: string, command: string, says: string): string {
-    return `export default { plugins: [{ name: ${JSON.stringify(name)}, commands: [
-      { command: ${JSON.stringify(command)}, describe: 'from ${name}',
-        handler: ctx => ctx.logger.info(${JSON.stringify(says)}) },
-    ] }] };`;
+    return `export default { plugins: [{ name: ${JSON.stringify(name)}, init(ctx) {
+      ctx.addCommand({ command: ${JSON.stringify(command)}, describe: 'from ${name}',
+        handler: c => c.logger.info(${JSON.stringify(says)}) });
+    } }] };`;
   }
 
   it('loads a plugin out of a config-exporting module, which is what a plugin package is now', async () => {
@@ -101,9 +101,9 @@ describe('core/plugin', () => {
     /** Accepting both shapes would mean telling them apart at runtime, and `name` is a key either
      *  may have - so the test would be a guess, and guessing "plugin" registers nothing while the
      *  command reports success. Refusing is the point; the message carries the fix. */
-    const bare = `export default { name: 'bare', commands: [
-      { command: 'bare-cmd', describe: 'from bare', handler: ctx => ctx.logger.info('hello from bare') },
-    ] };`;
+    const bare = `export default { name: 'bare', init(ctx) {
+      ctx.addCommand({ command: 'bare-cmd', describe: 'from bare', handler: c => c.logger.info('hello from bare') });
+    } };`;
     const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': bare });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
     expect(error.message).toContain('must export an rman config');
@@ -115,10 +115,10 @@ describe('core/plugin', () => {
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', private: true, version: '1.0.0' }));
     fs.writeFileSync(
       path.join(dir, '.rmanrc.mjs'),
-      `export default { plugins: [{ name: 'inline', commands: [
-         { command: 'inline-cmd', describe: 'declared as an object',
-           handler: ctx => ctx.logger.info('hello from inline') },
-       ] }] };`,
+      `export default { plugins: [{ name: 'inline', init(ctx) {
+         ctx.addCommand({ command: 'inline-cmd', describe: 'declared as an object',
+           handler: c => c.logger.info('hello from inline') });
+       } }] };`,
     );
     const lines = await captureLogs(() => runCli({ argv: ['inline-cmd'], cwd: dir }));
     expect(lines.join('\n')).toContain('hello from inline');
@@ -174,7 +174,7 @@ describe('core/plugin', () => {
   });
 
   it('refuses a plugin object with no name, which everything downstream is keyed by', async () => {
-    const dir = fixture({ plugins: [{ commands: [] }] });
+    const dir = fixture({ plugins: [{ init() {} }] });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
     expect(error.message).toContain('has no "name"');
   });

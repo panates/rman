@@ -90,8 +90,12 @@ export const nodeTechStack: TechStack = {
  *  registering it directly instead of through a config. */
 export const nodePlugin = definePlugin({
   name: 'rman-node',
-  commands: [publishCommand.command, ciCommand.command, cleanCommand.command],
-  techStacks: [nodeTechStack],
+  init(ctx) {
+    ctx.addTechStack(nodeTechStack);
+    for (const command of [publishCommand.command, ciCommand.command, cleanCommand.command]) {
+      ctx.addCommand(command);
+    }
+  },
 });
 
 /**

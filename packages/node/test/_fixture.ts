@@ -81,10 +81,19 @@ export function runCli(options?: { argv?: string[]; cwd?: string }): Promise<voi
  */
 export function useNodeEcosystem(): void {
   beforeEach(() => {
-    for (const stack of nodePlugin.techStacks ?? []) {
-      RmanApplication.current().techStacks.add(stack);
-      if (stack.versionPlanner) RmanApplication.current().versionPlanner = stack.versionPlanner;
-    }
+    /** Runs the plugin's own `init`, so the specs exercise exactly what a repository naming
+     *  `rman-node` in `plugins` would get - rather than a second list of what it contributes,
+     *  which is the thing that drifts. Commands are dropped: a spec calling a service directly has
+     *  no CLI to register them with, and `declarePlugin()` is what covers the command path. */
+    const app = RmanApplication.current();
+    void nodePlugin.init({
+      app,
+      addTechStack(stack) {
+        app.techStacks.add(stack);
+        if (stack.versionPlanner) app.versionPlanner = stack.versionPlanner;
+      },
+      addCommand() {},
+    });
   });
 }
 

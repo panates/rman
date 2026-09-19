@@ -20,21 +20,41 @@ export const PLUGINS_KEY = 'plugins';
 export interface RmanPlugin {
   /** For error messages and `--help` grouping. Conventionally the package's own name. */
   name: string;
-  commands?: CustomCommand[];
   /**
-   * The technologies this plugin brings - `rman-node` contributes one, `'node'`.
+   * **One entry point, called once, with the application.** Everything a plugin contributes it
+   * registers here.
    *
-   * **One field where there were five.** `manifest`, `workspace`, `runSteps`, `binPaths` and
-   * `versionPlanner` were independent, and declaring any of them without the others type-checked
-   * while making no sense: npm's step source reads `pkg.manifest.raw?.scripts`, so contributing it
-   * without npm's manifest reader left it parsing whatever another technology produced. See
-   * `TechStack` - the coupling was always real, only the type failed to say so.
+   * This replaced a growing list of declared fields - `manifest`, `workspace`, `runSteps`,
+   * `binPaths`, `versionPlanner`, then `techStacks`, then `commands`. Each new extensible thing
+   * meant another field on an interface every plugin is written against, and a plugin could never
+   * offer an extension point of its own: only rman's fields could be contributed to.
    *
-   * Loaded **before any package is known**, since this is what finds them: `Repository.create`
-   * reads the root config, loads the plugins it names, and only then asks. A repository naming no
-   * plugin therefore has no packages beyond itself, and its packages get `baseTechStack`.
+   * Called during `Repository.create`, **before any package is known** - plugins are what find
+   * them. `ctx.app.repository` therefore throws here; a plugin deciding something per package does
+   * it inside its own provider, which is asked later.
+   *
+   * A plugin whose `init` throws fails the whole load rather than leaving what it managed to
+   * register in place: a half-installed technology answers some questions and not others, which is
+   * worse than not being there.
    */
-  techStacks?: TechStack[];
+  init(ctx: PluginContext): void | Promise<void>;
+}
+
+/**
+ * What a plugin registers through - the application, plus the two helpers that need to know *which*
+ * plugin is asking.
+ *
+ * `addCommand` is one of those: a command carries the label and specifier it came from, so a broken
+ * one can be reported by name. `ctx.app` is everything else - `setService` to replace one of the
+ * core's, `techStacks` directly, and whatever the application grows later without this interface
+ * having to grow with it.
+ */
+export interface PluginContext {
+  readonly app: RmanApplication;
+  /** Adds a technology, and its version planner if it brings one. */
+  addTechStack(stack: TechStack): void;
+  /** Adds a command, tagged with the plugin it came from. */
+  addCommand(command: CustomCommand): void;
 }
 
 /**
@@ -121,7 +141,7 @@ async function loadInto(commands: LoadedCommand[], config: RmanConfig, from: str
       if (typeof entry.name !== 'string' || !entry.name) {
         throw new Error(`A plugin object in "${PLUGINS_KEY}" has no "name" - every other message is keyed by it.`);
       }
-      register(commands, entry as RmanPlugin, entry.name, from, seen);
+      await register(commands, entry as RmanPlugin, entry.name, from, seen);
       continue;
     }
     if (typeof entry !== 'string' || !entry.trim()) {
@@ -159,27 +179,34 @@ async function loadInto(commands: LoadedCommand[], config: RmanConfig, from: str
 }
 
 /**
- * Everything a plugin contributes, in one place - so the object and the imported forms cannot drift
- * apart in what they support.
+ * Runs one plugin's `init`, with a context that knows which plugin it is.
  *
- * **One registration per plugin name.** `plugins` appends at every layer now, so the same plugin
+ * **One registration per plugin name.** `plugins` appends at every layer, so the same plugin
  * arriving twice is an ordinary consequence of `extends` rather than a mistake to report - and
- * registering it twice would define its commands twice, which yargs does not survive. The config
- * merge already drops an identical entry; this catches the rest, including two objects claiming one
- * name and an object that duplicates a named package.
+ * running `init` twice would define its commands twice, which yargs does not survive.
  */
-function register(commands: LoadedCommand[], plugin: RmanPlugin, label: string, specifier: string, seen: Seen): void {
+async function register(
+  commands: LoadedCommand[],
+  plugin: RmanPlugin,
+  label: string,
+  specifier: string,
+  seen: Seen,
+): Promise<void> {
   if (seen.names.has(plugin.name)) return;
   seen.names.add(plugin.name);
-  for (const stack of plugin.techStacks ?? []) {
-    RmanApplication.current().techStacks.add(stack);
-    /** Still one answer per application rather than one per stack: `getPlanner()` is asked without
-     *  a package in places, so per-package planning waits for those call sites to carry one. */
-    if (stack.versionPlanner) RmanApplication.current().versionPlanner = stack.versionPlanner;
-  }
-  for (const command of plugin.commands ?? []) {
-    commands.push(toLoadedCommand(command, label || specifier, specifier));
-  }
+  const app = RmanApplication.current();
+  await plugin.init({
+    app,
+    addTechStack(stack) {
+      app.techStacks.add(stack);
+      /** Still one answer per application rather than one per stack: `getPlanner()` is asked
+       *  without a package in places, so per-package planning waits for those call sites. */
+      if (stack.versionPlanner) app.versionPlanner = stack.versionPlanner;
+    },
+    addCommand(command) {
+      commands.push(toLoadedCommand(command, label || specifier, specifier));
+    },
+  });
 }
 
 /**
@@ -199,7 +226,7 @@ function describeExport(exported: unknown): string {
     : `Its default export has no "${PLUGINS_KEY}".`;
 }
 
-const PLUGIN_SEAMS = ['commands', 'runSteps', 'workspace', 'manifest', 'versionPlanner', 'binPaths'] as const;
+const PLUGIN_SEAMS = ['init', 'name'] as const;
 
 /** A config object, as opposed to an array or anything with its own prototype. */
 function isPlainObject(value: unknown): value is Record<string, any> {
