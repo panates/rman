@@ -7,7 +7,7 @@ import path from 'path';
 import semver from 'semver';
 import { pathToFileURL } from 'url';
 import vm from 'vm';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
+import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
 import { finalizeConfig, mergeConfig, ORIGINS, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
 

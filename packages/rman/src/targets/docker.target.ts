@@ -1,5 +1,42 @@
 import type { PublishTarget } from '../core/publish-target.js';
+import type { ScopedVars, WithAppend } from '../interfaces/rman-cfg.interface.js';
 import { DOCKER_TARGET, type DockerPublishService } from '../services/docker-publish.service.js';
+
+/**
+ * **`publish.docker.*`** - this target's own config block, declared here rather than centrally.
+ *
+ * Reaches `RmanConfig` through the `PublishTargetConfigs` slot `publish.command.ts` exports, which
+ * is the same slot `rman-node` declares `publish.npm.*` in. Whoever reads a key declares it: the
+ * only thing that reads these is `DockerPublishService`, two files away.
+ *
+ * Required once `"docker"` is one of a package's `publish.target`s - `publish --target docker`
+ * errors clearly on a package that opts in and leaves this out.
+ */
+export interface DockerPublishOptions
+  extends DockerPublishOptionsKeys, WithAppend<DockerPublishOptionsKeys>, ScopedVars {}
+
+export interface DockerPublishOptionsKeys {
+  /** DockerHub image name/repository - bare (e.g. `"my-app"`) to be prefixed with
+   *  `--docker-namespace`/`DOCKERHUB_NAMESPACE`, or already-namespaced (contains a `/`) to use
+   *  verbatim. */
+  image: string;
+  /** Relative to the package's own directory. Default `"Dockerfile"`. */
+  dockerfile?: string;
+  /** Default `["linux/amd64"]`. */
+  platforms?: string[];
+  /** Build `cwd` override, relative to the repository root - only needed when the Dockerfile's
+   *  own `COPY`/`ADD` paths expect something other than the package's own directory (rare). */
+  cwd?: string;
+  /** Named `docker buildx build --build-context <name>=<path>` entries, keyed by name - each
+   *  path is relative to the package's own directory (or absolute). */
+  buildContexts?: Record<string, string>;
+  /** `docker buildx build --build-arg <name>=<value>` entries - a value of exactly `"$NAME"`
+   *  expands to `process.env.NAME` at build time (e.g. to pass a CI secret through). */
+  buildArgs?: Record<string, string>;
+  /** A file (relative to the package's own directory) whose contents become the DockerHub repo's
+   *  full description, if present. Default `"DOCKER_README.md"`. */
+  readme?: string;
+}
 
 /**
  * **Docker, as a publish target** - the core's own, and the reason `PublishTarget` is in the core

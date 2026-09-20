@@ -12,8 +12,6 @@
  * *not* exported is deliberately private: config resolution internals, the expression evaluator,
  * the command registry.
  */
-/** Aliased on import, and it has to be: the module's namespace is *also* called `RmanConfig`, and
- *  `rman-config.interface.ts` already exports that name. */
 import type { RmanConfig as CommandDeclaration } from './interfaces/rman-cfg.interface.js';
 
 export { defineConfig } from './core/config.js';
@@ -57,8 +55,11 @@ export { Workspace } from './core/workspace.js';
  * `runCli` walks, so a plugin using it would give its commands to repositories that never named it.
  * A plugin hands the function to `ctx.addCommand`.
  *
- * Exported under these flat names rather than as the `RmanConfig` namespace they live in, because
- * `rman-config.interface.ts` already exports a `RmanConfig` and one package cannot export two.
+ * **Flat names rather than `RmanConfig.CommandOption`**, and they outlived the reason they were
+ * introduced: a second file exported a `RmanConfig` too, so the namespace holding these was
+ * unreachable from outside the package. The two are one file now and `RmanConfig` *is* exported -
+ * these stay because they are the better names for the job. A plugin author declaring a flag wants
+ * `CommandOption`; the config it happens to contribute to is not what they are naming.
  */
 export { declareCommand } from './interfaces/rman-cfg.interface.js';
 export type CommandOption = CommandDeclaration.CommandOption;
@@ -69,7 +70,7 @@ export type CommandRegisterFunction = CommandDeclaration.CommandRegisterFunction
 export type ArgsOf<C, Cmd extends string> = CommandDeclaration.ArgsOf<C, Cmd>;
 export type GlobalArgs = CommandDeclaration.GlobalArgs;
 export * from './commands.js';
-export * from './interfaces/rman-config.interface.js';
+export * from './interfaces/rman-cfg.interface.js';
 export * from './services.js';
 
 // --- what a command needs to behave like a built-in one -----------------------------------------

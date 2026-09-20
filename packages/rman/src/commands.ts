@@ -10,7 +10,7 @@
  * applies where the module declaring it is part of the program. Reached only from `cli.ts`, those
  * keys existed for rman itself and for nobody else: `rman-node` reading `pkg.config.publish` got
  * `Property 'publish' does not exist on type 'RmanConfig'` (measured, the moment the keys stopped
- * being hand-written in `rman-config.interface.ts`).
+ * being hand-written centrally, in what is now `rman-cfg.interface.ts`).
  */
 import './cmd/build.command.js';
 import './cmd/changed.command.js';

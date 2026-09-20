@@ -368,15 +368,28 @@ the walk reaches first.
 
 ## Config types: whoever reads a key declares it
 
-[`packages/rman/src/interfaces/rman-config.interface.ts`](packages/rman/src/interfaces/rman-config.interface.ts)
+[`packages/rman/src/interfaces/rman-cfg.interface.ts`](packages/rman/src/interfaces/rman-cfg.interface.ts)
 is **purely a typing aid** - rman never reads it at runtime, it only ever sees the plain object a
 config file exports. So the split is about who can *author* what, and it follows the code.
 
 **A command-owned key is declared by the command**, not centrally: `version.*` lives in
 `version.command.ts`, `publish.*` in `publish.command.ts`, and `CommandContribution` assembles the
-block (see "How a command is declared"). That leaves `rman-config.interface.ts` holding only what no
-command owns - `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBranch`, `skip`, `group`,
-`dependencies`, and `run` (which is keyed by script name, so nothing to derive from).
+block (see "How a command is declared"). A *target's* block likewise - `publish.docker.*` in
+`targets/docker.target.ts`, `publish.npm.*` in `rman-node`. What is left in the one interface file
+is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBranch`, `skip`,
+`group`, `dependencies`, and `run`.
+
+- **There used to be two files, both exporting a `RmanConfig`** - `rman-config.interface.ts` for the
+  config shape and `rman-cfg.interface.ts` for the command declarations - and one package cannot
+  export two things under one name, so the second was unreachable from outside rman entirely. They
+  are one file now: `RmanConfigKeys` for the keys no command owns, `CommandConfigs` for what the
+  commands contribute, and `RmanConfig` extending both plus their `WithAppend` forms.
+- **`run` is the one key that stays hand-written, and `Extra` cannot take it.** `CommandContribution`
+  wraps a contributed block in `ConfigBlock`, which folds in `ScopedVars` - and `run` is keyed by
+  script name, so `vars` would have to satisfy the index signature too. Measured both halves:
+  `ConfigBlock<RunConfig>` *does* keep catching a typo inside a script (`run: { build: { exce } }`),
+  and `run: { vars: {...} }` still fails with `Property 'vars' is incompatible with index
+  signature`. Contributing `run` would gain nothing and add a `vars` nobody can write.
 
 - **`ConfigBlock` gives a contributed key the same shape a hand-written one had** - the keys, their
   `+key` forms, and `vars`. A hand-written interface said that with three clauses
@@ -1130,8 +1143,9 @@ const versionCommand = registerCommand(app => ({ command: COMMAND, config, handl
   half of a publish target being a contribution - the flags, the registry check *and* the keys.
 - **`declareCommand` and friends are exported from `rman` under flat names** (`CommandOption`,
   `ArgsOf`, `CommandMetadata`), not as the `RmanConfig` namespace they live in: `rman-config.
-  interface.ts` already exports that name and one package cannot export two. That is temporary -
-  see the two-`RmanConfig` note - and the flat names are the better ones for a plugin author anyway.
+  interface.ts` exported that name too and one package cannot export two. The two files are merged
+  now and `RmanConfig` *is* exported; the flat names stay because they are the better ones for the
+  job - a plugin author declaring a flag wants `CommandOption`, not the config it contributes to.
 
 **Three authoring forms exist, and only the first is the one to write:**
 

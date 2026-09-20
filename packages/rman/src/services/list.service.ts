@@ -1,8 +1,8 @@
 import path from 'path';
-import { targetsOf } from '../core/publish-target.js';
+import { type PublishTargetName, targetsOf } from '../core/publish-target.js';
 import type { Repository } from '../core/repository.js';
 import { Service } from '../core/service.js';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
+import type { DockerPublishOptions } from '../targets/docker.target.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 
 /**
@@ -77,10 +77,10 @@ export namespace ListService {
     /** Where this package actually ships - its own (cascaded) `.rmanrc "publish.target"` when it
      *  declares one, otherwise every registered target that claims it, which is the same question
      *  `publish` asks. Empty in a repository whose plugins contribute no target the package fits. */
-    publishTargets: RmanConfig.PublishTarget[];
+    publishTargets: PublishTargetName[];
     /** Present only when `"docker"` is one of `publishTargets` and `publish.docker` is configured -
      *  the raw `.rmanrc` config, unresolved (no namespace prefixing - see `DockerPublishService`). */
-    docker?: RmanConfig.DockerPublishOptions;
+    docker?: DockerPublishOptions;
   }
 }
 

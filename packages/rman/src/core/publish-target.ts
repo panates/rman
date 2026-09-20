@@ -101,6 +101,20 @@ export namespace PublishTarget {
 }
 
 /**
+ * **A target's name, and deliberately not a union.**
+ *
+ * It was `'npm' | 'docker'`, the type half of a bug whose runtime half was a hardcoded `['npm']`
+ * default, so `rman list --json` reported `publishTargets: ["npm"]` for a Cargo package. Both are
+ * gone together - which targets exist is whatever the repository's plugins contribute
+ * (`RmanApplication.publishTargets`), so a union here would mean the core naming plugins it cannot
+ * know about, exactly as `Package.provider` must not.
+ *
+ * A name nothing implements is caught where the facts are, by `publish` itself, naming the targets
+ * this repository does have.
+ */
+export type PublishTargetName = string;
+
+/**
  * The targets a package **declares**, or `undefined` when it declares none - which is not the same
  * as an empty list, and the difference is what `claims` is asked about.
  */

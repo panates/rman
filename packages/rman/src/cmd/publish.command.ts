@@ -4,7 +4,7 @@ import type { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/package.js';
 import { type PublishTarget, unknownTargets } from '../core/publish-target.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
-import type { RmanConfig as ConfigShape } from '../interfaces/rman-config.interface.js';
+import type { DockerPublishOptions } from '../targets/docker.target.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
@@ -91,7 +91,7 @@ export interface PublishExtraKeys extends PublishTargetConfigs {}
 export interface PublishTargetConfigs {
   /** Required once `"docker"` is one of a package's `publish.target`s - `publish --target docker`
    *  errors clearly on a package that opts in here but leaves this out. */
-  docker?: ConfigShape.DockerPublishOptions;
+  docker?: DockerPublishOptions;
 }
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;

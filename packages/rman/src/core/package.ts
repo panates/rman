@@ -1,5 +1,5 @@
 import path from 'path';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
+import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import type { RmanApplication } from './application.js';
 import { Manifest } from './manifest.js';
 import type { Repository } from './repository.js';

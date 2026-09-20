@@ -1,7 +1,6 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { RmanConfig as CommandDeclaration } from '../interfaces/rman-cfg.interface.js';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
+import type { RmanConfig as CommandDeclaration, RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import { RmanApplication } from './application.js';
 import type { CustomCommand } from './custom-command.js';
 import { resolveConfigTarget } from './resolve-target.js';

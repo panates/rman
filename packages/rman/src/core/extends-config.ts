@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as yaml from 'js-yaml';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
+import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import { isSelectorKey } from './config.js';
 import { mergeConfig } from './merge-config.js';
 import { resolveConfigTarget } from './resolve-target.js';
