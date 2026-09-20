@@ -25,11 +25,15 @@ declare module 'rman' {
    */
   interface RmanConfigKeys extends NodeConfigKeys {}
 
-  namespace RmanConfig {
-    /** The npm half of `publish`. `target`, `skip` and `docker` stay in the core: the first two are
-     *  read by `list` and by every target's own plan, and Docker publishing is not Node's. */
-    interface PublishOptionsKeys extends RmanNodeConfig.PublishOptions {}
-  }
+  /**
+   * The `npm` publish target's own `publish.*` block, declared the way the core's `docker` target
+   * declares `publish.docker` - through the slot `publish` contributes, rather than into a central
+   * `PublishOptionsKeys` that the core owned.
+   *
+   * That is the config half of a target being a contribution: this package brings the flags, the
+   * registry check, *and* the keys, and none of it is written down in rman.
+   */
+  interface PublishTargetConfigs extends RmanNodeConfig.PublishOptions {}
 
   namespace SystemInfo {
     type PackageManager = CiService.PackageManager;

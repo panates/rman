@@ -91,15 +91,20 @@ here rather than in rman's core:
 | --- | --- | --- |
 | `packageManager` | root only | Which package manager `ci`/`publish` shell out to, and whose version `info` reports. `npm` \| `yarn` \| `pnpm` \| `bun`, default `npm`. |
 | `clean` | per package, cascaded | `include`/`exclude` globs beyond TypeScript's own output, and `skip`. A package declaring its own `clean` replaces the root's entirely for itself. |
-| `publish.directory` | per package, cascaded | Where this package's publishable output lives, relative to its own directory. Added to the core's `publish` block. |
+| `publish.directory` | per package, cascaded | Where this package's publishable output lives, relative to its own directory. The `npm` target's own block, beside the `docker` one rman itself declares. |
 
 **They reach `RmanConfig` by declaration merging**, so `pkg.config.clean` is typed at the place it is
-*read* without a cast:
+*read* without a cast - and the two halves arrive through different slots, which is the point:
 
 ```ts
 // packages/node/src/augmentation/rman.augmentation.ts
 declare module 'rman' {
+  /** This plugin's own top-level keys. */
   interface RmanConfigKeys extends NodeConfigKeys {}
+
+  /** And its publish target's block, through the slot rman's `publish` command exports for *any*
+   *  target - so a target contributes its config keys the same way it contributes its flags. */
+  interface PublishTargetConfigs extends RmanNodeConfig.PublishOptions {}
 }
 ```
 

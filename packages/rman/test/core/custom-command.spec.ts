@@ -115,13 +115,13 @@ describe('core/custom-command', () => {
    * are the same walk and cannot disagree.
    *
    * What *can* still go wrong is one step earlier: a command registers itself as a side effect of
-   * its module being imported, so a new file in `src/cmd/` that `cli.ts` never imports is simply
-   * not a command - no error, no entry in `--help`, and a repository's own command free to take
-   * its name. That is the drift this now pins.
+   * its module being imported, so a new file in `src/cmd/` that nothing imports is simply not a
+   * command - no error, no entry in `--help`, and a repository's own command free to take its name.
+   * That is the drift this pins, now against `commands.ts` rather than `cli.ts`.
    */
-  it('the CLI imports every command module, so each one actually registers', () => {
+  it('commands.ts imports every command module, so each one actually registers', () => {
     const srcDir = path.dirname(srcIndex);
-    const cliSource = fs.readFileSync(path.resolve(srcDir, 'cli.ts'), 'utf-8');
+    const barrel = fs.readFileSync(path.resolve(srcDir, 'commands.ts'), 'utf-8');
 
     const files = fs
       .readdirSync(path.resolve(srcDir, 'cmd'))
@@ -129,7 +129,26 @@ describe('core/custom-command', () => {
       .map(f => f.replace(/\.ts$/, '.js'));
     expect(files.length).toBeGreaterThan(0);
 
-    const missing = files.filter(f => !cliSource.includes(`import './cmd/${f}'`));
+    const missing = files.filter(f => !barrel.includes(`import './cmd/${f}'`));
     expect(missing).toEqual([]);
+  });
+
+  /**
+   * **And both entry points have to reach that barrel**, for two different reasons.
+   *
+   * `cli.ts` needs the registrations - without them `commandRegistry` is empty and rman has no
+   * commands at all. `index.ts` needs the **type** augmentations: each command contributes its own
+   * `.rmanrc` keys with a `declare module` block, and a type augmentation applies only where the
+   * module declaring it is in the program. Reached from `cli.ts` alone, those keys existed for rman
+   * and for nobody else - measured the moment the keys stopped being hand-written in
+   * `rman-config.interface.ts`: `rman-node` reading `pkg.config.publish` got
+   * `Property 'publish' does not exist on type 'RmanConfig'`.
+   */
+  it('both cli.ts and index.ts reach the barrel - one for the registrations, one for the types', () => {
+    const srcDir = path.dirname(srcIndex);
+    for (const entry of ['cli.ts', 'index.ts']) {
+      const source = fs.readFileSync(path.resolve(srcDir, entry), 'utf-8');
+      expect(source).toMatch(/(import|export \*) .*'\.\/commands\.js'/);
+    }
   });
 });

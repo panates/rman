@@ -38,6 +38,18 @@ const config = {
    *  existing on the command line. */
   draft: { target: 'config', describe: 'Create the release as a draft', type: 'boolean' },
   prerelease: { target: 'config', describe: 'Mark the release as a prerelease', type: 'boolean' },
+  assets: {
+    target: 'config',
+    describe:
+      "Files to attach to the release, as glob patterns relative to the package's own directory " +
+      '(e.g. ["dist/*.tar.gz"]). Read from every package, since one release covers the whole ' +
+      'source tree. A release with no assets at all is still perfectly valid.',
+    /** `type: 'string'` plus `array: true`, not `type: 'array'`: the latter loses the element type
+     *  and the contribution would read `unknown[]`. This is what keeps `assets` a `string[]` and is
+     *  why the key needs no `Extra`. */
+    type: 'string',
+    array: true,
+  },
 } satisfies Record<string, RmanConfig.CommandOption>;
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;

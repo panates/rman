@@ -279,6 +279,59 @@ describe('core/config', () => {
     });
   });
 
+  /**
+   * **What a command contributes to `RmanConfig`, pinned at the type level.**
+   *
+   * `version`, `changelog`, `githubRelease` and `publish` are no longer written out in
+   * `rman-config.interface.ts` - each command declares its own key, and `CommandContribution`
+   * assembles the block. Four things have to survive that, and none of them is visible to mocha:
+   * the derived keys, the hand-written `Extra` ones, the `+key` append forms, and `vars`.
+   *
+   * Checked by `tsc --noEmit -p packages/rman/test/tsconfig.json`, like `ScopedVars` above.
+   */
+  describe('command contributions', () => {
+    it('carries the derived keys, the Extra ones, +key and vars alike', () => {
+      const config: RmanConfig = {
+        version: {
+          /** Derived: an ordinary `target: 'config'` option on `version`. */
+          commitMessage: 'chore(release): v{version}',
+          releaseTagPattern: 'release-*',
+          stampDockerfile: true,
+          /** Derived from a `target: 'both'` option - the flag is `--changelog`. */
+          changelog: true,
+          /** `Extra`: no `CommandOption` can say "a path, or `{ file, constant }`". */
+          stamp: ['src/constants.ts', { file: 'src/version.go', constant: 'Version' }],
+          /** `Extra` again: a shell command, or a function, or a list of either. */
+          before: ['echo before', ctx => void ctx.pkg.name],
+        },
+        /** `changelog` needs no `Extra` at all - every key of it is an option shape. */
+        changelog: { tagPattern: '{name}@*', ignoreTypes: ['chore'], template: './tpl.md' },
+        /** `array: true` beside `type: 'string'`, which is what keeps `assets` a `string[]`. */
+        githubRelease: { assets: ['dist/*.tgz'], draft: false, repository: 'owner/repo' },
+        publish: {
+          target: ['docker'],
+          skip: false,
+          /** Contributed by the core's own docker target, through `PublishTargetConfigs`. */
+          docker: { image: 'org/app', platforms: ['linux/arm64'] },
+        },
+        /** The append forms, which `ConfigBlock` generates rather than each interface restating. */
+        '+version': { stamp: ['extra.ts'] },
+      };
+      expect(config.version?.commitMessage).toBe('chore(release): v{version}');
+    });
+
+    /**
+     * The negative control, and the reason the positive one means anything: excess-property
+     * checking still fires *inside* a contributed block. Without it the assertions above would pass
+     * for a `CommandConfigs` that had quietly widened to `any`.
+     */
+    it('still catches a typo inside a contributed block', () => {
+      // @ts-expect-error `commitMesage` is not a key of `version`
+      const bad: RmanConfig = { version: { commitMesage: 'typo' } };
+      expect(bad).toBeDefined();
+    });
+  });
+
   describe('createFileScope()', () => {
     /**
      * **Pinned, not merely documented.** `file` is evaluated while the config *resolves*, which

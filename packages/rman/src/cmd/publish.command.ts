@@ -4,6 +4,7 @@ import type { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/package.js';
 import { type PublishTarget, unknownTargets } from '../core/publish-target.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import type { RmanConfig as ConfigShape } from '../interfaces/rman-config.interface.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
@@ -70,6 +71,28 @@ const config = {
     type: 'boolean',
   },
 } satisfies Record<string, RmanConfig.CommandOption>;
+
+/**
+ * The rest of `publish.*`: **one block per target, contributed by the target**.
+ *
+ * `PublishTargetConfigs` is an empty interface on purpose - an extension point rather than a list.
+ * `docker` below is the core's own target declaring its block; `rman-node` adds `directory` from
+ * its own package the same way. Neither could be written here: which targets exist is whatever the
+ * repository's plugins contribute.
+ *
+ * **It had to be a slot, not two declarations of `publish`.** A key that arrives from two places is
+ * `Interface 'RmanConfig' cannot simultaneously extend types ... Named property 'publish' of types
+ * ... are not identical` (measured) - so `publish` is contributed once, here, and everything under
+ * it merges into this one interface first.
+ */
+export interface PublishExtraKeys extends PublishTargetConfigs {}
+
+/** Where a target declares its own `publish.<target>` config block. Augmented, never edited. */
+export interface PublishTargetConfigs {
+  /** Required once `"docker"` is one of a package's `publish.target`s - `publish --target docker`
+   *  errors clearly on a package that opts in here but leaves this out. */
+  docker?: ConfigShape.DockerPublishOptions;
+}
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 
@@ -191,17 +214,19 @@ const publishCommand = registerCommand(app => {
 export default publishCommand;
 
 /**
- * `publish`'s own keys on `RmanConfig`, derived from the `config` block - so `target` and `skip`
- * are typed from the one place that also registers them.
+ * `publish`'s own keys on `RmanConfig`: `target` and `skip` derived from the `config` block, plus
+ * every target's own block through `PublishExtraKeys`.
  *
- * **A target's own config block is not here and cannot be**: `publish.docker.*` belongs to whoever
- * implements `docker`, and a `Record<string, CommandOption>` has no way to say "an object with
- * these keys" anyway. Those stay in `RmanConfig.PublishOptions` until a target can contribute its
- * config type as well as its flags.
+ * So a target contributes its config type as well as its flags now - `publish.docker.*` is declared
+ * by the core's docker target and `publish.directory` by `rman-node`'s npm one, each from its own
+ * package, and neither can collide with the other or with what the command derives.
  */
 declare module '../interfaces/rman-cfg.interface.js' {
   namespace RmanConfig {
-    interface CommandConfigs extends RmanConfig.CommandContribution<ReturnType<typeof publishCommand>> {}
+    interface CommandConfigs extends RmanConfig.CommandContribution<
+      ReturnType<typeof publishCommand>,
+      PublishExtraKeys
+    > {}
   }
 }
 

@@ -50,6 +50,32 @@ const config = {
       'otherwise the heading shows the previous release.',
     type: 'string',
   },
+  /**
+   * Config-only, from here down - `.rmanrc "changelog.*"` keys with no reason to be a flag. All
+   * three are plain strings or a string list, so this command needs no `Extra` at all: its whole
+   * config block is derived from what is declared here.
+   */
+  ignoreTypes: {
+    target: 'config',
+    describe: 'Conventional-commit types to leave out of the notes entirely (e.g. ["chore", "ci"])',
+    type: 'string',
+    array: true,
+  },
+  template: {
+    target: 'config',
+    describe:
+      "Path to a template file for one package's entry, relative to the repository root. Its own " +
+      "{{package}}/{{version}} placeholders are that file's content, not config expressions.",
+    type: 'string',
+  },
+  tagPattern: {
+    target: 'config',
+    describe:
+      "The release tag naming scheme each package's changelog boundary is detected from - " +
+      '"{name}" is replaced with the package name (e.g. "{name}@*" for independent versioning). ' +
+      'Default "v*", one repo-wide tag resolved through git describe.',
+    type: 'string',
+  },
 } satisfies Record<string, RmanConfig.CommandOption>;
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;

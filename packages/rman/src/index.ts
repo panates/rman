@@ -68,6 +68,7 @@ export type CommandRegisterFunction = CommandDeclaration.CommandRegisterFunction
  *  rather than inferred. */
 export type ArgsOf<C, Cmd extends string> = CommandDeclaration.ArgsOf<C, Cmd>;
 export type GlobalArgs = CommandDeclaration.GlobalArgs;
+export * from './commands.js';
 export * from './interfaces/rman-config.interface.js';
 export * from './services.js';
 

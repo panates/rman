@@ -1,23 +1,7 @@
 #!/usr/bin/env node
-/**
- * Imported for their side effect: each module calls `registerCommand`, which pushes its register
- * function onto `commandRegistry`. Nothing here reads the modules' exports - the registry is what
- * `runCli` walks - so the import list *is* the built-in command list.
- */
-import './cmd/build.command.js';
-import './cmd/changed.command.js';
-import './cmd/changelog.command.js';
-import './cmd/config.command.js';
-import './cmd/diff.command.js';
-import './cmd/exec.command.js';
-import './cmd/github-release.command.js';
-import './cmd/import.command.js';
-import './cmd/info.command.js';
-import './cmd/list.command.js';
-import './cmd/publish.command.js';
-import './cmd/run.command.js';
-import './cmd/test.command.js';
-import './cmd/version.command.js';
+/** Every built-in command, registered by importing them - see `commands.ts` for why the list lives
+ *  there rather than here. */
+import './commands.js';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

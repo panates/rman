@@ -1,6 +1,7 @@
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
 import EasyTable from 'easy-table';
+import type { RunStepValue } from '../core/run-step.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import type { VersionService } from '../services/version.service.js';
 import { VersionPlanService } from '../services/version-plan.service.js';
@@ -83,7 +84,76 @@ const config = {
       'identifier starts a fresh prerelease line. Ignored when bump is an explicit version.',
     type: 'string',
   },
+  /**
+   * Config-only, from here down: `.rmanrc "version.*"` keys with no reason to be a flag.
+   * `--message` is `commitMessage`'s flag and is declared above; the rest are settings a repository
+   * states once, not things a single run overrides.
+   */
+  commitMessage: {
+    target: 'config',
+    describe:
+      'The commit message for each group this run commits - "{version}" is substituted when a ' +
+      'commit\'s own group shares one version. Default "chore(release): v{version}".',
+    type: 'string',
+  },
+  releaseTagPattern: {
+    target: 'config',
+    describe:
+      "Tag naming the repository's own release, as opposed to the per-package tags " +
+      '"changelog.tagPattern" names - only created when the root is on a calendar version. ' +
+      'Root-level only. Default "release-*". Must **not** match any package\'s own tag pattern, or ' +
+      "that package's changelog boundary resolves to the repository release instead of its own.",
+    type: 'string',
+  },
+  stampDockerfile: {
+    target: 'config',
+    describe:
+      "Keep this package's Dockerfile org.opencontainers.image.version label in step with the " +
+      'version being written. Per-package cascaded. Default true - the label is by specification ' +
+      'the version of the packaged software, so there is only one correct value and "version" is ' +
+      'what knows it. Only ever rewrites a label the Dockerfile already declares.',
+    type: 'boolean',
+  },
 } satisfies Record<string, RmanConfig.CommandOption>;
+
+/**
+ * The rest of `version.*` - the keys an option **cannot** describe, which is the whole test for
+ * belonging here.
+ *
+ * A `CommandOption` says `type: 'string'` or `type: 'boolean'`. It has no way to say "a path, or
+ * `{ file, constant }`" or "a shell command, or a function, or a list of either" - so these four
+ * are written out, intersected with the derived ones by `CommandContribution`, and the key still
+ * has exactly one owner. Everything above that *is* expressible is declared as an option instead:
+ * `Extra` is the escape hatch, not the default.
+ */
+export interface VersionExtraKeys {
+  /** Files whose hard-coded version is rewritten to the version being written, in the same commit
+   *  as the bump - paths relative to the package's own directory (e.g. `["src/constants.ts"]`).
+   *  Per-package cascaded; a listed file a package doesn't have is a silent no-op, so one `"[*]"`
+   *  declaration covers a repo where only some packages carry one.
+   *
+   *  Stamping the source, not the build output: a build-time rewrite leaves the checked-in file
+   *  claiming a placeholder, so anything running from source reports that placeholder, git never
+   *  records the released version, and the rewrite has to be redone on every build. */
+  stamp?: VersionStampEntry | VersionStampEntry[];
+  /** Command(s) run at the version write itself, when the package does not declare a hook for that
+   *  slot of its own (`version` in a Node repository's `package.json#scripts`, whatever a plugin's
+   *  step source answers elsewhere - the package's own declaration wins, as in `run`). An array
+   *  runs them in sequence. `${{ pkg.targetVersion }}` is bound here and in the two below, and
+   *  nowhere else.
+   *
+   *  A `RunStepFn` runs in place of a shell command - but note that `${{ pkg.targetVersion }}` is a
+   *  *string* substitution, so a function reads the written version off `pkg` instead. */
+  exec?: RunStepValue | RunStepValue[];
+  /** Same, before the write (`preversion` in a Node repository). */
+  before?: RunStepValue | RunStepValue[];
+  /** Same, after it (`postversion` in a Node repository). */
+  after?: RunStepValue | RunStepValue[];
+}
+
+/** One `version.stamp` entry: a path, or a path plus the identifier to rewrite when it is not
+ *  spelled `version`. */
+export type VersionStampEntry = string | { file: string; constant?: string };
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 
@@ -204,7 +274,10 @@ export default versionCommand;
  */
 declare module '../interfaces/rman-cfg.interface.js' {
   namespace RmanConfig {
-    interface CommandConfigs extends RmanConfig.CommandContribution<ReturnType<typeof versionCommand>> {}
+    interface CommandConfigs extends RmanConfig.CommandContribution<
+      ReturnType<typeof versionCommand>,
+      VersionExtraKeys
+    > {}
   }
 }
 
