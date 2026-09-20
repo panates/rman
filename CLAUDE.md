@@ -265,8 +265,11 @@ when `!repository.monorepo`, or every hook runs twice (measured).
   - Top level only. `extends` inside a `"[selector]"` block **throws**: the recursive type makes it
     look valid and it would simply never resolve, and each form is checked against *its own* path so
     the error names the file that holds it.
-  - An inherited unmarked key still configures the inheriting directory's package, not the packages
-    below. The rule doesn't bend for a base; a shared config aimed at packages writes `"[*]"`.
+  - **An inherited unmarked key behaves exactly like one written in that directory**: it reaches the
+    directory's own package *and every package below it*. The rule doesn't bend for a base, in
+    either direction - a shared config aiming at the root alone writes `"[/]"`, and one aiming at
+    the packages writes `"[*]"`. (This bullet said the opposite until the selector redesign, and was
+    measured wrong: a base declaring `group` unmarked resolves onto the root **and** `pkg-a`.)
 - **`+key`** appends instead of replacing, through the single `mergeConfig` every layer uses.
   Scalars promote to lists; on an object the prefix is ignored (objects already merge); `key` and
   `+key` together apply replacement first.
