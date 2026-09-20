@@ -211,12 +211,23 @@ for (const entry of applied) {
 }
 ```
 
-`getPlan` is deliberately decoupled from `VersionService` - it only ever compares the *current*
-`package.json` version against the registry (via `npm view`, queried concurrently across every
-package), so it works equally well right after a version bump or standing alone in a release
-pipeline that bumped days earlier. A `private: true` package, or one with `.rmanrc
+`getPlan` is deliberately decoupled from `VersionService` - it only ever asks whether the *current*
+`package.json` version is on the registry (one `npm view <name> version versions --json` per
+package, run concurrently), so it works equally well right after a version bump or standing alone in
+a release pipeline that bumped days earlier. A `private: true` package, or one with `.rmanrc
 "publish.skip"`, is always `'skip'`ped; a dirty package is `'error'` (aborts the plan) unless
 `ignoreDirty` downgrades it to `'skip'`.
+
+**The question is whether *this version* is published, not what `latest` points at**, and the two
+part company as soon as a prerelease goes out under its own dist-tag: `latest` stays on the old
+stable however many betas follow. `entry.registryVersion` still reports `latest`, because that is
+what a reader wants to see; the status comes from the published `versions`.
+
+**A prerelease with no dist-tag is an `'error'` entry**, naming `--tag`. `npm publish` with no
+`--tag` writes `latest`, so a `2.0.0-beta.0` published that way is what every plain
+`npm install <name>` resolves to from then on, and `npm dist-tag` can only move it back after the
+people who installed in between already have it. `--tag latest` is refused the same way - it is the
+same request spelled out. A calendar version is not a preview, however semver reads its time part.
 
 `applyPlan` publishes **sequentially**, in topological order (dependencies before dependents) - if
 a package fails, every still-pending dependent (transitively) is marked `'error'` and skipped,

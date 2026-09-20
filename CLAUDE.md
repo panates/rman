@@ -802,7 +802,7 @@ touched package counts as changed.
 
   | Criterion | Source | Claims by default? | Implementation |
   | --- | --- | --- | --- |
-  | **b-1** npm-targeted packages | `npm view <name> version` == local `package.json` version | a package `rman-node` read the manifest of | `npmPublishTarget` → `PublishService` (`rman-node`) |
+  | **b-1** npm-targeted packages | the local version is among the registry's published `versions` | a package `rman-node` read the manifest of | `npmPublishTarget` → `PublishService` (`rman-node`) |
   | **b-2** docker-targeted packages | `docker manifest inspect <image>:<version>` | nothing - opt-in | `dockerPublishTarget` → `DockerPublishService` (core) |
   | **b-3** the repository itself (see `github-release`) | a GitHub Release exists for the repository's release tag | n/a - never optional, and not a target | `GithubReleaseService` (core) |
 
@@ -834,6 +834,32 @@ touched package counts as changed.
 - **Which packages a target is asked about is `shipsTo`/`targetsOf`, never a second read of
   `publish.target`.** `DockerPublishService` and `ListService` both go through it, so `publish` and
   `rman list --json` cannot disagree about where a package ships.
+- **B asks whether *this version* is published, never what `latest` points at.** The npm target
+  runs one `npm view <name> version versions --json`: `versions` decides `up-to-date` vs `publish`,
+  `latest` is only what the entry *reports* (`entry.registryVersion`). They are not the same
+  question and they part company as soon as a prerelease ships under its own dist-tag - `latest`
+  stays on the old stable however many betas follow, so the old `latest ==` comparison kept
+  proposing an already-published beta until npm answered 403. It was wrong in the other direction
+  too: a package whose local version sits *behind* `latest` was proposed just as wrongly.
+  - **A spec about this has to spell out both halves of the fake registry**, or it proves nothing.
+    Measured: with the fixture deriving `latest` from the end of the `versions` list, reverting the
+    fix left the spec green - the two answers coincided. `publish.service.spec.ts`'s `registry()`
+    therefore takes a `{ latest, versions }` form, and the beta specs use it.
+- **A prerelease with no dist-tag is an `'error'` entry, not a warning** (`needsDistTag`). `npm
+  publish` with no `--tag` writes `latest`, so a `2.0.0-beta.0` published that way is what every
+  plain `npm install` resolves to from then on; npm is content to point `latest` at a prerelease,
+  and `npm dist-tag` can move it back only after everyone who installed in between already has it.
+  One forgotten flag with no clean undo is what an aborting plan is for. `--tag latest` is the same
+  request spelled out and is refused identically.
+  - **`tag` is therefore a plan option, not an apply-only one.** A check firing at apply time would
+    be invisible to `--dry-run` and to the JSON a release pipeline gates on, which is exactly where
+    it should show up. `npm.target.ts` reads `--tag` in `planOptions`.
+  - **A calendar version has to be ruled out first**, and that is not a detail: `2026.9.15-1430`
+    carries a semver prerelease identifier because that is how the time is spelled. `needsDistTag`
+    makes the same pair of checks `github-release`'s `resolvePrerelease` does - `!isCalendarVersion`
+    plus the *scheme*'s `isPrerelease`, never `semver.prerelease` directly - and they agree
+    deliberately. `isCalendarVersion` is exported from `rman` for this caller, which is in a plugin.
+    Pinned with a negative control: dropping the calendar clause turns the calendar spec red.
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
 - In CI, gate the release pipeline on **this** plan, not on `changed`.

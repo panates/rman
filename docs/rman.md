@@ -107,6 +107,7 @@ import {
   SystemInfo,
   filterPackages,
   ROOT_SELECTOR,
+  isCalendarVersion,
   Logger,
   LOG_LEVELS,
   resolveRootLogLevel,

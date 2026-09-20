@@ -16,9 +16,17 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { exec, filterPackages, GitHelper, type Package, type PackageFilterOptions, type Repository } from 'rman';
+import {
+  exec,
+  filterPackages,
+  GitHelper,
+  isCalendarVersion,
+  type Package,
+  type PackageFilterOptions,
+  type Repository,
+} from 'rman';
 import { DEPENDENCY_KEYS } from '../augmentation/manifest.augmentation.js';
-import { npmViewVersion } from '../utils/npm-view.js';
+import { type NpmPackageView, npmViewPackage } from '../utils/npm-view.js';
 import { parseWorkspaceRange, resolveWorkspaceRange } from '../utils/workspace-range.js';
 import { CiService } from './ci.service.js';
 
@@ -120,9 +128,9 @@ function resolveWorkspaceRanges(json: Record<string, any>, packagesByName: Map<s
 
 export namespace PublishService {
   /** Injectable registry lookup - mainly for tests, so they don't depend on network access or a
-   *  real published package. Same shape as `detectChangeHash`'s own `npmViewVersion`. */
+   *  real published package. */
   export interface Deps {
-    npmViewVersion?: (name: string, cwd: string) => Promise<string | undefined>;
+    npmViewPackage?: (name: string, cwd: string) => Promise<NpmPackageView | undefined>;
   }
 
   export interface Options extends PackageFilterOptions {
@@ -134,14 +142,22 @@ export namespace PublishService {
     registry?: string;
     /** Path to a custom `.npmrc`, for both the registry check and the actual publish. */
     userconfig?: string;
+    /**
+     * `npm publish --tag <tag>` - the dist-tag this version is published under (npm's own default
+     * is `latest`).
+     *
+     * **A plan option rather than an apply-only one, because the plan is what has to refuse a
+     * prerelease without it** - see `needsDistTag`. A check that only fired at apply time would be
+     * invisible to `--dry-run` and to the JSON a release pipeline gates on, which is precisely
+     * where you want to find out.
+     */
+    tag?: string;
   }
 
   export interface ApplyOptions extends Options {
     packageManager?: CiService.PackageManager;
     /** `npm publish --access <access>` - required by the registry for a *new* scoped package. */
     access?: 'public' | 'restricted';
-    /** `npm publish --tag <tag>` - the dist-tag this version is published under (default `latest`). */
-    tag?: string;
     /** `npm publish --otp <otp>` - a 2FA one-time password, for registries that require it. */
     otp?: string;
     /** Subdirectory to publish from, relative to the package's own directory - only consulted when
@@ -155,7 +171,9 @@ export namespace PublishService {
     package: Package;
     version: string;
     status: 'publish' | 'skip' | 'up-to-date' | 'error';
-    /** What's currently on the registry, if anything - only set once a registry check actually ran. */
+    /** What the registry's **`latest` dist-tag** points at, if anything - only set once a registry
+     *  check actually ran. Reported rather than compared: whether *this* version is published is a
+     *  different question, and `getPlan` answers it from the published `versions`. */
     registryVersion?: string;
     reason?: string;
   }
@@ -166,13 +184,18 @@ export namespace PublishService {
    * queries it to decide, so it's safe to call any time, including as the plan a bare `rman
    * publish` shows before asking for confirmation.
    *
-   * A `private: true` package is always `'skip'`ped outright. A package with uncommitted local
-   * changes is `'error'` (aborts the whole plan) unless `options.ignoreDirty` downgrades it to
-   * `'skip'` instead - same rule `version` uses, since publishing untracked local edits is worse
-   * than a bad commit. Otherwise, its currently-published registry version (via `npm view`,
-   * queried concurrently across every remaining package) decides the rest: identical to the local
-   * `package.json` version is `'up-to-date'`; anything else (including never having been
-   * published at all) is `'publish'`.
+   * A `private: true` package is always `'skip'`ped outright. A **prerelease with no dist-tag** is
+   * `'error'` (see `needsDistTag`) - that one is about the invocation rather than the package, so
+   * it is caught before anything touches the network. A package with uncommitted local changes is
+   * `'error'` too (aborts the whole plan) unless `options.ignoreDirty` downgrades it to `'skip'`
+   * instead - same rule `version` uses, since publishing untracked local edits is worse than a bad
+   * commit.
+   *
+   * Otherwise the registry decides, via one `npmViewPackage` per remaining package (run
+   * concurrently): **the local version being among the published `versions`** is `'up-to-date'`,
+   * anything else - including never having been published at all - is `'publish'`. Deliberately not
+   * a comparison against `latest`, which answers a different question and disagrees with this one
+   * the moment a prerelease ships under its own dist-tag; see `npmViewPackage`.
    *
    * Deliberately decoupled from `version`: this only ever looks at what's *currently* on disk and
    * on the registry, never at whether `version` was just run - so it works equally well right
@@ -188,7 +211,7 @@ export namespace PublishService {
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
     const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
 
-    const viewVersion = deps.npmViewVersion ?? ((name: string, cwd: string) => npmViewVersion(name, cwd, options));
+    const viewPackage = deps.npmViewPackage ?? ((name: string, cwd: string) => npmViewPackage(name, cwd, options));
 
     const entries = new Map<string, Entry>();
     const toCheck: Package[] = [];
@@ -209,6 +232,15 @@ export namespace PublishService {
         });
       } else if (pkg.isPrivate) {
         entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'skip', reason: 'private package' });
+      } else if (needsDistTag(pkg, options.tag)) {
+        entries.set(pkg.name, {
+          package: pkg,
+          version: pkg.version,
+          status: 'error',
+          reason:
+            `${pkg.version} is a prerelease - publish it under its own dist-tag ` +
+            '(--tag beta), or npm puts it on "latest" and every plain install gets it',
+        });
       } else if (isDirty(pkg)) {
         entries.set(pkg.name, {
           package: pkg,
@@ -223,13 +255,22 @@ export namespace PublishService {
 
     await Promise.all(
       toCheck.map(async pkg => {
-        const registryVersion = await viewVersion(pkg.name, pkg.dirname);
+        const view = await viewPackage(pkg.name, pkg.dirname);
+        const registryVersion = view?.latest;
+        /** **This version**, not `latest` - the two part company the moment a prerelease is
+         *  published under its own dist-tag, and `latest` then never moves however many betas go
+         *  out. Asking it kept proposing an already-published version until npm answered 403. */
+        const published = !!view?.versions.includes(pkg.version);
         entries.set(pkg.name, {
           package: pkg,
           version: pkg.version,
           registryVersion,
-          status: registryVersion === pkg.version ? 'up-to-date' : 'publish',
-          reason: registryVersion ? `registry has ${registryVersion}` : 'never published',
+          status: published ? 'up-to-date' : 'publish',
+          reason: published
+            ? `registry already has ${pkg.version}`
+            : registryVersion
+              ? `registry has ${registryVersion}`
+              : 'never published',
         });
       }),
     );
@@ -319,6 +360,30 @@ function resolvePublishDir(pkg: Package, contentsOverride: string | undefined): 
  */
 function retiredDirectoryKey(pkg: Package): boolean {
   return (pkg.config?.publish as Record<string, unknown> | undefined)?.directory !== undefined;
+}
+
+/**
+ * Whether this package's version is a prerelease that has been given no dist-tag of its own - the
+ * one publish mistake a single forgotten flag makes, and an unrecoverable one.
+ *
+ * `npm publish` with no `--tag` writes **`latest`**, so a `2.0.0-beta.0` published that way is what
+ * every plain `npm install <name>` resolves to from then on. Nothing about the version stops it:
+ * npm is content to point `latest` at a prerelease, and `npm dist-tag` can move it back only after
+ * everyone who installed in between already has the beta. So this is an `'error'` entry rather than
+ * a warning - it aborts the plan, names the flag, and costs one retyped command.
+ *
+ * `--tag latest` counts as not having one: it is the same request spelled out, and a reader who
+ * typed it deliberately wants the same refusal as one who typed nothing.
+ *
+ * **Whether a version is a preview is the scheme's question, not semver's** - `pkg.versionScheme.
+ * isPrerelease` - and a **calendar version has to be ruled out first**: `2026.9.15-1430` carries a
+ * semver prerelease identifier by construction, because that is how the time is spelled, and it
+ * says nothing about the release being a preview. `github-release`'s own `resolvePrerelease` makes
+ * exactly this pair of checks; they agree deliberately.
+ */
+function needsDistTag(pkg: Package, tag: string | undefined): boolean {
+  if (tag && tag !== 'latest') return false;
+  return !isCalendarVersion(pkg.version) && pkg.versionScheme.isPrerelease(pkg.version);
 }
 
 function buildPublishCommand(packageManager: CiService.PackageManager, options: PublishService.ApplyOptions): string {

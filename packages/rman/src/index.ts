@@ -119,6 +119,11 @@ export {
 /** Version stamping helpers a `ManifestProvider.stampVersion` can delegate to - the quoted-constant
  *  pattern most languages share, and the OCI Dockerfile label (which `version` stamps itself, since
  *  the label's value is by specification the package's version). */
+/** A calendar version's time part (`2026.9.15-1430`) is a semver *prerelease identifier* by
+ *  construction, so anything asking "is this a preview?" has to rule it out first - `github-release`
+ *  does, and so must a publish target deciding whether a version needs its own dist-tag. Exported
+ *  because that second caller lives in a plugin. */
+export { isCalendarVersion } from './utils/release-version.js';
 export type { RunBinOptions, RunBinResult } from './utils/run-bin.js';
 export { runBin } from './utils/run-bin.js';
 export { OCI_VERSION_LABEL, stampVersionConstant, stampVersionLabel } from './utils/version-stamp.js';

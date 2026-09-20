@@ -75,7 +75,6 @@ export const npmPublishTarget: PublishTarget = {
       ...planOptions(ctx),
       packageManager: ctx.args.packageManager,
       access: ctx.args.access,
-      tag: ctx.args.tag,
       otp: ctx.args.otp,
       contents: ctx.args.contents,
     });
@@ -89,5 +88,9 @@ function planOptions(ctx: PublishTarget.Context): PublishService.Options {
     ...ctx.options,
     registry: ctx.args.registry as string | undefined,
     userconfig: ctx.args.userconfig as string | undefined,
+    /** Read at *plan* time too, not only where the publish command is built: the plan is what
+     *  refuses a prerelease carrying no dist-tag, so `--dry-run` and the JSON a pipeline gates on
+     *  have to see the flag. */
+    tag: ctx.args.tag as string | undefined,
   };
 }

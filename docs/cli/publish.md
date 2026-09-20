@@ -36,7 +36,7 @@ Two ship today, and a repository can install more:
 
 | Target | From | "Already published?" | Claims by default |
 | --- | --- | --- | --- |
-| `npm` | [`rman-node`](../cli-node.md) | `npm view <name> version` == the local `package.json` version | every package whose manifest that plugin read |
+| `npm` | [`rman-node`](../cli-node.md) | the local `package.json` version is among the registry's published `versions` | every package whose manifest that plugin read |
 | `docker` | rman itself | `docker manifest inspect <image>:<version>` succeeds | nothing - opt-in, via `publish.target` |
 
 Two consequences worth knowing:
@@ -95,7 +95,7 @@ Publish these packages? (y/N)
 rman publish --yes                        # publish immediately, no confirmation
 rman publish --dry-run                    # only show the plan, never publish
 rman publish --access public              # required for a brand-new scoped package
-rman publish --tag next
+rman publish --tag beta                   # a prerelease goes under its own dist-tag, never latest
 rman publish --otp 123456
 rman publish --registry https://registry.example.com --userconfig ./ci.npmrc
 rman publish --package-manager pnpm
@@ -110,6 +110,50 @@ Any dirty package aborts the whole plan (`N package(s) have uncommitted local ch
 A target's `getPlan` is decoupled from [`version`](version.md) - it only ever compares what is on
 disk against what is on its own registry, so it works equally well right after a version bump or
 standing alone days later.
+
+### Prereleases: `--tag` is not optional
+
+A prerelease carrying no dist-tag is an **error**, not a candidate:
+
+```
+error [npm] rman 2.0.0-beta.0 is a prerelease - publish it under its own dist-tag (--tag beta),
+            or npm puts it on "latest" and every plain install gets it
+1 package(s) failed to prepare for publish - see the errors above
+```
+
+The reason it refuses rather than warns: `npm publish` with no `--tag` writes **`latest`**, so a
+beta published that way is what every plain `npm install <name>` resolves to from then on. Nothing
+about the version stops it - npm is content to point `latest` at a prerelease - and `npm dist-tag`
+can move it back only after everyone who installed in between already has the beta. One forgotten
+flag, and no clean undo. `--tag latest` is refused the same way; it is the same request spelled out.
+
+A whole prerelease cycle, then:
+
+```bash
+rman version --preid beta     # 1.3.0 -> 2.0.0-beta.0, committed and tagged
+```
+
+```bash
+rman publish --tag beta       # published beside "latest", which does not move
+```
+
+Repeat the pair for `beta.1`, `beta.2`, … Any bump graduates a prerelease to the release it was
+previewing (`2.0.0-beta.3` → `2.0.0` for `major`, `minor` *or* `patch`), after which an ordinary
+`rman publish` puts it on `latest`:
+
+```bash
+rman version major && rman publish
+```
+
+**The plan stays correct across the cycle**, because the npm target asks whether *this version* is
+among the registry's published `versions` - not what `latest` points at, which by design does not
+move while betas are going out. Asking `latest` would have kept proposing an already-published beta
+until npm answered `403`.
+
+One thing the tooling cannot check for you: a **consumer's** dependency range. `>=2.0.0` does not
+match `2.0.0-beta.0` - semver excludes prereleases from a range that names none - so a package
+meant to be installed alongside the beta needs `>=2.0.0-0`. Ranges *inside* the repository are
+rewritten by [`version`](version.md) itself and need no attention.
 
 ### Asking "is there anything to release?" in CI
 
