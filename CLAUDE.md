@@ -1513,3 +1513,13 @@ Rules:
   mechanical and is not: the sections moved out of the old `docs/api.md` were at a baseline three
   refactors old, and carried a `getSystemInfo(packageManager, options)` and a `detectChangeHash`
   that no longer existed.
+- **`docs-api.spec.ts` is the only thing that ever looks at these docs.** It imports every name
+  `docs/rman.md`'s Installation block advertises and type-checks its command-declaration example
+  verbatim, so a name the package stops exporting fails at compile time. It is a **floor, not a
+  contract**: a name *added* to the package does not fail it, and no prose is checked at all. The
+  whole arc that made services classes, replaced four plugin seams with `TechStack` and introduced
+  `RmanApplication` left the page describing none of it, because nothing looked - mocha transpiles
+  without type-checking and no spec imported what the page claims.
+- **Check anchors after any heading change**, with the `github-slugger` pass - 162 links across
+  `docs/`, `docs/cli/` and the two published READMEs resolve today, and a link to a missing anchor
+  lands silently at the top of the page.

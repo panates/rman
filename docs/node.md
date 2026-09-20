@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 0ec1e88
-package-version: 1.0.12
-date: 2026-09-17
+git-commit: 171ca25
+package-version: 1.3.0
+date: 2026-09-20
 
 Verified against `packages/node/src/` as of the commit above. Before trusting/updating this file in
 a later session, run:
 
-  git diff 0ec1e88..HEAD -- packages/node/src/
+  git diff 171ca25..HEAD -- packages/node/src/
 
 and update only the sections touched by what that diff actually shows. Once verified again, bump
 `git-commit`/`package-version`/`date` above to the new HEAD.
@@ -52,6 +52,7 @@ rather than working around npm's.
 - [`SystemInfo`: the npm half](#systeminfo-the-npm-half)
 - [Seams this plugin fills](#seams-this-plugin-fills)
 - [`"workspace:"` ranges](#workspace-ranges)
+- [Commands, and the `npm` publish target](#commands-and-the-npm-publish-target)
 
 ## Installation
 
@@ -66,6 +67,10 @@ imported from the package root:
 import {
   defineConfig,
   nodePlugin,
+  nodeTechStack,
+  augmentTechStack,
+  npmPublishTarget,
+  NPM_TARGET,
   PublishService,
   CiService,
   CleanService,
@@ -74,6 +79,7 @@ import {
   packageJsonManifest,
   npmWorkspace,
   packageJsonSteps,
+  augmentSystemInfo,
   npmBinPaths,
   DEPENDENCY_KEYS,
   parseWorkspaceRange,
@@ -130,10 +136,18 @@ export default defineConfig({
 
 ## Services
 
+> The three below are still `namespace`s taking a `repository`, unlike rman's own services, which
+> are classes reached through `app.getService(...)`. They are this package's, so the shape is this
+> package's to change.
+
 ### `PublishService`
 
 Computes and applies `npm publish` (or the equivalent for yarn/pnpm/bun) across every non-private
 package whose local version isn't already on the registry.
+
+**Reached through `npmPublishTarget`, not directly, when `rman publish` runs** - this is the
+implementation behind the `npm` [publish target](rman.md#publishtarget), and stays callable on its
+own. See [Commands, and the `npm` publish target](#commands-and-the-npm-publish-target).
 
 ```ts
 namespace PublishService {

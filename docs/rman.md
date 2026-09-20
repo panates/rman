@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 546a809
-package-version: 1.1.1
-date: 2026-09-18
+git-commit: 171ca25
+package-version: 1.3.0
+date: 2026-09-20
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff 546a809..HEAD -- src/
+  git diff 171ca25..HEAD -- packages/rman/src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -22,18 +22,18 @@ from your own Node.js scripts (release tooling, CI glue code, custom dashboards,
 shelling out to the `rman` binary at all.
 
 ```ts
-import { Repository, VersionService } from 'rman';
+import { Repository, VersionPlanService } from 'rman';
 
 const repository = await Repository.create();
-const plan = await VersionService.getPlan(repository);
+const plan = await VersionPlanService.getPlanner(repository.app).getPlan(repository);
 ```
 
-This document covers that programmatic surface: `Repository`/`Package`, every `*Service`
-namespace, the `.rmanrc`/`.rmanrc.yml` configuration schema those services read, and a few
-standalone utilities (`ChangeHashService`, `Logger`). For the CLI itself (commands, flags,
+This document covers that programmatic surface: `RmanApplication`, `Repository`/`Package`, every
+service, the `.rmanrc`/`.rmanrc.yml` configuration schema those services read, and a few standalone
+utilities (`ChangeHashService`, `Logger`). For the CLI itself (commands, flags,
 `--help` text), see [docs/cli-rman.md](cli-rman.md) (or [README.md](../README.md) for a fast-start overview).
 
-> **Not part of this API:** anything under `src/commands/*.command.ts` and `cli.ts`'s `runCli` -
+> **Not part of this API:** anything under `src/cmd/*.command.ts` and `cli.ts`'s `runCli` -
 > those are CLI-only (argv parsing, colored console output, confirmation prompts) and are not
 > re-exported from the package's main entry point. If you need `runCli` itself (e.g. to embed the
 > CLI in another tool), import it from `rman/cli.js` explicitly.
@@ -42,6 +42,10 @@ standalone utilities (`ChangeHashService`, `Logger`). For the CLI itself (comman
 
 - [Installation](#installation)
 - [Core concepts](#core-concepts)
+  - [`RmanApplication`](#rmanapplication)
+  - [`TechStack`](#techstack)
+  - [`RmanPlugin`](#rmanplugin)
+  - [Declaring a command](#declaring-a-command)
   - [`Repository`](#repository)
   - [`Package`](#package)
 - [Configuration (`.rmanrc` / `.rmanrc.yml`)](#configuration-rmanrc--rmanrcyml)
@@ -53,6 +57,7 @@ standalone utilities (`ChangeHashService`, `Logger`). For the CLI itself (comman
   - [Editor support (types)](#editor-support-types)
 - [Services](#services)
   - [`VersionService`](#versionservice)
+  - [`VersionPlanService`](#versionplanservice)
   - [`PublishTarget`](#publishtarget)
   - [`DockerPublishService`](#dockerpublishservice)
   - [`GithubReleaseService`](#githubreleaseservice)
@@ -79,10 +84,19 @@ imported from the package's default export:
 
 ```ts
 import {
+  RmanApplication,
   Repository,
   Package,
+  Registry,
+  Service,
   defineConfig,
+  definePlugin,
+  declareCommand,
+  baseTechStack,
+  targetsOf,
+  shipsTo,
   VersionService,
+  VersionPlanService,
   DockerPublishService,
   GithubReleaseService,
   ChangelogService,
@@ -95,8 +109,19 @@ import {
   LOG_LEVELS,
   resolveRootLogLevel,
 } from 'rman';
-import type { RmanConfig } from 'rman';
+import type {
+  RmanConfig,
+  RmanPlugin,
+  TechStack,
+  PublishTarget,
+  ServiceMap,
+  CommandOption,
+  ArgsOf,
+} from 'rman';
 ```
+
+Services are **classes reached through the application** (`app.getService('version')`) - the
+classes are exported so you can name their types, not so you can construct one.
 
 **Everything npm-specific lives in `rman-node`** - `PublishService`, `CiService`, `CleanService`,
 the `package.json` manifest reader, the version planner, `node_modules/.bin` on PATH, and the
@@ -106,6 +131,164 @@ repository declares its own through the same seams the plugin uses. `info` is a 
 whose npm half the plugin augments in place.
 
 ## Core concepts
+
+### `RmanApplication`
+
+**One rman invocation, and everything it holds.** Created before anything else, handed to every
+plugin, and the owner of every registry and service. Nothing is process-global: an application
+starts empty and is thrown away whole, so two repositories in one process share nothing.
+
+```ts
+class RmanApplication {
+  constructor(options?: { logLevel?: LogLevel });
+
+  readonly techStacks: Registry<TechStack>;       // the technologies this run knows about
+  readonly publishTargets: Registry<PublishTarget>; // where a package's artifact can ship
+  readonly logger: Logger;
+  versionPlanner?: VersionPlanService;            // the plan orchestrator - see VersionPlanService
+
+  get repository(): Repository;                   // throws before one is attached
+  techStackFor(dir: string): TechStack;           // the first stack whose manifest reader claims it
+
+  getService<K extends keyof ServiceMap>(name: K): ServiceMap[K];
+  setService<K extends keyof ServiceMap>(name: K, factory: (app: RmanApplication) => ServiceMap[K]): void;
+}
+```
+
+`Repository.create` builds one unless handed one, and the repository carries it:
+
+```ts
+const repository = await Repository.create();
+const app = repository.app; // non-enumerable, so nothing that walks a Repository drags it in
+
+// Or hand one over, e.g. to set the log level before anything reads config:
+const own = new RmanApplication({ logLevel: 'silent' });
+await Repository.create(undefined, { app: own });
+```
+
+- **`repository` throws before it is attached, deliberately.** Plugins are what *find* the packages,
+  so they are loaded before any exists; `undefined` would let a plugin write a check that silently
+  does nothing.
+- **One application, one repository.** A second is refused.
+- **`Registry<T>`** is the shape of a contribution list: `add` (idempotent by identity), `all`,
+  `first(ask)` for "the first that recognizes this", and it is iterable. A registry is for a
+  question whose answer is the *sum* of what was contributed; a question with exactly one answer is
+  a service instead.
+
+### `TechStack`
+
+**A technology, as one unit.** What a package *is*, where packages are, where its scripts come
+from, which directories hold its binaries, and how its releases are planned - five answers that
+only make sense together, which is why they are not five separate seams.
+
+```ts
+interface TechStack {
+  name: string;                          // what Package.provider reports
+  manifestProvider: ManifestProvider;    // required - the rest are optional
+  workspaceProvider?: Workspace.Provider;
+  runSteps?: RunService.StepSource;
+  binPathsProvider?: BinPath.Provider;
+  versionPlanner?: VersionPlanService;
+}
+```
+
+The core ships `baseTechStack`, which recognizes nothing - a repository naming no plugin falls back
+to it and gets a package named after its directory at `0.0.0`. `rman-node` contributes
+`nodeTechStack`; another ecosystem contributes its own.
+
+### `RmanPlugin`
+
+**A name and an `init`.** Everything a plugin contributes it registers there, so a new extension
+point never means a new field on an interface every plugin is written against.
+
+```ts
+interface RmanPlugin {
+  name: string;
+  init(ctx: PluginContext): void | Promise<void>;
+}
+
+interface PluginContext {
+  readonly app: RmanApplication;
+  addTechStack(stack: TechStack): void;
+  addCommand(command: CustomCommand | CommandRegisterFunction): void;
+}
+```
+
+```ts
+export const nodePlugin = definePlugin({
+  name: 'rman-node',
+  init(ctx) {
+    ctx.addTechStack(nodeTechStack);
+    ctx.app.publishTargets.add(npmPublishTarget); // anything else goes straight onto ctx.app
+    ctx.addCommand(ciCommand);
+  },
+});
+```
+
+`init` runs **during `Repository.create`, before any package is known** - so `ctx.app.repository`
+throws there. A plugin deciding something per package does it inside its own provider, which is
+asked later. A plugin package's entry point exports an **rman config**, not the plugin:
+`export default defineConfig({ plugins: [nodePlugin] })`.
+
+### Declaring a command
+
+**A command says what it has; one function says what yargs is told.** Options are data, checked for
+typos, and the `--config` keys and the handler's argv type both fall out of the same declaration.
+
+```ts
+import { declareCommand, packageFilterOptions, type ArgsOf, type CommandOption } from 'rman';
+
+/** Hoisted, both of them - see the note below. */
+const COMMAND = 'deploy [stage]' as const;
+const config = {
+  ...packageFilterOptions,
+  wait: { target: 'cli', describe: 'block until healthy', type: 'boolean' },
+  registry: { target: 'config', describe: 'where images are pushed from', type: 'string' },
+} satisfies Record<string, CommandOption>;
+
+type Args = ArgsOf<typeof config, typeof COMMAND>;
+
+export const deployCommand = declareCommand(app => ({
+  command: COMMAND,
+  describe: 'Ships the current versions',
+  configKeys: ['publish'],                 // keys it *reads*; its own key is derived
+  config,
+  positionals: { stage: { describe: 'which cluster', type: 'string' } },
+  handler: async (args: Args) => { /* app.repository is available here */ },
+}));
+```
+
+- **`declareCommand` for a plugin, `registerCommand` for rman's own.** The difference is one line:
+  `registerCommand` pushes onto a module-level registry every run walks, so a plugin using it would
+  hand its commands to repositories that never named the plugin. A plugin passes the function to
+  `ctx.addCommand`.
+- **A factory of `app`, not the metadata.** A command closes over the repository, and over whatever
+  the application carries - `publish` reads `app.publishTargets` to build its own option list. For a
+  plugin it is also a necessity: `init` runs before any package is known, so the factory is stored
+  and called later.
+- **`target: 'cli' | 'config' | 'both'`** decides whether an option is a flag, a `.rmanrc` key, or
+  both. The `config`/`both` ones become the command's slice of `RmanConfig` automatically, so the
+  option list and the config type cannot drift:
+
+  ```ts
+  declare module 'rman' {
+    namespace RmanConfig {
+      interface CommandConfigs extends RmanConfig.CommandContribution<ReturnType<typeof deployCommand>> {}
+    }
+  }
+  ```
+
+- **`as const` on the command string is load-bearing twice**: the config key is derived from it
+  (`'deploy'`), and so are the positional names, which are checked against `positionals`.
+- **`ArgsOf` is annotated, never inferred** - hence the two hoisted consts. Inferring `argv` and
+  keeping the metadata's own typo-checking cannot both work in one signature.
+- **A second parameter, `Extra`, is for what an option cannot describe** - `{ file, constant }`, or
+  "a shell command or a function". Reach for it only when the shape genuinely resists; a `string[]`
+  is `type: 'string'` plus `array: true`.
+
+A repository's own `.rman/*.mjs` command is a different, older form (`defineCommand`, a
+hand-written `builder`, a handler taking a `CommandContext`) and is not deprecated - see
+[docs/cli/custom-commands.md](cli/custom-commands.md).
 
 ### `Repository`
 
@@ -960,12 +1143,37 @@ forms is silent. Use a JS config for anything non-trivial.
 
 ## Services
 
-Every service is a `namespace` grouping one domain's functions and types - `VersionService.Entry`,
-`VersionService.getPlan(...)`, and so on. Most follow the same **plan → apply** shape: a pure
-`getPlan` (or `getEntries`/`getPackages`) function that computes what *would* happen without
-touching anything, and a separate `applyPlan` (or `generateToFile`) that actually writes/commits/
-publishes. This mirrors what `rman`'s own CLI commands do: compute a plan, print it, optionally ask
-for confirmation, then apply it.
+**Every service is a class, reached through the application** - `app.getService('version')`, never
+a constructor call of your own. Each extends `Service`, which gives it `this.repository` and
+`this.logger`; the repository is not a parameter any more, because the application carries it and
+every caller had exactly one.
+
+```ts
+import { Repository } from 'rman';
+
+const repository = await Repository.create();
+const app = repository.app;
+const version = repository.app.getService('version');
+const plan = await repository.app.getService('list').getPackages();
+```
+
+- **`getService` is typed by `ServiceMap`**, a declaration-merged interface each service augments
+  from its own file. A misspelled name is a compile error rather than a runtime `undefined`, and a
+  plugin adds its own service the same way.
+- **Built on first use.** `rman info` has no business constructing the changelog and release
+  services, and services reach each other through the application - so resolving at call time is
+  also what keeps that from being a construction cycle.
+- **A plugin can replace one**, with `app.setService(name, app => new MyService(app))`, before it is
+  first built.
+
+Most follow the same **plan → apply** shape: a pure `getPlan` (or `getEntries`/`getPackages`) that
+computes what *would* happen without touching anything, and a separate `applyPlan` (or
+`generateToFile`) that writes, commits or publishes. That mirrors what rman's own commands do:
+compute a plan, print it, optionally ask for confirmation, then apply it.
+
+**Two things stayed plain exported functions**, and the line is whether they need the repository:
+`ChangeHashService` and `ConventionalCommitsService` are pure functions of their arguments, so
+putting an application between a caller and a parser would be ceremony.
 
 ### `VersionService`
 
@@ -977,30 +1185,25 @@ cross-group dependency-range propagation, and prerelease (`--preid`) support.
 same boundary `ChangelogService` measures from, so `changed`/`version`/`changelog` never disagree
 about which commits are unreleased. This is deliberately a *commit*-driven question, independent of
 what any registry currently holds: only commits can say how big a bump is warranted, and why. The
-mirror-image question ("is this version already out there?") belongs to `PublishService`/
-`DockerPublishService`/`GithubReleaseService`, which each answer it against their own registry.
+mirror-image question ("is this version already out there?") belongs to each
+[publish target](#publishtarget) and to `GithubReleaseService`, which answer it against their own
+registry.
 
 ```ts
-namespace VersionService {
-  type BumpKeyword = 'patch' | 'minor' | 'major';
-  function isBumpKeyword(value: unknown): value is BumpKeyword;
-
+namespace VersionPlanService {
   interface Options extends PackageFilterOptions {
-    bump?: string; // a BumpKeyword, or an explicit semver version - omit to auto-detect
+    /** One of the root scheme's own `bumpNames`, or a concrete version it recognizes - either way
+     *  this replaces auto-detection. Omit to detect the bump per group from commit subjects. */
+    bump?: string;
     ignoreDirty?: boolean; // default false
     preid?: string; // e.g. "beta" -> prerelease bumps
-    npmViewVersion?: (name: string, cwd: string) => Promise<string | undefined>; // for tests
+    now?: () => Date; // the clock behind a calendar release version - injectable for tests
   }
 
-  interface ApplyOptions {
-    push?: boolean; // default false
-    message?: string; // overrides .rmanrc version.commitMessage for this run
-    changelog?: boolean; // also write CHANGELOG.md and fold it into the same commit
-  }
-
+  /** One package's outcome in a plan. */
   interface Entry {
     package: Package;
-    groupKey: string;
+    groupKey: string; // internal group identity, not for display
     group: string; // human-readable group name
     status: 'bump' | 'skip' | 'error' | 'no-change';
     from: string;
@@ -1008,39 +1211,64 @@ namespace VersionService {
     reason?: string;
   }
 
+  type Cascade = 'changed' | 'dependents' | 'group';
+
+  /** The registered orchestrator. Throws when a repository's plugins contribute none. */
+  function getPlanner(app: RmanApplication): VersionPlanService;
+}
+
+/** Abstract - a technology supplies it (`TechStack.versionPlanner`). */
+abstract class VersionPlanService {
+  getPlan(repository: Repository, options?: VersionPlanService.Options): Promise<VersionPlanService.Entry[]>;
+
+  /** The two a technology must answer. Asked of the *package's own* planner, not the orchestrator. */
+  protected abstract detectBoundary(git: GitHelper, pkg: Package, options: Options): Promise<string | undefined>;
+  protected abstract cascade(bump: string): VersionPlanService.Cascade;
+}
+
+namespace VersionService {
+  interface ApplyOptions {
+    push?: boolean; // default false
+    message?: string; // overrides .rmanrc version.commitMessage for this run
+    changelog?: boolean; // also write CHANGELOG.md and fold it into the same commit
+  }
+
   /** What `applyPlan` did - not the plan it was given. */
   interface ApplyResult {
-    entries: Entry[]; // the plan, as given
-    updated: Entry[]; // the entries whose manifest was actually written
+    entries: VersionPlanService.Entry[]; // the plan, as given
+    updated: VersionPlanService.Entry[]; // the entries whose manifest was actually written
     commits: { sha: string; message: string; packages: string[] }[];
     tags: { name: string; created: boolean; release?: boolean }[];
     pushed: boolean;
   }
-
-  function getPlan(repository: Repository, options?: Options): Promise<Entry[]>;
-  function applyPlan(repository: Repository, plan: Entry[], options?: ApplyOptions): Promise<ApplyResult>;
 }
 
-// Also exported at module scope, shared with PublishService:
-const DEPENDENCY_KEYS = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'] as const;
+class VersionService {
+  applyPlan(plan: VersionPlanService.Entry[], options?: ApplyOptions): Promise<ApplyResult>;
+}
 ```
+
+**The plan comes from `VersionPlanService`, not from here.** `VersionService` only *applies* one -
+the split is what lets an ecosystem answer the two questions no repository-in-general can (see
+[`VersionPlanService`](#versionplanservice)), while the writes, commits and tags stay the core's.
 
 #### Basic usage
 
 ```ts
-import { Repository, VersionService } from 'rman';
+import { Repository, VersionPlanService } from 'rman';
 
 const repository = await Repository.create();
+const app = repository.app;
 
-// 1. Compute a plan - never writes anything.
-const plan = await VersionService.getPlan(repository); // auto-detect severity from commits
+// 1. Compute a plan - never writes anything. The planner comes from the repository's plugins.
+const plan = await VersionPlanService.getPlanner(app).getPlan(repository); // severity from commits
 
 for (const entry of plan) {
   console.log(entry.status, entry.package.name, entry.from, '->', entry.to, entry.reason);
 }
 
 // 2. Apply it - writes package.json, commits, tags (once per group).
-const result = await VersionService.applyPlan(repository, plan, { push: true, changelog: true });
+const result = await app.getService('version').applyPlan(plan, { push: true, changelog: true });
 
 console.log(`${result.updated.length} packages`);
 for (const c of result.commits) console.log(c.sha, c.message, c.packages);
@@ -1084,10 +1312,10 @@ version line the group's own tag already is the release, so no second name is cr
 
 ```ts
 // Force every changed package's group to a minor bump, regardless of commit content:
-const plan = await VersionService.getPlan(repository, { bump: 'minor' });
+const plan = await VersionPlanService.getPlanner(app).getPlan(repository, { bump: 'minor' });
 
 // Or set every changed package straight to an exact version:
-const plan = await VersionService.getPlan(repository, { bump: '2.0.0-rc.1' });
+const plan = await VersionPlanService.getPlanner(app).getPlan(repository, { bump: '2.0.0-rc.1' });
 ```
 
 #### Grouping (`.rmanrc group`)
@@ -1136,7 +1364,7 @@ With no explicit `bump`, each changed package's severity comes from its own comm
 release tag (Conventional Commits):
 
 ```ts
-const plan = await VersionService.getPlan(repository); // no `bump` at all
+const plan = await VersionPlanService.getPlanner(app).getPlan(repository); // no `bump` at all
 ```
 
 | Commit | Detected severity |
@@ -1167,16 +1395,17 @@ that one.
 a bump keyword of its own:
 
 ```ts
+const app = repository.app;
 // First run: 1.2.3 -> 1.3.0-beta.0 (a fresh prerelease of the computed "minor" severity)
-let plan = await VersionService.getPlan(repository, { bump: 'minor', preid: 'beta' });
-await VersionService.applyPlan(repository, plan);
+let plan = await VersionPlanService.getPlanner(app).getPlan(repository, { bump: 'minor', preid: 'beta' });
+await app.getService('version').applyPlan(plan);
 
 // Later, with new commits: 1.3.0-beta.0 -> 1.3.0-beta.1 (same identifier -> increments)
-plan = await VersionService.getPlan(repository, { bump: 'minor', preid: 'beta' });
-await VersionService.applyPlan(repository, plan);
+plan = await VersionPlanService.getPlanner(app).getPlan(repository, { bump: 'minor', preid: 'beta' });
+await app.getService('version').applyPlan(plan);
 
 // Switching the identifier starts a fresh prerelease line instead of incrementing:
-plan = await VersionService.getPlan(repository, { preid: 'rc' }); // -> 1.3.0-rc.0
+plan = await VersionPlanService.getPlanner(app).getPlan(repository, { preid: 'rc' }); // -> 1.3.0-rc.0
 ```
 
 `preid` has **no effect** when `bump` is an explicit semver version (`getPlan(repo, { bump:
@@ -1223,15 +1452,56 @@ package doesn't have is a silent no-op.
 
 ```ts
 // Default: any package with uncommitted local changes aborts the whole plan (status "error").
-const plan = await VersionService.getPlan(repository);
+const plan = await VersionPlanService.getPlanner(app).getPlan(repository);
 if (plan.some(e => e.status === 'error')) {
   throw new Error('Some packages have uncommitted changes');
 }
 
 // Or exclude them instead (status "skip"):
-const plan = await VersionService.getPlan(repository, { ignoreDirty: true });
+const plan = await VersionPlanService.getPlanner(app).getPlan(repository, { ignoreDirty: true });
 ```
 
+
+### `VersionPlanService`
+
+**Abstract - a technology supplies it**, through `TechStack.versionPlanner`. `version`/`changed`
+fail naming that key when a repository's plugins contribute none: there is no version plan that is
+merely a diminished one, and a wrong boundary or cascade releases a plausible, untrue set of
+packages.
+
+Two roles, and they resolve differently:
+
+| | |
+| --- | --- |
+| **Orchestrator** | `app.versionPlanner` - one slot, last registration wins. Drives groups, the commit→size reading, the cross-group ripple and the root's release identity: none of it belongs to a technology, and all of it is computed for the whole repository at once. |
+| **Per package** | `detectBoundary` and `cascade`, asked of `pkg.techStack.versionPlanner` (falling back to the orchestrator). |
+
+That split is not cosmetic. Both used to come off the single slot, so in a polyglot repository a
+Cargo package's boundary fell back to `npm view` and its cascade assumed npm's caret ranges -
+whichever plugin registered last decided for every package. A group whose members disagree about
+`cascade` takes the **widest** answer: too narrow releases too little, which is the invisible
+failure; too wide releases a package that did not strictly need it.
+
+The two abstract members are exactly the decisions no repository-in-general has an answer to:
+
+- **`detectBoundary`** - since when is a package unreleased. Git tags answer it for any repository
+  (`ChangeHashService.detect` is exported for that), but *which* registry stands in when a package
+  has no tag yet is the ecosystem's business.
+- **`cascade`** - how far into its group a bump reaches, named in the scheme's own `bumpNames`. The
+  familiar patch/minor/major mapping is a statement about **npm's dependency ranges**: `^1.2.0`
+  already tolerates a patch, so nothing downstream needs republishing. An ecosystem pinning exact
+  versions has to release every dependent for the same patch.
+
+```ts
+class NodeVersionPlanService extends VersionPlanService {
+  protected detectBoundary(git: GitHelper, pkg: Package) {
+    return ChangeHashService.detect(git, pkg);
+  }
+  protected cascade(bump: string): VersionPlanService.Cascade {
+    return bump === 'major' ? 'group' : bump === 'minor' ? 'dependents' : 'changed';
+  }
+}
+```
 
 ### `PublishTarget`
 
@@ -1324,18 +1594,22 @@ namespace DockerPublishService {
     reason?: string;
   }
 
-  function getPlan(repository: Repository, options?: Options, deps?: Deps): Promise<Entry[]>;
-  function applyPlan(repository: Repository, plan: Entry[]): Promise<Entry[]>;
+}
+
+class DockerPublishService {
+  getPlan(options?: Options, deps?: Deps): Promise<Entry[]>;
+  applyPlan(plan: Entry[]): Promise<Entry[]>;
 }
 ```
 
 ```ts
 import { DockerPublishService } from 'rman';
 
-const plan = await DockerPublishService.getPlan(repository);
+const app = repository.app;
+const plan = await app.getService('dockerPublish').getPlan();
 for (const entry of plan) console.log(entry.status, entry.package.name, entry.image, entry.reason);
 
-await DockerPublishService.applyPlan(repository, plan);
+await app.getService('dockerPublish').applyPlan(plan);
 ```
 
 A candidate package missing the required `publish.docker.image` config is `'error'` - opting into
@@ -1390,18 +1664,22 @@ namespace GithubReleaseService {
     reason?: string;
   }
 
-  function getPlan(repository: Repository, options?: Options, deps?: Deps): Promise<Entry[]>;
-  function applyPlan(repository: Repository, plan: Entry[]): Promise<Entry[]>;
+}
+
+class DockerPublishService {
+  getPlan(options?: Options, deps?: Deps): Promise<Entry[]>;
+  applyPlan(plan: Entry[]): Promise<Entry[]>;
 }
 ```
 
 ```ts
 import { GithubReleaseService } from 'rman';
 
-const plan = await GithubReleaseService.getPlan(repository);
+const app = repository.app;
+const plan = await app.getService('githubRelease').getPlan();
 for (const entry of plan) console.log(entry.status, entry.package.name, entry.tag, entry.reason);
 
-await GithubReleaseService.applyPlan(repository, plan);
+await app.getService('githubRelease').applyPlan(plan);
 ```
 
 The release is identified by the repository's own version (the root's - see
@@ -1458,23 +1736,27 @@ namespace ChangelogService {
     filePath: string;
   }
 
-  function getEntries(repository: Repository, options?: Options, deps?: Deps): Promise<Entry[]>;
-  function generateToFile(repository: Repository, options?: Options, deps?: Deps): Promise<Entry[]>;
+}
+
+class ChangelogService {
+  getEntries(options?: Options): Promise<Entry[]>;
+  generateToFile(options?: Options): Promise<Entry[]>;
 }
 ```
 
 ```ts
 import { ChangelogService } from 'rman';
 
+const app = repository.app;
 // Pure - just compute the entries, print/inspect them yourself:
-const entries = await ChangelogService.getEntries(repository);
+const entries = await app.getService('changelog').getEntries();
 for (const entry of entries) console.log(entry.content);
 
 // Since a specific commit, for every package:
-const entries = await ChangelogService.getEntries(repository, { from: 'a1b2c3d' });
+const entries = await app.getService('changelog').getEntries({ from: 'a1b2c3d' });
 
 // Actually prepend each entry into its own CHANGELOG.md:
-const written = await ChangelogService.generateToFile(repository, { root: true });
+const written = await app.getService('changelog').generateToFile({ root: true });
 for (const entry of written) console.log('wrote', entry.filePath, 'for', entry.package.name);
 ```
 
@@ -1555,7 +1837,10 @@ namespace RunService {
     statusCache: Map<string, Record<string, Repository.PackageStatus>>,
   ): Promise<boolean>;
 
-  function runScript(repository: Repository, script: string, options?: Options & { commandName?: string }): Promise<void>;
+}
+
+class RunService {
+  runScript(script: string, options?: Options & { commandName?: string }): Promise<void>;
 }
 
 // Also exported at module scope:
@@ -1568,11 +1853,12 @@ function resolveLogLevel(cliValue: LogLevel | undefined, pkg: Package, script: s
 ```ts
 import { RunService } from 'rman';
 
+const app = repository.app;
 // Runs "build" in every package, dependency order, CPU-count concurrency.
-await RunService.runScript(repository, 'build');
+await app.getService('run').runScript('build');
 
 // Only in packages changed since the last publish, serially, never bailing on a single failure:
-await RunService.runScript(repository, 'test', { changed: true, parallel: false, bail: false });
+await app.getService('run').runScript('test', { changed: true, parallel: false, bail: false });
 ```
 
 `runScript` throws an `Error` with `.logged = true` (see [below](#the-logged-error-convention)) if
@@ -1629,9 +1915,10 @@ run:
 ```
 
 ```ts
+const app = repository.app;
 const node = RunService.parseIfExpr('changed and not dirty');
 const cache = new Map();
-const shouldRun = await RunService.evaluateIf(repository, pkg, node!, cache);
+const shouldRun = await app.getService('run').evaluateIf(pkg, node!, cache);
 ```
 
 An unrecognized atom name prints a one-time warning and evaluates to `true` (the package still
@@ -1657,15 +1944,19 @@ namespace ExecService {
     root?: boolean;
   }
 
-  function exec(repository: Repository, command: string, options?: Options): Promise<void>;
+}
+
+class ExecService {
+  exec(command: string, options?: Options): Promise<void>;
 }
 ```
 
 ```ts
 import { ExecService } from 'rman';
 
-await ExecService.exec(repository, 'rm -rf dist');
-await ExecService.exec(repository, 'ls -la', { scope: 'pkg-a', topo: false });
+const app = repository.app;
+await app.getService('exec').exec('rm -rf dist');
+await app.getService('exec').exec('ls -la', { scope: 'pkg-a', topo: false });
 ```
 
 Everything about package selection/scheduling matches `RunService` (dependency order, per-package
@@ -1695,17 +1986,21 @@ namespace ListService {
     docker?: RmanConfig.DockerPublishOptions; // present only when "docker" is one of publishTargets
   }
 
-  function getPackages(repository: Repository, options?: Options): Promise<Item[]>;
+}
+
+class ListService {
+  getPackages(options?: Options): Promise<Item[]>;
 }
 ```
 
 ```ts
 import { ListService } from 'rman';
 
-const items = await ListService.getPackages(repository, { toposort: true });
+const app = repository.app;
+const items = await app.getService('list').getPackages({ toposort: true });
 const graph = Object.fromEntries(items.map(i => [i.name, i.dependencies]));
 
-const changedOnly = await ListService.getPackages(repository, { changed: true });
+const changedOnly = await app.getService('list').getPackages({ changed: true });
 ```
 
 ### `ImportService`
@@ -1726,14 +2021,18 @@ namespace ImportService {
     commitCount: number;
   }
 
-  function importRepo(repository: Repository, sourcePath: string, options?: Options): Promise<Result>;
+}
+
+class ImportService {
+  importRepo(sourcePath: string, options?: Options): Promise<Result>;
 }
 ```
 
 ```ts
 import { ImportService } from 'rman';
 
-const result = await ImportService.importRepo(repository, '../my-old-standalone-repo', {
+const app = repository.app;
+const result = await app.getService('import').importRepo('../my-old-standalone-repo', {
   dest: 'libs',
 });
 console.log(`Imported ${result.name} (${result.commitCount} commits) -> ${result.targetDir}`);
@@ -1873,8 +2172,9 @@ If you're calling these services programmatically, `.logged` is just a marker on
 - it doesn't change what you need to do:
 
 ```ts
+const app = repository.app;
 try {
-  await RunService.runScript(repository, 'build');
+  await app.getService('run').runScript('build');
 } catch (e: any) {
   // e.message === '"build" failed'; e.logged === true
   process.exitCode = 1;
@@ -1895,14 +2195,15 @@ interface PackageFilterOptions {
 ```
 
 ```ts
+const app = repository.app;
 // Everything under @myorg/, minus anything ending in -internal:
-await RunService.runScript(repository, 'build', { scope: '@myorg/*', ignore: '*-internal' });
+await app.getService('run').runScript('build', { scope: '@myorg/*', ignore: '*-internal' });
 
 // A scoped package plus everything it needs to build first (dependency order handles the rest):
-await RunService.runScript(repository, 'build', { scope: 'my-app', deps: true });
+await app.getService('run').runScript('build', { scope: 'my-app', deps: true });
 
 // Everything that could be affected by a scoped library's change - useful before a release:
-await RunService.runScript(repository, 'test', { scope: 'core-lib', dependents: true });
+await app.getService('run').runScript('test', { scope: 'core-lib', dependents: true });
 ```
 
 `scope`/`ignore` accept [`micromatch`](https://github.com/micromatch/micromatch) glob syntax
