@@ -224,6 +224,21 @@ export function useTarget(target: PublishTarget): void {
 }
 
 /**
+ * Adds a second technology, asked **before** the fixture's own - for a spec about a polyglot
+ * repository, where which stack claims a package is the whole question.
+ *
+ * `useLocalBin` is the same mechanism with a stack that claims nothing; this is the case where the
+ * claiming matters, so `createApp` puts a spec's stacks first. A provider recognizing only its own
+ * marker file leaves every other package to the fixture's, which is what makes one repository hold
+ * two ecosystems.
+ */
+export function useTechStack(stack: TechStack): void {
+  beforeEach(() => {
+    extraStacks.push(stack);
+  });
+}
+
+/**
  * A repository, on an application carrying the fixture's technologies - what a spec calls instead
  * of `Repository.create`.
  *
@@ -243,9 +258,17 @@ export function createRepository(root?: string, options?: { deep?: number }): Pr
  */
 export function createApp(): RmanApplication {
   const app = new RmanApplication();
+  /**
+   * **A spec's own stacks go on first, and the order is load-bearing.** `techStackFor` takes the
+   * first stack whose manifest provider recognizes a directory, and the fixture's claims anything
+   * with a `package.json` - which every package the fixture writes has. Registered after it, a
+   * second technology could never claim one, so a polyglot repository was not expressible at all.
+   * `useLocalBin`'s stack recognizes nothing (`baseTechStack.manifestProvider`), so being first
+   * costs it nothing.
+   */
+  for (const stack of extraStacks) app.techStacks.add(stack);
   app.techStacks.add(testTechStack);
   app.versionPlanner = testTechStack.versionPlanner;
-  for (const stack of extraStacks) app.techStacks.add(stack);
   for (const target of extraTargets) app.publishTargets.add(target);
   lastApp = app;
   return app;

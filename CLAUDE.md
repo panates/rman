@@ -609,12 +609,25 @@ touched package counts as changed.
 
 - **Question A**, from the same plan `changed` shows
   (`VersionPlanService.getPlanner().getPlan`); `VersionService.applyPlan` does the writes.
-- **`VersionPlanService` is abstract - a plugin supplies the planner** (`RmanPlugin.versionPlanner`,
+- **`VersionPlanService` is abstract - a technology supplies the planner** (`TechStack.versionPlanner`,
   `rman-node`'s `NodeVersionPlanService`), and `version`/`changed` fail naming that key when none
-  is registered. One slot, last registration wins: unlike `Manifest`/`Workspace` a planner has
-  nothing to *recognize*, so "first that answers" would mean "first registered" and a repo layering
-  its own policy plugin could never take effect. It does not degrade to a built-in default either -
-  a wrong boundary or cascade releases a plausible, untrue set of packages.
+  is registered. It does not degrade to a built-in default - a wrong boundary or cascade releases a
+  plausible, untrue set of packages.
+- **Two roles, and they resolve differently.** `app.versionPlanner` is the **orchestrator**: one
+  slot, last registration wins, driving groups, the commit→size reading, the cross-group ripple and
+  the root's release identity - none of which belongs to any one technology, and all of which is
+  computed for the whole repository at once. The two decisions that *are* a technology's are asked
+  per package instead:
+  - **`detectBoundary`** through `plannerFor(pkg)` = `pkg.techStack.versionPlanner ?? this`;
+  - **`cascade`** through `cascadeFor(members, bump)`, once per group.
+  - **This was a real bug, of exactly the shape the `['npm']` publish default was.** Both came off
+    the single slot, so in a polyglot repository a Cargo package's boundary fell back to `npm view`
+    and its cascade assumed npm's caret ranges - whichever plugin registered last decided for
+    everyone. Pinned in `version-plan.polyglot.spec.ts`, with a negative control: reverting the two
+    delegations makes both cases fail.
+  - **A group whose members disagree takes the *widest* cascade**, and the direction is deliberate:
+    too narrow releases too little, which `cascade`'s own doc calls the invisible failure; too wide
+    releases a package that did not strictly need it, which is visible and harmless.
   - Abstract are exactly the two decisions no repository-in-general has an answer to:
     `detectBoundary` (which registry stands in when a package has no release tag yet) and `cascade`
     (how far into its group a bump reaches). **`cascade` is a statement about dependency *ranges*,
@@ -1293,6 +1306,12 @@ no version planner - so a spec that needs one **brings it**.
     the map instead of stubbing a function, so `ChangeHashService.detect` is exercised through the
     real provider - and `registryCalls` can assert the registry was **not** consulted, which a
     throwing stub only ever did by accident.
+  - `useTechStack(stack)` adds a **second technology**, for a spec about a polyglot repository.
+    **A spec's own stacks are registered first, and that is load-bearing**: `techStackFor` takes the
+    first whose manifest provider recognizes a directory, and the fixture's claims anything with a
+    `package.json` - which every package the fixture writes has. Registered after it, a second
+    technology could never claim one, so a polyglot repository was not expressible at all.
+    `useLocalBin`'s stack recognizes nothing, so being first costs it nothing.
   - `useLocalBin()` adds a bin-only `TechStack` offering `<dir>/local-bin` **at every level from
     cwd upward**. Walking up is not decoration: `exec` runs a step in the *package's* directory, so a
     provider offering only `<cwd>/local-bin` serves a command run at the repository root and nothing

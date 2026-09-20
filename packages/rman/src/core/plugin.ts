@@ -229,8 +229,15 @@ async function register(
     app,
     addTechStack(stack) {
       app.techStacks.add(stack);
-      /** Still one answer per application rather than one per stack: `getPlanner()` is asked
-       *  without a package in places, so per-package planning waits for those call sites. */
+      /**
+       * **The orchestrator, and only that.** A plan is computed for the whole repository at once -
+       * groups span packages, the ripple crosses them - so one planner drives the traversal and the
+       * last registration wins it.
+       *
+       * The two decisions that belong to a *technology* are not taken from here: `detectBoundary`
+       * and `cascade` are asked of `pkg.techStack.versionPlanner` per package, which is why a stack
+       * still declares one even when it is not the last to register.
+       */
       if (stack.versionPlanner) app.versionPlanner = stack.versionPlanner;
     },
     addCommand(command) {

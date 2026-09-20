@@ -41,7 +41,17 @@ export class RmanApplication {
    */
   readonly publishTargets = new Registry<PublishTarget>();
 
-  /** One answer, not a sum - so a field rather than a registry, and last registration wins. */
+  /**
+   * **The planner that orchestrates a run**, not the one that answers for each package.
+   *
+   * One answer, not a sum - so a field rather than a registry, and last registration wins. What it
+   * decides is the shape of the whole plan: groups, the commit→size reading, the cross-group ripple
+   * and the root's release identity, none of which belongs to any one technology.
+   *
+   * The two decisions that *are* a technology's - `detectBoundary` and `cascade` - are asked of
+   * each package's own `TechStack.versionPlanner` instead (`VersionPlanService.plannerFor`), so a
+   * polyglot repository no longer resolves both through whichever plugin registered last.
+   */
   versionPlanner?: VersionPlanService;
 
   readonly logger: Logger;
