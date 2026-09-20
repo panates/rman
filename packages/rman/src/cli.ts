@@ -14,6 +14,7 @@ import './cmd/github-release.command.js';
 import './cmd/import.command.js';
 import './cmd/info.command.js';
 import './cmd/list.command.js';
+import './cmd/publish.command.js';
 import './cmd/run.command.js';
 import './cmd/test.command.js';
 import './cmd/version.command.js';

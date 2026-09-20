@@ -25,7 +25,7 @@ export const command: CustomCommand = {
       .example('$0 ci', '')
       .option('package-manager', {
         describe: 'Package manager to install with (default: npm, or .rmanrc "packageManager")',
-        choices: PACKAGE_MANAGERS,
+        choices: CiService.PACKAGE_MANAGERS,
       })
       .option('progress', {
         describe:
@@ -43,5 +43,3 @@ export const command: CustomCommand = {
     });
   },
 };
-
-const PACKAGE_MANAGERS = ['npm', 'yarn', 'pnpm', 'bun'] as const;

@@ -53,6 +53,7 @@ standalone utilities (`ChangeHashService`, `Logger`). For the CLI itself (comman
   - [Editor support (types)](#editor-support-types)
 - [Services](#services)
   - [`VersionService`](#versionservice)
+  - [`PublishTarget`](#publishtarget)
   - [`DockerPublishService`](#dockerpublishservice)
   - [`GithubReleaseService`](#githubreleaseservice)
   - [`ChangelogService`](#changelogservice)
@@ -872,7 +873,7 @@ step there is mistaken for a value.
 | `changelog.tagPattern` | `string` (glob, may contain `{name}`) | `'v*'` | Per-package cascaded. `{name}` → independent per-package tags (`{name}@*`); no `{name}` → one shared repo-wide tag scheme. |
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |
 | `clean.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of `clean` entirely. |
-| `publish.target` | `'npm' \| 'docker'` or an array of them | `['npm']` | Per-package cascaded. Which **registry** `publish` ships this package to. Each target has its own "already published?" check: npm via `npm view`, docker via `docker manifest inspect`. The repository's GitHub Release is not a target here - see `githubRelease`. |
+| `publish.target` | `string` or an array of them | whichever installed targets *claim* the package | Per-package cascaded. Which **registry** `publish` ships this package to - a name from the installed [publish targets](#publishtarget), never a fixed list. Each has its own "already published?" check: npm via `npm view`, docker via `docker manifest inspect`. A name nothing implements is an error naming the ones this repository has. The repository's GitHub Release is not a target here - see `githubRelease`. |
 | `publish.directory` | `string` | none (the package's own directory) | Per-package cascaded. Where the publishable output lives, relative to the package's own directory. A package's own `publishConfig.directory` wins over it; `--contents` is the last fallback. Publishing from such a directory means **`publish` generates the manifest there** - see below. |
 | `publish.docker.image` | `string` | none (required once `"docker"` is a target) | A bare name is prefixed with `--docker-namespace`/`DOCKERHUB_NAMESPACE`; one already containing `/` is used verbatim. |
 | `publish.docker.dockerfile` | `string` | `'Dockerfile'` | Relative to the package's own directory. |
@@ -1232,12 +1233,75 @@ const plan = await VersionService.getPlan(repository, { ignoreDirty: true });
 ```
 
 
+### `PublishTarget`
+
+**Where a package's artifact ships, as a contribution.** The [`publish`](cli/publish.md) command is
+rman's; a target is one answer to "is this version on the registry, and how do I push it", which is
+the only part of publishing an ecosystem owns. rman registers `docker`; `rman-node` registers `npm`.
+
+```ts
+interface PublishTarget {
+  name: string;                                    // what publish.target and --target call it
+  describe?: string;                               // one line, for --target's help
+  options?: Record<string, RmanConfig.CommandOption>; // merged into `publish`'s own flags
+  claims?(pkg: Package): boolean;                  // is this package mine when it declares nothing?
+  getPlan(ctx: PublishTarget.Context): Promise<PublishTarget.Entry[]>;
+  applyPlan(ctx: PublishTarget.Context, plan: PublishTarget.Entry[]): Promise<PublishTarget.Entry[]>;
+}
+
+namespace PublishTarget {
+  interface Context {
+    app: RmanApplication;
+    repository: Repository;
+    options: Options;             // the shared filters, read off argv once by the command
+    args: Record<string, any>;    // the parsed argv - where a target reads its own flags
+  }
+
+  interface Options extends PackageFilterOptions {
+    ignoreDirty?: boolean;
+  }
+
+  interface Entry {
+    package: Package;
+    version: string;
+    status: 'publish' | 'skip' | 'up-to-date' | 'error';
+    detail?: string;              // printed beside the package - docker's resolved image ref
+    reason?: string;
+  }
+}
+```
+
+Registered on the application, in `plugins` declaration order:
+
+```ts
+export const cargoPlugin = definePlugin({
+  name: 'rman-cargo',
+  init(ctx) {
+    ctx.app.publishTargets.add(cratesIoTarget);
+  },
+});
+```
+
+- **`claims` is where a default belongs.** A package with no `publish.target` of its own is offered
+  to every target that claims it - `npm`'s answer is `pkg.provider === 'node'`, and `docker` has no
+  answer at all, which is what makes it opt-in. rman itself cannot state either; it used to try, with
+  a hardcoded `['npm']`, and reported `publishTargets: ["npm"]` for a Cargo package.
+- **`options` are merged into `publish`'s flags** where the command is built. Two targets declaring
+  the same option name throws, naming both - npm has a `--registry` and so would a Cargo target,
+  and any rule for picking a winner gives you a flag that silently means the other one's thing.
+- Which packages a target is asked about is `shipsTo(pkg, target)` / `targetsOf(app, pkg)`, both
+  exported - use them rather than re-reading `publish.target`, so `publish` and `rman list --json`
+  cannot disagree.
+
 ### `DockerPublishService`
 
 Computes and applies `docker buildx build --push` across every package that opts into the
-`"docker"` publish target - unlike `PublishService`'s npm side (opt-out via `"private"`), this is
-opt-in: only a package whose own (cascaded) `.rmanrc "publish.target"` includes `"docker"` is a
-candidate at all. `.rmanrc "publish.skip"` excludes it regardless, same as on the npm side.
+`"docker"` publish target - unlike the npm side (opt-out via `"private"`), this is opt-in: only a
+package whose own (cascaded) `.rmanrc "publish.target"` includes `"docker"` is a candidate at all.
+`.rmanrc "publish.skip"` excludes it regardless, same as on the npm side.
+
+Reached through `dockerPublishTarget`, which is what `publish` actually calls; the service is the
+implementation and stays callable on its own.
 
 ```ts
 namespace DockerPublishService {
@@ -1627,7 +1691,7 @@ namespace ListService {
     private: boolean;
     status: Repository.PackageStatus;
     dependencies: string[]; // in-repo package names - enough to build a dependency graph
-    publishTargets: RmanConfig.PublishTarget[]; // this package's own "publish.target" (["npm"] when unset)
+    publishTargets: string[]; // where it actually ships: its own "publish.target", or what claims it
     docker?: RmanConfig.DockerPublishOptions; // present only when "docker" is one of publishTargets
   }
 

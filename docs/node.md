@@ -32,8 +32,9 @@ Naming it does three kinds of thing at once, and they are worth telling apart:
 
 | | What it adds | Where it plugs in |
 | --- | --- | --- |
-| **Commands** | `publish`, `ci`, `clean` | `RmanPlugin.commands` |
-| **Seams** | what a package *is* (`package.json`), where packages are (`workspaces`), how a version is planned, what `pre<script>`/`post<script>` mean, `node_modules/.bin` on PATH | `manifest`, `workspace`, `versionPlanner`, `runSteps`, `binPaths` |
+| **Commands** | `ci`, `clean` | `ctx.addCommand()` |
+| **A publish target** | `npm` - its flags on `rman publish`, its registry check, and which packages are npm's by default | `ctx.app.publishTargets` |
+| **A technology** | what a package *is* (`package.json`), where packages are (`workspaces`), how a version is planned, what `pre<script>`/`post<script>` mean, `node_modules/.bin` on PATH | one `TechStack`, via `ctx.addTechStack()` |
 | **Augmentations** | the npm half of `SystemInfo` (what `info` prints), and the `.rmanrc` keys below | `augment*()` + `declare module 'rman'` |
 
 Without this package, `rman clean` is `Unknown argument: clean`, and a repository has **no manifest
@@ -336,18 +337,27 @@ it too.
 `DEPENDENCY_KEYS` is the list those readers use: `dependencies`, `devDependencies`,
 `peerDependencies`, `optionalDependencies`.
 
-Each has a matching `augment*()` that registers it. They are also declared on `nodePlugin`, so a
-repository naming this package in `plugins` needs no import side effect:
+They are declared together as **one `TechStack`**, because they only mean anything together -
+`packageJsonSteps` reads `pkg.manifest.raw.scripts`, so it is meaningless without
+`packageJsonManifest` having produced that manifest. The plugin is a name and an `init`:
 
 ```ts
+export const nodeTechStack: TechStack = {
+  name: 'node',
+  manifestProvider: packageJsonManifest,
+  workspaceProvider: npmWorkspace,
+  runSteps: packageJsonSteps,
+  binPathsProvider: npmBinPaths,
+  versionPlanner: nodeVersionPlanner,
+};
+
 export const nodePlugin = definePlugin({
   name: 'rman-node',
-  commands: [publishCommand.command, ciCommand.command, cleanCommand.command],
-  runSteps: packageJsonSteps,
-  workspace: npmWorkspace,
-  manifest: packageJsonManifest,
-  versionPlanner: nodeVersionPlanner,
-  binPaths: npmBinPaths,
+  init(ctx) {
+    ctx.addTechStack(nodeTechStack);
+    ctx.app.publishTargets.add(npmPublishTarget);
+    for (const command of [ciCommand.command, cleanCommand.command]) ctx.addCommand(command);
+  },
 });
 
 /** What the entry point actually default-exports. */
@@ -392,12 +402,22 @@ semver range, or not a string.
 
 The same substitution pnpm and yarn perform in their own `publish`.
 
-## Commands
+## Commands, and the `npm` publish target
 
-Their CLI reference lives with the others: [`publish`](cli/publish.md), [`ci`](cli/ci.md),
-[`clean`](cli/clean.md). Docker publishing is **not** here - an image is any language's to publish,
-so `publish --target docker` and `DockerPublishService` are the core's
-([rman.md#dockerpublishservice](rman.md#dockerpublishservice)). What is still wrong is that this
-plugin owns the `publish` *command* that drives it, so a non-Node repository has to install this
-package to reach Docker publishing. Fixing that means making a publish target something a plugin
-contributes to a core `publish`.
+Two commands: [`ci`](cli/ci.md) and [`clean`](cli/clean.md), whose CLI reference lives with every
+other command's.
+
+**`publish` is not one of them.** The command is the core's
+([`docs/cli/publish.md`](cli/publish.md)); what this package contributes is one
+[publish target](rman.md#publishtarget) named `npm` - `npmPublishTarget`, a thin adapter over
+[`PublishService`](#publishservice):
+
+- **its own flags** on `rman publish`: `--package-manager`, `--access`, `--tag`, `--otp`,
+  `--registry`, `--userconfig`, `--contents`;
+- **`claims`**: a package with no `publish.target` of its own ships to npm when this plugin is what
+  read its manifest (`pkg.provider === 'node'`). Nothing else can state that, which is why the
+  core's old hardcoded `['npm']` default reported npm for a Cargo package.
+
+Docker publishing was always the core's - an image is any language's to publish - but until targets
+became contributions, the only command that drove it was this plugin's, so a non-Node repository had
+to install this package to reach a feature the core implemented. That is what the move fixed.

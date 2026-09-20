@@ -17,6 +17,16 @@ import {
 } from 'rman';
 
 export namespace CiService {
+  /**
+   * The package managers this plugin knows how to drive, and the `choices` both `ci --package-manager`
+   * and the `npm` publish target's own flag offer.
+   *
+   * Exported rather than module-private, which it was: the publish target needs the same list, and
+   * a second copy of it is the kind of drift that shows up as a flag accepting a value nothing can
+   * act on. One list, one place it is written down.
+   */
+  export const PACKAGE_MANAGERS = ['npm', 'yarn', 'pnpm', 'bun'] as const;
+
   export type PackageManager = (typeof PACKAGE_MANAGERS)[number];
 
   export interface Options extends PackageFilterOptions {
@@ -129,8 +139,6 @@ export namespace CiService {
     }
   }
 }
-
-const PACKAGE_MANAGERS = ['npm', 'yarn', 'pnpm', 'bun'] as const;
 
 const LOCK_FILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb'];
 

@@ -314,11 +314,13 @@ export namespace RmanConfig {
   export interface PublishOptions extends PublishOptionsKeys, WithAppend<PublishOptionsKeys>, ScopedVars {}
 
   export interface PublishOptionsKeys {
-    /** Which **registry** `publish` ships this package to - default `['npm']` (every existing repo
-     *  keeps working unchanged). A package that only ever wants Docker images (typically also
-     *  `"private": true`, since it's not meant for npm at all) sets `['docker']`; both works too.
-     *  Each target answers "is this version already out there?" against its own registry, so a
-     *  package is never left without one: npm via `npm view`, docker via `docker manifest inspect`.
+    /** Which **registry** `publish` ships this package to. Left unset, every registered target
+     *  decides for itself whether this package is one of its own (`PublishTarget.claims`) - `npm`
+     *  claims a package whose manifest it read, and `docker` claims nothing, so it is opt-in. A
+     *  package that only ever wants Docker images (typically also `"private": true, since it's not
+     *  meant for a registry at all) sets `['docker']`; both works too. Each target answers "is this
+     *  version already out there?" against its own registry: npm via `npm view`, docker via
+     *  `docker manifest inspect`.
      *
      *  Note this is strictly about *package distribution*. The repository's GitHub Release is not
      *  a target here - it isn't a place a package ships to, it's the repository's own record that
@@ -335,7 +337,19 @@ export namespace RmanConfig {
     skip?: boolean;
   }
 
-  export type PublishTarget = 'npm' | 'docker';
+  /**
+   * **A target's name, and deliberately not a union.**
+   *
+   * It was `'npm' | 'docker'`, which CLAUDE.md recorded as the type half of a bug: the runtime half
+   * was a hardcoded `['npm']` default, so `rman list --json` reported `publishTargets: ["npm"]` for
+   * a Cargo package. Both are gone together - which targets exist is whatever the repository's
+   * plugins contribute (`RmanApplication.publishTargets`), so a union here would mean the core
+   * naming plugins it cannot know about, exactly as `Package.provider` must not.
+   *
+   * A name nothing implements is caught where the facts are, by `publish` itself, naming the
+   * targets this repository does have.
+   */
+  export type PublishTarget = string;
 
   /** Required once `"docker"` is one of this package's `publish.target`s - `publish --target
    *  docker` errors clearly on a package that opts in here but leaves this out. */

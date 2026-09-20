@@ -5,6 +5,7 @@ import { runCli as cliRunCli } from '../src/cli.js';
 import { RmanApplication } from '../src/core/application.js';
 import type { ManifestProvider } from '../src/core/manifest.js';
 import type { Package } from '../src/core/package.js';
+import type { PublishTarget } from '../src/core/publish-target.js';
 import { Repository } from '../src/core/repository.js';
 import type { ServiceMap } from '../src/core/service.js';
 import { baseTechStack, type TechStack } from '../src/core/tech-stack.js';
@@ -169,6 +170,7 @@ export function useTestEcosystem(): void {
     registryVersions.clear();
     registryCalls.length = 0;
     extraStacks.length = 0;
+    extraTargets.length = 0;
     lastApp = undefined;
   });
 }
@@ -208,6 +210,20 @@ export function useLocalBin(): void {
 }
 
 /**
+ * Adds a publish target to every application the enclosing `describe` builds.
+ *
+ * The same rule every other seam follows: the core registers `docker` and nothing else, so a spec
+ * that needs a registry to publish to **brings one**. A fake target is also the only way to
+ * exercise the contribution itself - `claims`, a target's own flags, two targets colliding on an
+ * option name - without borrowing `rman-node`'s npm one, which a core spec must never do.
+ */
+export function useTarget(target: PublishTarget): void {
+  beforeEach(() => {
+    extraTargets.push(target);
+  });
+}
+
+/**
  * A repository, on an application carrying the fixture's technologies - what a spec calls instead
  * of `Repository.create`.
  *
@@ -230,6 +246,7 @@ export function createApp(): RmanApplication {
   app.techStacks.add(testTechStack);
   app.versionPlanner = testTechStack.versionPlanner;
   for (const stack of extraStacks) app.techStacks.add(stack);
+  for (const target of extraTargets) app.publishTargets.add(target);
   lastApp = app;
   return app;
 }
@@ -274,6 +291,9 @@ export const testTechStack: TechStack = {
 
 /** Stacks a spec asked for on top of the fixture's own - see `useLocalBin`. */
 const extraStacks: TechStack[] = [];
+
+/** Publish targets a spec asked for, on top of the core's own `docker` - see `useTarget`. */
+const extraTargets: PublishTarget[] = [];
 let lastApp: RmanApplication | undefined;
 
 /**

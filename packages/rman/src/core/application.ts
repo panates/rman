@@ -1,6 +1,8 @@
 import type { VersionPlanService } from '../services/version-plan.service.js';
 import { Logger, type LogLevel } from '../utils/logger.js';
 import { registerCoreServices } from './core-services.js';
+import { registerCoreTargets } from './core-targets.js';
+import type { PublishTarget } from './publish-target.js';
 import { Registry } from './registry.js';
 import type { Repository } from './repository.js';
 import type { ServiceFactory, ServiceMap } from './service.js';
@@ -28,6 +30,16 @@ export class RmanApplication {
    * `TechStack`.
    */
   readonly techStacks = new Registry<TechStack>();
+
+  /**
+   * Where a package's artifact can ship, in registration order.
+   *
+   * A registry rather than a field because the answer is a *sum*: a package may ship to npm and
+   * Docker Hub at once, and `publish` runs every target a package declares. The core contributes
+   * `docker` (nobody's ecosystem), `rman-node` contributes `npm`, and a plugin for any other
+   * technology adds its own without either of them changing - see `PublishTarget`.
+   */
+  readonly publishTargets = new Registry<PublishTarget>();
 
   /** One answer, not a sum - so a field rather than a registry, and last registration wins. */
   versionPlanner?: VersionPlanService;
@@ -64,6 +76,7 @@ export class RmanApplication {
   constructor(options?: { logLevel?: LogLevel }) {
     this.logger = new Logger(options?.logLevel ?? 'info');
     registerCoreServices(this);
+    registerCoreTargets(this);
   }
 
   /**

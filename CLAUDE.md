@@ -412,10 +412,14 @@ is nobody's ecosystem.
   - **Trap when writing a fixture for this:** a `"[selector]"` matches **package names**, not
     directory names - `"[app]"` matches nothing when the package in `packages/app` is called
     `pkg-app` (measured, twice).
-- **Still core's, and still wrong:** `PublishTarget = 'npm' | 'docker'`. The union is the type half
-  of a bug whose runtime half is the `['npm']` default in `list`/`docker-publish` - `rman list
-  --json` reports `publishTargets: ["npm"]` for a Cargo package. Fixing only the type would make it
-  worse, so both wait for publish targets to become a plugin contribution.
+- **`PublishTarget` is `string`, and both halves of the bug it used to be are gone.** It was
+  `'npm' | 'docker'`, the type half of a bug whose runtime half was a hardcoded `['npm']` default in
+  `list`/`docker-publish` - so `rman list --json` reported `publishTargets: ["npm"]` for a Cargo
+  package. Publish targets are contributions now (see below), so the union would mean the core
+  naming plugins it cannot know about, exactly as `Package.provider` must not; and the default is
+  `PublishTarget.claims`, answered by the ecosystem that read the manifest. **Never narrow it
+  again.** A name nothing implements is caught by `publish` itself, naming the targets the
+  repository does have.
 ## `rman config` - the resolved config, for the directory you are standing in
 
 [`src/commands/config.command.ts`](packages/rman/src/commands/config.command.ts). Prints
@@ -699,25 +703,58 @@ touched package counts as changed.
   **explicitly**. Do the same for any new note-generating path.
 - Skips a `.rmanrc "publish.skip"` package by default; `--include-skipped` brings it back.
 
-### `publish`
+### `publish` - the core's command; a *target* is what a plugin contributes
+
+[`src/cmd/publish.command.ts`](packages/rman/src/cmd/publish.command.ts),
+[`src/core/publish-target.ts`](packages/rman/src/core/publish-target.ts).
 
 - **Question B.** Each target asks its **own** registry whether this version is already out there:
 
-  | Criterion | Source | Opt-in? | Service |
+  | Criterion | Source | Claims by default? | Implementation |
   | --- | --- | --- | --- |
-  | **b-1** npm-targeted packages | `npm view <name> version` == local `package.json` version | No (opt out via `private`/`target`) | `PublishService` |
-  | **b-2** docker-targeted packages | `docker manifest inspect <image>:<version>` | Yes | `DockerPublishService` |
-  | **b-3** the repository itself (see `github-release`) | a GitHub Release exists for the repository's release tag | n/a - never optional | `GithubReleaseService` |
+  | **b-1** npm-targeted packages | `npm view <name> version` == local `package.json` version | a package `rman-node` read the manifest of | `npmPublishTarget` → `PublishService` (`rman-node`) |
+  | **b-2** docker-targeted packages | `docker manifest inspect <image>:<version>` | nothing - opt-in | `dockerPublishTarget` → `DockerPublishService` (core) |
+  | **b-3** the repository itself (see `github-release`) | a GitHub Release exists for the repository's release tag | n/a - never optional, and not a target | `GithubReleaseService` (core) |
 
+- **`publish` was `rman-node`'s command, and that had the ownership backwards.** Everything the
+  command does is about a *repository* - which packages are candidates, dependency order, the
+  plan/confirm/apply shape, `--dry-run`, the JSON a CI gate reads - and none of it is npm's. What an
+  ecosystem owns is one answer to "is this version on the registry, and how do I push it", which is
+  the whole of `PublishTarget`. The measured consequence of the old arrangement: Docker publishing
+  was implemented in the **core** all along, and `publish --target docker` in a repository with no
+  JavaScript in it still required installing a Node plugin to reach it.
+- **A target owns three things and no more**: `claims` (which packages are its own when a package
+  declares no `publish.target`), its **own CLI options**, and `getPlan`/`applyPlan`. Registered on
+  `RmanApplication.publishTargets` - a registry, not a service, because the answer is a *sum*: a
+  package may ship to npm and Docker Hub at once.
+  - **A target's flags are merged into `publish`'s where the command is built**, which is why the
+    command can take `app` and still be declared rather than built by hand. `--access`, `--tag`,
+    `--otp`, `--registry`, `--userconfig`, `--contents`, `--package-manager` are the `npm` target's;
+    `--docker-namespace` is `docker`'s. A target reads them off `ctx.args`, untyped on purpose - the
+    target declared them, so it is the only thing that can know their names.
+  - **Two targets colliding on an option name throws**, naming both. npm has a `--registry` and so
+    would a Cargo target; any rule for picking a winner (registration order, last wins) produces a
+    flag that silently means the other target's thing. Name it for the target.
+  - **`--target`'s `choices` come from the registry**, and a name in `publish.target` that nothing
+    implements is an error naming what *is* installed. That check used to be the type's job and can
+    no longer be - see `PublishTarget` above.
+- **`claims` is where the `['npm']` default went, and it must stay per-ecosystem.** `npm`'s answer
+  is `pkg.provider === 'node'`; `docker` has none, so it is opt-in. The core cannot write either
+  down, which is exactly why the old hardcoded default was wrong for a Cargo package.
+- **Which packages a target is asked about is `shipsTo`/`targetsOf`, never a second read of
+  `publish.target`.** `DockerPublishService` and `ListService` both go through it, so `publish` and
+  `rman list --json` cannot disagree about where a package ships.
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
 - In CI, gate the release pipeline on **this** plan, not on `changed`.
-- A new target follows the same shape: opt-in, its own `.rmanrc` config block, its own
-  "already there?" check, `getPlan`/`applyPlan`, and an injectable `Deps` check so tests stay offline.
 - `.rmanrc "publish.skip"` excludes a package from **every** target.
 - `publish.target` is about **package distribution only** - which registry a package's artifact
   goes to. `"github"` as a value would read as *GitHub Packages* (`npm.pkg.github.com`), which is
   what it will mean if it is ever added; it must never again mean the repository's GitHub Release.
+- **Still open**: a target contributes flags but not its own *config type*. `publish.docker.*` and
+  `publish.directory` are still declared in `RmanConfig.PublishOptions` / `NodeConfigKeys` rather
+  than by the targets that read them, because a `Record<string, CommandOption>` cannot say "an
+  object with these keys". `publish.directory` should become `publish.npm.directory` when it can.
 
 - **Publishing from a build directory** (`publishConfig.directory` > `.rmanrc "publish.directory"` >
   `--contents`): the manifest in that directory is **generated by `publish`**, at publish time, and
@@ -726,6 +763,9 @@ touched package counts as changed.
   those would silently break every native-module package); `private` (publish refuses a private
   package anyway); `publishConfig.directory` (it pointed *here*). `"workspace:"` ranges are resolved
   in it, and it is deleted again afterwards.
+  - **This whole section is the `npm` target's**, not `publish`'s: a build directory, a generated
+    manifest and `"workspace:"` ranges are all facts about npm. `PublishService` in `rman-node` is
+    where it lives, reached through `npmPublishTarget`.
   - **The `"workspace:"` protocol lives in `rman-node`** (`utils/workspace-range.ts`), not in the
     core: it is a statement about a `package.json` dependency field, and the core never read it -
     it was only exported from there because `publish` needed it before `publish` itself moved out.
@@ -771,9 +811,8 @@ four behaviours still fire.
 - A `.d.ts` with **no** matching `.ts`/`.tsx` is left alone - that is a hand-written declaration,
   not build output. Don't "simplify" that check away.
 - Never touches `node_modules`; that is `ci`'s job.
-- The `clean` key still sits in the *core's* `RmanConfig` interface and JSON schema, as `publish`'s
-  and `ci`'s do. That is consistent but not yet right: config *types* for plugin-owned commands
-  should be contributed by the plugin. One cleanup for all three, not three.
+- `clean` and `ci` are the two commands still wholly `rman-node`'s, and the two still to be
+  converted to `registerCommand`. `publish` is no longer one of them - see above.
 
 ### `list` / `run`
 
@@ -1043,10 +1082,14 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   That is the intended escape hatch and the same precedence a package's own `.rmanrc` has over an
   `extends` base, so don't "fix" it into an error - but know it when a plugin's command appears not
   to work.
-- `BUILT_IN_COMMANDS` in [`src/cli.ts`](src/cli.ts) is hand-maintained (yargs exposes no such list)
-  and pinned by a test against the `command:` strings in `src/commands/*.command.ts` - so adding a
-  command can't quietly leave a repository's own able to shadow it. It covers **built-ins only**,
-  which is why the rule above differs for plugins.
+- **The built-in name list is derived, not written** (`builtInNames` in
+  [`src/cli.ts`](packages/rman/src/cli.ts)): it walks the same `commandRegistry` the commands are
+  registered from, so the two cannot disagree and adding a command can't quietly leave a
+  repository's own able to shadow it. It was a hand-maintained array pinned by a spec, which is what
+  declaring commands replaced. Aliases count (`ls` is `list`); `completion` is yargs' own and is the
+  one name still written down. It covers **built-ins only**, which is why the rule above differs for
+  plugins - and note that `publish` crossed that line when it moved into the core, so a
+  `.rman/publish.mjs` that used to win silently is now a clash that throws.
 - **A bare name resolves through the *repository's* `node_modules` first, and falls back to whatever
   is installed beside rman itself** (`resolveConfigTarget` / `resolveBesideRman` in
   [`src/core/resolve-target.ts`](packages/rman/src/core/resolve-target.ts)). A globally installed

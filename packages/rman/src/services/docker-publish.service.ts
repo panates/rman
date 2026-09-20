@@ -4,12 +4,21 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import type { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/package.js';
+import { type PublishTarget, targetsOf } from '../core/publish-target.js';
 import type { Repository } from '../core/repository.js';
 import { Service } from '../core/service.js';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { exec } from '../utils/exec.js';
 import { GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
+
+/**
+ * The name this target answers to in `publish.target` and `--target`.
+ *
+ * Declared beside the implementation rather than in `publish-target.ts`: the seam is general and
+ * must not know any one target's name, and the adapter in `targets/docker.target.ts` reads it from
+ * here, which keeps the dependency pointing one way.
+ */
+export const DOCKER_TARGET = 'docker';
 
 /**
  * A service class - see `ListService` for the shape and `Service` for the three measured
@@ -35,8 +44,12 @@ export class DockerPublishService extends Service {
   ): Promise<DockerPublishService.Entry[]> {
     const repository = this.repository;
     const git = new GitHelper({ cwd: repository.dirname });
+    /** Which packages are the docker target's is the one question `PublishTarget` answers for every
+     *  target alike (`publish.target`, or `claims` when a package declares none) - asked through
+     *  `targetsOf` rather than re-read here, so `publish` and `list --json` cannot disagree about
+     *  where a package ships. */
     const packages = filterPackages(repository.getPackages({ toposort: true }), options).filter(
-      pkg => targetsDocker(pkg) && !pkg.config.publish?.skip,
+      pkg => targetsOf(this.app, pkg).some(t => t.name === DOCKER_TARGET) && !pkg.config.publish?.skip,
     );
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
     const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
@@ -67,6 +80,7 @@ export class DockerPublishService extends Service {
           package: pkg,
           version: pkg.version,
           image,
+          detail: image,
           status: options.ignoreDirty ? 'skip' : 'error',
           reason: 'uncommitted local changes',
         });
@@ -82,6 +96,7 @@ export class DockerPublishService extends Service {
           package: pkg,
           version: pkg.version,
           image,
+          detail: image,
           status: exists ? 'up-to-date' : 'publish',
           reason: exists ? `registry already has ${image}:${pkg.version}` : 'never published',
         });
@@ -142,12 +157,6 @@ async function defaultImageExists(image: string, tag: string): Promise<boolean> 
   } catch {
     return false;
   }
-}
-
-function targetsDocker(pkg: Package): boolean {
-  const target = pkg.config.publish?.target;
-  const targets = Array.isArray(target) ? target : target ? [target] : (['npm'] as RmanConfig.PublishTarget[]);
-  return targets.includes('docker');
 }
 
 function resolveImageRef(image: string, namespaceOverride: string | undefined): string {
@@ -255,15 +264,17 @@ export namespace DockerPublishService {
 
   export type ApplyOptions = Options;
 
-  /** One package's outcome in a docker-publish plan - see `getPlan`. */
-  export interface Entry {
-    package: Package;
-    version: string;
-    status: 'publish' | 'skip' | 'up-to-date' | 'error';
+  /**
+   * One package's outcome in a docker-publish plan - see `getPlan`.
+   *
+   * A `PublishTarget.Entry` with one field of its own, which is the shape that interface expects: a
+   * target knows things about its own registry that no other target has a word for, and `detail` is
+   * where it puts whatever the command should print beside the package.
+   */
+  export interface Entry extends PublishTarget.Entry {
     /** The fully-qualified `<namespace>/<image>` this entry publishes to - unset only when the
      *  package's own `publish.docker.image` config is missing entirely (an `'error'` entry). */
     image?: string;
-    reason?: string;
   }
 }
 

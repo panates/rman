@@ -66,7 +66,7 @@ rman version
 # Apply it: bump versions, write CHANGELOG.md, commit, tag
 rman version --changelog
 
-# Publish everything that isn't already on the registry (needs rman-node)
+# Publish everything that isn't already on the registry
 rman publish
 ```
 
@@ -90,16 +90,23 @@ worked examples of every single command, see **[docs/cli-rman.md](https://github
 | [`diff [package]`](#rman-diff-package) | Shows the git diff since a package's (or the repo's) last release tag. |
 | [`changelog`](#rman-changelog) | Generates a changelog per package from unreleased commits. |
 | [`version [bump]`](#rman-version-bump) | Bumps versions of changed packages (and their dependents). |
+| [`publish`](#rman-publish) | Publishes every package whose version isn't on its registry yet. |
 | [`github-release`](#rman-github-release) | Creates the repository's GitHub Release for its release tag. |
 | [`import <path>`](#rman-import-path) | Imports an external git repository as a new package, with history. |
 
-**`publish`, `ci` and `clean` come from [`rman-node`](https://www.npmjs.com/package/rman-node)**,
-not from this package - each is about npm or TypeScript rather than about repositories. Name the
-plugin in `.rmanrc` to get them:
+**`ci` and `clean` come from [`rman-node`](https://www.npmjs.com/package/rman-node)**, not from
+this package - each is about npm or TypeScript rather than about repositories. Name the plugin in
+`.rmanrc` to get them:
 
 ```yaml
 plugins: ['rman-node']
 ```
+
+**`publish` is here, but *where* a package ships is a plugin's to say.** A **publish target** is
+one answer to "is this version on the registry, and how do I push it" - rman ships `docker`
+(any language's project can push an image), and `rman-node` contributes `npm` along with the flags
+that only mean something there (`--access`, `--tag`, `--otp`, `--registry`, ...). So
+`rman publish --help` lists what this repository's targets actually understand.
 
 Options shared across several commands:
 
@@ -265,6 +272,29 @@ Release-As: patch
 
 See [docs/rman.md#versionservice](https://github.com/panates/rman/blob/main/docs/rman.md#versionservice) for the full grouping/propagation
 algorithm, prerelease semantics, and `"workspace:"` dependency-range handling.
+
+### `rman publish`
+
+Publishes every package whose current version isn't on its registry yet. Shows the plan first, then
+asks for confirmation (unless `--yes` or `--dry-run`), then publishes in topological order,
+dependencies before dependents.
+
+```bash
+rman publish                    # show the plan, then ask for confirmation
+rman publish --yes              # publish immediately, no confirmation
+rman publish --dry-run --json   # "is there anything to release?", for a CI gate
+rman publish --target docker    # only the packages configured for that target
+```
+
+**Where a package ships is a publish target, and a target is a contribution.** rman ships `docker`;
+`rman-node` contributes `npm`. A package says where it goes with `.rmanrc "publish.target"`, or says
+nothing and goes wherever the installed targets claim it - so a Cargo package is never assumed to be
+an npm one. Each target adds its own flags, so `rman publish --help` is worth reading in your own
+repository. See
+[docs/cli/publish.md](https://github.com/panates/rman/blob/main/docs/cli/publish.md).
+
+It never looks at whether `version` ran: it inspects what is on disk and on each registry, so it
+behaves the same right after a bump or days later, and re-running is safe.
 
 ### `rman github-release`
 

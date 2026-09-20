@@ -44,12 +44,18 @@ rman <command> --help   # full option list for that one command
 | `diff [package]` | [`docs/cli/diff.md`](cli/diff.md) | Shows the git diff since a package's (or the repo's) last release tag. |
 | `changelog` | [`docs/cli/changelog.md`](cli/changelog.md) | Generates a changelog per package from unreleased commits. |
 | `version [bump]` | [`docs/cli/version.md`](cli/version.md) | Bumps versions of changed packages (and their dependents). |
+| `publish` | [`docs/cli/publish.md`](cli/publish.md) | Publishes every package whose version isn't on its registry yet. |
 | `github-release` | [`docs/cli/github-release.md`](cli/github-release.md) | Creates the repository's GitHub Release for the version that just shipped. |
 | `import <path>` | [`docs/cli/import.md`](cli/import.md) | Imports an external git repository as a new package, with history. |
 
-**`publish`, `ci` and `clean` are not in that list** - they come from
-[`rman-node`](cli-node.md), because each is about npm or TypeScript rather than about
-repositories.
+**`ci` and `clean` are not in that list** - they come from [`rman-node`](cli-node.md), because each
+is about npm or TypeScript rather than about repositories.
+
+**`publish` is, and its flags still are not fixed.** The command is rman's; *where a package ships*
+is a **publish target**, which a plugin contributes. rman itself brings `docker` - any language's
+project can push an image - and `rman-node` brings `npm`. Each target adds its own flags to
+`rman publish`, so `rman publish --help` lists exactly the ones the targets this repository
+installed actually understand. See [Publish targets](cli/publish.md#publish-targets).
 
 ## Where a command comes from
 

@@ -19,40 +19,36 @@ npm i -D rman-node
 plugins: ['rman-node']
 ```
 
-A plugin that cannot be loaded is an error, not a skip: silently losing `rman publish` is worse
+A plugin that cannot be loaded is an error, not a skip: silently losing `rman clean` is worse
 than not starting.
 
-## Commands
+## The `npm` publish target
 
-These three commands do not exist without this package - `rman clean` is `Unknown argument: clean`
-in a repository that names no plugin.
-
-### `rman publish`
-
-Publishes every package to its configured registry - `npm` by default, or whatever each package's
-own `.rmanrc "publish.target"` says (`"npm"`, `"docker"`, or both). Each target decides for itself
-whether the current version is already out there: `npm view` on the npm side, `docker manifest
-inspect` on the docker side.
+**`rman publish` is rman's own command.** What this package adds is the `npm` target: the answer to
+"is this version on the npm registry, and how do I push it". Installing it adds these flags, and
+makes a package with no `publish.target` of its own ship to npm:
 
 ```bash
-rman publish                              # show the plan, then ask for confirmation
-rman publish --yes                        # publish immediately, no confirmation
-rman publish --dry-run                    # only show the plan, never publish
 rman publish --access public              # required for a new scoped package
 rman publish --tag next
 rman publish --otp 123456
 rman publish --registry https://registry.example.com --userconfig ./ci.npmrc
 rman publish --package-manager pnpm
-rman publish --target docker              # only the packages configured for the "docker" target
+rman publish --contents build
 ```
 
 A `"workspace:*"`/`"workspace:^"`/`"workspace:~"` dependency range is automatically rewritten to a
 real, registry-consumable range immediately before each package's publish, and restored right
 after - see [docs/node.md#publishservice](https://github.com/panates/rman/blob/main/docs/node.md#publishservice).
 
-A package opts into building/pushing a Docker image via `.rmanrc "publish.target": ["docker"]` plus
-a `"publish.docker"` block (`image`, `platforms`, `buildContexts`, `buildArgs`, ...) - see
+Docker publishing needs none of this: the `docker` target is rman's own, so any repository reaches
+it by naming `"docker"` in `publish.target` - see
 [docs/cli/publish.md](https://github.com/panates/rman/blob/main/docs/cli/publish.md#docker-publishing-publishdocker).
+
+## Commands
+
+These two commands do not exist without this package - `rman clean` is `Unknown argument: clean`
+in a repository that names no plugin.
 
 ### `rman ci`
 

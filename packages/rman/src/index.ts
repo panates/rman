@@ -25,6 +25,9 @@ export { Manifest } from './core/manifest.js';
 export { Package } from './core/package.js';
 export type { RmanPlugin } from './core/plugin.js';
 export { definePlugin } from './core/plugin.js';
+/** The publish seam: where a package's artifact ships. The core brings `docker` (nobody's
+ *  ecosystem); npm's target lives in `rman-node`, and any other technology's in its own plugin. */
+export { declaredTargets, type PublishTarget, shipsTo, targetsOf, unknownTargets } from './core/publish-target.js';
 export { Registry } from './core/registry.js';
 export { Repository } from './core/repository.js';
 export type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from './core/run-step.js';

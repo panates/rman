@@ -6,9 +6,9 @@ import { augmentSystemInfo } from './augmentation/system-info.augmentation.js';
 import { npmWorkspace } from './augmentation/workspace.augmentation.js';
 import * as ciCommand from './commands/ci.command.js';
 import * as cleanCommand from './commands/clean.command.js';
-import * as publishCommand from './commands/publish.command.js';
 import { defineConfig } from './interfaces/rman-config.interface.js';
 import { nodeVersionPlanner } from './services/version-plan.service.js';
+import { npmPublishTarget } from './targets/npm.target.js';
 import { npmBinPaths } from './utils/npm-run-path.js';
 
 export { DEPENDENCY_KEYS, packageJsonManifest } from './augmentation/manifest.augmentation.js';
@@ -21,6 +21,7 @@ export { CiService } from './services/ci.service.js';
 export { CleanService } from './services/clean.service.js';
 export { PublishService } from './services/publish.service.js';
 export { nodeVersionPlanner, NodeVersionPlanService } from './services/version-plan.service.js';
+export { NPM_TARGET, npmPublishTarget } from './targets/npm.target.js';
 export { npmBinPaths } from './utils/npm-run-path.js';
 export type { ParsedWorkspaceRange } from './utils/workspace-range.js';
 export { parseWorkspaceRange, resolveWorkspaceRange } from './utils/workspace-range.js';
@@ -36,13 +37,14 @@ export const version = '1';
  * plugins: ['rman-node']
  * ```
  *
- * rman's core is about repositories - packages, versions, changelogs, releases, branches. These
- * three commands are about *npm*, which is a different thing that happens to be true of most
+ * rman's core is about repositories - packages, versions, changelogs, releases, branches. What this
+ * package adds is about *npm*, which is a different thing that happens to be true of most
  * repositories rman has been used on so far:
  *
- * - **`publish`** asks an npm registry whether a version is already out there, and pushes it -
- *   including the manifest it generates in a build directory, the `"workspace:"` ranges it
- *   resolves, and the `devDependencies` it strips.
+ * - **the `npm` publish target** asks an npm registry whether a version is already out there, and
+ *   pushes it - including the manifest it generates in a build directory, the `"workspace:"` ranges
+ *   it resolves, and the `devDependencies` it strips. The `publish` *command* is the core's; this
+ *   is the registry half of it, contributed through `RmanApplication.publishTargets`.
  * - **`ci`** deletes `node_modules` and a lockfile, and reinstalls with npm/yarn/pnpm/bun.
  * - **`clean`** deletes TypeScript's output - a compiled `.js`/`.js.map`/`.d.ts` beside its `.ts`
  *   source, a `*.tsbuildinfo`, skipping `node_modules` while it looks. Every one of those is a
@@ -57,11 +59,12 @@ export const version = '1';
  * "because `info` reads it", and that stopped being true when `SystemInfo`'s npm half moved here:
  * measured, nothing in the core read it at all, only the declaration was left behind.
  *
- * **Docker stayed in the core**, where it belongs - any language's project can publish an image.
- * What is still wrong is that this command *drives* it: `publish --target docker` in a repository
- * that is not a Node one would have to install this plugin to reach it. Fixing that means making a
- * publish target something a plugin contributes to a core `publish`, which is the next step rather
- * than this one.
+ * **`publish` is no longer this package's command**, and that is the correction worth recording.
+ * Docker publishing was always in the core - any language's project can publish an image - but the
+ * only command that drove it was this plugin's, so `publish --target docker` in a repository with
+ * no JavaScript in it meant installing a Node plugin to reach a feature the core implemented.
+ * A publish target is a contribution now, so the command went back to the core and this package
+ * contributes `npm` to it.
  */
 /** Applied as the plugin module loads - before any command runs, since `loadPlugins` imports this
  *  during CLI startup. Augmentations go here rather than inside a command so that `rman info`,
@@ -92,7 +95,11 @@ export const nodePlugin = definePlugin({
   name: 'rman-node',
   init(ctx) {
     ctx.addTechStack(nodeTechStack);
-    for (const command of [publishCommand.command, ciCommand.command, cleanCommand.command]) {
+    /** Not `addPublishTarget` on the context: a target needs nothing the application cannot give
+     *  it, and `PluginContext`'s two helpers exist only because they have to know *which* plugin is
+     *  asking. Everything else a plugin contributes goes straight onto `ctx.app`. */
+    ctx.app.publishTargets.add(npmPublishTarget);
+    for (const command of [ciCommand.command, cleanCommand.command]) {
       ctx.addCommand(command);
     }
   },
@@ -111,6 +118,7 @@ export const nodePlugin = definePlugin({
  */
 export function augmentTechStack(app: RmanApplication): void {
   app.techStacks.add(nodeTechStack);
+  app.publishTargets.add(npmPublishTarget);
   app.versionPlanner = nodeVersionPlanner;
 }
 

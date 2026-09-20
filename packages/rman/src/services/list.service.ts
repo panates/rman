@@ -1,4 +1,5 @@
 import path from 'path';
+import { targetsOf } from '../core/publish-target.js';
 import type { Repository } from '../core/repository.js';
 import { Service } from '../core/service.js';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
@@ -33,8 +34,10 @@ export class ListService extends Service {
     const status = await repository.listStatus({ hash: options.changedSince });
 
     let items: ListService.Item[] = packages.map(p => {
-      const target = p.config.publish?.target;
-      const publishTargets: RmanConfig.PublishTarget[] = Array.isArray(target) ? target : target ? [target] : ['npm'];
+      /** **Asked, not assumed.** This read the config key directly and defaulted to `['npm']`, so a
+       *  Cargo package in a polyglot repository was reported as shipping to npm - which is what
+       *  `PublishTarget.claims` exists to answer, per target, from the ecosystem that knows. */
+      const publishTargets = targetsOf(this.app, p).map(t => t.name);
       return {
         name: p.name,
         version: p.version,
@@ -71,8 +74,9 @@ export namespace ListService {
     /** In-repo package names this one depends on - enough to build a dependency graph without a
      *  second call, e.g. `Object.fromEntries(items.map(i => [i.name, i.dependencies]))`. */
     dependencies: string[];
-    /** This package's own (cascaded) `.rmanrc "publish.target"` - `["npm"]` when unset, same
-     *  default `publish` itself uses. */
+    /** Where this package actually ships - its own (cascaded) `.rmanrc "publish.target"` when it
+     *  declares one, otherwise every registered target that claims it, which is the same question
+     *  `publish` asks. Empty in a repository whose plugins contribute no target the package fits. */
     publishTargets: RmanConfig.PublishTarget[];
     /** Present only when `"docker"` is one of `publishTargets` and `publish.docker` is configured -
      *  the raw `.rmanrc` config, unresolved (no namespace prefixing - see `DockerPublishService`). */

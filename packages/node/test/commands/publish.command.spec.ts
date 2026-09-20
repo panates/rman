@@ -196,7 +196,10 @@ describe('commands/publish', () => {
   });
 
   describe('--target', () => {
-    it('--target docker errors clearly when nothing configures the "docker" target', async () => {
+    /** The message names `publish.target`, not `publish.docker`, and the distinction is exact: a
+     *  package that *declares* the target but leaves out `publish.docker.image` produces an error
+     *  entry in the plan, so an **empty** plan can only mean nothing named the target at all. */
+    it('--target docker errors clearly when no package ships to the "docker" target', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
 
@@ -204,7 +207,7 @@ describe('commands/publish', () => {
         const lines = await captureLogs(() =>
           expectCliFailure(() => runCli({ cwd: dir, argv: ['publish', '--target', 'docker'] })),
         );
-        expect(lines.some(l => l.includes('no package') && l.includes('publish.docker'))).toBe(true);
+        expect(lines.some(l => l.includes('no package ships there') && l.includes('publish.target'))).toBe(true);
       });
     });
 
