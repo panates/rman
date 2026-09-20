@@ -280,6 +280,52 @@ describe('core/config', () => {
   });
 
   /**
+   * **Every `run.<script>` key `RunService` actually reads, pinned at the type level.**
+   *
+   * The two halves drift independently - `run.service.ts` reads a key, `RunScriptOptionsKeys`
+   * declares one - and nothing connects them, so a key can exist on exactly one side indefinitely.
+   * It did: `changed` was read at runtime (`resolveBool(..., 'changed', false)`) and missing from
+   * the type, which meant a typed JS config could not write the thing that already worked.
+   *
+   * A `satisfies` rather than an annotation, so an excess key fails here instead of widening.
+   */
+  describe('RunScriptOptions', () => {
+    it('accepts every key RunService reads', () => {
+      const config = {
+        run: {
+          build: {
+            // read off the root package: one scheduler, one answer for the whole batch
+            concurrency: 2,
+            progress: false,
+            changed: true,
+            changedSince: 'abc1234',
+            // read both ways - the root's picks the sort, a package's own its dependency waiting
+            topo: false,
+            bail: false,
+            // per package
+            logLevel: 'verbose',
+            skip: false,
+            if: 'changed',
+            override: true,
+            before: 'node ./gen.js',
+            exec: 'tsc -b',
+            after: ['node ./copy.js', 'node ./stamp.js'],
+          },
+        },
+      } satisfies RmanConfig;
+      expect(config.run.build.changed).toBe(true);
+    });
+
+    it('rejects "parallel", which is the CLI flag rather than a config key', () => {
+      const config: RmanConfig = {
+        // @ts-expect-error `--parallel` is boolean|number on the CLI; the key it feeds is `concurrency`
+        run: { build: { parallel: 4 } },
+      };
+      expect(config.run).toBeDefined();
+    });
+  });
+
+  /**
    * **What a command contributes to `RmanConfig`, pinned at the type level.**
    *
    * `version`, `changelog`, `githubRelease` and `publish` are no longer written out in

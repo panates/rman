@@ -64,29 +64,53 @@ package of the directory declaring them, and a `"[selector]"` block configures t
 names - so at the repository root, package-facing script config goes under `"[*]"`:
 
 ```yaml
-"[*]":
+"[/]": # how the batch is scheduled - one answer for the whole run, so it is read here
+  run:
+    build:
+      concurrency: 2
+    lint:
+      topo: false # sort alphabetically instead of in dependency order
+
+"[*]": # what each package does
   run:
     test: mocha # a bare string is shorthand for { exec: mocha }
     build:
-      concurrency: 2
       before: [node ./generate.js, node ./validate.js] # array -> run in sequence
       exec: tsc -b # used only if the package's own package.json has no "build" script at all
       after: node ./copy-assets.js
       override: true # use these even if the package DOES already define build/prebuild/postbuild
     lint:
-      topo: false # independent packages - alphabetical order, no dependency waiting
+      topo: false # this package does not wait for its dependencies
       bail: false # one package's lint failure doesn't stop the others
     coverage:
       skip: true # these packages opt out of "coverage" entirely
       if: changed # only actually runs when the package has changed since the last publish
 ```
 
+**Which level a key is read at is not uniform**, and a key written at the wrong one is silently
+ignored - there is no schema to catch it in a JSON or YAML config:
+
+| Key | Read from | Belongs under |
+| --- | --- | --- |
+| `concurrency`, `progress`, `changed`, `changedSince` | the **root package only** - one scheduler, one answer for the whole batch | `"[/]"` |
+| `topo` | **both**, meaning different things: the root's picks the sort (dependency order vs alphabetical), a package's own decides whether *it* waits for its dependencies | either, or both |
+| `bail` | **both**: the root's is the default, a package's own is its own rule | either, or both |
+| `logLevel`, `skip`, `if`, `override`, `exec`/`before`/`after` | the package it is about | `"[*]"` |
+
+Measured, because this is the kind of mistake nothing reports: with two packages of 1.5s each,
+`concurrency: 1` written under `"[*]"` still ran them at once (1.8s), while the same line under
+`"[/]"` serialized them (3.3s). `topo: false` works from either place, for the two different
+reasons above.
+
+A JS config catches a key that does not exist at all (`parallel` is the *CLI flag*; the key it
+feeds is `concurrency`), but nothing catches a real key at the wrong level.
+
 Values may embed [`${{ ... }}` expressions](../rman.md#expressions---), evaluated per package - so one
 declaration can still say something package-specific (`../../coverage/${{ pkg.basename }}`,
 `app:${{ git.shortSha ?? 'local' }}`).
 
-**Precedence** for `topo`/`progress`/`concurrency`/`logLevel`: explicit CLI flag > package's own
-resolved `.rmanrc` > built-in fallback. **`bail` is the one exception:** a package's own `.rmanrc
+**Precedence** for `topo`/`progress`/`concurrency`/`logLevel`: explicit CLI flag > the resolved
+`.rmanrc` at whichever level the table above says the key is read from > built-in fallback. **`bail` is the one exception:** a package's own `.rmanrc
 bail` outranks even an explicit CLI `--bail`/`--no-bail` - "this package's failure must always stop
 the batch" is a more specific, intentional statement than a broad flag meant for the whole run, and
 shouldn't be silently overridden by it.

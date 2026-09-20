@@ -523,12 +523,27 @@ export namespace RmanConfig {
 
   export interface RunScriptOptions extends RunScriptOptionsKeys, WithAppend<RunScriptOptionsKeys>, ScopedVars {}
 
+  /**
+   * **Which level a key is read at is not uniform, and it follows what the key decides.**
+   * `RunService` reads `concurrency`, `progress`, `changed` and `changedSince` off the **root
+   * package only** - one scheduler, one answer for the whole batch - so those belong under
+   * `"[/]"`, and a `"[*]"` block declaring them is silently ignored (measured: `concurrency: 1`
+   * under `"[*]"` still ran two packages at once). `logLevel`, `skip`, `if`, `override` and the
+   * step slots are per package. `topo` and `bail` are read **both** ways and mean different things
+   * at each: the root's `topo` picks the sort (topological vs alphabetical), a package's own
+   * decides whether *it* waits for its dependencies; the root's `bail` is the default, a package's
+   * own outranks even an explicit CLI flag.
+   */
   export interface RunScriptOptionsKeys {
     concurrency?: number;
     topo?: boolean;
     bail?: boolean;
     progress?: boolean;
     logLevel?: 'silent' | 'error' | 'info' | 'verbose';
+    /** Only run in packages that have changed since their last release - the config twin of
+     *  `--changed`, read off the root. It was read at runtime long before it was declared here, so
+     *  a typed config could not say the thing that already worked. */
+    changed?: boolean;
     changedSince?: string;
     skip?: boolean;
     /** Whether this script runs for a package at all - the small `changed and not private` grammar,

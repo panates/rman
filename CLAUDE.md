@@ -944,6 +944,30 @@ four behaviours still fire.
 
 ### `list` / `run`
 
+- **A `run.<script>` key is not read at one uniform level, and the wrong level fails silently.**
+  `RunService` reads `concurrency`, `progress`, `changed` and `changedSince` off
+  **`repository.rootPackage` only** - there is one scheduler and it needs one answer for the whole
+  batch - while `logLevel`, `skip`, `if`, `override` and the step slots are per package. Measured,
+  because nothing reports it: two packages of 1.5s each, `concurrency: 1` under `"[*]"` still ran
+  them at once (1.8s); the same line under `"[/]"` serialized them (3.3s). `docs/cli/run.md`'s
+  example had it under `"[*]"`.
+  - **`topo` is read both ways and means a different thing at each**, which is why `topo: false`
+    appears to work from either place: the root's picks the *sort* (`getPackages({toposort})`,
+    decided once for the list), a package's own decides whether **it** waits for its dependencies
+    (`pkgTopo`, `run.service.ts:175`). `bail` is likewise both - the root's is the default, a
+    package's own outranks even an explicit CLI flag.
+  - **Raising concurrency buys nothing while `topo` is on and the packages form a chain** - the
+    dependency edges serialize them anyway (measured: `topo: true, concurrency: 8` is the same 3.1s
+    as `concurrency: 1`). For a script whose packages are genuinely independent, `topo: false` is
+    the setting that matters, not `concurrency`.
+  - **`--parallel` and `concurrency` are deliberately different names**: the flag is
+    `boolean | number` (omit/`true` = CPU count, `false` = serially), the key is the number it
+    resolves to. Don't "fix" this into one name; do keep the flag's describe text naming the key.
+  - **A key read at runtime but missing from `RunScriptOptionsKeys` is invisible to a typed
+    config**, and there is no schema behind it any more, so the type is the only reader. `changed`
+    sat that way - read since forever, declared never - so a JS config could not write the thing
+    that worked. Pinned now in `config.spec.ts`'s `RunScriptOptions` block, with a negative control.
+
 - **An empty run has two endings, and conflating them hid a broken CI step for months.** Nothing
   defining the script at all is a mistake - `npm run` fails on it, so does `rman` (non-zero). Every
   package being *filtered out* (`--scope`/`--changed`/`skip`/`if:`) is the correct answer to what

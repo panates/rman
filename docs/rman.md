@@ -1918,6 +1918,14 @@ run:
 `getConfig(pkg, script)` reads exactly this resolved block for one package/script pair - useful if
 you're building your own tooling on top of the same config convention.
 
+**`RunService` does not ask every key of every package.** `concurrency`, `progress`, `changed` and
+`changedSince` it reads off the **root package only** - one scheduler, one answer for the whole
+batch - while `logLevel`, `skip`, `if`, `override` and the step slots are per package, and `topo`
+and `bail` are read both ways and mean different things at each. The block above is unmarked, so it
+reaches the root package as well as the members and every key lands; a `"[*]"` block would not
+reach the root, and the scheduling keys in it would be silently ignored. See
+[the table in `docs/cli/run.md`](cli/run.md#per-packagescript-configuration-rmanrc-runscript).
+
 #### Conditional execution (`if`)
 
 A small, GitHub-Actions-`if`-flavored boolean grammar - atoms (`changed`, `dirty`, `committed`,
