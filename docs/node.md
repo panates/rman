@@ -90,31 +90,45 @@ import type { RmanNodeConfig, NodeConfigKeys, ParsedWorkspaceRange } from 'rman-
 
 ## Config keys
 
-Three `.rmanrc` keys only mean something because the repository is a Node one, so they are declared
-here rather than in rman's core:
+Three `.rmanrc` keys only mean something because the repository is a Node one - and they reach
+`RmanConfig` through **three different routes**, each chosen by who reads the key:
 
-| Key | Level | What it says |
-| --- | --- | --- |
-| `packageManager` | root only | Which package manager `ci`/`publish` shell out to, and whose version `info` reports. `npm` \| `yarn` \| `pnpm` \| `bun`, default `npm`. |
-| `clean` | per package, cascaded | `include`/`exclude` globs beyond TypeScript's own output, and `skip`. A package declaring its own `clean` replaces the root's entirely for itself. |
-| `publish.npm.directory` | per package, cascaded | Where this package's publishable output lives, relative to its own directory. The `npm` target's own block, beside the `docker` one rman itself declares. |
+| Key | Level | Declared by | What it says |
+| --- | --- | --- | --- |
+| `packageManager` | root only | `NodeConfigKeys` | Which package manager `ci`/`publish` shell out to, and whose version `info` reports. `npm` \| `yarn` \| `pnpm` \| `bun`, default `npm`. **Here because no single command owns it** - `ci` and the `npm` target both read it. |
+| `clean` | per package, cascaded | `clean.command.ts` | `include`/`exclude` globs beyond TypeScript's own output, and `skip`. A package declaring its own `clean` replaces the root's entirely for itself. A **command contribution**, like every built-in's own key. |
+| `publish.npm.directory` | per package, cascaded | `npmPublishTarget` | Where this package's publishable output lives, relative to its own directory. The target's own block, through the `PublishTargetConfigs` slot, beside the `docker` one rman itself declares. |
 
-**They reach `RmanConfig` by declaration merging**, so `pkg.config.clean` is typed at the place it is
-*read* without a cast - and the two halves arrive through different slots, which is the point:
+All three are typed where they are *read* - `CleanService` reaching `pkg.config.clean` needs no
+cast. What differs is only who says so:
 
 ```ts
 // packages/node/src/augmentation/rman.augmentation.ts
 declare module 'rman' {
-  /** This plugin's own top-level keys. */
+  /** The key no command owns. */
   interface RmanConfigKeys extends NodeConfigKeys {}
 
-  /** And its publish target's block, through the slot rman's `publish` command exports for *any*
+  /** `clean.*`, derived from the command's own option list - `skip` from `config`, `include`/
+   *  `exclude` from `Extra`, since an option cannot say "a glob or a list of them". */
+  namespace RmanConfig {
+    interface CommandConfigs
+      extends RmanConfig.CommandContribution<ReturnType<typeof cleanCommand>, CleanExtraKeys> {}
+  }
+
+  /** The publish target's block, through the slot rman's `publish` command exports for *any*
    *  target - so a target contributes its config keys the same way it contributes its flags. */
   interface PublishTargetConfigs {
     npm?: RmanNodeConfig.NpmPublishOptions;
   }
 }
 ```
+
+**All three live in that one block, and that is forced rather than chosen.** A *second*
+`declare module 'rman'` anywhere in this package silently disables the first - measured twice now,
+the second time while moving `clean`: it left `SystemInfo.PackageManager` unresolved at four call
+sites in a different file, with nothing pointing at the cause. rman's own commands declare their
+contributions beside themselves because they augment a **module path**, which has no such limit; a
+plugin augments a *package name* and gets one block.
 
 `RmanNodeConfig` is the name a **config author** annotates with, and its `defineConfig` is the
 import that carries that augmentation - explicit, rather than a side effect someone has to remember:

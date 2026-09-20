@@ -855,6 +855,13 @@ while looking. Nothing in it would fire for a Cargo or Go repository - both of w
 Measured after the move: without the plugin `rman clean` is `Unknown argument: clean`; with it all
 four behaviours still fire.
 
+- **`clean.*` is contributed by the command**, like every built-in's own key: `skip` derived from
+  its `config` block, `include`/`exclude` through `Extra` because a `CommandOption` cannot say "a
+  glob *or* a list of them" - and that union is what a config author writes. **The contribution is
+  declared in `rman.augmentation.ts`, not beside the command**, and only because of the one-block
+  rule: re-measured while moving it, a second `declare module 'rman'` left
+  `SystemInfo.PackageManager` unresolved at four call sites. rman's own commands augment a *module
+  path*, which has no such limit.
 - **`clean.include`/`clean.exclude` moved with it**, and they are genuinely ecosystem-neutral - that
   is the cost of the move, named rather than hidden. A repository wanting only the globs has to name
   the plugin, or write the `rm` lines as a `run` script. The alternative was a stub `clean` in the

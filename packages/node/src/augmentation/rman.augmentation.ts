@@ -1,3 +1,5 @@
+import type cleanCommand from '../commands/clean.command.js';
+import type { CleanExtraKeys } from '../commands/clean.command.js';
 import type { NodeConfigKeys, RmanNodeConfig } from '../interfaces/rman-config.interface.js';
 import type { CiService } from '../services/ci.service.js';
 
@@ -24,6 +26,19 @@ declare module 'rman' {
    * along on its own.
    */
   interface RmanConfigKeys extends NodeConfigKeys {}
+
+  /**
+   * **`clean.*`, contributed by the command that reads it**, the way every built-in contributes its
+   * own key - `skip` derived from the command's `config` block, `include`/`exclude` hand-written in
+   * `CleanExtraKeys` because a `CommandOption` cannot say "a glob *or* a list of them".
+   *
+   * It is declared here rather than beside the command only because of the one-block rule above.
+   * rman's own commands put theirs next to themselves, augmenting a module path instead of a
+   * package name, which has no such limit.
+   */
+  namespace RmanConfig {
+    interface CommandConfigs extends RmanConfig.CommandContribution<ReturnType<typeof cleanCommand>, CleanExtraKeys> {}
+  }
 
   /**
    * The `npm` publish target's own `publish.*` block, declared the way the core's `docker` target

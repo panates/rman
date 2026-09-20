@@ -4,16 +4,16 @@ import type { CiService } from '../services/ci.service.js';
 /**
  * The `.rmanrc` keys that only mean something because the repository is a Node one.
  *
- * Declared here rather than in rman's core for the reason the commands themselves are: `clean`
- * describes TypeScript's output, and `publish.npm.directory` a `package.json` generated at publish
- * time. A Cargo or Go repository has neither, and a core interface offering them was a core
- * interface claiming to know npm.
+ * **One key, and it is here because no single command owns it**: `packageManager` is read by `ci`
+ * *and* by the `npm` publish target, so neither can contribute it. Everything else this package
+ * adds to `.rmanrc` is declared by whoever reads it - `clean.*` by `clean.command.ts` (through
+ * `CommandContribution`), `publish.npm.*` by the target, below.
  *
  * **Two surfaces, and they are not alternatives:**
  *
- * - the `declare module 'rman'` block in [`../augmentation/rman.augmentation.ts`] merges these into
- *   `RmanConfigKeys`, so `pkg.config.clean` stays typed wherever it is read - `CleanService`
- *   included - with no casts. It lives there because one such block per package is the limit;
+ * - the `declare module 'rman'` block in [`../augmentation/rman.augmentation.ts`] merges this into
+ *   `RmanConfigKeys`, so `repository.config.packageManager` stays typed wherever it is read with no
+ *   cast. It lives there because one such block per package is the limit;
  * - `RmanNodeConfig` is the name a *config author* annotates with, which is what makes the import
  *   carrying that augmentation explicit instead of a side effect someone has to remember.
  */
@@ -27,22 +27,9 @@ export interface NodeConfigKeys {
    * all**, only the declaration was left behind. The value set was npm's tooling the whole time.
    */
   packageManager?: CiService.PackageManager;
-  /** Extra files and directories `clean` removes, beyond TypeScript's own output - globs relative
-   *  to each package's own directory. Per-package cascaded; a package declaring its own `clean`
-   *  block replaces the root's entirely for itself, rather than combining with it. */
-  clean?: RmanNodeConfig.CleanOptions;
 }
 
 export namespace RmanNodeConfig {
-  export interface CleanOptions extends CleanOptionsKeys, WithAppend<CleanOptionsKeys>, ScopedVars {}
-
-  export interface CleanOptionsKeys {
-    include?: string | string[];
-    exclude?: string | string[];
-    /** Excludes this package from `clean` entirely. */
-    skip?: boolean;
-  }
-
   /**
    * **`publish.npm.*`** - the `npm` publish target's own block, contributed through the
    * `PublishTargetConfigs` slot rman's `publish` command exports for any target.

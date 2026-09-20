@@ -45,6 +45,28 @@ describe('interfaces/rman-config', () => {
     expect(config.publish?.npm?.directory).toBe('build');
   });
 
+  /**
+   * **`clean.*` is a command contribution now, not a hand-written key.** `skip` is derived from
+   * `clean.command.ts`'s own `config` block; `include`/`exclude` come through `Extra`, because a
+   * `CommandOption` cannot say "a glob *or* a list of them" - and that union is what a config
+   * author actually writes. All three have to survive the move, and so does `+clean`, which now
+   * comes from `WithAppend<CommandConfigs>` rather than `WithAppend<RmanConfigKeys>`.
+   */
+  it('delivers every clean key through the command contribution, append form included', () => {
+    const config: RmanConfig = {
+      clean: { include: 'build', skip: false },
+      '[*]': { clean: { include: ['build', '*.tsbuildinfo'], exclude: 'keep.js' } },
+      '+clean': { include: 'extra' },
+    };
+    expect(config.clean?.include).toBe('build');
+  });
+
+  it('catches a typo inside the contributed clean block', () => {
+    // @ts-expect-error `includes` is not a key of `clean`
+    const bad: RmanConfig = { clean: { includes: 'build' } };
+    expect(bad).toBeDefined();
+  });
+
   it('still catches a typo in one of them', () => {
     // @ts-expect-error `directry` is not a key of `publish.npm`
     const bad: RmanConfig = { publish: { npm: { directry: 'build' } } };
