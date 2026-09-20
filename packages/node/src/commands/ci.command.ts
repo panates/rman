@@ -1,45 +1,73 @@
 import {
-  applyBranchGuardOptions,
-  applyPackageFilterOptions,
+  type ArgsOf,
   assertAllowedBranch,
-  type CustomCommand,
-  type LogLevel,
+  branchGuardOptions,
+  type CommandOption,
+  declareCommand,
+  packageFilterOptions,
   readBranchGuardOptions,
   readPackageFilterOptions,
 } from 'rman';
 import { CiService } from '../services/ci.service.js';
 
+/** Hoisted out of the metadata literal so the handler can be annotated against them - see
+ *  `RmanConfig.ArgsOf` for why an inferred `argv` and the metadata's own typo checking cannot both
+ *  work in one signature. */
+const COMMAND = 'ci' as const;
+
+const config = {
+  ...packageFilterOptions,
+  ...branchGuardOptions,
+  packageManager: {
+    target: 'cli',
+    cliName: 'package-manager',
+    describe: 'Package manager to install with (default: npm, or .rmanrc "packageManager")',
+    choices: CiService.PACKAGE_MANAGERS,
+  },
+  progress: {
+    target: 'cli',
+    describe:
+      'Show a live progress panel while running (default: true; auto-disabled when not a TTY). ' +
+      'Unlike run/build, completion is not reported as a per-package tally - only failures are called out.',
+    type: 'boolean',
+  },
+} satisfies Record<string, CommandOption>;
+
+type Args = ArgsOf<typeof config, typeof COMMAND>;
+
 /**
  * `rman ci` - contributed by the `rman-node` plugin rather than built into rman.
  *
- * A plugin's command is a `CustomCommand`, so the repository arrives through `context` instead of
- * being captured when the command is registered - the same shape a repository's own `.rman/*.mjs`
- * command has, and the reason both can be registered through one code path.
+ * **Declared, not built.** This was a `CustomCommand` with a hand-written `builder` chaining
+ * `applyBranchGuardOptions(applyPackageFilterOptions(cmd))`, which is the shape every built-in had
+ * before the options became data. A plugin's command uses the identical declaration now -
+ * `declareCommand` rather than `registerCommand`, which is the one difference and the reason for
+ * it: `registerCommand` pushes onto a module-level registry that `runCli` always walks, so a plugin
+ * using it would hand `ci` to repositories that never named `rman-node`.
+ *
+ * The repository arrives through `app` when the factory runs (in `cli.ts`, after `Repository.create`
+ * has attached one), rather than through a `CommandContext` per invocation.
  */
-export const command: CustomCommand = {
-  command: 'ci',
-  configKeys: ['packageManager'],
-  describe: 'Deletes node_modules and lockfiles in every package, then reinstalls from scratch',
-  builder: cmd =>
-    applyBranchGuardOptions(applyPackageFilterOptions(cmd))
-      .example('$0 ci', '')
-      .option('package-manager', {
-        describe: 'Package manager to install with (default: npm, or .rmanrc "packageManager")',
-        choices: CiService.PACKAGE_MANAGERS,
-      })
-      .option('progress', {
-        describe:
-          'Show a live progress panel while running (default: true; auto-disabled when not a TTY). ' +
-          'Unlike run/build, completion is not reported as a per-package tally - only failures are called out.',
-        type: 'boolean',
-      }),
-  handler: async ({ repository }, args) => {
-    await assertAllowedBranch(repository, readBranchGuardOptions(args));
-    await CiService.reinstall(repository, {
-      ...readPackageFilterOptions(args),
-      packageManager: args.packageManager as CiService.PackageManager | undefined,
-      progress: args.progress as boolean | undefined,
-      logLevel: args.logLevel as LogLevel | undefined,
-    });
-  },
-};
+const ciCommand = declareCommand(app => {
+  const repository = app.repository;
+  return {
+    command: COMMAND,
+    describe: 'Deletes node_modules and lockfiles in every package, then reinstalls from scratch',
+    /** Read, not owned: `packageManager` is a root-level key this package declares in
+     *  `NodeConfigKeys`, and the `npm` publish target reads it too. */
+    configKeys: ['packageManager'],
+    config,
+    examples: [{ command: '$0 ci' }],
+    handler: async (args: Args) => {
+      await assertAllowedBranch(repository, readBranchGuardOptions(args));
+      await CiService.reinstall(repository, {
+        ...readPackageFilterOptions(args),
+        packageManager: args.packageManager,
+        progress: args.progress,
+        logLevel: args.logLevel,
+      });
+    },
+  };
+});
+
+export default ciCommand;

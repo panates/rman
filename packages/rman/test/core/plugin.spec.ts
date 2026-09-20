@@ -177,4 +177,82 @@ describe('core/plugin', () => {
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
     expect(error.message).toContain('has no "name"');
   });
+
+  /**
+   * **A plugin declares a command the way a built-in does**, by handing `addCommand` a function of
+   * the application instead of a `CustomCommand` object - `declareCommand(app => ({ ... }))`, which
+   * is `registerCommand` minus the push onto the module-level registry every `runCli` walks.
+   *
+   * The fixtures below write the bare function, for the same reason the others write bare objects:
+   * `declareCommand` is an identity helper, so skipping it tests the same runtime path without
+   * depending on how `'rman'` resolves from a temp directory.
+   */
+  describe('a declarative command', () => {
+    /** A factory, as a plugin would hand one over - options as data, `handler(args)`. */
+    function declarativeModule(name: string): string {
+      return `export default { plugins: [{ name: ${JSON.stringify(name)}, init(ctx) {
+        ctx.addCommand(app => ({
+          command: 'greet [who]',
+          describe: 'from ${name}',
+          configKeys: ['group'],
+          config: { loud: { target: 'cli', describe: 'shout it', type: 'boolean' } },
+          positionals: { who: { describe: 'whom to greet', type: 'string' } },
+          handler: args => {
+            const text = 'hello ' + (args.who ?? app.repository.name);
+            console.log(args.loud ? text.toUpperCase() : text);
+          },
+        }));
+      } }] };`;
+    }
+
+    it('is registered, with its options and positionals', async () => {
+      const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': declarativeModule('p') });
+      expect((await captureLogs(() => runCli({ argv: ['greet', 'world'], cwd: dir }))).join('\n')).toContain(
+        'hello world',
+      );
+      expect((await captureLogs(() => runCli({ argv: ['greet', 'you', '--loud'], cwd: dir }))).join('\n')).toContain(
+        'HELLO YOU',
+      );
+    });
+
+    /**
+     * The factory wants `app.repository`, and `init` runs *inside* `Repository.create` - before any
+     * package is known, since plugins are what find them. Stored and run later is the whole reason
+     * `addCommand` takes a function rather than the metadata.
+     */
+    it('is run after the repository exists, not while the plugin is initialising', async () => {
+      const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': declarativeModule('p') });
+      expect((await captureLogs(() => runCli({ argv: ['greet'], cwd: dir }))).join('\n')).toContain('hello root');
+    });
+
+    /** The trap a hand-copied registration kept falling into: `--config` printed the *whole* config
+     *  for every plugin command until the field was forwarded. Declared, there is nothing to
+     *  forward - `toYargsCommand` is the same function the built-ins go through. */
+    it('keeps its configKeys, so --config narrows to what it reads', async () => {
+      const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': declarativeModule('p') });
+      const text = (await captureLogs(() => runCli({ argv: ['greet', '--config'], cwd: dir }))).join('\n');
+      expect(text).toContain('group');
+      expect(text).not.toContain('plugins');
+    });
+
+    it('still cannot take a built-in name', async () => {
+      const shadow = `export default { plugins: [{ name: 'p', init(ctx) {
+        ctx.addCommand(() => ({ command: 'version', describe: 'nope', handler: () => {} }));
+      } }] };`;
+      const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': shadow });
+      const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
+      expect(error.message).toContain('would shadow');
+    });
+
+    /** The same three checks a `CustomCommand` gets, on what the factory returned - a plugin written
+     *  in JavaScript reaches both forms with no type checker in the way. */
+    it('is checked like any other: a missing describe names the plugin and the command', async () => {
+      const bad = `export default { plugins: [{ name: 'p', init(ctx) {
+        ctx.addCommand(() => ({ command: 'greet', handler: () => {} }));
+      } }] };`;
+      const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': bad });
+      const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
+      expect(error.message).toContain('Plugin "p" command "greet" has no "describe"');
+    });
+  });
 });

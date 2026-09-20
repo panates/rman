@@ -4,8 +4,8 @@ import { packageJsonManifest } from './augmentation/manifest.augmentation.js';
 import { packageJsonSteps } from './augmentation/run.augmentation.js';
 import { augmentSystemInfo } from './augmentation/system-info.augmentation.js';
 import { npmWorkspace } from './augmentation/workspace.augmentation.js';
-import * as ciCommand from './commands/ci.command.js';
-import * as cleanCommand from './commands/clean.command.js';
+import ciCommand from './commands/ci.command.js';
+import cleanCommand from './commands/clean.command.js';
 import { defineConfig } from './interfaces/rman-config.interface.js';
 import { nodeVersionPlanner } from './services/version-plan.service.js';
 import { npmPublishTarget } from './targets/npm.target.js';
@@ -99,7 +99,7 @@ export const nodePlugin = definePlugin({
      *  it, and `PluginContext`'s two helpers exist only because they have to know *which* plugin is
      *  asking. Everything else a plugin contributes goes straight onto `ctx.app`. */
     ctx.app.publishTargets.add(npmPublishTarget);
-    for (const command of [ciCommand.command, cleanCommand.command]) {
+    for (const command of [ciCommand, cleanCommand]) {
       ctx.addCommand(command);
     }
   },

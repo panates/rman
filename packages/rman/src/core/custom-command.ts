@@ -184,7 +184,10 @@ export async function loadCustomCommands(
  * `rman publish` that is safe to guess at. Silently preferring either one would leave whoever typed
  * it unable to tell which ran.
  */
-export function assertNoBuiltinShadowing(commands: LoadedCommand[], builtins: readonly string[]): void {
+export function assertNoBuiltinShadowing(
+  commands: readonly { name: string; file: string }[],
+  builtins: readonly string[],
+): void {
   const clash = commands.find(c => builtins.includes(c.name));
   if (!clash) return;
   throw new Error(

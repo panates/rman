@@ -307,9 +307,37 @@ export namespace RmanConfig {
 export function registerCommand<M extends RmanConfig.CommandMetadata>(
   def: (app: RmanApplication) => M & ValidMeta<M>,
 ): (app: RmanApplication) => M {
+  /** The same cast `declareCommand` makes, rather than a call to it: passing `def` through would
+   *  re-infer `M` from a type that already carries `ValidMeta<M>`, and the check then compounds
+   *  onto itself (`Exact<M & Exact<M, …>, …>`) and fails on every command. Two lines, one cast
+   *  each, is the honest shape. */
   const fn = def as (app: RmanApplication) => M;
   commandRegistry.push(fn);
   return fn;
+}
+
+/**
+ * The same declaration, **without** the registration - for a command that must exist only when
+ * something asks for it.
+ *
+ * That is exactly a plugin's situation: `commandRegistry` is a module-level array walked by every
+ * `runCli`, so a plugin pushing onto it would give its commands to repositories that never named
+ * the plugin - the module is imported as soon as anything imports the package. A plugin hands the
+ * function to `ctx.addCommand` instead, and it is called once the repository exists.
+ *
+ * **Why a factory rather than the metadata itself**, for a plugin in particular: `init` runs
+ * *inside* `Repository.create`, before the packages are known (plugins are what find them), so
+ * `app.repository` throws there. The function is stored and run later, in `cli.ts`, where the
+ * built-ins' own factories run.
+ *
+ * Everything `registerCommand` documents about inference - `M & ValidMeta<M>`, the `as const` on
+ * `command`, the metadata riding on the return type - applies here unchanged; the two differ in one
+ * line.
+ */
+export function declareCommand<M extends RmanConfig.CommandMetadata>(
+  def: (app: RmanApplication) => M & ValidMeta<M>,
+): (app: RmanApplication) => M {
+  return def as (app: RmanApplication) => M;
 }
 
 /**

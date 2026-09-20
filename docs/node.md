@@ -32,7 +32,7 @@ Naming it does three kinds of thing at once, and they are worth telling apart:
 
 | | What it adds | Where it plugs in |
 | --- | --- | --- |
-| **Commands** | `ci`, `clean` | `ctx.addCommand()` |
+| **Commands** | `ci`, `clean` | `declareCommand()` + `ctx.addCommand()` |
 | **A publish target** | `npm` - its flags on `rman publish`, its registry check, and which packages are npm's by default | `ctx.app.publishTargets` |
 | **A technology** | what a package *is* (`package.json`), where packages are (`workspaces`), how a version is planned, what `pre<script>`/`post<script>` mean, `node_modules/.bin` on PATH | one `TechStack`, via `ctx.addTechStack()` |
 | **Augmentations** | the npm half of `SystemInfo` (what `info` prints), and the `.rmanrc` keys below | `augment*()` + `declare module 'rman'` |
@@ -356,7 +356,7 @@ export const nodePlugin = definePlugin({
   init(ctx) {
     ctx.addTechStack(nodeTechStack);
     ctx.app.publishTargets.add(npmPublishTarget);
-    for (const command of [ciCommand.command, cleanCommand.command]) ctx.addCommand(command);
+    for (const command of [ciCommand, cleanCommand]) ctx.addCommand(command);
   },
 });
 

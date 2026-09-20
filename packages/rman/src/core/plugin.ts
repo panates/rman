@@ -1,8 +1,9 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import type { RmanConfig as CommandDeclaration } from '../interfaces/rman-cfg.interface.js';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { RmanApplication } from './application.js';
-import type { CustomCommand, LoadedCommand } from './custom-command.js';
+import type { CustomCommand } from './custom-command.js';
 import { resolveConfigTarget } from './resolve-target.js';
 import type { TechStack } from './tech-stack.js';
 
@@ -53,9 +54,28 @@ export interface PluginContext {
   readonly app: RmanApplication;
   /** Adds a technology, and its version planner if it brings one. */
   addTechStack(stack: TechStack): void;
-  /** Adds a command, tagged with the plugin it came from. */
-  addCommand(command: CustomCommand): void;
+  /**
+   * Adds a command, tagged with the plugin it came from.
+   *
+   * **Two forms, and the first is the one to write.** `declareCommand(app => ({ ... }))` is the
+   * same declaration the built-ins use - options as data, checked for typos, with `--config` keys
+   * and `ArgsOf` typing falling out of it. The older `CustomCommand` object (a hand-written
+   * `builder`, a handler taking a context) still works and is what a `.rman/*.mjs` command is.
+   */
+  addCommand(command: CustomCommand | CommandDeclaration.CommandRegisterFunction): void;
 }
+
+/**
+ * One command a plugin contributed, in whichever form it was declared, plus who contributed it.
+ *
+ * The plugin and specifier travel with it because every message about a command is keyed by them -
+ * which plugin declared the one that clashes, which one failed to register. `cli.ts` is what turns
+ * either form into a yargs registration; nothing between here and there has to tell them apart.
+ */
+export type PluginCommand = { plugin: string; file: string } & (
+  | { register: CommandDeclaration.CommandRegisterFunction; custom?: undefined }
+  | { custom: CustomCommand; register?: undefined }
+);
 
 /**
  * Identity helper for authoring a plugin with full type-checking - the `defineConfig`/
@@ -105,8 +125,8 @@ export async function loadPlugins(
   app: RmanApplication,
   rootDir: string,
   rootConfig: RmanConfig,
-): Promise<LoadedCommand[]> {
-  const commands: LoadedCommand[] = [];
+): Promise<PluginCommand[]> {
+  const commands: PluginCommand[] = [];
   /** Resolved against the repository root, where the `.rmanrc` declaring them lives. */
   await loadInto(app, commands, rootConfig, path.join(rootDir, '.rmanrc'), { files: new Set(), names: new Set() });
   return commands;
@@ -130,7 +150,7 @@ export async function loadPlugins(
  */
 async function loadInto(
   app: RmanApplication,
-  commands: LoadedCommand[],
+  commands: PluginCommand[],
   config: RmanConfig,
   from: string,
   seen: Seen,
@@ -197,7 +217,7 @@ async function loadInto(
  */
 async function register(
   app: RmanApplication,
-  commands: LoadedCommand[],
+  commands: PluginCommand[],
   plugin: RmanPlugin,
   label: string,
   specifier: string,
@@ -214,7 +234,17 @@ async function register(
       if (stack.versionPlanner) app.versionPlanner = stack.versionPlanner;
     },
     addCommand(command) {
-      commands.push(toLoadedCommand(command, label || specifier, specifier));
+      const from = label || specifier;
+      /**
+       * **A declarative command is stored, not run.** Its factory needs `app.repository`, and this
+       * runs inside `Repository.create` - before the packages are known, since plugins are what
+       * find them. `cli.ts` runs it where the built-ins' own factories run, and checks it there.
+       */
+      if (typeof command === 'function') {
+        commands.push({ plugin: from, file: specifier, register: command });
+        return;
+      }
+      commands.push({ plugin: from, file: specifier, custom: checkCustomCommand(command, from) });
     },
   });
 }
@@ -250,9 +280,18 @@ interface Seen {
   names: Set<string>;
 }
 
-/** A plugin's command, checked the same way a `.rman/*.mjs` one is - the name it answers to comes
- *  from its own `command` string, since a plugin has no file name to fall back on. */
-function toLoadedCommand(command: CustomCommand, pluginName: string, specifier: string): LoadedCommand {
+/**
+ * A plugin's `CustomCommand`, checked the same way a `.rman/*.mjs` one is - the name it answers to
+ * comes from its own `command` string, since a plugin has no file name to fall back on.
+ *
+ * Exported because `cli.ts` runs the identical checks on what a *declarative* command's factory
+ * returns, and they must not drift: a plugin written in JavaScript reaches both forms with no type
+ * checker in the way.
+ */
+export function checkCustomCommand<T extends { command?: string; describe?: unknown; handler?: unknown }>(
+  command: T,
+  pluginName: string,
+): T & { command: string } {
   const declared = command?.command?.trim();
   if (!declared) {
     throw new Error(`Plugin "${pluginName}" has a command with no "command" name - it cannot be registered.`);
@@ -266,5 +305,5 @@ function toLoadedCommand(command: CustomCommand, pluginName: string, specifier: 
         `nothing to list it by.`,
     );
   }
-  return { ...command, command: declared, name: declared.split(/\s+/)[0], file: specifier };
+  return { ...command, command: declared };
 }

@@ -16,17 +16,16 @@ import {
   type RepositoryScope,
   resolveConfig,
 } from './config.js';
-import type { LoadedCommand } from './custom-command.js';
 import { Manifest } from './manifest.js';
 import { Package } from './package.js';
-import { loadPlugins } from './plugin.js';
+import { loadPlugins, type PluginCommand } from './plugin.js';
 import { Workspace } from './workspace.js';
 
 export class Repository extends Package {
   readonly rootPackage: Package;
   /** Commands the repository's plugins contributed, loaded during `create` because the workspace
    *  providers they bring are needed before any package can be found. `cli.ts` registers them. */
-  pluginCommands: LoadedCommand[] = [];
+  pluginCommands: PluginCommand[] = [];
   /**
    * Cached repository scope - see `_repositoryScope`.
    *

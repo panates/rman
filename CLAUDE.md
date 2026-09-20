@@ -459,9 +459,11 @@ through `filterPackages` the way the command computes it), and the `.rmanrc` tho
   cannot drift from the code doing the reading, and a plugin or `.rman/*.mjs` command can declare
   it too. **Absent, it prints the whole effective config** - the honest answer when nothing has
   said which half matters.
-  - **Trap: the `.rman/*.mjs` and plugin loop in `cli.ts` builds a *new* spec object**, so a field
-    it does not copy is silently lost. `--config` printed the whole config for every plugin command
-    until `configKeys: custom.configKeys` was added there (measured, on `clean` and `ci`).
+  - **Trap: `toCustomModule` in `cli.ts` builds a *new* spec object**, so a field it does not copy
+    is silently lost. `--config` printed the whole config for every plugin command until
+    `configKeys` was on that list (measured, on `clean` and `ci`). It applies to the
+    `CustomCommand` form only - a **declared** command goes through `toYargsCommand`, the same
+    function the built-ins use, so there is nothing to forward and nothing to forget.
   - **`configKeys` needed a `declare module 'yargs'` augmentation** of `CommandModule`, not just a
     field on our own `CustomCommand`: `program.command({ ... })` takes a literal, and TypeScript's
     excess-property check fires on a literal however the parameter is typed - nine commands failed
@@ -811,8 +813,8 @@ four behaviours still fire.
 - A `.d.ts` with **no** matching `.ts`/`.tsx` is left alone - that is a hand-written declaration,
   not build output. Don't "simplify" that check away.
 - Never touches `node_modules`; that is `ci`'s job.
-- `clean` and `ci` are the two commands still wholly `rman-node`'s, and the two still to be
-  converted to `registerCommand`. `publish` is no longer one of them - see above.
+- `clean` and `ci` are the two commands still wholly `rman-node`'s. `publish` is no longer one of
+  them - see above. Both are **declared**, not built, like every built-in.
 
 ### `list` / `run`
 
@@ -1035,6 +1037,60 @@ entirely, so the step simply vanished from the output.
 `logged` marker is printed **twice** - once to stdout by yargs' `.fail()`, once to stderr by
 `runCli`'s catch. Measured on untouched paths too (`rman version banana` prints it three times).
 Don't take a doubled message as evidence that a new throw site is wrong.
+
+## How a command is declared
+
+[`src/interfaces/rman-cfg.interface.ts`](packages/rman/src/interfaces/rman-cfg.interface.ts),
+[`src/core/command-builder.ts`](packages/rman/src/core/command-builder.ts). **A command says what it
+has; one function says what yargs is told.** A hand-written `builder` was the second place every
+fact about a command lived, and a typo in it was a flag that silently never existed.
+
+```ts
+const COMMAND = 'version [bump]' as const;
+const config = { ...packageFilterOptions, show: { target: 'cli', type: 'boolean', ... } }
+  satisfies Record<string, RmanConfig.CommandOption>;
+type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
+
+const versionCommand = registerCommand(app => ({ command: COMMAND, config, handler: (args: Args) => ... }));
+```
+
+- **`registerCommand` for a built-in, `declareCommand` for a plugin's**, and the difference is one
+  line: the first pushes onto `commandRegistry`, a module-level array `runCli` always walks. A
+  plugin using it would hand its commands to repositories that never named the plugin - the module
+  is imported the moment anything imports the package. A plugin passes the function to
+  `ctx.addCommand` instead.
+- **A factory of `app`, not the metadata**, because a command closes over the repository and over
+  whatever the application carries (`publish` reads `app.publishTargets` to build its own options).
+  For a plugin that is also a necessity: `init` runs *inside* `Repository.create`, before any
+  package is known, so `app.repository` throws there. `cli.ts` runs a plugin's factory where the
+  built-ins' own run.
+- **`as const` on the `command` string is load-bearing twice**: the config key is derived from it
+  (`'version'`), and so are the positional names checked against `positionals`.
+- **`ArgsOf` is annotated, never inferred.** Three ways were measured: via `ValidMeta<M>` it is
+  circular; split inference sites give the names but `unknown` values; hoisting `config`/`COMMAND`
+  out and annotating the handler works. That is why those two consts sit above the factory.
+- **`M & ValidMeta<M>` is what catches a typo**, and the plainer `<T extends CommandRegisterFunction>`
+  does not: a generic inferred from a literal makes the constraint a subtype check, and a subtype
+  check does no excess-property checking (measured - `cliName` and `examples` went unnoticed).
+- **`target: 'cli' | 'config' | 'both'`** on each option decides whether it is a flag, a `.rmanrc`
+  key, or both; `CommandContribution` turns the `config`/`both` ones into the command's slice of
+  `RmanConfig`, so the option list and the config type cannot drift.
+- **`declareCommand` and friends are exported from `rman` under flat names** (`CommandOption`,
+  `ArgsOf`, `CommandMetadata`), not as the `RmanConfig` namespace they live in: `rman-config.
+  interface.ts` already exports that name and one package cannot export two. That is temporary -
+  see the two-`RmanConfig` note - and the flat names are the better ones for a plugin author anyway.
+
+**Three authoring forms exist, and only the first is the one to write:**
+
+| | Who | Shape |
+| --- | --- | --- |
+| `registerCommand` | rman's own `src/cmd/*.command.ts` | declarative, auto-registered |
+| `declareCommand` + `ctx.addCommand` | a plugin | declarative, registered when the plugin loads |
+| `defineCommand` (`CustomCommand`) | `.rman/*.mjs`, and a plugin not yet converted | hand-written `builder`, `handler(context, args)` |
+
+The third is not deprecated: a repository's own command has no `app` to close over and wants the
+`CommandContext` it gets. `cli.ts` turns either plugin form into a `CommandModule` and there is one
+`program.command` call for all of them.
 
 ## A repository's own commands (`.rman/*.mjs`)
 

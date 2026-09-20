@@ -12,6 +12,10 @@
  * *not* exported is deliberately private: config resolution internals, the expression evaluator,
  * the command registry.
  */
+/** Aliased on import, and it has to be: the module's namespace is *also* called `RmanConfig`, and
+ *  `rman-config.interface.ts` already exports that name. */
+import type { RmanConfig as CommandDeclaration } from './interfaces/rman-cfg.interface.js';
+
 export { defineConfig } from './core/config.js';
 export type { CommandContext, CustomCommand } from './core/custom-command.js';
 export { defineCommand } from './core/custom-command.js';
@@ -44,6 +48,26 @@ export { assertOneScheme, SemverScheme, semverScheme, VersionScheme } from './co
 /** `Workspace.Layout`, `Workspace.Provider`, `Workspace.addProvider`, `Workspace.resolve`,
  *  `Workspace.findRoot` - one namespace, so a plugin can augment it. */
 export { Workspace } from './core/workspace.js';
+/**
+ * **How a command is declared** - the same API the built-ins use, so a plugin's command is declared
+ * rather than built: options as data (checked for typos), positionals named against the command
+ * string, `--config` keys derived from what the command owns, and `ArgsOf` for the handler.
+ *
+ * `declareCommand`, not `registerCommand`: the latter pushes onto a module-level registry every
+ * `runCli` walks, so a plugin using it would give its commands to repositories that never named it.
+ * A plugin hands the function to `ctx.addCommand`.
+ *
+ * Exported under these flat names rather than as the `RmanConfig` namespace they live in, because
+ * `rman-config.interface.ts` already exports a `RmanConfig` and one package cannot export two.
+ */
+export { declareCommand } from './interfaces/rman-cfg.interface.js';
+export type CommandOption = CommandDeclaration.CommandOption;
+export type CommandMetadata = CommandDeclaration.CommandMetadata;
+export type CommandRegisterFunction = CommandDeclaration.CommandRegisterFunction;
+/** The argv a command's handler is annotated with - see `RmanConfig.ArgsOf` for why it is annotated
+ *  rather than inferred. */
+export type ArgsOf<C, Cmd extends string> = CommandDeclaration.ArgsOf<C, Cmd>;
+export type GlobalArgs = CommandDeclaration.GlobalArgs;
 export * from './interfaces/rman-config.interface.js';
 export * from './services.js';
 
@@ -55,6 +79,7 @@ export {
   applyBranchGuardOptions,
   assertAllowedBranch,
   type BranchGuardOptions,
+  branchGuardOptions,
   readBranchGuardOptions,
 } from './utils/branch-guard.js';
 /** Where a repository's locally installed binaries live - the core spells the PATH variable, a
@@ -74,8 +99,10 @@ export {
   applyRootOption,
   filterPackages,
   type PackageFilterOptions,
+  packageFilterOptions,
   readPackageFilterOptions,
   readRootOption,
+  rootOption,
 } from './utils/package-filter.js';
 /** The live panel `run`/`build`/`clean` print - a plugin's per-package command looks like the rest
  *  of rman instead of like a script someone bolted on. */

@@ -23,13 +23,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import colors from 'ansi-colors';
 import * as yaml from 'js-yaml';
-import yargs, { type Argv } from 'yargs';
+import yargs, { type ArgumentsCamelCase, type Argv, type CommandModule } from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { version } from './constants.js';
 import { RmanApplication } from './core/application.js';
 import { commandName, toYargsCommand } from './core/command-builder.js';
-import { assertNoBuiltinShadowing, type CommandContext, loadCustomCommands } from './core/custom-command.js';
+import {
+  assertNoBuiltinShadowing,
+  type CommandContext,
+  type CustomCommand,
+  loadCustomCommands,
+} from './core/custom-command.js';
 import type { Package } from './core/package.js';
+import { checkCustomCommand } from './core/plugin.js';
 import { Repository } from './core/repository.js';
 import { commandRegistry, type RmanConfig } from './interfaces/rman-cfg.interface.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/logger.js';
@@ -146,35 +152,33 @@ export async function runCli(options?: { argv?: string[]; cwd?: string; app?: Rm
      * statement, the same way its own `.rmanrc` overrides an `extends` base. A plugin taking a
      * *built-in's* name is still refused outright.
      */
-    /** Already loaded: `Repository.create` had to, because a plugin's workspace provider is what
-     *  finds the packages. This is just what it brought back. */
-    const pluginCommands = repository.pluginCommands;
+    /**
+     * Already loaded: `Repository.create` had to, because a plugin's workspace provider is what
+     * finds the packages. This is just what it brought back - and a plugin may have declared a
+     * command either way, so each is turned into a yargs registration here.
+     *
+     * **A declarative one's factory runs here, not at `addCommand`**, for the same reason a
+     * built-in's does: it wants `app.repository`, and `init` ran before any package was known.
+     */
+    const pluginModules = repository.pluginCommands.map(entry => {
+      if (entry.register) {
+        const meta = checkCustomCommand(entry.register(app), entry.plugin);
+        return { name: commandName(meta.command), file: entry.file, module: toYargsCommand(meta) };
+      }
+      return {
+        name: commandName(entry.custom.command!),
+        file: entry.file,
+        module: toCustomModule(entry.custom, repository, app),
+      };
+    });
     const { commands: localCommands, errors } = await loadCustomCommands(repository.dirname);
     const localNames = new Set(localCommands.map(c => c.name));
-    const commands = [...pluginCommands.filter(c => !localNames.has(c.name)), ...localCommands];
+    const commands = [
+      ...pluginModules.filter(c => !localNames.has(c.name)),
+      ...localCommands.map(c => ({ name: c.name, file: c.file, module: toCustomModule(c, repository, app) })),
+    ];
     assertNoBuiltinShadowing(commands, builtInNames(builtIns));
-    for (const custom of commands) {
-      program.command({
-        command: custom.command!,
-        describe: custom.describe,
-        /** Forwarded, not dropped: this loop builds a *new* spec object, so anything the command
-         *  declared and is not copied here is silently lost - `--config` printed the whole config
-         *  for every plugin command until this line existed (measured, on `clean` and `ci`). */
-        configKeys: custom.configKeys,
-        builder: custom.builder ?? (y => y),
-        handler: args => {
-          /** Resolved per invocation, not once at registration: `--log-level` is only known now. */
-          const logLevel = (args.logLevel as LogLevel | undefined) ?? resolveRootLogLevel(repository);
-          const context: CommandContext = {
-            repository,
-            package: repository.currentPackage,
-            runBin: (bin, argv, opts) => runBin(bin, argv, { cwd: repository.dirname, logLevel, app, ...opts }),
-            logger: new Logger(logLevel),
-          };
-          return custom.handler(context, args);
-        },
-      });
-    }
+    for (const { module } of commands) program.command(module);
     /** Warned about, not thrown: one unparseable file must not take the other commands with it.
      *  Loud enough not to be mistaken for success, and it names the file and the reason - "my
      *  command isn't there" is otherwise a long afternoon. */
@@ -355,4 +359,33 @@ if (isMain()) runCli().catch(() => process.exit(1));
 function builtInNames(metas: RmanConfig.CommandMetadata[]): string[] {
   const names = metas.flatMap(meta => [commandName(meta.command), ...(meta.aliases ?? [])]);
   return [...names, 'completion'];
+}
+
+/**
+ * A `CustomCommand` - a `.rman/*.mjs` command, or a plugin's written the older way - as the yargs
+ * registration it describes. `toYargsCommand` is the same function for a *declarative* command;
+ * this is the other authoring form, and both end at one `program.command`.
+ *
+ * **Every field has to be copied deliberately**, because this builds a new object: anything the
+ * command declared and this forgets is silently lost. `--config` printed the whole config for every
+ * plugin command until `configKeys` was on this list (measured, on `clean` and `ci`).
+ */
+function toCustomModule(custom: CustomCommand, repository: Repository, app: RmanApplication): CommandModule {
+  return {
+    command: custom.command!,
+    describe: custom.describe,
+    configKeys: custom.configKeys,
+    builder: custom.builder ?? ((y: Argv) => y),
+    handler: (args: ArgumentsCamelCase) => {
+      /** Resolved per invocation, not once at registration: `--log-level` is only known now. */
+      const logLevel = (args.logLevel as LogLevel | undefined) ?? resolveRootLogLevel(repository);
+      const context: CommandContext = {
+        repository,
+        package: repository.currentPackage,
+        runBin: (bin, argv, opts) => runBin(bin, argv, { cwd: repository.dirname, logLevel, app, ...opts }),
+        logger: new Logger(logLevel),
+      };
+      return custom.handler(context, args);
+    },
+  };
 }

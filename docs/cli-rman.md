@@ -80,7 +80,30 @@ plugins: ['rman-node']
 ```
 
 Without it, `rman clean` is `Unknown argument: clean`. A plugin that cannot be *loaded* is an error
-rather than a skip: silently losing `rman publish` is worse than not starting.
+rather than a skip: silently losing a command the repository is built around is worse than not
+starting.
+
+**A plugin declares a command the way a built-in does** - `declareCommand(app => ({ ... }))`, with
+its options as data rather than a hand-written `builder`, and hands it to `ctx.addCommand`:
+
+```js
+import { declareCommand, packageFilterOptions } from 'rman';
+
+const deploy = declareCommand(app => ({
+  command: 'deploy [stage]',
+  describe: 'Ships the current versions',
+  config: { ...packageFilterOptions, wait: { target: 'cli', describe: 'block until healthy', type: 'boolean' } },
+  configKeys: ['publish'],
+  handler: async args => { /* app.repository is available here */ },
+}));
+
+export default defineConfig({ plugins: [definePlugin({ name: 'mine', init: ctx => ctx.addCommand(deploy) })] });
+```
+
+`declareCommand`, not the `registerCommand` rman's own commands use: that one pushes onto a registry
+every run walks, so a plugin using it would give its commands to repositories that never named the
+plugin. The function is called once the repository exists - `app.repository` throws during `init`,
+since plugins are what find the packages.
 
 **A plugin package exports an `.rmanrc` config, not a single plugin** - its entry point ends with
 `export default defineConfig({ plugins: [ ... ] })`, and rman reads that config's own `plugins`.
@@ -100,7 +123,7 @@ import { defineConfig, definePlugin } from 'rman';
 export default defineConfig({
   plugins: [
     'rman-node',
-    definePlugin({ name: 'mine', commands: [/* ... */] }),
+    definePlugin({ name: 'mine', init: ctx => ctx.addCommand(/* ... */) }),
   ],
 });
 ```
