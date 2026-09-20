@@ -603,10 +603,10 @@ describe('services/changelog', () => {
       expect(output).not.toContain('## pkg-b');
     });
 
-    it('--root generates for the whole repository even from inside a single package', async () => {
+    it('--from-root generates for the whole repository even from inside a single package', async () => {
       const { dir } = fixtureWithUnpushedCommits();
       await createRepository(path.join(dir, 'packages/a'));
-      const output = content(await service('changelog').getEntries({ root: true }));
+      const output = content(await service('changelog').getEntries({ fromRoot: true }));
       expect(output).toContain('## pkg-a');
       expect(output).toContain('## pkg-b');
     });

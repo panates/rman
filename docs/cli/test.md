@@ -12,8 +12,8 @@ A literal alias for [`rman run test`](run.md) - same options, same behavior, jus
 ## Options
 
 Identical to [`rman run <script>`](run.md#options) (package filtering, branch guard, `--parallel`,
-`--bail`, `--topo`, `--progress`, `--changed`/`--changed-since`, `--root`) - see that page for the
-full table.
+`--bail`, `--topo`, `--progress`, `--changed`/`--changed-since`, `--from-root`) - see that page
+for the full table.
 
 ## Examples
 

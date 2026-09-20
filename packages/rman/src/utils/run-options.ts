@@ -2,10 +2,10 @@ import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import type { RunService } from '../services/run.service.js';
 import { branchGuardOptions } from './branch-guard.js';
 import type { LogLevel } from './logger.js';
-import { packageFilterOptions, readPackageFilterOptions, rootOption } from './package-filter.js';
+import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from './package-filter.js';
 
 /**
- * Everything `run`, `build` and `test` accept - the package filter, the branch guard, `--root`, and
+ * Everything `run`, `build` and `test` accept - the package filter, the branch guard, `--from-root`, and
  * the scheduling flags on top.
  *
  * **In `utils/` rather than in `run.command.ts`, which is where the `Argv` version lived.** `build`
@@ -19,7 +19,7 @@ import { packageFilterOptions, readPackageFilterOptions, rootOption } from './pa
 export const runOptions = {
   ...packageFilterOptions,
   ...branchGuardOptions,
-  ...rootOption('Run'),
+  ...fromRootOption('Run'),
   parallel: {
     target: 'cli',
     describe:
@@ -80,6 +80,6 @@ export function readRunOptions(args: any): RunService.Options {
     changed: args.changed as boolean,
     changedSince: args.changedSince as string | undefined,
     logLevel: args.logLevel as LogLevel | undefined,
-    root: args.root as boolean,
+    fromRoot: args.fromRoot as boolean,
   };
 }

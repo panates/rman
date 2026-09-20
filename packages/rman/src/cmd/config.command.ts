@@ -4,13 +4,13 @@ import * as yaml from 'js-yaml';
 import { DEFERRED_PATHS } from '../core/config.js';
 import type { Package } from '../core/package.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
-import { readRootOption, rootOption } from '../utils/package-filter.js';
+import { fromRootOption, readFromRootOption } from '../utils/package-filter.js';
 import { printableConfig } from '../utils/printable-config.js';
 
 const COMMAND = 'config' as const;
 
 const config = {
-  ...rootOption('Print the config for'),
+  ...fromRootOption('Print the config for'),
   json: {
     target: 'cli',
     describe: 'Print as JSON instead of YAML - nothing else on stdout, so it can be piped.',
@@ -30,11 +30,11 @@ const configCommand = registerCommand(app => {
     config,
     examples: [
       { command: '$0 config', description: '# The config of the package you are standing in' },
-      { command: '$0 config --root', description: "# The repository root's own config instead" },
+      { command: '$0 config --from-root', description: "# The repository root's own config instead" },
       { command: '$0 config --json | jq .version', description: '# Machine-readable' },
     ],
     handler: (args: Args) => {
-      const target = (!readRootOption(args) && repository.currentPackage) || repository.rootPackage;
+      const target = (!readFromRootOption(args) && repository.currentPackage) || repository.rootPackage;
 
       if (args.json) {
         console.log(JSON.stringify(printableConfig(target.config), undefined, 2));

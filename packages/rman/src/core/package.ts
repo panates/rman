@@ -124,6 +124,25 @@ export class Package {
     return !!this.manifest.private;
   }
 
+  /**
+   * Whether this is the repository's **own root package** - what `--scope /` and `.rmanrc`'s
+   * `"[/]"` both select.
+   *
+   * **By directory, and deliberately not by name or by identity.** The documented rule is that the
+   * root package is the one whose directory *is* the repository root, because a name can be
+   * anything - and identity (`this === repository.rootPackage`) is not equivalent either:
+   * `Repository extends Package` while holding a separate `rootPackage` instance for the same
+   * directory, so a comparison by reference answers `false` for one of the two objects that are
+   * both, truthfully, the root.
+   *
+   * `false` before `Repository.create` has assigned `repository` - a bare `new Package(dir, app)`
+   * (which the test fixtures build) belongs to no repository yet, so there is no root for it to be.
+   */
+  get isRoot(): boolean {
+    const repository = this.repository as Repository | undefined;
+    return !!repository && path.resolve(this.dirname) === path.resolve(repository.dirname);
+  }
+
   /** Re-reads from disk - for a command that has just written the manifest itself and wants the
    *  package to agree with the file again. */
   /** Re-reads from disk through **its own** technology's provider - no search, since the package

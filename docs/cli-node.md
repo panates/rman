@@ -63,7 +63,7 @@ See [`docs/cli/publish.md`](cli/publish.md) for the command, and
 Nothing is redefined here. Both commands take rman's own option groups, identically - `skip`,
 package filtering (`--scope`/`--ignore`/`--deps`/`--dependents`), the branch guard
 (`--allow-branch`/`--ignore-branch`), and `--log-level`. `clean` additionally scopes itself to the
-package you are standing in, with `--root`/`-r` to override. See
+package you are standing in, with `--from-root`/`-r` to override. See
 [cli-rman.md#shared-option-groups](cli-rman.md#shared-option-groups).
 
 That is what `RmanPlugin` is for: a plugin's command is meant to look like a built-in rather than

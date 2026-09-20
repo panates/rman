@@ -16,6 +16,7 @@ import {
   definePlugin,
   DockerPublishService,
   ExecService,
+  filterPackages,
   GithubReleaseService,
   ImportService,
   ListService,
@@ -27,6 +28,7 @@ import {
   Repository,
   resolveRootLogLevel,
   RmanApplication,
+  ROOT_SELECTOR,
   RunService,
   Service,
   shipsTo,
@@ -73,12 +75,20 @@ describe('docs/rman.md: the documented API surface', () => {
       ListService,
       ImportService,
       SystemInfo,
+      filterPackages,
+      ROOT_SELECTOR,
       Logger,
       LOG_LEVELS,
       resolveRootLogLevel,
     ]) {
       expect(exported).toBeDefined();
     }
+  });
+
+  /** `ROOT_SELECTOR` is a documented *value*, not just a name - `docs/rman.md` and the CLI pages
+   *  spell it `/`, and a repository writes the literal rather than importing it. */
+  it('ROOT_SELECTOR is the "/" the docs and the CLI pages spell out', () => {
+    expect(ROOT_SELECTOR).toBe('/');
   });
 
   /**

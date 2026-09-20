@@ -40,6 +40,10 @@ below, and a `"[selector]"` narrows the audience.**
 
   - `/` for the root because that is what a repository root is called everywhere else, and no
     package can be named it.
+  - **The CLI shares this vocabulary**: `--scope /` / `--ignore /` is the root package and a glob
+    never matches it, so `"[*]"` and `--scope '*'` mean the same set. They disagreed until 2.0 -
+    measured, `rman clean --scope 'rman*'` selected this repository's root. See the
+    shared-flags section below.
   - **The root is never selected by name, and that one rule removes two traps.** A glob matches
     package names and the root is nobody's child, so `"[my-*]"` cannot quietly pick up a repository
     whose root package is called `my-repo`, and `"[*]"` cannot hand a package-shaped setting to a
@@ -506,7 +510,7 @@ through `filterPackages` the way the command computes it), and the `.rmanrc` tho
 - Distinct from [`rman config`](docs/cli/config.md), and keep them distinct: that prints one
   package's whole config with no command involved; this answers "what would *this command* do".
 
-## `skip` and `--root`, the two flags every command should share
+## `skip`, `--from-root` and `--scope /`, the flags every command should share
 
 - **Top-level `skip`: "leave this package alone", honoured by every command that *acts*** -
   `run`/`build`/`test`, `exec`, `clean`, `publish`, `version`, `changelog`. Applied inside
@@ -522,14 +526,54 @@ through `filterPackages` the way the command computes it), and the `.rmanrc` tho
     script, `publish.skip` means "never distributed, by any target" - which `changelog` reuses on
     purpose - and `version` deliberately honours *neither* of those (a package can be meaningfully
     versioned without ever being published). A blanket `skip` replacing them would flatten that.
-- **`--root`/`-r` comes from one `applyRootOption(cmd, verb)`**, not from four near-identical option
-  blocks. It means something **only where a command scopes by the current directory** -
-  `run`/`build`/`test`, `exec`, `clean`, `changelog`, `diff` narrow to `Repository.currentPackage`
-  when you stand inside a package, and this is the escape hatch. Do **not** add it to `version`,
-  `publish`, `list` or `changed`: they already work across the whole repository, so the flag would
-  do nothing, and a no-op flag reads as a promise.
+- **`--from-root`/`-r` comes from one `fromRootOption(verb)`** (`applyFromRootOption` for the
+  hand-written builder form), not from four near-identical option blocks. It means something **only
+  where a command scopes by the current directory** - `run`/`build`/`test`, `exec`, `clean`,
+  `changelog`, `diff` narrow to `Repository.currentPackage` when you stand inside a package, and
+  this is the escape hatch. Do **not** add it to `version`, `publish`, `list` or `changed`: they
+  already work across the whole repository, so the flag would do nothing, and a no-op flag reads as
+  a promise.
   - `diff` was the measured gap - it narrowed to the current package like the others but had no way
     to say "the whole repository", since omitting the package name is what already meant that.
+  - **It was `--root` through 1.x and the name said the opposite of what it does.** Every reader is
+    the same line - `options.fromRoot ? undefined : repository.currentPackage` - so the flag means
+    *ignore where I am standing*, i.e. the widest set; `--root` reads as the narrowest. The service
+    option was renamed with it (`RunService`/`ExecService`/`ChangelogService`/`CleanService`
+    `Options.fromRoot`), which also fixed two internal callers that read `root: true` beside a
+    `scope:` - `version` and `github-release` driving `ChangelogService` programmatically.
+  - **A two-letter short (`-fr`) is not available, and this was measured rather than assumed.**
+    yargs' `short-option-groups` is on by default, so `-fr` parses as `-f -r` and `.strict()`
+    answers `Unknown arguments: f, r`; `alias: 'fr'` is reachable only as `--fr`. Disabling that
+    parser option does make `-fr` work and breaks every grouped short - `rman list -sj` works today.
+    So `-r` stayed. The same reasoning applies to any future two-letter alias here.
+  - **There is no `--root-only`, and the rule above is why.** Per command: a no-op on
+    `run`/`build`/`test` (`repository.packages` holds the members only, and the root contributes
+    just its `pre`/`post` bookends, so there is nothing to select); identical to `--from-root` on
+    `diff` (which is already `rootPackage` with no pathspec); already what `--from-root` does on
+    `config`; answerable with `cd $(git rev-parse --show-toplevel)` for `exec`. On `clean` it would
+    be **actively misleading**: measured, the root's own sweep recurses through `packages/*`, so a
+    flag named "root only" deletes *more* than a package-scoped run. Where the root genuinely is a
+    candidate, `--scope /` says so - see below.
+- **`--scope /` is the root package, and a glob never matches the root** (`ROOT_SELECTOR` /
+  `selector` in `package-filter.ts`, `Package.isRoot`). One vocabulary with `.rmanrc`'s `"[/]"`, and
+  the same justification: *the root is never selected by name.*
+  - **Both halves are the feature.** `/` alone would be sugar - `--scope <root's name>` already
+    worked (measured on this repository: `rman clean --scope 'rman*'` selected the root). Leaving
+    globs able to reach it keeps exactly the trap the config selectors were redesigned to remove,
+    and for `clean` it is destructive rather than merely surprising.
+  - Accepted by `--ignore` too, so `--ignore /` is every package but the root. The asymmetry would
+    be the thing to remember, and that spelling is a real thing to want of `clean`.
+  - **It selects nothing where the root is not a candidate, deliberately.**
+    `repository.packages` is the workspace members, so `list`/`run`/`exec` have no root to select -
+    measured, `rman list --scope /` answers `0 Package(s) found` and `rman exec --scope /` answers
+    `No package matched.` `clean` and `changelog` are the two that put
+    `[rootPackage, ...packages]` in front of `filterPackages` on purpose - they are where it bites,
+    and where the specs for it live.
+  - **`Package.isRoot` is by directory**, not by name and not by identity: `Repository extends
+    Package` while holding a *separate* `rootPackage` instance for the same directory, so `this ===
+    repository.rootPackage` answers `false` for one of the two objects that are both the root. It is
+    `false` before `Repository.create` assigns `repository`, which is what keeps a bare
+    `new Package(dir, app)` (the fixtures') usable.
 
 ## Change and release detection
 

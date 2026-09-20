@@ -26,7 +26,7 @@ options, in addition to:
 | `--progress` | - | boolean | `true` | Show a live progress panel (auto-disabled when not a TTY). |
 | `--changed` | `-c` | boolean | `false` | Only run in packages that have changed since the last publish. |
 | `--changed-since <hash>` | - | string | - | Only run in packages that have changed since the given git commit/hash. |
-| `--root` | `-r` | boolean | `false` | Run across the whole repository even when standing inside one package's own directory. No effect elsewhere. |
+| `--from-root` | `-r` | boolean | `false` | Run across the whole repository even when standing inside one package's own directory. No effect elsewhere. |
 
 `--changed`/`--changed-since` conflict (pick one). `command` (the positional) doesn't need its own
 flags escaped **unless** one of them happens to share a name with one of `exec`'s own options above

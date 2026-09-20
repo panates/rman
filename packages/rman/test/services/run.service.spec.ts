@@ -631,7 +631,7 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('ROOT-PRE-RAN'))).toBe(false);
     });
 
-    it('--root (root: true) runs across the whole repository even from inside a single package', async () => {
+    it('--from-root (fromRoot: true) runs across the whole repository even from inside a single package', async () => {
       const dir = mkTmp();
       dirs.push(dir);
       writeFixture(dir, {
@@ -640,7 +640,7 @@ describe('run: Run.runScript() integration', () => {
       });
 
       await createRepository(path.join(dir, 'packages', 'pkg-a'));
-      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false, root: true }));
+      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false, fromRoot: true }));
 
       expect(lines.some(l => l.includes('pkg-a-ran'))).toBe(true);
       expect(lines.some(l => l.includes('pkg-b-ran'))).toBe(true);

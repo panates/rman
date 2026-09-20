@@ -4,12 +4,12 @@ git-commit: b6924c69810870582f615a81c97b587e4057910d
 package-version: 1.0.3
 date: 2026-09-13
 
-Verified against `packages/rman/src/cli.ts` and every `packages/rman/src/commands/*.command.ts` as
+Verified against `packages/rman/src/cli.ts` and every `packages/rman/src/cmd/*.command.ts` as
 of the commit above (and the matching specs for behavior examples). `rman-node`'s three commands
 have their own index, [cli-node.md](cli-node.md). Before trusting/updating this file (or any page
 under `docs/cli/`) in a later session, run:
 
-  git diff b6924c69810870582f615a81c97b587e4057910d..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/
+  git diff b6924c69810870582f615a81c97b587e4057910d..HEAD -- packages/rman/src/cli.ts packages/rman/src/cmd/
 
 and update only the pages touched by what that diff actually shows - don't regenerate everything
 unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -249,12 +249,24 @@ Several commands (`run`/`build`/`test`, `exec`, `changelog`, `diff`, `config`, a
 `clean`)
 automatically scope themselves to *just the package you're standing in* when your shell's current
 directory is inside one package's own directory (rather than the repository root) - pass
-`--root`/`-r` to force the whole repository anyway. This has no effect when you're already at the
-repository root, or your current directory isn't inside any known package (e.g. a plain
+`--from-root`/`-r` to force the whole repository anyway. This has no effect when you're already
+at the repository root, or your current directory isn't inside any known package (e.g. a plain
 single-package repo).
 
 `version`, `publish`, `list` and `changed` already work across the whole repository, so they
-deliberately have **no** `--root`: a flag that does nothing reads as a promise.
+deliberately have **no** `--from-root`: a flag that does nothing reads as a promise.
+
+> **It was `--root`/`-r` through 1.x.** The name said the opposite of what the flag does - every
+> reader spells it *ignore where I am standing*, i.e. the whole repository, while `--root` reads as
+> "the root alone". `-r` is unchanged; the old long spelling is gone rather than aliased, so
+> `rman run build --root` now fails with `Unknown argument: root`.
+>
+> There is deliberately no `--root-only` beside it. It would do nothing on `run`/`build`/`test` (the
+> repository's package list holds the members only, and the root contributes just its `pre`/`post`
+> bookends), mean the same thing as `--from-root` on `diff`, already be what `--from-root` does on
+> `config`, and on `clean` it would be actively misleading - the root's own sweep recurses through
+> every package directory, so a "root only" clean deletes *more* than a package-scoped one. Where
+> the root genuinely is a candidate, [`--scope /`](#package-filtering) says so.
 
 ## Shared option groups
 
@@ -276,15 +288,28 @@ package is dropped **before** `--deps`/`--dependents`, so a dependency edge cann
 
 | Option | Description |
 | --- | --- |
-| `--scope <glob>` | Only include packages whose name matches this glob (repeatable). |
-| `--ignore <glob>` | Exclude packages whose name matches this glob (repeatable) - applied after `--scope`. |
+| `--scope <glob>` | Only include packages whose name matches this glob, or **`/`** for the repository's own root package (repeatable). |
+| `--ignore <glob>` | Exclude packages matching this glob (or `/`) - applied after `--scope`. |
 | `--deps` | Also include every package the matched set depends on (transitively). |
 | `--dependents` | Also include every package that depends on the matched set (transitively). |
 
 ```bash
 rman run build --scope '@myorg/*' --ignore '*-internal'
 rman test --scope core-lib --dependents   # core-lib plus everything that could be affected by it
+rman changelog --scope /                  # the root package's own entry, and nothing else
+rman clean --ignore /                     # every member, skipping the root's own sweep
 ```
+
+**`--scope /` is the root package, and it is not a glob.** The same `/` `.rmanrc`'s `"[/]"` block
+uses, for the reason stated there: *the root is never selected by name.* So a glob is never offered
+the root - `--scope '*'` means the members, `--scope /` means the root - which is what stops
+`--scope '@myorg/*'` from quietly picking up a repository whose root package is called
+`@myorg/monorepo`. That mattered most for `clean`, where the root's own sweep recurses through every
+package directory.
+
+It selects nothing where the root is not a candidate to begin with, which is most commands: the
+repository's package list holds the workspace members only, so `list`, `run` and `exec` have no root
+row to select, while `clean` and `changelog` put it in their candidate list on purpose.
 
 Full semantics (glob syntax, how `--deps`/`--dependents` combine): see
 [docs/rman.md#package-filtering-scopeignoredepsdependents](rman.md#package-filtering-scopeignoredepsdependents).

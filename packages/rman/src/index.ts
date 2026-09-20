@@ -97,14 +97,15 @@ export { LOG_LEVELS, Logger, resolveRootLogLevel } from './utils/logger.js';
 /** `--scope`/`--deps`/`--dependents`/`--private`, so a plugin's command filters packages the same
  *  way every built-in does rather than inventing its own flags. */
 export {
+  applyFromRootOption,
   applyPackageFilterOptions,
-  applyRootOption,
   filterPackages,
+  fromRootOption,
   type PackageFilterOptions,
   packageFilterOptions,
+  readFromRootOption,
   readPackageFilterOptions,
-  readRootOption,
-  rootOption,
+  ROOT_SELECTOR,
 } from './utils/package-filter.js';
 /** The live panel `run`/`build`/`clean` print - a plugin's per-package command looks like the rest
  *  of rman instead of like a script someone bolted on. */

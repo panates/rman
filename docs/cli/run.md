@@ -24,7 +24,7 @@ options, in addition to:
 | `--progress` | - | boolean | `true` | Show the live progress panel (auto-disabled when stdout isn't a TTY). Overridable via `.rmanrc run.<script>.progress`. |
 | `--changed` | `-c` | boolean | `false` | Only run in packages that have changed since the last publish. |
 | `--changed-since <hash>` | - | string | - | Only run in packages that have changed since the given git commit/hash. Falls back to `.rmanrc run.<script>.changedSince` (root-level) when omitted. |
-| `--root` | `-r` | boolean | `false` | Run across the whole repository even when standing inside one package's own directory (which otherwise scopes the run to just that package, dropping the root pre/post hooks). No effect elsewhere. |
+| `--from-root` | `-r` | boolean | `false` | Run across the whole repository even when standing inside one package's own directory (which otherwise scopes the run to just that package, dropping the root pre/post hooks). No effect elsewhere. |
 
 `--changed` and `--changed-since` conflict (pick one).
 
@@ -39,7 +39,7 @@ rman run build --parallel 4           # at most 4 packages at once
 rman run build --parallel false       # serially, one at a time
 rman run build --bail=false           # keep going even if one package's build fails
 rman run build --scope pkg-a --deps   # pkg-a plus everything it depends on
-rman run build --root                 # whole repo, even run from inside one package's directory
+rman run build --from-root            # whole repo, even from inside one package's directory
 rman run build --log-level verbose    # also print each step's "executing" line before it runs
 ```
 
@@ -118,8 +118,8 @@ If the repository root defines a `prebuild`/`postbuild` (matching `pre<script>`/
 npm script, or an **unmarked** `.rmanrc run.<script>.before`/`.after`, it runs once each -
 exclusively, before/after every package's own script - unless the root opts out via
 `run.<script>.skip`, fails its own `run.<script>.if`, or the run is scoped to a single package
-(`--root` not given while standing inside one package's own directory - a repo-wide bookend has no
-place there).
+(`--from-root` not given while standing inside one package's own directory - a repo-wide bookend
+has no place there).
 
 Unmarked is the operative word: a bookend command is run at the repository root, so a
 package-relative one (`node ../../support/postbuild.cjs`) belongs under `"[*]"`, not here. There is

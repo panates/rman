@@ -159,13 +159,13 @@ describe('commands/run', () => {
       expect(lines.some(l => l.includes('pkg-b'))).toBe(false);
     });
 
-    it('--root runs across the whole repository even from inside a single package', async () => {
+    it('--from-root runs across the whole repository even from inside a single package', async () => {
       const dir = fixture({
         'pkg-a': { build: quiet('echo a-ran') },
         'pkg-b': { build: quiet('echo b-ran') },
       });
       const lines = await captureLogs(() =>
-        runCli({ cwd: path.join(dir, 'packages/pkg-a'), argv: ['run', 'build', '--no-progress', '--root'] }),
+        runCli({ cwd: path.join(dir, 'packages/pkg-a'), argv: ['run', 'build', '--no-progress', '--from-root'] }),
       );
       expect(lines.some(l => l.includes('pkg-a') && l.includes('success'))).toBe(true);
       expect(lines.some(l => l.includes('pkg-b') && l.includes('success'))).toBe(true);

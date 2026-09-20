@@ -27,7 +27,7 @@ export class ExecService extends Service {
     const logLevelDefault = resolveRootLogLevel(repository);
     const logger = new Logger(options.logLevel ?? logLevelDefault);
 
-    const cwdScope = options.root ? undefined : repository.currentPackage;
+    const cwdScope = options.fromRoot ? undefined : repository.currentPackage;
     const topo = options.topo ?? true;
     let packages = repository.getPackages({ toposort: topo, scope: cwdScope?.name });
     if (!topo) packages = [...packages].sort((a, b) => a.name.localeCompare(b.name));
@@ -163,7 +163,7 @@ export namespace ExecService {
     /** Run across the whole repository even when the current directory is inside a single package
      *  (which otherwise scopes the run to just that package). Has no effect when already at the
      *  repository root, or outside any known package. */
-    root?: boolean;
+    fromRoot?: boolean;
   }
 }
 

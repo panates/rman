@@ -30,9 +30,9 @@ export class RunService extends Service {
     const logLevelDefault = resolveRootLogLevel(repository);
 
     /** Standing inside a single package's own directory scopes the run to just that package
-     *  (and drops the root bookend below) unless `--root` asks for the whole repository anyway -
+     *  (and drops the root bookend below) unless `--from-root` asks for the whole repository anyway -
      *  a no-op when already at the root, or outside any known package. */
-    const cwdScope = options.root ? undefined : repository.currentPackage;
+    const cwdScope = options.fromRoot ? undefined : repository.currentPackage;
 
     /** Global fallback for topo - individual packages can still override their own linking below,
      *  but the initial sort (topological vs alphabetical) has to be decided for the whole list at once. */
@@ -291,7 +291,7 @@ export namespace RunService {
      *  (which otherwise scopes the run to just that package, and skips the root's own pre/post
      *  bookend - see `Repository.currentPackage`). Has no effect when already at the repository
      *  root, or outside any known package. */
-    root?: boolean;
+    fromRoot?: boolean;
   }
 
   /**

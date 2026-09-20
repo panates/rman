@@ -143,7 +143,7 @@ export class VersionService extends Service {
         const from = (await git.tagExists(fromTag)) ? fromTag : undefined;
         const changelogEntries = await this.app.getService('changelog').generateToFile({
           scope: entry.package.name,
-          root: true,
+          fromRoot: true,
           from,
           // The tag for this release doesn't exist yet (it's created below), so changelog's own
           // tag-derived version would resolve to the *previous* release and label the entry with it.

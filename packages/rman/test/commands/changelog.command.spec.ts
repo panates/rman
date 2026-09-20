@@ -136,7 +136,7 @@ describe('commands/changelog', () => {
     });
   });
 
-  describe('--root', () => {
+  describe('--from-root', () => {
     it('generates for the whole repository even when run from inside a single package', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
@@ -160,11 +160,81 @@ describe('commands/changelog', () => {
       run('commit', '-q', '-m', 'feat(pkg-b): another change');
 
       const lines = await captureLogs(() =>
-        runCli({ cwd: path.join(dir, 'packages/a'), argv: ['changelog', '--from', baseHash, '--root'] }),
+        runCli({ cwd: path.join(dir, 'packages/a'), argv: ['changelog', '--from', baseHash, '--from-root'] }),
       );
       const joined = lines.join('\n');
       expect(joined).toContain('## pkg-a');
       expect(joined).toContain('## pkg-b');
+    });
+  });
+
+  /**
+   * `--scope /` end to end, through the real `Package.isRoot` - `package-filter.spec.ts` covers the
+   * selector against fakes, which cannot tell whether "the root" is found the way the rule says.
+   *
+   * `changelog` is one of the two commands whose candidate list holds the root at all (`clean` is
+   * the other), which is what makes the selector observable here.
+   */
+  describe('--scope / (the root package)', () => {
+    async function repoWithRootEntry() {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'init');
+      const baseHash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat(pkg-a): a change');
+      /** A file under no package at all, which `owningPackage` resolves to the root - so the root
+       *  has an entry of its own to select. Not the repo-wide route (`ownersOf`): that needs
+       *  `BROAD_COMMIT_MIN_PACKAGES` = 3 packages before it fires at all, which would make this
+       *  fixture about the threshold rather than about the selector. */
+      fs.writeFileSync(path.join(dir, 'README.md'), 'readme');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: something at the root');
+      return { dir, baseHash };
+    }
+
+    it('selects the root package alone', async () => {
+      const { dir, baseHash } = await repoWithRootEntry();
+      const lines = await captureLogs(() =>
+        runCli({ cwd: dir, argv: ['changelog', '--from', baseHash, '--scope', '/'] }),
+      );
+      const joined = lines.join('\n');
+      expect(joined).toContain('something at the root');
+      expect(joined).not.toContain('## pkg-a');
+      expect(joined).not.toContain('## pkg-b');
+    });
+
+    /**
+     * The negative control, and the behaviour change `/` exists for: the root used to be reachable
+     * by name, which is exactly what `.rmanrc`'s selectors refuse ("the root is never selected by
+     * name"). Without this assertion the spec above passes whether or not the glob path still
+     * matches the root.
+     */
+    it('and the root is no longer reachable by its own name', async () => {
+      const { dir, baseHash } = await repoWithRootEntry();
+      const lines = await captureLogs(() =>
+        runCli({ cwd: dir, argv: ['changelog', '--from', baseHash, '--scope', 'root'] }),
+      );
+      expect(lines.join('\n')).not.toContain('something at the root');
+    });
+
+    it('--ignore / leaves every package but the root', async () => {
+      const { dir, baseHash } = await repoWithRootEntry();
+      const lines = await captureLogs(() =>
+        runCli({ cwd: dir, argv: ['changelog', '--from', baseHash, '--ignore', '/'] }),
+      );
+      const joined = lines.join('\n');
+      expect(joined).toContain('## pkg-a');
+      expect(joined).not.toContain('something at the root');
     });
   });
 

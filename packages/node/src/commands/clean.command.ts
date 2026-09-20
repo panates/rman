@@ -4,10 +4,10 @@ import {
   branchGuardOptions,
   type CommandOption,
   declareCommand,
+  fromRootOption,
   packageFilterOptions,
   readBranchGuardOptions,
   readPackageFilterOptions,
-  rootOption,
 } from 'rman';
 import { CleanService } from '../services/clean.service.js';
 
@@ -18,7 +18,7 @@ const config = {
   ...packageFilterOptions,
   ...branchGuardOptions,
   /** A group of one, and a function because its text is this command's own word for what it does. */
-  ...rootOption('Clean'),
+  ...fromRootOption('Clean'),
   progress: {
     target: 'cli',
     describe: 'Show a live progress panel (default: true; auto-disabled when not a TTY)',
@@ -95,7 +95,7 @@ const cleanCommand = declareCommand(app => {
         ...readPackageFilterOptions(args),
         progress: args.progress,
         dryRun: args.dryRun,
-        root: args.root,
+        fromRoot: args.fromRoot,
         logLevel: args.logLevel,
       });
     },

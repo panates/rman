@@ -105,6 +105,8 @@ import {
   ListService,
   ImportService,
   SystemInfo,
+  filterPackages,
+  ROOT_SELECTOR,
   Logger,
   LOG_LEVELS,
   resolveRootLogLevel,
@@ -372,32 +374,50 @@ const sinceRelease = await repository.listStatus({ hash: 'v1.2.0' });
 ```ts
 class Package {
   readonly dirname: string;
-  dependencies: string[]; // in-repo package names this one depends on (full transitive closure)
+  manifest: Manifest; // this package's identity, as its own technology read it
+  manifestFileName: string; // absolute path to the file it was read from ('' if none)
+  dependencies: Package[]; // in-repo packages this one depends on (full transitive closure)
   config: RmanConfig; // this package's own effective, cascaded .rmanrc config
+  repository: Repository; // the repository it belongs to (a repository's own is itself)
+  parent?: Package; // the package whose directory contains this one; undefined for the root
+  techStack: TechStack; // the technology whose manifest provider claimed this directory
+  versionScheme: VersionScheme; // how its versions are numbered (semver by default)
 
   get basename(): string; // path.basename(dirname)
-  get name(): string; // package.json "name"
-  get version(): string; // package.json "version"
-  get json(): any; // the parsed package.json object (mutable in-memory)
-  get jsonFileName(): string; // absolute path to package.json
-  get isPrivate(): boolean; // !!json.private
+  get name(): string; // from the manifest
+  get version(): string; // from the manifest
+  get isPrivate(): boolean; // !!manifest.private
+  get provider(): string; // which ecosystem read it - 'node', ''; see TechStack
+  get isRoot(): boolean; // whether this is the repository's own root package
 
-  reloadJson(): any; // re-reads package.json from disk, discarding in-memory edits
-  writeJson(): void; // writes `this.json` back to package.json (2-space indent)
+  reloadManifest(): Manifest; // re-reads from disk through its own technology's provider
+  writeManifest(): void; // writes the manifest back to its own file
 }
 ```
 
-`pkg.dependencies` is **not** just what's declared in `package.json` - `Repository` computes the
-full transitive closure across every in-repo package (guarding against cycles), which is what
-powers topological sort, `--deps`/`--dependents` filtering, and `RunService`'s task scheduling.
-It also folds in anything declared under `.rmanrc dependencies` (see the
+There is no `json`/`writeJson` here: `package.json` is npm's answer to where a package's name and
+version are written, not rman's. `manifest.raw` is still the whole document for code that knows its
+own ecosystem (guard it with `pkg.provider === 'node'`), while the core only ever touches `name`,
+`version` and `private`.
+
+`pkg.dependencies` holds **packages, not names** - a name identifies a package only where the
+ecosystem guarantees uniqueness - and is **not** just what the manifest declares: `Repository`
+computes the full transitive closure across every in-repo package (guarding against cycles), which
+is what powers topological sort, `--deps`/`--dependents` filtering, and `RunService`'s task
+scheduling. It also folds in anything declared under `.rmanrc dependencies` (see the
 [config reference](#configuration-rmanrc--rmanrcyml)) - a way to tell rman about an in-repo
-dependency relationship that isn't expressed as a real `package.json` dependency.
+dependency relationship the manifests do not express, and the only way a repository with no
+provider at all has a graph.
+
+**`pkg.isRoot`** is decided by *directory* - the root package is the one whose directory is the
+repository root, because a name can be anything. It is what `--scope /` selects (see
+[package filtering](#package-filtering-scopeignoredepsdependents)) and what distinguishes the
+repo-wide reading of a config key from a package's own.
 
 ```ts
 const pkgA = repository.getPackage('pkg-a')!;
-pkgA.json.description = 'Updated via script';
-pkgA.writeJson();
+pkgA.manifest.raw.description = 'Updated via script';
+pkgA.writeManifest();
 ```
 
 ## Configuration (`.rmanrc` / `.rmanrc.yml`)
@@ -2187,8 +2207,8 @@ Every service above that takes `PackageFilterOptions` narrows its target package
 
 ```ts
 interface PackageFilterOptions {
-  scope?: string | string[]; // only packages whose name matches this glob (micromatch syntax)
-  ignore?: string | string[]; // exclude packages matching this glob, applied after `scope`
+  scope?: string | string[]; // only packages whose name matches this glob, or "/" for the root
+  ignore?: string | string[]; // exclude packages matching this glob (or "/"), applied after `scope`
   deps?: boolean; // also include everything the matched set depends on
   dependents?: boolean; // also include everything that depends on the matched set
 }
@@ -2207,7 +2227,25 @@ await app.getService('run').runScript('test', { scope: 'core-lib', dependents: t
 ```
 
 `scope`/`ignore` accept [`micromatch`](https://github.com/micromatch/micromatch) glob syntax
-(`*`, `**`, `{a,b}`, ...) matched against each package's bare name. `deps` and `dependents` each
+(`*`, `**`, `{a,b}`, ...) matched against each package's bare name.
+
+**`"/"` (`ROOT_SELECTOR`) is the repository's own root package, and it is not a glob** - the same
+`/` `.rmanrc`'s `"[/]"` block uses, for the reason stated there: *the root is never selected by
+name.* A glob is never offered the root, so `scope: '*'` means the members and `scope: '/'` means
+the root; `ignore: '/'` is every package but the root. It is accepted everywhere `scope`/`ignore`
+are, and selects nothing where the root is not a candidate to begin with - `repository.packages`
+holds the workspace members only, so `run`, `list` and `exec` see no root, while `clean` and
+`changelog` put it in their candidate list on purpose.
+
+```ts
+// The root package's own changelog entry (repo-wide commits), and nothing else:
+await app.getService('changelog').getEntries({ scope: '/' });
+
+// Clean every member but skip the root's own sweep:
+await CleanService.clean(repository, { ignore: '/' });
+```
+
+`deps` and `dependents` each
 independently expand the already-`scope`/`ignore`-matched set along the full transitive dependency
 graph, and their results are **unioned** together (not compounded) - so passing both never
 re-expands one direction's additions through the other, which would otherwise tend to explode

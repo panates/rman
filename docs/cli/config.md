@@ -12,7 +12,7 @@ output may come from four places at once, and no single file shows it.
 
 ```bash
 rman config                  # the package you are standing in
-rman config --root           # the repository root's own config instead
+rman config --from-root      # the repository root's own config instead
 rman config --json           # machine-readable
 rman config --json | jq .version
 ```
@@ -50,14 +50,14 @@ group: a-line
 
 | Option | Alias | Description |
 | --- | --- | --- |
-| `--root` | `-r` | Print the repository root's config instead of the current package's. No effect when already at the root. |
+| `--from-root` | `-r` | Print the repository root's config instead of the current package's. No effect when already at the root. |
 | `--json` | - | Print JSON instead of YAML. **Nothing else on stdout**, so it can be piped. |
 
 ## Which package it is about
 
 The same rule `run`/`exec`/`changelog` use: standing inside a package's own directory, that package;
 anywhere else - the repository root, or a directory holding no package (an intermediate
-`packages/`) - the root package. `--root` forces the root from inside a package.
+`packages/`) - the root package. `--from-root` forces the root from inside a package.
 
 Remember that the **root is a package too**, and that a `"[*]"` block is about the *others*: at the
 root you see `allowBranch`, `version.*` and the plugins' root-level keys, and *not* what `"[*]"`

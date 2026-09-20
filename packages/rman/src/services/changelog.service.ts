@@ -63,11 +63,11 @@ export class ChangelogService extends Service {
    * changelog.tagPattern`.
    *
    * Run from inside a single package's own directory, it only covers that package unless
-   * `options.root` says otherwise (see `Repository.currentPackage`).
+   * `options.fromRoot` says otherwise (see `Repository.currentPackage`).
    */
   async getEntries(options: ChangelogService.Options = {}): Promise<ChangelogService.Entry[]> {
     const repository = this.repository;
-    const cwdScope = options.root ? undefined : repository.currentPackage;
+    const cwdScope = options.fromRoot ? undefined : repository.currentPackage;
     const packages = repository.getPackages().filter(p => p !== repository.rootPackage);
     const targets = (cwdScope ? [cwdScope] : filterPackages([repository.rootPackage, ...packages], options)).filter(
       pkg => options.includeSkipped || !pkg.config.publish?.skip,
@@ -324,7 +324,7 @@ export namespace ChangelogService {
     from?: string;
     /** Generate for the whole repository even when the current directory is inside a single
      *  package (which otherwise scopes it to just that package) - see `Repository.currentPackage`. */
-    root?: boolean;
+    fromRoot?: boolean;
     /** Where a package's changelog file lives, relative to *that package's own* directory -
      *  default `'CHANGELOG.md'`. Applies the same way to every package; for a package that wants
      *  its own filename instead, use `.rmanrc changelog.filePath` (cascaded, per-package

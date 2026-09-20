@@ -120,9 +120,11 @@ describe('commands/config', () => {
     expect(config.group).toBeUndefined();
   });
 
-  it("--root prints the root package's config instead, from inside a package", async () => {
+  it("--from-root prints the root package's config instead, from inside a package", async () => {
     const dir = fixture();
-    const lines = await captureLogs(() => runCli({ argv: ['config', '--root'], cwd: path.join(dir, 'packages/a') }));
+    const lines = await captureLogs(() =>
+      runCli({ argv: ['config', '--from-root'], cwd: path.join(dir, 'packages/a') }),
+    );
 
     expect(lines[0]).toContain('root');
     const config = parsed(lines);

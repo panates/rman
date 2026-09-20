@@ -82,7 +82,7 @@ describe('commands/build', () => {
     expect(lines.some(l => l.includes('echo tested'))).toBe(false);
   });
 
-  it("shares run's own options, e.g. --root, through the same applyRunOptions() builder", async () => {
+  it("shares run's own options, e.g. --from-root, through the same applyRunOptions() builder", async () => {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
     /** Marks the repository root: `Workspace.findRoot` looks for an `.rmanrc*` or a `.git`,
@@ -92,7 +92,7 @@ describe('commands/build', () => {
     writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0', scripts: { build: quiet('echo b') } });
 
     const lines = await captureLogs(() =>
-      runCli({ cwd: path.join(dir, 'packages/a'), argv: ['build', '--no-progress', '--root'] }),
+      runCli({ cwd: path.join(dir, 'packages/a'), argv: ['build', '--no-progress', '--from-root'] }),
     );
     expect(lines.some(l => l.includes('pkg-a') && l.includes('success'))).toBe(true);
     expect(lines.some(l => l.includes('pkg-b') && l.includes('success'))).toBe(true);

@@ -78,7 +78,7 @@ const execCommand = registerCommand(app => {
         changed: args.changed,
         changedSince: args.changedSince,
         logLevel: args.logLevel,
-        root: args.root,
+        fromRoot: args.fromRoot,
       });
     },
   };

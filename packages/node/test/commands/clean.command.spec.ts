@@ -109,7 +109,7 @@ describe('commands/clean', () => {
     });
   });
 
-  describe('--root (cwd scoping through the real CLI)', () => {
+  describe('--from-root (cwd scoping through the real CLI)', () => {
     it('running from inside a single package only cleans that package', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
@@ -127,7 +127,7 @@ describe('commands/clean', () => {
       expect(exists(dir, 'packages/b/src/bar.js')).toBe(true);
     });
 
-    it('--root cleans the whole repository even from inside a single package', async () => {
+    it('--from-root cleans the whole repository even from inside a single package', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       /** Marks the repository root: `Workspace.findRoot` looks for an `.rmanrc*` or a `.git`,
@@ -138,7 +138,7 @@ describe('commands/clean', () => {
       writeFile(dir, 'packages/a/src/foo.js');
       writeFile(dir, 'packages/b/src/bar.js');
 
-      await captureLogs(() => runCli({ cwd: path.join(dir, 'packages/a'), argv: ['clean', '--root'] }));
+      await captureLogs(() => runCli({ cwd: path.join(dir, 'packages/a'), argv: ['clean', '--from-root'] }));
 
       expect(exists(dir, 'packages/a/src/foo.js')).toBe(false);
       expect(exists(dir, 'packages/b/src/bar.js')).toBe(false);

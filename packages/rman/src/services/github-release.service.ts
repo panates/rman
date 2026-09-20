@@ -216,7 +216,7 @@ async function buildReleaseNotes(repository: Repository, git: GitHelper, release
   for (const pkg of [...repository.getPackages(), root]) {
     const entries = await repository.app.getService('changelog').getEntries({
       from: previous,
-      root: true,
+      fromRoot: true,
       includeSkipped: true,
       scope: pkg.name,
       version: pkg.version,

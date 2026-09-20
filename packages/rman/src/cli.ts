@@ -23,7 +23,7 @@ import { checkCustomCommand } from './core/plugin.js';
 import { Repository } from './core/repository.js';
 import { commandRegistry, type RmanConfig } from './interfaces/rman-cfg.interface.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/logger.js';
-import { filterPackages, readPackageFilterOptions, readRootOption } from './utils/package-filter.js';
+import { filterPackages, readFromRootOption, readPackageFilterOptions } from './utils/package-filter.js';
 import { printableConfig } from './utils/printable-config.js';
 import { runBin } from './utils/run-bin.js';
 
@@ -294,10 +294,10 @@ function readOptions(args: any): Record<string, unknown> {
 
 /** The packages the command would act on - `filterPackages` with the command's own options, so
  *  this is the same set the command will compute, `skip` included. Narrowed to the current package
- *  for a command that scopes by directory, unless `--root` says otherwise. */
+ *  for a command that scopes by directory, unless `--from-root` says otherwise. */
 function commandTargets(repository: Repository, args: any): Package[] {
   const current = repository.currentPackage;
-  if (current && !readRootOption(args)) return [current];
+  if (current && !readFromRootOption(args)) return [current];
   return filterPackages(repository.getPackages(), readPackageFilterOptions(args));
 }
 

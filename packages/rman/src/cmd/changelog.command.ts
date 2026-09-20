@@ -2,13 +2,13 @@ import colors from 'ansi-colors';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
 import { Logger, resolveRootLogLevel } from '../utils/logger.js';
-import { packageFilterOptions, readPackageFilterOptions, rootOption } from '../utils/package-filter.js';
+import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
 const COMMAND = 'changelog' as const;
 
 const config = {
   ...packageFilterOptions,
-  ...rootOption('Generate'),
+  ...fromRootOption('Generate'),
   from: {
     target: 'cli',
     describe:
@@ -110,7 +110,7 @@ const changelogCommand = registerCommand(app => {
         ...readPackageFilterOptions(args),
         from,
         filePath: args.filePath,
-        root: args.root,
+        fromRoot: args.fromRoot,
         includeSkipped: args.includeSkipped,
         version: args.releaseVersion,
       };

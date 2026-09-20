@@ -3,10 +3,10 @@ import colors from 'ansi-colors';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
 import { GitHelper } from '../utils/git.js';
-import { readRootOption, rootOption } from '../utils/package-filter.js';
+import { fromRootOption, readFromRootOption } from '../utils/package-filter.js';
 
 const COMMAND = 'diff [package]' as const;
-const config = rootOption('Diff');
+const config = fromRootOption('Diff');
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 
 const diffCommand = registerCommand(app => {
@@ -26,7 +26,7 @@ const diffCommand = registerCommand(app => {
     examples: [
       { command: '$0 diff', description: "# Since the repository's own last tag" },
       { command: '$0 diff pkg-a', description: "# Since pkg-a's own last tag, scoped to its directory" },
-      { command: '$0 diff --root', description: '# The whole repository, from inside a package' },
+      { command: '$0 diff --from-root', description: '# The whole repository, from inside a package' },
     ],
     handler: async (args: Args) => {
       const git = new GitHelper({ cwd: repository.dirname });
@@ -45,7 +45,7 @@ const diffCommand = registerCommand(app => {
         }
         target = pkg;
         pathspec = path.relative(repository.dirname, pkg.dirname);
-      } else if (!readRootOption(args) && repository.currentPackage) {
+      } else if (!readFromRootOption(args) && repository.currentPackage) {
         /** The measured gap this closes: `diff` narrowed to the current package like `run` and
          *  `changelog` do, but offered no way to say "the whole repository" without naming a
          *  package - and no package name means the repository, so there was nothing to type. */

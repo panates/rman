@@ -115,8 +115,10 @@ Options shared across several commands:
 - **Package filtering** (`list`, `run`/`build`/`test`, `exec`, `version`, `changelog`, and a
   plugin's own commands): `--scope <glob>`, `--ignore <glob>`, `--deps`, `--dependents` - see
   [Package filtering](https://github.com/panates/rman/blob/main/docs/rman.md#package-filtering-scopeignoredepsdependents)
-  for the full semantics.
-- **`--root`/`-r`** (every command that narrows to the package you are standing in -
+  for the full semantics. **`--scope /` is the repository's own root package** - the same `/`
+  `.rmanrc`'s `"[/]"` block uses, and not a glob, so `--scope '*'` means the members and a glob
+  never picks up the root by name.
+- **`--from-root`/`-r`** (every command that narrows to the package you are standing in -
   `run`/`build`/`test`, `exec`, `changelog`, `diff`): run against the whole repository instead.
 - **Branch guard** (every command that mutates state or runs scripts - `run`/`build`/`test`,
   `exec`, `version`): `--allow-branch <glob>`, `--ignore-branch <glob>` -
@@ -204,7 +206,7 @@ applied. What rman actually sees there, which no single file shows.
 
 ```bash
 rman config                  # the package you are standing in
-rman config --root           # the repository root's own config instead
+rman config --from-root           # the repository root's own config instead
 rman config --json | jq .run
 ```
 

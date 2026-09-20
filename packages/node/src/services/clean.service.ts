@@ -23,7 +23,7 @@ export namespace CleanService {
     /** Clean the whole repository even when the current directory is inside a single package
      *  (which otherwise scopes cleaning to just that package - see `Repository.currentPackage`).
      *  Has no effect when already at the repository root, or outside any known package. */
-    root?: boolean;
+    fromRoot?: boolean;
     /** Verbosity of the classic per-item log (only applies when the live panel is off). Falls back
      *  to the root's `.rmanrc logLevel`, then 'info' - see `resolveRootLogLevel`. */
     logLevel?: LogLevel;
@@ -58,16 +58,16 @@ export namespace CleanService {
    * Never touches `node_modules` - that's `ci`'s job, not this one.
    *
    * Run from inside a single package's own directory, it only cleans that package unless
-   * `options.root` says otherwise (see `Repository.currentPackage`).
+   * `options.fromRoot` says otherwise (see `Repository.currentPackage`).
    *
    * Uses the same live progress panel as `run`/`build` (see `../utils/progress-panel.ts`) - unlike
    * `ci`, cleaning genuinely is independent per-package work, so the final per-package tally stays.
    */
   export async function clean(repository: Repository, options: Options = {}): Promise<void> {
     /** Standing inside a single package's own directory scopes cleaning to just that package
-     *  (root's own artifacts included) unless `--root` asks for the whole repository anyway - a
+     *  (root's own artifacts included) unless `--from-root` asks for the whole repository anyway - a
      *  no-op when already at the root, or outside any known package. */
-    const cwdScope = options.root ? undefined : repository.currentPackage;
+    const cwdScope = options.fromRoot ? undefined : repository.currentPackage;
     const packages = repository.getPackages().filter(p => p !== repository.rootPackage);
     const allTargets = cwdScope ? [cwdScope] : [repository.rootPackage, ...packages];
     const targets = filterPackages(allTargets, options).filter(pkg => !cleanConfig(pkg).skip);
