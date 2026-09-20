@@ -77,7 +77,7 @@ options, in addition to:
 | `--otp <code>` | string | - | `npm publish --otp <code>` - a 2FA one-time password, for registries that require it. |
 | `--registry <url>` | string | - | Registry to check against **and** publish to (default: whatever `.npmrc` already configures). |
 | `--userconfig <path>` | string | - | Path to a custom `.npmrc` for both the registry check and the actual publish. |
-| `--contents <dir>` | string | - | Subdirectory to publish from, relative to each package's own directory - the lowest-precedence way to say it, after `publishConfig.directory` and `.rmanrc "publish.directory"`. |
+| `--contents <dir>` | string | - | Subdirectory to publish from, relative to each package's own directory - the lowest-precedence way to say it, after `publishConfig.directory` and `.rmanrc "publish.npm.directory"`. |
 
 ## Examples
 
@@ -186,7 +186,7 @@ needs no configuration and no opt-in - see [`rman github-release`](github-releas
 to **GitHub Packages** (`npm.pkg.github.com`). That works today through npm's own
 `publishConfig.registry`, or `--registry`, rather than a target of its own.
 
-## Publishing from a build directory (`publish.directory`)
+## Publishing from a build directory (`publish.npm.directory`)
 
 > The `npm` target's, in every detail below - a build directory, a generated manifest and
 > `"workspace:"` ranges are npm's ideas. Requires [`rman-node`](../cli-node.md).

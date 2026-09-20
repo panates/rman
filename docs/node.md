@@ -91,7 +91,7 @@ here rather than in rman's core:
 | --- | --- | --- |
 | `packageManager` | root only | Which package manager `ci`/`publish` shell out to, and whose version `info` reports. `npm` \| `yarn` \| `pnpm` \| `bun`, default `npm`. |
 | `clean` | per package, cascaded | `include`/`exclude` globs beyond TypeScript's own output, and `skip`. A package declaring its own `clean` replaces the root's entirely for itself. |
-| `publish.directory` | per package, cascaded | Where this package's publishable output lives, relative to its own directory. The `npm` target's own block, beside the `docker` one rman itself declares. |
+| `publish.npm.directory` | per package, cascaded | Where this package's publishable output lives, relative to its own directory. The `npm` target's own block, beside the `docker` one rman itself declares. |
 
 **They reach `RmanConfig` by declaration merging**, so `pkg.config.clean` is typed at the place it is
 *read* without a cast - and the two halves arrive through different slots, which is the point:
@@ -104,7 +104,9 @@ declare module 'rman' {
 
   /** And its publish target's block, through the slot rman's `publish` command exports for *any*
    *  target - so a target contributes its config keys the same way it contributes its flags. */
-  interface PublishTargetConfigs extends RmanNodeConfig.PublishOptions {}
+  interface PublishTargetConfigs {
+    npm?: RmanNodeConfig.NpmPublishOptions;
+  }
 }
 ```
 
@@ -118,7 +120,7 @@ import { defineConfig } from 'rman-node';
 export default defineConfig({
   plugins: ['rman-node'],
   packageManager: 'pnpm',
-  '[*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
+  '[*]': { clean: { include: 'build' }, publish: { npm: { directory: 'build' } } },
 });
 ```
 
@@ -209,7 +211,7 @@ await PublishService.applyPlan(repository, plan);
 #### Where it publishes from, and the manifest it finds there
 
 Most specific first: the package's own `publishConfig.directory`, then `.rmanrc
-"publish.directory"` (one `"[*]"` line for a repository instead of a copy in every `package.json`),
+"publish.npm.directory"` (one `"[*]"` line for a repository instead of a copy in every `package.json`),
 then `ApplyOptions.contents` for a single run. Absent all three, the package's own directory.
 
 When that resolves to a **subdirectory**, `applyPlan` writes the `package.json` `npm publish` will

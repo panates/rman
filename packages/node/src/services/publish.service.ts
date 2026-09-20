@@ -193,7 +193,14 @@ export namespace PublishService {
     const entries = new Map<string, Entry>();
     const toCheck: Package[] = [];
     for (const pkg of packages) {
-      if (pkg.config.publish?.skip) {
+      if (retiredDirectoryKey(pkg)) {
+        entries.set(pkg.name, {
+          package: pkg,
+          version: pkg.version,
+          status: 'error',
+          reason: '.rmanrc "publish.directory" is now "publish.npm.directory" - see the npm publish target',
+        });
+      } else if (pkg.config.publish?.skip) {
         entries.set(pkg.name, {
           package: pkg,
           version: pkg.version,
@@ -286,13 +293,32 @@ export namespace PublishService {
 
 /** Where the publishable output lives, most specific statement first: the package's own
  *  `publishConfig.directory` (npm/pnpm's native spelling, and a statement about that one package),
- *  then `.rmanrc "publish.directory"` (which a `"[*]"` block can say once for a whole repository
+ *  then `.rmanrc "publish.npm.directory"` (which a `"[*]"` block can say once for a whole repository
  *  instead of repeating in every `package.json`), then `--contents` for a single run. */
 function resolvePublishDir(pkg: Package, contentsOverride: string | undefined): string {
   const native = pkg.manifest.raw.publishConfig?.directory;
-  const configured = pkg.config?.publish?.directory;
+  const configured = pkg.config?.publish?.npm?.directory;
   const rel = (typeof native === 'string' && native) || configured || contentsOverride;
   return rel ? path.resolve(pkg.dirname, rel) : pkg.dirname;
+}
+
+/**
+ * The retired `publish.directory` spelling, if a config still carries it.
+ *
+ * **Caught and refused, never ignored**, and the reason is what ignoring it would do: the key would
+ * silently stop being read, `resolvePublishDir` would fall back to the package's own directory, and
+ * the run would publish the *source tree* to npm instead of the build output. A rename that fails
+ * loudly costs one error message; one that goes quiet ships TypeScript sources to the registry.
+ *
+ * Checked in `getPlan` rather than at the write, for the same reason `version` validates its stamp
+ * list first: a configuration mistake has to surface before anything is published, and an `'error'`
+ * entry aborts the whole plan.
+ *
+ * YAML and JSON configs are unchecked at author time - there is no JSON Schema any more - so this is
+ * the only thing standing between the old spelling and a wrong publish.
+ */
+function retiredDirectoryKey(pkg: Package): boolean {
+  return (pkg.config?.publish as Record<string, unknown> | undefined)?.directory !== undefined;
 }
 
 function buildPublishCommand(packageManager: CiService.PackageManager, options: PublishService.ApplyOptions): string {

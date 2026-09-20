@@ -259,15 +259,15 @@ describe('services/publish', () => {
       expect(fs.realpathSync(call.split(' ')[0])).toBe(fs.realpathSync(path.join(dir, 'dist')));
     });
 
-    it('.rmanrc "publish.directory" points the publish at a build dir, without touching package.json', async () => {
+    it('.rmanrc "publish.npm.directory" points the publish at a build dir, without touching package.json', async () => {
       // One "[*]" line for a whole repository, instead of publishConfig.directory in every
       // package.json - which still wins when a package declares one of its own.
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      /** Marks the repository root: `Workspace.findRoot` looks for an `.rmanrc*` or a `.git`,
-       *  since it runs before the plugins that would know what a package is. */
-      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { publish: { directory: 'build' } } }));
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { publish: { npm: { directory: 'build' } } } }),
+      );
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       fs.mkdirSync(path.join(dir, 'packages/a/build'), { recursive: true });
       const repo = await createRepository(dir);
@@ -278,6 +278,34 @@ describe('services/publish', () => {
 
       const call = fs.readFileSync(logFile, 'utf-8').trim();
       expect(fs.realpathSync(call.split(' ')[0])).toBe(fs.realpathSync(path.join(dir, 'packages/a/build')));
+    });
+
+    /**
+     * **The retired spelling is refused, not ignored** - and the reason is what ignoring it would
+     * do rather than tidiness. `publish.directory` would simply stop being read, `resolvePublishDir`
+     * would fall back to the package's own directory, and the run would push the *source tree* to
+     * npm instead of the build output. YAML and JSON configs are unchecked at author time, so this
+     * error is the only thing between the old key and a wrong publish.
+     *
+     * An `'error'` entry, raised in `getPlan`, so it surfaces before anything is published at all.
+     */
+    it('refuses the retired "publish.directory" instead of quietly publishing the source tree', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { publish: { directory: 'build' } } }));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      fs.mkdirSync(path.join(dir, 'packages/a/build'), { recursive: true });
+      const repo = await createRepository(dir);
+      const { logFile } = stubPublishBin(dir, 'npm');
+
+      const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
+      const entry = plan.find(e => e.package.name === 'pkg-a')!;
+      expect(entry.status).toBe('error');
+      expect(entry.reason).toContain('publish.npm.directory');
+      /** And nothing was published - the plan never reached `'publish'`, so the stubbed `npm` was
+       *  never called and its log file does not even exist. */
+      await PublishService.applyPlan(repo, plan);
+      expect(fs.existsSync(logFile)).toBe(false);
     });
 
     it("generates the build dir's manifest at publish time, and removes it afterwards", async () => {

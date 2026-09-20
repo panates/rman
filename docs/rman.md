@@ -381,7 +381,7 @@ substitutions to keep adding (`{{major}}`, `{{scope}}`, ...). In scope:
 | `git` | the checkout: `branch`, `sha`, `shortSha`, `dirty` |
 | `value` | what this key resolved to in the layers below - see [Function values](#function-values) |
 
-plus **the config's own top-level keys, bare** (`${{ vars.registry }}`, `${{ publish.directory }}`)
+plus **the config's own top-level keys, bare** (`${{ vars.registry }}`, `${{ changelog.filePath }}`)
 - resolved on demand, so key order in the file means nothing and a cycle is reported rather than
 half-resolved. A scope binding wins a name clash, and a key that is not a valid identifier (a
 `"[selector]"`, a `"lint:fix"`) is not bound at all.
@@ -773,7 +773,7 @@ export default {
     buildDir: 'build',
   },
   '[*]': {
-    publish: { directory: ({ vars }) => vars.buildDir },
+    changelog: { filePath: ({ vars }) => vars.notesFile },
     clean: { include: ({ vars }) => [vars.buildDir, '*.tsbuildinfo'] },
   },
   '[*]': {
@@ -823,7 +823,7 @@ import whatever it needs.
 > ```js
 > clean: { include: ({ vars }) => [vars.buildDir] },            // computes. Right.
 > run: { build: { after: ({ pkg }) => fs.copyFileSync(...) } }, // acts. Also right - it is a step.
-> publish: { directory: () => { fs.mkdirSync('out'); ... } },   // acts at read time. Wrong.
+> changelog: { filePath: () => { fs.mkdirSync('out'); ... } },  // acts at read time. Wrong.
 > ```
 
 #### Which functions are values, and which are code
@@ -874,7 +874,7 @@ step there is mistaken for a value.
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |
 | `clean.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of `clean` entirely. |
 | `publish.target` | `string` or an array of them | whichever installed targets *claim* the package | Per-package cascaded. Which **registry** `publish` ships this package to - a name from the installed [publish targets](#publishtarget), never a fixed list. Each has its own "already published?" check: npm via `npm view`, docker via `docker manifest inspect`. A name nothing implements is an error naming the ones this repository has. The repository's GitHub Release is not a target here - see `githubRelease`. |
-| `publish.directory` | `string` | none (the package's own directory) | Per-package cascaded. Where the publishable output lives, relative to the package's own directory. A package's own `publishConfig.directory` wins over it; `--contents` is the last fallback. Publishing from such a directory means **`publish` generates the manifest there** - see below. |
+| `publish.npm.directory` | `string` | none (the package's own directory) | Per-package cascaded. Where the publishable output lives, relative to the package's own directory. A package's own `publishConfig.directory` wins over it; `--contents` is the last fallback. Publishing from such a directory means **`publish` generates the manifest there** - see below. |
 | `publish.docker.image` | `string` | none (required once `"docker"` is a target) | A bare name is prefixed with `--docker-namespace`/`DOCKERHUB_NAMESPACE`; one already containing `/` is used verbatim. |
 | `publish.docker.dockerfile` | `string` | `'Dockerfile'` | Relative to the package's own directory. |
 | `publish.docker.platforms` | `string[]` | `['linux/amd64']` | `docker buildx build --platform` targets. |
@@ -932,7 +932,7 @@ module.exports = { allowBranch: ['main'] };
 
 **With a plugin, import `defineConfig` from the plugin instead** - `rman-node`'s is the same
 function typed with `RmanNodeConfig`, and the import is what carries the plugin's own keys
-(`clean`, `publish.directory`, `packageManager`) into the type:
+(`clean`, `publish.npm.directory`, `packageManager`) into the type:
 
 ```js
 // .rmanrc.mjs

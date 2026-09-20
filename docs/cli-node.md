@@ -76,7 +76,7 @@ from `rman` for it to reuse.
 | --- | --- | --- |
 | `packageManager` | root only | Which package manager `ci`/`publish` shell out to. `npm` \| `yarn` \| `pnpm` \| `bun`, default `npm`. An explicit `--package-manager` wins over it. |
 | `clean` | per package | `include`/`exclude` globs beyond TypeScript's own output, plus `skip`. |
-| `publish.directory` | per package | Where this package's publishable output lives, relative to its own directory. |
+| `publish.npm.directory` | per package | Where this package's publishable output lives, relative to its own directory. The `npm` target's own block, named after the target like the core's `publish.docker`. |
 
 Full descriptions: [docs/node.md#config-keys](node.md#config-keys). The remaining `publish` keys
 (`target`, `skip`, `docker`) are rman's own - where a package ships and whether it ships at all are

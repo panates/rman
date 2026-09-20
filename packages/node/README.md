@@ -85,7 +85,7 @@ declaration merging - so `pkg.config.clean` is typed where it is read, with no c
 | --- | --- | --- |
 | `packageManager` | root only | Which package manager `ci`/`publish` shell out to, and whose version `info` reports. Default `npm`. |
 | `clean` | per package | `include`/`exclude` globs beyond TypeScript's own output, plus `skip`. |
-| `publish.directory` | per package | Where this package's publishable output lives, relative to its own directory. |
+| `publish.npm.directory` | per package | Where this package's publishable output lives, relative to its own directory - the `npm` target's own block. |
 
 `RmanNodeConfig` is the name a config author annotates with, and importing its `defineConfig` is
 what carries the augmentation:
@@ -97,7 +97,7 @@ import { defineConfig } from 'rman-node';
 export default defineConfig({
   plugins: ['rman-node'],
   packageManager: 'pnpm',
-  '[*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
+  '[*]': { clean: { include: 'build' }, publish: { npm: { directory: 'build' } } },
 });
 ```
 
@@ -135,10 +135,9 @@ one at all.
 
 ## Not here
 
-**Docker publishing stayed in the core** - any language's project can publish an image. What is
-still wrong is that `publish` is what *drives* it, so a non-Node repository has to install this
-plugin to reach `publish --target docker`. Fixing that means making a publish target something a
-plugin contributes to a core `publish`.
+**`publish` is rman's own command**, and so is the `docker` target - any language's project can
+publish an image, and a non-Node repository reaches it without installing anything of this. What
+this package adds to publishing is the `npm` target, above.
 
 ## Licence
 

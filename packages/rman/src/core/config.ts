@@ -424,7 +424,7 @@ export interface GitScope {
  * Namespaced rather than a flat bag of loose names: one obvious place per fact, and room to add
  * helpers to `pkg`/`repository` later without crowding the global.
  *
- * Alongside these, **the config's own top-level keys are bound bare** (`${{ publish.directory }}`,
+ * Alongside these, **the config's own top-level keys are bound bare** (`${{ changelog.filePath }}`,
  * `${{ clean.include }}`) - see `interpolateConfig`. They are not listed here because they come
  * from the config being interpolated, not from this object; a name here wins over a config key of
  * the same name.
@@ -504,7 +504,7 @@ export interface ConfigScope {
  *   run:
  *     build:
  *       # the config's own keys are in scope, so this is not a second copy of "build"
- *       after: "cp README.md ${{ publish.directory }}/"
+ *       after: "cp README.md ${{ changelog.filePath }}/"
  * ```
  *
  * Every string, with no list of "interpolated keys" to memorize - a rule with exceptions is a rule
@@ -564,8 +564,8 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: In
   if (!config || typeof config !== 'object' || Array.isArray(config)) return walk(config, scope, context, base, skip);
 
   /**
-   * The config's own top-level keys, readable bare: `${{ publish.directory }}`. So a value that
-   * restates another - `after: "cp README.md ${{ publish.directory }}/"` - stops being a second
+   * The config's own top-level keys, readable bare: `${{ changelog.filePath }}`. So a value that
+   * restates another - `after: "cp README.md ${{ changelog.filePath }}/"` - stops being a second
    * copy that drifts when the first one changes.
    *
    * Resolved **on demand**, one key at a time, and memoized. Interpolating the config in tree order
@@ -654,7 +654,7 @@ export const DEFERRED_PATHS = ['version.before', 'version.exec', 'version.after'
  * ```
  *
  * **The key decides, and it already did.** `run.build.exec: 'tsc -b'` is a shell command and
- * `publish.directory: 'build'` is a path - not because of anything about the strings, but because of
+ * `publish.npm.directory: 'build'` is a path - not because of anything about the strings, but because of
  * where they sit. A function inherits the same rule, so nothing new has to be learned and no marker
  * has to be remembered. The alternative was inspecting the function (arity, parameter names), which
  * is the kind of guess `loadPlugins` refuses to make about a module's export for the same reason:

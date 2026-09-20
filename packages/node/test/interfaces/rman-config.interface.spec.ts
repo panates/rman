@@ -9,12 +9,12 @@ import { defineConfig, type RmanNodeConfig } from '../../src/interfaces/rman-con
  * transpiles without type-checking, so a config type can be wrong indefinitely and every assertion
  * below still "passes". That is precisely the hole `npm run typecheck` exists to close.
  *
- * The case worth pinning is `publish.directory`, because of how it now arrives. It used to merge
- * into a `RmanConfig.PublishOptionsKeys` the **core** declared - a slot the core had to know npm
- * would want. It merges into `PublishTargetConfigs` instead, the slot rman's `publish` command
- * contributes for *any* target's block, beside the `docker` one the core's own target declares.
- * So this package now brings the npm target's flags, its registry check, and its config keys, and
- * none of the three is written down in rman.
+ * The case worth pinning is `publish.npm.directory`, because of how it now arrives. It was
+ * `publish.directory`, merged into a `RmanConfig.PublishOptionsKeys` the **core** declared - a slot
+ * the core had to know npm would want. It merges into `PublishTargetConfigs` instead, the slot
+ * rman's `publish` command contributes for *any* target's block, and it is named after the target
+ * the way the core's own `publish.docker` is. So this package brings the npm target's flags, its
+ * registry check, and its config keys, and none of the three is written down in rman.
  */
 describe('interfaces/rman-config', () => {
   it("adds this plugin's keys to the core's own config type", () => {
@@ -23,7 +23,7 @@ describe('interfaces/rman-config', () => {
       packageManager: 'pnpm',
       '[*]': {
         clean: { include: 'build', exclude: ['keep.js'] },
-        publish: { directory: 'build' },
+        publish: { npm: { directory: 'build' } },
       },
     };
     expect(config.packageManager).toBe('pnpm');
@@ -38,17 +38,25 @@ describe('interfaces/rman-config', () => {
     const config: RmanConfig = {
       packageManager: 'yarn',
       clean: { skip: true },
-      /** `directory` from this package, `target` and `docker` from rman's own `publish` command and
+      /** `npm` from this package, `target` and `docker` from rman's own `publish` command and
        *  docker target - one key, three contributors, no collision. */
-      publish: { directory: 'build', target: ['npm'], docker: { image: 'org/app' } },
+      publish: { npm: { directory: 'build' }, target: ['npm'], docker: { image: 'org/app' } },
     };
-    expect(config.publish?.directory).toBe('build');
+    expect(config.publish?.npm?.directory).toBe('build');
   });
 
   it('still catches a typo in one of them', () => {
-    // @ts-expect-error `directry` is not a key of `publish`
-    const bad: RmanConfig = { publish: { directry: 'build' } };
+    // @ts-expect-error `directry` is not a key of `publish.npm`
+    const bad: RmanConfig = { publish: { npm: { directry: 'build' } } };
     expect(bad).toBeDefined();
+  });
+
+  /** The retired spelling no longer type-checks either - a typed JS config gets the rename at
+   *  author time, where a YAML one only finds out when `publish` refuses to run. */
+  it('no longer accepts the retired publish.directory', () => {
+    // @ts-expect-error `directory` moved to `publish.npm.directory`
+    const old: RmanConfig = { publish: { directory: 'build' } };
+    expect(old).toBeDefined();
   });
 
   it('defineConfig returns its argument unchanged - a typing aid, not a transform', () => {

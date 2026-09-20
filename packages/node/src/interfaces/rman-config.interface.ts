@@ -5,7 +5,7 @@ import type { CiService } from '../services/ci.service.js';
  * The `.rmanrc` keys that only mean something because the repository is a Node one.
  *
  * Declared here rather than in rman's core for the reason the commands themselves are: `clean`
- * describes TypeScript's output, and `publish.directory` a `package.json` generated at publish
+ * describes TypeScript's output, and `publish.npm.directory` a `package.json` generated at publish
  * time. A Cargo or Go repository has neither, and a core interface offering them was a core
  * interface claiming to know npm.
  *
@@ -43,10 +43,18 @@ export namespace RmanNodeConfig {
     skip?: boolean;
   }
 
-  /** Added to the core's `publish` block - the npm-only half of it. `target`, `skip` and `docker`
-   *  stay in the core: the first two are read by `list` and by every target's own plan, and Docker
-   *  publishing is not a Node concern at all. */
-  export interface PublishOptions extends ScopedVars {
+  /**
+   * **`publish.npm.*`** - the `npm` publish target's own block, contributed through the
+   * `PublishTargetConfigs` slot rman's `publish` command exports for any target.
+   *
+   * Named after the target, the way `publish.docker.*` already was. It used to be `publish.directory`
+   * - a bare key sitting directly beside `target`, `skip` and `docker`, so the one block that was
+   * *not* a target's read as though it belonged to publishing in general. `target` and `skip` are
+   * genuinely `publish`'s own; `directory` never was.
+   */
+  export interface NpmPublishOptions extends NpmPublishOptionsKeys, WithAppend<NpmPublishOptionsKeys>, ScopedVars {}
+
+  export interface NpmPublishOptionsKeys {
     /** Where this package's publishable output lives, relative to its own directory (e.g.
      *  `"build"`). Per-package cascaded, so a root `"[*]"` block can say it once for the whole
      *  repository instead of repeating `publishConfig.directory` in every `package.json` - which
@@ -67,7 +75,7 @@ export namespace RmanNodeConfig {
  *
  * export default defineConfig({
  *   plugins: ['rman-node'],
- *   '[*]': { clean: { include: 'build' }, publish: { directory: 'build' } },
+ *   '[*]': { clean: { include: 'build' }, publish: { npm: { directory: 'build' } } },
  * });
  * ```
  *

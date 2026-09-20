@@ -720,7 +720,8 @@ describe('core/Repository', () => {
           // Unmarked, at the root - the one key that does not stop at the root's own package.
           vars: { x: 1, outDir: 'build', image: 'panates/${{ pkg.basename }}' },
           '[*]': {
-            /** A core key again - `publish.directory` left with `rman-node`. */
+            /** A core key: `publish.npm.directory` is the npm target's, and a core spec must not need a
+             *  plugin loaded to write its own fixture. */
             changelog: { filePath: '${{ vars.outDir }}' },
             run: { a: '${{ vars.x }}', b: 'x is ${{ vars.x }}', c: '${{ vars.image }}:latest' },
           },
@@ -929,8 +930,8 @@ describe('core/Repository', () => {
           '[*]': {
             // Declared *after* the value that reads it: resolution is on demand, so the order of
             // keys in the file says nothing about the answer.
-            run: { build: { after: 'cp README.md ${{ publish.directory }}/' } },
-            publish: { directory: 'out-${{ pkg.basename }}' },
+            run: { build: { after: 'cp README.md ${{ changelog.filePath }}/' } },
+            changelog: { filePath: 'out-${{ pkg.basename }}' },
           },
         }),
       );
@@ -970,12 +971,15 @@ describe('core/Repository', () => {
       fs.writeFileSync(
         path.join(dir, '.rmanrc'),
         JSON.stringify({
-          '[*]': { publish: { directory: '${{ clean.include }}' }, clean: { include: '${{ publish.directory }}' } },
+          '[*]': {
+            changelog: { filePath: '${{ version.commitMessage }}' },
+            version: { commitMessage: '${{ changelog.filePath }}' },
+          },
         }),
       );
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
 
-      await expect(createRepository(dir)).rejects.toThrow(/forms a cycle: publish -> clean -> publish/);
+      await expect(createRepository(dir)).rejects.toThrow(/forms a cycle: changelog -> version -> changelog/);
     });
 
     it('lets a scope binding win over a config key of the same name', async () => {
@@ -1120,7 +1124,7 @@ describe('core/Repository', () => {
       const dir = jsFixture(
         `{ '[*]': {
              vars: { sample: 'x' },
-             publish: { directory: 'build' },
+             changelog: { filePath: 'build' },
              inExpr: '\${{ Object.keys(globalThis).sort().join(",") }}',
              inFn: s => {
                const names = new Set();
@@ -1135,7 +1139,7 @@ describe('core/Repository', () => {
       const inFunction = new Set(cfg.inFn.split(','));
 
       /** Every scope binding, and the config's own top-level keys, in both. */
-      for (const name of ['pkg', 'repository', 'file', 'read', 'env', 'semver', 'path', 'git', 'vars', 'publish']) {
+      for (const name of ['pkg', 'repository', 'file', 'read', 'env', 'semver', 'path', 'git', 'vars', 'changelog']) {
         expect([name, inExpression.has(name)]).toEqual([name, true]);
         expect([name, inFunction.has(name)]).toEqual([name, true]);
       }

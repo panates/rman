@@ -218,7 +218,7 @@ export default publishCommand;
  * every target's own block through `PublishExtraKeys`.
  *
  * So a target contributes its config type as well as its flags now - `publish.docker.*` is declared
- * by the core's docker target and `publish.directory` by `rman-node`'s npm one, each from its own
+ * by the core's docker target and `publish.npm.directory` by `rman-node`'s npm one, each from its own
  * package, and neither can collide with the other or with what the command derives.
  */
 declare module '../interfaces/rman-cfg.interface.js' {

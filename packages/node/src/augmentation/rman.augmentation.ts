@@ -33,7 +33,10 @@ declare module 'rman' {
    * That is the config half of a target being a contribution: this package brings the flags, the
    * registry check, *and* the keys, and none of it is written down in rman.
    */
-  interface PublishTargetConfigs extends RmanNodeConfig.PublishOptions {}
+  interface PublishTargetConfigs {
+    /** The `npm` target's block, named after the target exactly as the core's `docker` one is. */
+    npm?: RmanNodeConfig.NpmPublishOptions;
+  }
 
   namespace SystemInfo {
     type PackageManager = CiService.PackageManager;

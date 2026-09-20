@@ -46,7 +46,7 @@ export interface RmanConfig
 export interface RmanConfigKeys {
   /**
    * **A plugin adds its own keys here, by declaration merging** - `rman-node` contributes
-   * `clean` and `publish.directory` from its own
+   * `clean` and `publish.npm.directory` from its own
    * `interfaces/rman-config.interface.ts`, so `pkg.config.clean` stays typed wherever it is read
    * without the core having to know npm has a `node_modules` or that TypeScript has build output.
    * `WithAppend` is a mapped type evaluated at use, so an augmented key gets its `+key` form too.

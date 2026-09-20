@@ -17,8 +17,12 @@ plugins: ['./packages/node/build/index.js']
 # child, so it is reached only by an unmarked key or by `[/]`.
 '[*]':
   # `publish` ships the build directory, and generates the manifest there itself.
+  #
+  # `publish.npm.*`, not `publish.directory`: a target's block is named after the target, the way
+  # `publish.docker.*` always was. The key is the `npm` target's, contributed by `rman-node`.
   publish:
-    directory: build
+    npm:
+      directory: build
 
   clean:
     include: ['build', '*.tsbuildinfo']
