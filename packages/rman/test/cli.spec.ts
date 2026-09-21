@@ -160,6 +160,51 @@ describe('cli: global --config', () => {
     expect(out).toContain('command: deploy');
     expect(out).toContain('the keys deploy reads: vars');
   });
+
+  /**
+   * **`.rmanrc "commands"` is the same path, with the directory named instead of assumed** -
+   * `.rman/*.mjs` is only this key's default value.
+   */
+  it('loads a command from a directory the config names, not just .rman', async () => {
+    const dir = fixture();
+    fs.mkdirSync(path.join(dir, 'tools'));
+    fs.writeFileSync(
+      path.join(dir, 'tools', 'ship.mjs'),
+      `export default { describe: 'would ship', handler: () => console.log('shipped') };`,
+    );
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ commands: 'tools/*.mjs' }));
+    const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['ship'] }))).join('\n');
+    expect(out).toContain('shipped');
+  });
+
+  /**
+   * **A relative glob means the directory of the file that declared it**, which is what lets a
+   * shared config ship commands of its own. Anchored when the config is read (`anchorCommands`),
+   * because `commands` appends and `ORIGINS` records one file per key rather than per element -
+   * after the merge there is nothing left to attribute an entry by.
+   *
+   * The negative control is built in: the glob is `./cmds/*.mjs` and there is no `cmds` directory
+   * at the repository root, so resolving it against the root - which is what `plugins` does with a
+   * relative path - finds nothing and the command never registers.
+   */
+  it("anchors a shared config's own glob to that config, not to the repository root", async () => {
+    const dir = fixture();
+    const shared = path.join(dir, 'node_modules', 'shared-cfg');
+    fs.mkdirSync(path.join(shared, 'cmds'), { recursive: true });
+    fs.writeFileSync(
+      path.join(shared, 'package.json'),
+      JSON.stringify({ name: 'shared-cfg', version: '1.0.0', type: 'module', exports: './index.js' }),
+    );
+    fs.writeFileSync(path.join(shared, 'index.js'), `export default { commands: './cmds/*.mjs' };\n`);
+    fs.writeFileSync(
+      path.join(shared, 'cmds', 'audit.mjs'),
+      `export default app => ({ describe: 'would audit', handler: () => console.log('audited ' + app.repository.getPackages().length) });`,
+    );
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ extends: 'shared-cfg' }));
+
+    const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['audit'] }))).join('\n');
+    expect(out).toContain('audited');
+  });
 });
 
 /**

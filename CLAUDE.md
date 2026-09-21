@@ -1359,8 +1359,41 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   packages, i.e. the inherited entry brought the manifest reader and workspace provider along with
   the command. It is read **once, from the root, before the packages are known**, which is why it is
   root-level and why a `plugins` entry in a package's own `.rmanrc` is never read.
-- No `.rman` directory means no scan and no imports. Every `rman` invocation runs this, `info`
-  included, so that has to stay true.
+- **`.rman/` is the default value of `.rmanrc "commands"`, not a mechanism of its own**
+  (`defaultCommandGlobs`). A glob key was going to sit *beside* the directory scan, and that is a
+  third source of repository-level commands and a third precedence question - the shape rejected
+  for `clean` ("two commands with one name and a rule between them"). Folding the directory into
+  the key leaves one source, one slot, and a zero-config path that behaves exactly as before.
+  - **A relative glob is anchored to the file that declared it**, in `mergeConfig` (`anchorCommands`),
+    which is the last moment the answer is known: `commands` always appends, so one resolved list
+    holds entries from the repository's `.rmanrc`, each `extends` base and every directory above,
+    and `ORIGINS` records one file per *key*, not per element. After the merge there is nothing
+    left to attribute an entry by.
+  - **`plugins` does not work this way, and that asymmetry is deliberate.** `loadPlugins` resolves
+    every entry against `<rootDir>/.rmanrc` whatever file declared it, so a shared config writing
+    `plugins: './x.js'` looks in the *consumer's* root. It does not bite in practice because shared
+    configs use the object form or a package name. `commands` is the side worth being on, and the
+    reason is the payoff: a shared config can ship commands without wrapping them in a plugin.
+  - **Always appends** (`ALWAYS_APPEND`), like `plugins`: naming a directory of your own never
+    means "and stop loading the ones my shared config ships". Consequence to state rather than
+    hide - a closer layer cannot un-say one, and declaring `commands` anywhere replaces the
+    `.rman/` default, because the key appends across layers and not onto a built-in fallback.
+  - **Not a root-level key**, unlike `plugins`: a package's own `.rmanrc` may contribute. The
+    commands stay repository-wide - there is one command list - so a package declaring one is
+    contributing it to the repository. The cascade then names the same glob once per package, so
+    `commandGlobs` dedups by pattern and the loader again by resolved file; two different globs
+    can name one file, which is why the second pass is the one that matters.
+  - **Both export forms are accepted**, as `PluginContext.addCommand` accepts both. The
+    declarative factory is stored unrun and executed in `cli.ts` where `app.repository` exists.
+    **The file name is the fallback for `command`** on either form - a convention a file has and a
+    plugin does not, which is why `checkCustomCommand` refuses nameless metadata and `cli.ts`
+    fills the name in before calling it. The name for the clash check comes from what the factory
+    *returned*, not from the file, or the check compares something yargs never registered.
+  - The error for a module that exports nothing usable says **"no command exported"**, not "no
+    default export": measured on a real package, a module exporting the declarative form was
+    refused as having no default export, which it plainly had.
+- No matching file means no imports. Every `rman` invocation runs this, `info` included, so that
+  has to stay true - it costs one glob now rather than one `existsSync`.
 
 ## `plugins`: one shape, and always additive
 

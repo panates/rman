@@ -89,6 +89,38 @@ export interface RmanConfigKeys {
   plugins?: string | RmanPlugin | (string | RmanPlugin)[];
 
   /**
+   * Where this repository keeps command modules of its own - a glob, or a list of them.
+   *
+   * ```yaml
+   * commands: ['tools/commands/*.mjs']
+   * ```
+   *
+   * **The easy half of `plugins`.** A package contributing a tech stack, a publish target or a
+   * version planner needs a plugin; a repository that just wants a command of its own should not
+   * have to write one. `.rman/*.mjs` is simply this key's default value rather than a second
+   * mechanism beside it - one source of repository-level commands, one precedence slot.
+   *
+   * **A relative glob is anchored to the file that declared it**, not to the repository root (see
+   * `anchorCommands`), so a shared config can ship commands with `commands: './commands/*.js'` and
+   * have it mean its own directory. `plugins` does *not* behave this way, deliberately noted here
+   * because the two look alike.
+   *
+   * **Always appends** (`ALWAYS_APPEND`), like `plugins` and for the same reason: naming a
+   * directory of your own never means "and stop loading the ones my shared config ships". It
+   * follows that a closer layer cannot *un*-say one.
+   *
+   * Declared at any level, and every level's globs are loaded - which is what makes it useful in a
+   * package's own `.rmanrc`. The commands themselves are still repository-wide, because there is
+   * one command list; a package declaring one is contributing it to the repository.
+   *
+   * A module exports either form: the declarative `app => ({ ... })` a plugin would use, or the
+   * `defineCommand({ ... })` object. **`.ts` is not loadable** - rman imports these in its own
+   * process, with no loader registered - so a TypeScript repository compiles them first or writes
+   * them as `.mjs`.
+   */
+  commands?: string | string[];
+
+  /**
    * Values for `${{ vars.* }}` to read - a name for something the config would otherwise repeat:
    *
    * ```yaml

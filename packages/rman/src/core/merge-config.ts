@@ -1,6 +1,11 @@
+import path from 'node:path';
+
 /** The prefix that turns a key into an append instead of a replacement: `+before` adds to whatever
  *  `before` already resolved to, rather than taking its place. */
 export const APPEND_PREFIX = '+';
+
+/** Where a repository keeps command modules of its own, as a glob or a list of them. */
+export const COMMANDS_KEY = 'commands';
 
 /**
  * Keys that **append whether or not you ask** - `+plugins` is accepted and means nothing extra.
@@ -11,10 +16,14 @@ export const APPEND_PREFIX = '+';
  * brought. Replacing was the silent failure - `extends`-ing a toolchain config and then adding a
  * plugin of your own dropped the toolchain's, and what you noticed was `Unknown argument: publish`.
  *
+ * `commands` is the same kind of statement in glob form - where a repository keeps command modules
+ * of its own - so it appends for the same reason: a repository adding a directory of its own never
+ * means "and stop loading the ones my shared config ships".
+ *
  * Do not extend this list casually: a key that always appends can never be *un*-said by a closer
  * layer, which is only acceptable where the value is a set of contributions rather than a decision.
  */
-export const ALWAYS_APPEND: readonly string[] = ['plugins'];
+export const ALWAYS_APPEND: readonly string[] = ['plugins', COMMANDS_KEY];
 
 /**
  * Where a key keeps what it is replacing, so the replacement can be handed it back as `value`.
@@ -106,9 +115,10 @@ export function mergeConfig(
   // to whatever the previous layer had.
   for (const [key, value] of Object.entries(source)) {
     if (appendTarget(key)) continue;
-    /** `plugins`: additive at every layer, so the closer one adds rather than takes over. */
+    /** `plugins`/`commands`: additive at every layer, so the closer one adds rather than takes
+     *  over. A `commands` glob is anchored to its own file on the way in - see `anchorCommands`. */
     if (ALWAYS_APPEND.includes(key)) {
-      appendList(target, key, value);
+      appendList(target, key, key === COMMANDS_KEY ? anchorCommands(value, origin) : value);
       continue;
     }
     assignMerged(target, key, value, source, origin);
@@ -230,6 +240,32 @@ function appendList(target: Record<string, any>, key: string, value: unknown): v
 
 function toList(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [value];
+}
+
+/**
+ * Anchors every `commands` glob to the directory of the file that declared it, on the way in.
+ *
+ * **Done here, at the merge, because this is the last moment the answer is known.** `commands`
+ * always appends, so one resolved list ends up holding entries from the repository's own
+ * `.rmanrc`, from each `extends` base, and from every directory above - and `ORIGINS` records one
+ * file per *key*, not per element, so after the merge there is nothing left to attribute them by.
+ * Rewriting each glob as it arrives makes the merge trivially correct and costs one `path.resolve`.
+ *
+ * It is what lets a **shared config ship commands**: `commands: './commands/*.js'` in a package's
+ * own config means that package's directory, wherever the repository inheriting it happens to sit.
+ * Note that `plugins` does *not* work this way - `loadPlugins` resolves every entry against the
+ * repository root's `.rmanrc` whatever file declared it - so a relative path there means something
+ * different. The two are not consistent, and this is the side worth being on.
+ *
+ * `origin` is absent when a caller merges a value it built rather than read (a selector block, the
+ * directory chain layering already-resolved configs); those globs have been anchored already, and
+ * an absolute path is left alone by `path.resolve` anyway.
+ */
+function anchorCommands(value: unknown, origin: string | undefined): unknown {
+  if (!origin) return value;
+  const dir = path.dirname(origin);
+  const anchor = (entry: unknown) => (typeof entry === 'string' ? path.resolve(dir, entry) : entry);
+  return Array.isArray(value) ? value.map(anchor) : anchor(value);
 }
 
 /** A config object, as opposed to an array or anything with its own prototype - only the former

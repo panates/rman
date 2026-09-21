@@ -16,6 +16,7 @@ import {
   assertNoBuiltinShadowing,
   type CommandContext,
   type CustomCommand,
+  defaultCommandGlobs,
   loadCustomCommands,
 } from './core/custom-command.js';
 import type { Package } from './core/package.js';
@@ -155,12 +156,38 @@ export async function runCli(options?: { argv?: string[]; cwd?: string; app?: Rm
         module: toCustomModule(entry.custom, repository, app),
       };
     });
-    const { commands: localCommands, errors } = await loadCustomCommands(repository.dirname);
-    const localNames = new Set(localCommands.map(c => c.name));
-    const commands = [
-      ...pluginModules.filter(c => !localNames.has(c.name)),
-      ...localCommands.map(c => ({ name: c.name, file: c.file, module: toCustomModule(c, repository, app) })),
-    ];
+    /**
+     * **`.rman/*.mjs` is the default value of `commands`, not a mechanism beside it** - one source
+     * of repository-level commands and one precedence slot. Every level's globs are collected,
+     * because `commands` appends and may be declared in a package's own `.rmanrc` as well as at
+     * the root; `loadCustomCommands` deduplicates by resolved path, which the cascade makes
+     * routine rather than exceptional.
+     */
+    const { commands: localCommands, errors } = await loadCustomCommands(commandGlobs(repository));
+    /**
+     * The same two forms a plugin may contribute, resolved the same way - a declarative one's
+     * factory runs here, where `app.repository` exists.
+     *
+     * **The file name is the fallback for `command`**, which is the convention a command loaded
+     * from a file has always had and a plugin's has not: `checkCustomCommand` refuses metadata
+     * with no name because a plugin has nothing to fall back to. Spread *under* the factory's
+     * result, so metadata that does declare one - `deploy <stage>`, with its positionals - wins.
+     *
+     * The name is taken from what the factory returned rather than from the file, because those
+     * differ exactly when the metadata declared one; using the file name would leave the clash
+     * check comparing something yargs never registered.
+     */
+    const localModules = localCommands.map(c => {
+      if (!c.register) return { name: c.name, file: c.file, module: toCustomModule(c.custom!, repository, app) };
+      const declared = c.register(app);
+      const meta = checkCustomCommand(
+        { ...declared, command: declared.command?.trim() || c.name },
+        path.relative(repository.dirname, c.file),
+      );
+      return { name: commandName(meta.command), file: c.file, module: toYargsCommand(meta) };
+    });
+    const localNames = new Set(localModules.map(c => c.name));
+    const commands = [...pluginModules.filter(c => !localNames.has(c.name)), ...localModules];
     assertNoBuiltinShadowing(commands, builtInNames(builtIns));
     for (const { module } of commands) program.command(module);
     /** Warned about, not thrown: one unparseable file must not take the other commands with it.
@@ -206,6 +233,34 @@ export async function runCli(options?: { argv?: string[]; cwd?: string; app?: Rm
     if (!e?.logged) console.error(colors.red(e.message));
     throw e;
   }
+}
+
+/**
+ * Every glob a repository's own commands are loaded from: its declared `commands`, plus the
+ * `.rman/` default when nothing declared any.
+ *
+ * **Collected from the root and from every package**, because `commands` is not a root-level key -
+ * a package's own `.rmanrc` may contribute one, and the glob was anchored to that file when it was
+ * read. The commands themselves are still repository-wide; there is one command list, and a
+ * package declaring one is contributing it to the repository.
+ *
+ * The cascade means a root-declared glob also appears in each package's resolved config, so the
+ * same pattern arrives many times over. Deduplicated here, and by resolved *file* again in the
+ * loader - the second pass is the one that matters, since two different globs can name one file.
+ *
+ * The default is used only when nothing was declared anywhere. Declaring `commands` elsewhere and
+ * still wanting `.rman/` scanned means naming it: the key appends to other layers, not to a
+ * built-in fallback, and a default that could never be turned off is not a default.
+ */
+function commandGlobs(repository: Repository): string[] {
+  const declared = new Set<string>();
+  for (const config of [repository.rootPackage.config, ...repository.getPackages().map(p => p.config)]) {
+    const value = (config as { commands?: string | string[] } | undefined)?.commands;
+    for (const glob of Array.isArray(value) ? value : value ? [value] : []) {
+      if (typeof glob === 'string' && glob.trim()) declared.add(glob);
+    }
+  }
+  return declared.size ? [...declared] : defaultCommandGlobs(repository.dirname);
 }
 
 /**

@@ -67,7 +67,11 @@ a command "doesn't exist":
 | --- | --- | --- |
 | **Built in** | nothing - always there | every repository |
 | **A plugin** | `.rmanrc "plugins"` | every repository naming that package |
-| **The repository's own** | a module in `.rman/*.mjs` | this repository only |
+| **The repository's own** | a module matching `.rmanrc "commands"`, which defaults to `.rman/*.mjs` | this repository only |
+
+`commands` takes a glob or a list of them, always appends, and anchors a relative glob to the file
+that declared it - so a shared config can ship commands without wrapping them in a plugin. See
+[custom-commands.md](cli/custom-commands.md#where-rman-looks-rmanrc-commands).
 
 ### A plugin
 
