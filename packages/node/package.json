@@ -1,7 +1,7 @@
 {
   "name": "rman-node",
   "description": "Node.js support for rman - the commands and conventions that only mean something in a Node repository",
-  "version": "2.0.0-beta.1",
+  "version": "2.0.0-beta.2",
   "author": "Panates",
   "license": "MIT",
   "private": true,
@@ -14,7 +14,7 @@
     "yargs": "^18.1.0"
   },
   "peerDependencies": {
-    "rman": "^2.0.0-beta.1"
+    "rman": "^2.0.0-beta.2"
   },
   "scripts": {
     "compile": "tsc --noEmit",
