@@ -143,13 +143,17 @@ export namespace PublishService {
     /** Path to a custom `.npmrc`, for both the registry check and the actual publish. */
     userconfig?: string;
     /**
-     * `npm publish --tag <tag>` - the dist-tag this version is published under (npm's own default
-     * is `latest`).
+     * `npm publish --tag <tag>` - the dist-tag to publish under, overriding what the version
+     * itself implies.
      *
-     * **A plan option rather than an apply-only one, because the plan is what has to refuse a
-     * prerelease without it** - see `needsDistTag`. A check that only fired at apply time would be
-     * invisible to `--dry-run` and to the JSON a release pipeline gates on, which is precisely
-     * where you want to find out.
+     * **Usually unnecessary**: a prerelease is published under its own identifier (`2.0.0-beta.1`
+     * -> `beta`) and a release under npm's `latest`, neither needing to be asked for. Pass this to
+     * send a release somewhere other than `latest`, or a prerelease to a tag that is not its
+     * identifier (`next` for every preview, say). See `distTagFor`.
+     *
+     * **A plan option rather than an apply-only one**, because the tag is decided in the plan: it
+     * is printed beside each package and recorded as `Entry.distTag`, so `--dry-run` and the JSON
+     * a release pipeline gates on both show where a version is going.
      */
     tag?: string;
   }
@@ -175,6 +179,20 @@ export namespace PublishService {
      *  check actually ran. Reported rather than compared: whether *this* version is published is a
      *  different question, and `getPlan` answers it from the published `versions`. */
     registryVersion?: string;
+    /**
+     * The dist-tag this entry will publish under - `--tag` when given, otherwise the version's own
+     * prerelease identifier (`2.0.0-beta.1` -> `beta`), and `undefined` for an ordinary release,
+     * which npm puts on `latest`.
+     *
+     * **Decided in the plan and read back by `applyPlan`, rather than recomputed there.** The plan
+     * is what a reader confirms and what a pipeline gates on, so the tag has to be part of what it
+     * says; recomputing at publish time would let the two disagree about where a package is going.
+     */
+    distTag?: string;
+    /** `PublishTarget.Entry`'s own field - what the core's `publish` prints beside the package
+     *  name. Carries the dist-tag, so where a version is going is visible in the plan and in
+     *  `--dry-run --json` without the core knowing anything about npm. */
+    detail?: string;
     reason?: string;
   }
 
@@ -184,9 +202,10 @@ export namespace PublishService {
    * queries it to decide, so it's safe to call any time, including as the plan a bare `rman
    * publish` shows before asking for confirmation.
    *
-   * A `private: true` package is always `'skip'`ped outright. A **prerelease with no dist-tag** is
-   * `'error'` (see `needsDistTag`) - that one is about the invocation rather than the package, so
-   * it is caught before anything touches the network. A package with uncommitted local changes is
+   * A `private: true` package is always `'skip'`ped outright. Each remaining package's **dist-tag**
+   * is settled next (`distTagFor`): usually derived from the version itself, `'error'` in the two
+   * cases with nothing to derive - that one is about the invocation rather than the package, so it
+   * is answered before anything touches the network. A package with uncommitted local changes is
    * `'error'` too (aborts the whole plan) unless `options.ignoreDirty` downgrades it to `'skip'`
    * instead - same rule `version` uses, since publishing untracked local edits is worse than a bad
    * commit.
@@ -216,6 +235,11 @@ export namespace PublishService {
     const entries = new Map<string, Entry>();
     const toCheck: Package[] = [];
     for (const pkg of packages) {
+      /** Asked before the registry is, because it is about the *invocation* rather than the
+       *  package: a prerelease heading for `latest` is wrong whatever the registry says, and
+       *  finding that out after a round trip per package would be a slower way to the same
+       *  refusal. */
+      const distTag = distTagFor(pkg, options.tag);
       if (retiredDirectoryKey(pkg)) {
         entries.set(pkg.name, {
           package: pkg,
@@ -232,15 +256,8 @@ export namespace PublishService {
         });
       } else if (pkg.isPrivate) {
         entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'skip', reason: 'private package' });
-      } else if (needsDistTag(pkg, options.tag)) {
-        entries.set(pkg.name, {
-          package: pkg,
-          version: pkg.version,
-          status: 'error',
-          reason:
-            `${pkg.version} is a prerelease - publish it under its own dist-tag ` +
-            '(--tag beta), or npm puts it on "latest" and every plain install gets it',
-        });
+      } else if (distTag.error) {
+        entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'error', reason: distTag.error });
       } else if (isDirty(pkg)) {
         entries.set(pkg.name, {
           package: pkg,
@@ -261,10 +278,15 @@ export namespace PublishService {
          *  published under its own dist-tag, and `latest` then never moves however many betas go
          *  out. Asking it kept proposing an already-published version until npm answered 403. */
         const published = !!view?.versions.includes(pkg.version);
+        const distTag = distTagFor(pkg, options.tag).tag;
         entries.set(pkg.name, {
           package: pkg,
           version: pkg.version,
           registryVersion,
+          distTag,
+          /** Printed beside the package in the plan, so where a version is going is something the
+           *  reader confirms rather than something they have to infer from the version string. */
+          detail: distTag ? `-> dist-tag "${distTag}"` : undefined,
           status: published ? 'up-to-date' : 'publish',
           reason: published
             ? `registry already has ${pkg.version}`
@@ -315,7 +337,10 @@ export namespace PublishService {
       const publishDir = resolvePublishDir(pkg, options.contents);
       const restore = preparePublishManifest(pkg, publishDir, packagesByName);
       try {
-        await exec(buildPublishCommand(packageManager, options), {
+        /** The plan's own tag, not a recomputed one: `getPlan` decided where this package goes,
+         *  the reader confirmed that, and `applyPlan` is here to carry it out. `options.tag` is
+         *  the fallback only for a plan built by something other than `getPlan`. */
+        await exec(buildPublishCommand(packageManager, { ...options, tag: entry.distTag ?? options.tag }), {
           cwd: publishDir,
           app: pkg.repository.app,
           stdio: 'inherit',
@@ -363,27 +388,52 @@ function retiredDirectoryKey(pkg: Package): boolean {
 }
 
 /**
- * Whether this package's version is a prerelease that has been given no dist-tag of its own - the
- * one publish mistake a single forgotten flag makes, and an unrecoverable one.
+ * Which dist-tag a package publishes under, or why the plan must refuse to publish it at all.
  *
- * `npm publish` with no `--tag` writes **`latest`**, so a `2.0.0-beta.0` published that way is what
- * every plain `npm install <name>` resolves to from then on. Nothing about the version stops it:
- * npm is content to point `latest` at a prerelease, and `npm dist-tag` can move it back only after
- * everyone who installed in between already has the beta. So this is an `'error'` entry rather than
- * a warning - it aborts the plan, names the flag, and costs one retyped command.
+ * **A prerelease names its own tag, so rman uses it**: `2.0.0-beta.1` goes to `beta`. That is a
+ * reading rather than a guess - the identifier is written in the version - and it is the whole
+ * point, because `npm publish` with no `--tag` writes **`latest`**. A beta that lands there is what
+ * every plain `npm install <name>` resolves to from then on; npm is content to point `latest` at a
+ * prerelease, and `npm dist-tag` can move it back only after everyone who installed in between
+ * already has the beta.
  *
- * `--tag latest` counts as not having one: it is the same request spelled out, and a reader who
- * typed it deliberately wants the same refusal as one who typed nothing.
+ * **It is recorded in the plan rather than applied silently.** The derived tag becomes the entry's
+ * `distTag` and is printed beside the package, so where a version is going is something the reader
+ * confirms. Deriving it and saying nothing would be the same class of mistake in the other
+ * direction - the wrong tag is recoverable (`npm dist-tag add`), but only by someone who noticed.
  *
- * **Whether a version is a preview is the scheme's question, not semver's** - `pkg.versionScheme.
- * isPrerelease` - and a **calendar version has to be ruled out first**: `2026.9.15-1430` carries a
- * semver prerelease identifier by construction, because that is how the time is spelled, and it
- * says nothing about the release being a preview. `github-release`'s own `resolvePrerelease` makes
- * exactly this pair of checks; they agree deliberately.
+ * Two cases still refuse, because there is no honest answer to derive:
+ *
+ * - **an explicit `--tag latest` on a prerelease.** Someone who typed it is far likelier to have
+ *   confused themselves than to mean it, and the escape hatch for genuinely meaning it - a bare
+ *   `npm publish --tag latest` - is one command away.
+ * - **a prerelease with no identifier to name** (`2.0.0-1`, whose prerelease part is numeric).
+ *   `VersionScheme.prereleaseId` answers `undefined` there rather than inventing a tag called `1`.
+ *
+ * **Both questions are the scheme's, not semver's** - `isPrerelease` and `prereleaseId` - and a
+ * **calendar version has to be ruled out first**: `2026.9.15-1430` carries a semver prerelease
+ * identifier by construction, because that is how the time is spelled, and it says nothing about
+ * the release being a preview. `github-release`'s own `resolvePrerelease` makes the same pair of
+ * checks; they agree deliberately.
  */
-function needsDistTag(pkg: Package, tag: string | undefined): boolean {
-  if (tag && tag !== 'latest') return false;
-  return !isCalendarVersion(pkg.version) && pkg.versionScheme.isPrerelease(pkg.version);
+function distTagFor(pkg: Package, tag: string | undefined): { tag?: string; error?: string } {
+  const isPreview = !isCalendarVersion(pkg.version) && pkg.versionScheme.isPrerelease(pkg.version);
+  if (!isPreview) return { tag };
+  if (tag) {
+    if (tag !== 'latest') return { tag };
+    return {
+      error:
+        `${pkg.version} is a prerelease, so --tag latest would make it what every plain ` +
+        'install resolves to - drop the flag to publish it under its own identifier instead',
+    };
+  }
+  const derived = pkg.versionScheme.prereleaseId(pkg.version);
+  if (derived) return { tag: derived };
+  return {
+    error:
+      `${pkg.version} is a prerelease with no identifier to name a dist-tag after, and with ` +
+      'no --tag npm would put it on "latest" - pass --tag <name>',
+  };
 }
 
 function buildPublishCommand(packageManager: CiService.PackageManager, options: PublishService.ApplyOptions): string {

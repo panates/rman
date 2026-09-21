@@ -223,11 +223,20 @@ part company as soon as a prerelease goes out under its own dist-tag: `latest` s
 stable however many betas follow. `entry.registryVersion` still reports `latest`, because that is
 what a reader wants to see; the status comes from the published `versions`.
 
-**A prerelease with no dist-tag is an `'error'` entry**, naming `--tag`. `npm publish` with no
-`--tag` writes `latest`, so a `2.0.0-beta.0` published that way is what every plain
-`npm install <name>` resolves to from then on, and `npm dist-tag` can only move it back after the
-people who installed in between already have it. `--tag latest` is refused the same way - it is the
-same request spelled out. A calendar version is not a preview, however semver reads its time part.
+**A prerelease publishes under its own identifier.** `2.0.0-beta.1` gets `beta`, recorded as the
+entry's `distTag` and printed beside the package, and `applyPlan` publishes under the tag the plan
+showed rather than working it out again. `npm publish` with no `--tag` writes `latest`, so a beta
+published that way is what every plain `npm install <name>` resolves to from then on, and `npm
+dist-tag` can only move it back after the people who installed in between already have it - one
+forgotten flag with no clean undo, which is why it is not left to the caller.
+
+`--tag` overrides the derived one. Two cases are errors instead, having nothing honest to derive:
+an explicit `--tag latest` on a prerelease (the one thing deriving must not reach), and a
+prerelease with no identifier to name - `2.0.0-1`, whose prerelease part is the number `1`. A
+calendar version is not a preview, however semver reads its time part.
+
+The identifier comes from `VersionScheme.prereleaseId`, beside `isPrerelease` - both questions are
+the scheme's, so a repository numbering its versions some other way answers them its own way.
 
 `applyPlan` publishes **sequentially**, in topological order (dependencies before dependents) - if
 a package fails, every still-pending dependent (transitively) is marked `'error'` and skipped,

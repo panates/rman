@@ -845,17 +845,36 @@ touched package counts as changed.
     Measured: with the fixture deriving `latest` from the end of the `versions` list, reverting the
     fix left the spec green - the two answers coincided. `publish.service.spec.ts`'s `registry()`
     therefore takes a `{ latest, versions }` form, and the beta specs use it.
-- **A prerelease with no dist-tag is an `'error'` entry, not a warning** (`needsDistTag`). `npm
-  publish` with no `--tag` writes `latest`, so a `2.0.0-beta.0` published that way is what every
-  plain `npm install` resolves to from then on; npm is content to point `latest` at a prerelease,
-  and `npm dist-tag` can move it back only after everyone who installed in between already has it.
-  One forgotten flag with no clean undo is what an aborting plan is for. `--tag latest` is the same
-  request spelled out and is refused identically.
-  - **`tag` is therefore a plan option, not an apply-only one.** A check firing at apply time would
-    be invisible to `--dry-run` and to the JSON a release pipeline gates on, which is exactly where
-    it should show up. `npm.target.ts` reads `--tag` in `planOptions`.
+- **A prerelease publishes under its own identifier, derived rather than asked for**
+  (`distTagFor`). `2.0.0-beta.1` -> `beta`. `npm publish` with no `--tag` writes `latest`, so a
+  beta published that way is what every plain `npm install` resolves to from then on; npm is
+  content to point `latest` at a prerelease, and `npm dist-tag` can move it back only after
+  everyone who installed in between already has it. One forgotten flag with no clean undo is not
+  something to leave to the caller.
+  - **This started as an `'error'` telling the caller to type `--tag beta`, and that was the wrong
+    call.** The reasoning was "don't guess, fail loudly" - but it conflated guessing something
+    *unknowable* (whether a module's export is a plugin or a config, which `loadPlugins` rightly
+    refuses to decide) with *reading* something written in the data. The identifier is in the
+    version; `semver.prerelease` returns it. The error message even named the answer.
+  - **Derived is not silent, and that distinction is the whole design.** The tag is decided in
+    `getPlan`, stored as `Entry.distTag`, put in `detail` so the plan line and `--dry-run --json`
+    both show it, and read back by `applyPlan` - which must not recompute it, or the plan and the
+    publish could disagree about where a package is going. Pinned: a spec asserts the *command*
+    carries `--tag beta`, because a plan that says `beta` while the command says nothing would put
+    the beta on `latest` anyway and read as though it had not.
+  - **Two cases still refuse, because there is nothing honest to derive.** An explicit
+    `--tag latest` on a prerelease - the one thing deriving must never reach, and someone who typed
+    it is likelier confused than deliberate (bare `npm publish --tag latest` is the escape hatch) -
+    and a prerelease whose identifier is numeric (`2.0.0-1`), where a dist-tag called `1` would be
+    invented rather than read.
+  - **`VersionScheme.prereleaseId` is where the identifier comes from**, beside `isPrerelease`:
+    implemented (not abstract) returning `undefined`, overridden by `SemverScheme`. Both questions
+    are the scheme's, so the npm target never reaches for `semver` directly.
+  - **`tag` is therefore a plan option, not an apply-only one.** The tag is *decided* in the plan,
+    so it has to be visible to `--dry-run` and to the JSON a release pipeline gates on.
+    `npm.target.ts` reads `--tag` in `planOptions`, not only where the publish command is built.
   - **A calendar version has to be ruled out first**, and that is not a detail: `2026.9.15-1430`
-    carries a semver prerelease identifier because that is how the time is spelled. `needsDistTag`
+    carries a semver prerelease identifier because that is how the time is spelled. `distTagFor`
     makes the same pair of checks `github-release`'s `resolvePrerelease` does - `!isCalendarVersion`
     plus the *scheme*'s `isPrerelease`, never `semver.prerelease` directly - and they agree
     deliberately. `isCalendarVersion` is exported from `rman` for this caller, which is in a plugin.

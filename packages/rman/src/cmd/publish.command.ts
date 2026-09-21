@@ -312,7 +312,16 @@ function printPlan(entries: PublishTarget.Entry[], label: string): void {
     const name = prefix + colors.cyan(e.package.name);
     switch (e.status) {
       case 'publish':
-        console.log(colors.green('publish'), name, e.version, colors.gray(e.reason ?? ''));
+        /** `detail` belongs on this line, not only on the "published" one after the fact: it is
+         *  where a target says *where* the package is going - npm's dist-tag, docker's resolved
+         *  `<namespace>/<image>` - and the plan is what the reader is being asked to confirm. */
+        console.log(
+          colors.green('publish'),
+          name,
+          e.version,
+          ...(e.detail ? [colors.cyan(e.detail)] : []),
+          colors.gray(e.reason ?? ''),
+        );
         break;
       case 'up-to-date':
         console.log(colors.gray('up-to-date'), name, e.version);

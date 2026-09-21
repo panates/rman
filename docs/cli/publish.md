@@ -111,21 +111,44 @@ A target's `getPlan` is decoupled from [`version`](version.md) - it only ever co
 disk against what is on its own registry, so it works equally well right after a version bump or
 standing alone days later.
 
-### Prereleases: `--tag` is not optional
+### Prereleases go under their own dist-tag, without being asked
 
-A prerelease carrying no dist-tag is an **error**, not a candidate:
+A version that names a prerelease line publishes to that line:
 
 ```
-error [npm] rman 2.0.0-beta.0 is a prerelease - publish it under its own dist-tag (--tag beta),
-            or npm puts it on "latest" and every plain install gets it
-1 package(s) failed to prepare for publish - see the errors above
+publish [npm] rman 2.0.0-beta.1 -> dist-tag "beta"  never published
+publish [npm] rman-node 2.0.0-beta.1 -> dist-tag "beta"  never published
 ```
 
-The reason it refuses rather than warns: `npm publish` with no `--tag` writes **`latest`**, so a
-beta published that way is what every plain `npm install <name>` resolves to from then on. Nothing
-about the version stops it - npm is content to point `latest` at a prerelease - and `npm dist-tag`
-can move it back only after everyone who installed in between already has the beta. One forgotten
-flag, and no clean undo. `--tag latest` is refused the same way; it is the same request spelled out.
+`2.0.0-beta.1` → `beta`; the identifier is written in the version, so this is a reading rather
+than a guess. An ordinary release carries no tag at all, which is how npm is told `latest`.
+
+**Why it is not left to you to remember:** `npm publish` with no `--tag` writes **`latest`**, so a
+beta published that way is what every plain `npm install <name>` resolves to from then on. npm is
+content to point `latest` at a prerelease, and `npm dist-tag` can move it back only after everyone
+who installed in between already has the beta. One forgotten flag, no clean undo.
+
+**Derived is not silent.** The tag is decided in the *plan*, printed beside the package, and
+carried in `--dry-run --json` as each entry's `detail`, so where a version is going is something
+you confirm rather than infer. `applyPlan` then publishes under the tag the plan showed, instead of
+working it out again.
+
+`--tag` still overrides it - for a project that puts every preview on `next`, or to send a release
+somewhere other than `latest`:
+
+```bash
+rman publish --tag next
+```
+
+Two cases have no honest answer to derive, and are errors rather than guesses:
+
+| | |
+| --- | --- |
+| `--tag latest` on a prerelease | the one thing deriving must never reach. Someone who typed it is likelier to have confused themselves than to mean it; a bare `npm publish --tag latest` is the escape hatch for genuinely meaning it. |
+| a prerelease with no identifier (`2.0.0-1`) | its prerelease part is the number `1`, so a dist-tag called `1` would be invented rather than read. Pass `--tag <name>`. |
+
+A **calendar version** (`2026.9.15-1430`) is not a preview, however semver reads its time part -
+that is just how the time is spelled - so it publishes to `latest` like any other release.
 
 A whole prerelease cycle, then:
 
@@ -134,12 +157,12 @@ rman version --preid beta     # 1.3.0 -> 2.0.0-beta.0, committed and tagged
 ```
 
 ```bash
-rman publish --tag beta       # published beside "latest", which does not move
+rman publish                  # -> dist-tag "beta"; "latest" does not move
 ```
 
 Repeat the pair for `beta.1`, `beta.2`, … Any bump graduates a prerelease to the release it was
-previewing (`2.0.0-beta.3` → `2.0.0` for `major`, `minor` *or* `patch`), after which an ordinary
-`rman publish` puts it on `latest`:
+previewing (`2.0.0-beta.3` → `2.0.0` for `major`, `minor` *or* `patch`), after which the same
+`rman publish` puts it on `latest`, because the version no longer names a prerelease line:
 
 ```bash
 rman version major && rman publish

@@ -164,40 +164,58 @@ describe('services/publish', () => {
 
     /**
      * `npm publish` with no `--tag` writes `latest`, so a prerelease published that way is what
-     * every plain install resolves to from then on - and `npm dist-tag` can only move it back after
-     * the fact. One forgotten flag, unrecoverable, so the plan refuses.
+     * every plain install resolves to from then on, and `npm dist-tag` can only move it back after
+     * the fact. A prerelease names its own tag, so the plan uses it rather than asking.
      */
-    describe('a prerelease with no dist-tag', () => {
+    describe('the dist-tag a prerelease publishes under', () => {
       async function repoAt(version: string) {
         const dir = tmp();
         writeJson(dir, 'package.json', { name: 'pkg-a', version });
         return createRepository(dir);
       }
 
-      it('is an error naming the flag, rather than a publish candidate', async () => {
+      it('is its own prerelease identifier, with nothing asked for', async () => {
         const repo = await repoAt('2.0.0-beta.0');
+        const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '1.3.0' }));
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish', distTag: 'beta' });
+      });
+
+      /** Derived is not the same as silent: the plan prints `detail`, so the tag is something the
+       *  reader confirms rather than has to infer from the version string. */
+      it('says so in the entry the plan prints', async () => {
+        const repo = await repoAt('2.0.0-beta.0');
+        const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '1.3.0' }));
+        expect(entryFor(plan, 'pkg-a').detail).toContain('beta');
+      });
+
+      it('an explicit --tag wins over the identifier', async () => {
+        const repo = await repoAt('2.0.0-beta.0');
+        const plan = await PublishService.getPlan(repo, { tag: 'next' }, registry({ 'pkg-a': '1.3.0' }));
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish', distTag: 'next' });
+      });
+
+      it('--tag latest on a prerelease is refused - the one thing deriving must not reach', async () => {
+        const repo = await repoAt('2.0.0-beta.0');
+        const plan = await PublishService.getPlan(repo, { tag: 'latest' }, registry({ 'pkg-a': '1.3.0' }));
+        const entry = entryFor(plan, 'pkg-a');
+        expect(entry.status).toBe('error');
+        expect(entry.reason).toContain('latest');
+      });
+
+      /** Nothing to derive: `2.0.0-1`'s prerelease part is `[1]`, a number. A dist-tag called `1`
+       *  would be invented rather than read, so the plan asks instead. */
+      it('a prerelease with no identifier to name is an error, not a tag called "1"', async () => {
+        const repo = await repoAt('2.0.0-1');
         const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '1.3.0' }));
         const entry = entryFor(plan, 'pkg-a');
         expect(entry.status).toBe('error');
         expect(entry.reason).toContain('--tag');
       });
 
-      it('--tag latest is the same request spelled out, and is refused the same way', async () => {
-        const repo = await repoAt('2.0.0-beta.0');
-        const plan = await PublishService.getPlan(repo, { tag: 'latest' }, registry({ 'pkg-a': '1.3.0' }));
-        expect(entryFor(plan, 'pkg-a').status).toBe('error');
-      });
-
-      it('with its own dist-tag it is an ordinary candidate', async () => {
-        const repo = await repoAt('2.0.0-beta.0');
-        const plan = await PublishService.getPlan(repo, { tag: 'beta' }, registry({ 'pkg-a': '1.3.0' }));
-        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish' });
-      });
-
-      it('a stable version needs no tag - the guard is about previews only', async () => {
+      it('a release carries no tag at all, so npm puts it on latest', async () => {
         const repo = await repoAt('2.0.0');
         const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '1.3.0' }));
-        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish' });
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish', distTag: undefined });
       });
 
       /**
@@ -208,11 +226,11 @@ describe('services/publish', () => {
       it('a calendar version is not a preview, however semver reads its time part', async () => {
         const repo = await repoAt('2026.9.15-1430');
         const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '1.3.0' }));
-        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish' });
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish', distTag: undefined });
       });
 
       /** Ordering pin: a package that is never published at all has no dist-tag to get wrong, so
-       *  "private" has to win over the guard rather than the other way round. */
+       *  "private" has to win over the check rather than the other way round. */
       it('a private package is skipped, not errored', async () => {
         const dir = tmp();
         writeJson(dir, 'package.json', { name: 'pkg-a', version: '2.0.0-beta.0', private: true });
@@ -360,6 +378,37 @@ describe('services/publish', () => {
       const call = fs.readFileSync(logFile, 'utf-8').trim();
       expect(call).toContain('publish --access public --tag next --otp 123456 --registry https://example.com');
       expect(call).toContain('--userconfig /tmp/.npmrc');
+    });
+
+    /**
+     * The half that actually matters: the plan saying `beta` while the command says nothing would
+     * put the beta on `latest` anyway, and the plan would have read as though it had not.
+     */
+    it('publishes under the dist-tag the plan derived, with no --tag given', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '2.0.0-beta.1' });
+      const repo = await createRepository(dir);
+      const { logFile } = stubPublishBin(dir, 'npm');
+
+      const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '1.3.0' }));
+      expect(entryFor(plan, 'pkg-a').distTag).toBe('beta');
+      await PublishService.applyPlan(repo, plan, {});
+
+      expect(fs.readFileSync(logFile, 'utf-8').trim()).toContain('publish --tag beta');
+    });
+
+    /** A release must not acquire one: `--tag` absent is how npm is told `latest`, and passing
+     *  anything here would be this feature reaching a version it has no business touching. */
+    it('passes no --tag at all for an ordinary release', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '2.0.0' });
+      const repo = await createRepository(dir);
+      const { logFile } = stubPublishBin(dir, 'npm');
+
+      const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '1.3.0' }));
+      await PublishService.applyPlan(repo, plan, {});
+
+      expect(fs.readFileSync(logFile, 'utf-8')).not.toContain('--tag');
     });
 
     it("respects the package's own package.json publishConfig.directory over --contents", async () => {
