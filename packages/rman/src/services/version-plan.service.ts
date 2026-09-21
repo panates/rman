@@ -215,10 +215,10 @@ export abstract class VersionPlanService {
    * technology that read the manifest.
    *
    * Falls back to `this`, which is what a single-technology repository always gets and what a
-   * `TechStack` contributing no planner of its own means.
+   * `Plugin` contributing no planner of its own means.
    */
   protected plannerFor(pkg: Package): VersionPlanService {
-    return pkg.techStack.versionPlanner ?? this;
+    return pkg.plugin.versionPlanner ?? this;
   }
 
   /**

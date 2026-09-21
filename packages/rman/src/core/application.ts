@@ -2,11 +2,11 @@ import type { VersionPlanService } from '../services/version-plan.service.js';
 import { Logger, type LogLevel } from '../utils/logger.js';
 import { registerCoreServices } from './core-services.js';
 import { registerCoreTargets } from './core-targets.js';
+import { basePlugin, type Plugin } from './plugin.js';
 import type { PublishTarget } from './publish-target.js';
 import { Registry } from './registry.js';
 import type { Repository } from './repository.js';
 import type { ServiceFactory, ServiceMap } from './service.js';
-import { baseTechStack, type TechStack } from './tech-stack.js';
 
 /**
  * **One rman invocation, and everything it holds.** Created before anything else, handed to every
@@ -27,9 +27,9 @@ export class RmanApplication {
    *
    * One registry rather than the four it replaces (`manifest`, `workspace`, `binPaths`,
    * `runSteps`): a technology is a whole, and declaring part of one was never meaningful - see
-   * `TechStack`.
+   * `Plugin`.
    */
-  readonly techStacks = new Registry<TechStack>();
+  readonly plugins = new Registry<Plugin>();
 
   /**
    * Where a package's artifact can ship, in registration order.
@@ -49,7 +49,7 @@ export class RmanApplication {
    * and the root's release identity, none of which belongs to any one technology.
    *
    * The two decisions that *are* a technology's - `detectBoundary` and `cascade` - are asked of
-   * each package's own `TechStack.versionPlanner` instead (`VersionPlanService.plannerFor`), so a
+   * each package's own `Plugin.versionPlanner` instead (`VersionPlanService.plannerFor`), so a
    * polyglot repository no longer resolves both through whichever plugin registered last.
    */
   versionPlanner?: VersionPlanService;
@@ -58,8 +58,8 @@ export class RmanApplication {
 
   /** Which stack claims a directory - the first whose manifest provider recognizes it, because
    *  before a package is read there is nothing else to go on. */
-  techStackFor(dir: string): TechStack {
-    return this.techStacks.first(stack => (stack.manifestProvider.read(dir) ? stack : undefined)) ?? baseTechStack;
+  techStackFor(dir: string): Plugin {
+    return this.plugins.first(stack => (stack.manifestProvider.read(dir) ? stack : undefined)) ?? basePlugin;
   }
 
   /**

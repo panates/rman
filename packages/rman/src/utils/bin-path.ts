@@ -42,7 +42,7 @@ export namespace BinPath {
    *  honest answer rather than a guess at some ecosystem's layout. */
   export function resolve(app: RmanApplication, cwd: string): string[] {
     const dir = path.resolve(cwd);
-    return [...app.techStacks].flatMap(stack => stack.binPathsProvider?.(dir) ?? []);
+    return [...app.plugins].flatMap(stack => stack.getBinPaths?.(dir) ?? []);
   }
 
   /**

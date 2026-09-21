@@ -5,10 +5,10 @@ import { runCli as cliRunCli } from '../src/cli.js';
 import { RmanApplication } from '../src/core/application.js';
 import type { ManifestProvider } from '../src/core/manifest.js';
 import type { Package } from '../src/core/package.js';
+import { basePlugin, type Plugin } from '../src/core/plugin.js';
 import type { PublishTarget } from '../src/core/publish-target.js';
 import { Repository } from '../src/core/repository.js';
 import type { ServiceMap } from '../src/core/service.js';
-import { baseTechStack, type TechStack } from '../src/core/tech-stack.js';
 import { Workspace } from '../src/core/workspace.js';
 import { ChangeHashService } from '../src/services/change-hash.service.js';
 import { RunService } from '../src/services/run.service.js';
@@ -169,14 +169,14 @@ export function useTestEcosystem(): void {
   beforeEach(() => {
     registryVersions.clear();
     registryCalls.length = 0;
-    extraStacks.length = 0;
+    extraPlugins.length = 0;
     extraTargets.length = 0;
     lastApp = undefined;
   });
 }
 
 /**
- * Registers a `TechStack` offering `<dir>/local-bin` at **every level from `cwd` upward**, for a
+ * Registers a `Plugin` offering `<dir>/local-bin` at **every level from `cwd` upward**, for a
  * spec that stubs an executable.
  *
  * Walking up is the part that is easy to get wrong: a step runs in the *package's* directory, so a
@@ -189,12 +189,12 @@ export function useTestEcosystem(): void {
  */
 export function useLocalBin(): void {
   beforeEach(() => {
-    extraStacks.push({
-      name: 'local-bin',
+    extraPlugins.push({
       /** A technology contributing only directories is a real shape - a PATH contributor
-       *  recognizes no package - and the base stack's reader is what keeps it from claiming any. */
-      manifestProvider: baseTechStack.manifestProvider,
-      binPathsProvider: cwd => {
+       *  recognizes no package - and the base plugin's reader is what keeps it from claiming any. */
+      manifestProvider: basePlugin.manifestProvider,
+      name: 'local-bin',
+      getBinPaths: cwd => {
         const dirs: string[] = [];
         let previous: string | undefined;
         let dir = path.resolve(cwd);
@@ -232,9 +232,9 @@ export function useTarget(target: PublishTarget): void {
  * marker file leaves every other package to the fixture's, which is what makes one repository hold
  * two ecosystems.
  */
-export function useTechStack(stack: TechStack): void {
+export function usePlugin(stack: Plugin): void {
   beforeEach(() => {
-    extraStacks.push(stack);
+    extraPlugins.push(stack);
   });
 }
 
@@ -263,12 +263,12 @@ export function createApp(): RmanApplication {
    * first stack whose manifest provider recognizes a directory, and the fixture's claims anything
    * with a `package.json` - which every package the fixture writes has. Registered after it, a
    * second technology could never claim one, so a polyglot repository was not expressible at all.
-   * `useLocalBin`'s stack recognizes nothing (`baseTechStack.manifestProvider`), so being first
+   * `useLocalBin`'s stack recognizes nothing (`basePlugin`'s reader), so being first
    * costs it nothing.
    */
-  for (const stack of extraStacks) app.techStacks.add(stack);
-  app.techStacks.add(testTechStack);
-  app.versionPlanner = testTechStack.versionPlanner;
+  for (const stack of extraPlugins) app.plugins.add(stack);
+  app.plugins.add(testPlugin);
+  app.versionPlanner = testPlugin.versionPlanner;
   for (const target of extraTargets) app.publishTargets.add(target);
   lastApp = app;
   return app;
@@ -304,16 +304,16 @@ export function service<K extends keyof ServiceMap>(name: K): ServiceMap[K] {
  * Named `'test'` rather than `'node'` on purpose: a core spec must not be able to pass because
  * `rman-node`'s answers happened to be right.
  */
-export const testTechStack: TechStack = {
+export const testPlugin: Plugin = {
   name: 'test',
   manifestProvider: testManifest,
-  workspaceProvider: testWorkspace,
-  runSteps: testSteps,
+  getWorkspace: testWorkspace,
+  getRunSteps: testSteps,
   versionPlanner: new TestVersionPlanService(),
 };
 
 /** Stacks a spec asked for on top of the fixture's own - see `useLocalBin`. */
-const extraStacks: TechStack[] = [];
+const extraPlugins: Plugin[] = [];
 
 /** Publish targets a spec asked for, on top of the core's own `docker` - see `useTarget`. */
 const extraTargets: PublishTarget[] = [];

@@ -385,7 +385,7 @@ export interface PackageScope {
    * about (`${{ pkg.manifest.engines.node }}`).
    *
    * Named `manifest`, not `json`: which file a package's identity lives in is the ecosystem's
-   * business now (see `ManifestProvider`), and `json` was that assumption showing through the one
+   * business now (see `Plugin`'s manifest members), and `json` was that assumption showing through the one
    * remaining user-facing name. A config written against `${{ pkg.json... }}` needs the rename.
    */
   manifest: Record<string, unknown>;
@@ -683,16 +683,23 @@ export const STEP_PATHS = [
 
 /**
  * Keys whose **whole subtree** is code rather than config, so no function under them is a value to
- * compute. `plugins` is the only one, and it has to be here: an entry may be the plugin *object*
- * itself, and an `RmanPlugin` is almost entirely functions - `manifest.read`, `workspace.resolve`,
- * `versionPlanner`, `binPaths`, and every command's `builder` and `handler`.
+ * compute.
  *
- * Measured, and it is why this exists: with `plugins` walked like any other key, resolving the
- * config of a repository that named a plugin called that plugin's yargs builder with the config
- * scope - `Config function in "plugins[0].commands[0].builder" failed: cmd.option is not a
- * function`. A `plugins` entry is loaded by `loadPlugins`, never read as a setting.
+ * The three contribution keys, and each has to be here: an entry may be the *instance* itself, and
+ * a `Plugin` is almost entirely functions - `manifestProvider.read`, `getWorkspace`,
+ * `getBinPaths`, `versionPlanner` - while a command is often a bare factory and a publish target
+ * carries `getPlan`/`applyPlan`.
+ *
+ * Measured twice, once per shape. With `plugins` walked like any other key, resolving the config
+ * of a repository that named a plugin called that plugin's yargs builder with the config scope:
+ * `Config function in "plugins[0].commands[0].builder" failed: cmd.option is not a function`. And
+ * with `commands` left out of this list, a declarative command - which *is* a function - was
+ * invoked with the interpolation scope instead of the application, so its handler closed over a
+ * repository that was not one: `repository.getPackages is not a function`, from inside `clean`.
+ *
+ * These entries are loaded by `loadPlugins` and `cli.ts`, never read as settings.
  */
-export const CODE_SUBTREES = ['plugins'];
+export const CODE_SUBTREES = ['plugins', 'commands', 'publishTargets'];
 
 const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
 

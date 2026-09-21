@@ -18,9 +18,10 @@ import {
   type CustomCommand,
   defaultCommandGlobs,
   loadCustomCommands,
+  type LoadedCommand,
 } from './core/custom-command.js';
 import type { Package } from './core/package.js';
-import { checkCustomCommand } from './core/plugin.js';
+import { checkCustomCommand } from './core/plugin-loader.js';
 import { Repository } from './core/repository.js';
 import { commandRegistry, type RmanConfig } from './interfaces/rman-cfg.interface.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/logger.js';
@@ -126,68 +127,41 @@ export async function runCli(options?: { argv?: string[]; cwd?: string; app?: Rm
     for (const meta of builtIns) program.command(toYargsCommand(meta));
 
     /**
-     * Commands that are not built in, from two places, registered after the built-ins so the clash
-     * check below has the full list to compare against:
+     * Commands that are not built in, all from **one** key: `.rmanrc "commands"`, whose default
+     * value is `.rman/*.{js,mjs,cjs}`.
      *
-     * - **plugins** (`.rmanrc "plugins"`) - a *package* contributing commands, which is how
-     *   everything Node-specific lives outside rman's core;
-     * - **`.rman/*.mjs`** - this one repository's own commands.
+     * An entry is a command or a glob naming modules that export one, so a package contributing
+     * commands (`rman-node`) and a repository writing its own reach yargs by the same path - there
+     * is one source of non-built-in commands and one precedence slot. A plugin used to hand them
+     * over separately through `addCommand`, which is the step this replaces.
      *
-     * The repository wins a name clash with a plugin, and silently: it is the more specific
-     * statement, the same way its own `.rmanrc` overrides an `extends` base. A plugin taking a
-     * *built-in's* name is still refused outright.
+     * Registered after the built-ins so the shadow check below has the full list to compare
+     * against. A command taking a *built-in's* name is refused outright.
      */
+    const { globs, direct } = commandEntries(repository);
+    const { commands: loaded, errors } = await loadCustomCommands(globs);
+
     /**
-     * Already loaded: `Repository.create` had to, because a plugin's workspace provider is what
-     * finds the packages. This is just what it brought back - and a plugin may have declared a
-     * command either way, so each is turned into a yargs registration here.
-     *
-     * **A declarative one's factory runs here, not at `addCommand`**, for the same reason a
-     * built-in's does: it wants `app.repository`, and `init` ran before any package was known.
-     */
-    const pluginModules = repository.pluginCommands.map(entry => {
-      if (entry.register) {
-        const meta = checkCustomCommand(entry.register(app), entry.plugin);
-        return { name: commandName(meta.command), file: entry.file, module: toYargsCommand(meta) };
-      }
-      return {
-        name: commandName(entry.custom.command!),
-        file: entry.file,
-        module: toCustomModule(entry.custom, repository, app),
-      };
-    });
-    /**
-     * **`.rman/*.mjs` is the default value of `commands`, not a mechanism beside it** - one source
-     * of repository-level commands and one precedence slot. Every level's globs are collected,
-     * because `commands` appends and may be declared in a package's own `.rmanrc` as well as at
-     * the root; `loadCustomCommands` deduplicates by resolved path, which the cascade makes
-     * routine rather than exceptional.
-     */
-    const { commands: localCommands, errors } = await loadCustomCommands(commandGlobs(repository));
-    /**
-     * The same two forms a plugin may contribute, resolved the same way - a declarative one's
-     * factory runs here, where `app.repository` exists.
+     * The two authoring forms, resolved the same way - a declarative one's factory runs here,
+     * where `app.repository` exists, rather than when the config was read.
      *
      * **The file name is the fallback for `command`**, which is the convention a command loaded
-     * from a file has always had and a plugin's has not: `checkCustomCommand` refuses metadata
-     * with no name because a plugin has nothing to fall back to. Spread *under* the factory's
-     * result, so metadata that does declare one - `deploy <stage>`, with its positionals - wins.
+     * from a *file* has and one written straight into the config has not: `checkCustomCommand`
+     * refuses nameless metadata, and an inline command has nothing to fall back on, so it must say
+     * its own name. Spread *under* the factory's result, so metadata that does declare one -
+     * `deploy <stage>`, with its positionals - wins.
      *
-     * The name is taken from what the factory returned rather than from the file, because those
-     * differ exactly when the metadata declared one; using the file name would leave the clash
-     * check comparing something yargs never registered.
+     * The name comes from what the factory *returned*, not from the file: those differ exactly
+     * when the metadata declared one, and using the file name would leave the clash check
+     * comparing something yargs never registered.
      */
-    const localModules = localCommands.map(c => {
+    const localModules = [...direct, ...loaded].map(c => {
       if (!c.register) return { name: c.name, file: c.file, module: toCustomModule(c.custom!, repository, app) };
       const declared = c.register(app);
-      const meta = checkCustomCommand(
-        { ...declared, command: declared.command?.trim() || c.name },
-        path.relative(repository.dirname, c.file),
-      );
+      const meta = checkCustomCommand({ ...declared, command: declared.command?.trim() || c.name }, c.file);
       return { name: commandName(meta.command), file: c.file, module: toYargsCommand(meta) };
     });
-    const localNames = new Set(localModules.map(c => c.name));
-    const commands = [...pluginModules.filter(c => !localNames.has(c.name)), ...localModules];
+    const commands = localModules;
     assertNoBuiltinShadowing(commands, builtInNames(builtIns));
     for (const { module } of commands) program.command(module);
     /** Warned about, not thrown: one unparseable file must not take the other commands with it.
@@ -236,31 +210,52 @@ export async function runCli(options?: { argv?: string[]; cwd?: string; app?: Rm
 }
 
 /**
- * Every glob a repository's own commands are loaded from: its declared `commands`, plus the
- * `.rman/` default when nothing declared any.
+ * Everything `.rmanrc "commands"` declares across the repository, split into the globs to load and
+ * the commands written straight into the config.
  *
  * **Collected from the root and from every package**, because `commands` is not a root-level key -
- * a package's own `.rmanrc` may contribute one, and the glob was anchored to that file when it was
- * read. The commands themselves are still repository-wide; there is one command list, and a
- * package declaring one is contributing it to the repository.
+ * a package's own `.rmanrc` may contribute one, and a glob was anchored to that file when it was
+ * read. The commands themselves are repository-wide; there is one command list, so a package
+ * declaring one is contributing it to the repository. (`plugins` and `publishTargets` cannot work
+ * this way: they are read before the packages exist, because a plugin is what finds them.)
  *
- * The cascade means a root-declared glob also appears in each package's resolved config, so the
- * same pattern arrives many times over. Deduplicated here, and by resolved *file* again in the
- * loader - the second pass is the one that matters, since two different globs can name one file.
+ * The cascade means a root-declared entry also appears in each package's resolved config, so the
+ * same one arrives many times over. Globs are de-duplicated here and by resolved *file* again in
+ * the loader - the second pass is the one that matters, since two different globs can name one
+ * file. Inline commands are de-duplicated by identity, which is what the cascade produces.
  *
- * The default is used only when nothing was declared anywhere. Declaring `commands` elsewhere and
+ * The `.rman/` default is used only when nothing was declared anywhere. Declaring `commands` and
  * still wanting `.rman/` scanned means naming it: the key appends to other layers, not to a
  * built-in fallback, and a default that could never be turned off is not a default.
  */
-function commandGlobs(repository: Repository): string[] {
-  const declared = new Set<string>();
+function commandEntries(repository: Repository): { globs: string[]; direct: LoadedCommand[] } {
+  const globs = new Set<string>();
+  const seen = new Set<unknown>();
+  const direct: LoadedCommand[] = [];
+
   for (const config of [repository.rootPackage.config, ...repository.getPackages().map(p => p.config)]) {
-    const value = (config as { commands?: string | string[] } | undefined)?.commands;
-    for (const glob of Array.isArray(value) ? value : value ? [value] : []) {
-      if (typeof glob === 'string' && glob.trim()) declared.add(glob);
+    const value = config?.commands;
+    for (const entry of Array.isArray(value) ? value : value ? [value] : []) {
+      if (typeof entry === 'string') {
+        if (entry.trim()) globs.add(entry);
+        continue;
+      }
+      if (!entry || seen.has(entry)) continue;
+      seen.add(entry);
+      /** No file to fall back on, so the metadata has to name itself - `checkCustomCommand` says
+       *  so when it does not. `"commands"` stands in for the file in that message. */
+      if (typeof entry === 'function') {
+        direct.push({ name: '', file: '"commands"', register: entry });
+      } else {
+        /** `checkCustomCommand` is what refuses a nameless one, with the message that names the
+         *  omission - reached here rather than at registration so an inline command is checked
+         *  the same way a plugin's used to be. */
+        const custom = checkCustomCommand(entry, '"commands"');
+        direct.push({ name: commandName(custom.command), file: '"commands"', custom });
+      }
     }
   }
-  return declared.size ? [...declared] : defaultCommandGlobs(repository.dirname);
+  return { globs: globs.size ? [...globs] : defaultCommandGlobs(repository.dirname), direct };
 }
 
 /**

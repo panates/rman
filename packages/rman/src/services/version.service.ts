@@ -18,7 +18,7 @@ import { VersionPlanService } from './version-plan.service.js';
  * commit and tag lives here; **what** to write is `VersionPlanService`'s answer.
  *
  * Nothing here knows what a `package.json` is, names an npm script, or runs a command: the version
- * goes through `Manifest`/`ManifestProvider`, refreshing a sibling's dependency range goes through
+ * goes through `Manifest`/`Plugin`'s manifest members, refreshing a sibling's dependency range goes through
  * the same provider, and the lifecycle hooks around the write go through
  * `RunService.runLifecycleSlot` - this module only supplies the `.rmanrc version.<slot>` fallback,
  * which is its own config. What is left is git, that config, and the version stamps.
@@ -99,12 +99,12 @@ export class VersionService extends Service {
         );
       await hook('before');
       /** Through the manifest, not through a `package.json` field: where a version is written is
-       *  the provider's business (see `ManifestProvider`), and this is the one place rman changes
+       *  the provider's business (see `Plugin`'s manifest members), and this is the one place rman changes
        *  it. */
       pkg.manifest.version = entry.to!;
       /** Which fields hold a sibling reference, and what a reference even looks like, is the
        *  ecosystem's - npm's four fields and its `"workspace:"` protocol used to be spelled out
-       *  here. See `ManifestProvider.updateDependencyVersions`. */
+       *  here. See `Plugin.updateDependencyVersions`. */
       Manifest.updateDependencyVersions(pkg, bumpedVersions);
       await hook('exec');
       pkg.writeManifest();
@@ -357,7 +357,7 @@ export namespace VersionService {
    * pattern missed it) released a tagged commit with a stale constant and said nothing. The error
    * names the file and, when the package's ecosystem declared none, says so.
    *
-   * *How* a version is declared is the provider's (`ManifestProvider.stampVersion`); *which* files
+   * *How* a version is declared is the provider's (`Plugin.stampVersion`); *which* files
    * hold one is the repository's, which is why the list is config and the rewrite is a seam.
    */
   export function stampSourceFiles(pkg: Package, version: string): string[] {

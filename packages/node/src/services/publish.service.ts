@@ -25,7 +25,7 @@ import {
   type PackageFilterOptions,
   type Repository,
 } from 'rman';
-import { DEPENDENCY_KEYS } from '../augmentation/manifest.augmentation.js';
+import { DEPENDENCY_KEYS } from '../node-manifest.provider.js';
 import { type NpmPackageView, npmViewPackage } from '../utils/npm-view.js';
 import { parseWorkspaceRange, resolveWorkspaceRange } from '../utils/workspace-range.js';
 import { CiService } from './ci.service.js';

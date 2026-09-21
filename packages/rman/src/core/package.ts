@@ -2,13 +2,13 @@ import path from 'path';
 import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import type { RmanApplication } from './application.js';
 import { Manifest } from './manifest.js';
+import type { Plugin } from './plugin.js';
 import type { Repository } from './repository.js';
-import type { TechStack } from './tech-stack.js';
 import { semverScheme, type VersionScheme } from './version-scheme.js';
 
 export class Package {
   /**
-   * This package's identity, read through whichever `ManifestProvider` recognizes its directory.
+   * This package's identity, read through whichever `Plugin`'s manifest members recognizes its directory.
    *
    * There is no `json` here any more, and that is the point: `package.json` is npm's answer to
    * "where is a package's name and version written", not rman's. `manifest.raw` is still the whole
@@ -63,7 +63,7 @@ export class Package {
 
   /**
    * **The technology this package belongs to** - the stack whose manifest provider claimed the
-   * directory, or `baseTechStack` when none did.
+   * directory, or `basePlugin` when none did.
    *
    * Per *package*, not per repository: the question is asked per directory, so a polyglot monorepo
    * can hold a `node` package beside a `cargo` one and a command sweeping `getPackages()` can tell
@@ -71,7 +71,7 @@ export class Package {
    * live, where its scripts come from, how its releases are planned - so anything that used to walk
    * four separate registries asking "is this yours?" now asks the package it already has.
    */
-  techStack: TechStack;
+  plugin: Plugin;
 
   /**
    * **Which ecosystem this package belongs to** - `'node'` for one read by `rman-node`. Empty when
@@ -84,7 +84,7 @@ export class Package {
    * contribute, so narrowing it here would mean the core listing plugins it cannot know about.
    */
   get provider(): string {
-    return this.techStack.name;
+    return this.plugin.name;
   }
 
   /**
@@ -101,11 +101,11 @@ export class Package {
     readonly dirname: string,
     app: RmanApplication,
   ) {
-    const { manifest, versionScheme, fileName, techStack } = Manifest.read(app, dirname);
+    const { manifest, versionScheme, fileName, plugin } = Manifest.read(app, dirname);
     this.manifest = manifest;
     this.versionScheme = versionScheme;
     this.manifestFileName = fileName ? path.join(dirname, fileName) : '';
-    this.techStack = techStack;
+    this.plugin = plugin;
   }
 
   get basename(): string {
@@ -148,15 +148,21 @@ export class Package {
   /** Re-reads from disk through **its own** technology's provider - no search, since the package
    *  already knows which one claimed it, and a second opinion on a re-read was never wanted. */
   reloadManifest(): Manifest {
-    const provider = this.techStack.manifestProvider;
-    this.manifest = provider.read(this.dirname) ?? { name: path.basename(this.dirname), version: '0.0.0', raw: {} };
-    this.versionScheme = provider.versionScheme ?? this.versionScheme;
-    this.manifestFileName = provider.fileName ? path.join(this.dirname, provider.fileName) : '';
+    const stack = this.plugin;
+    this.manifest = stack.manifestProvider.read(this.dirname) ?? {
+      name: path.basename(this.dirname),
+      version: '0.0.0',
+      raw: {},
+    };
+    this.versionScheme = stack.manifestProvider.versionScheme ?? this.versionScheme;
+    this.manifestFileName = stack.manifestProvider.fileName
+      ? path.join(this.dirname, stack.manifestProvider.fileName)
+      : '';
     return this.manifest;
   }
 
   /** Writes the current manifest back through its provider. */
   writeManifest(): void {
-    this.techStack.manifestProvider.write(this.dirname, this.manifest);
+    this.plugin.manifestProvider.write(this.dirname, this.manifest);
   }
 }

@@ -671,7 +671,7 @@ describe('services/version', () => {
     it('falls back to what the ecosystem reports published when no tag is reachable from HEAD', async () => {
       // The tag exists but sits off HEAD's own ancestry (a release cut on another branch, history
       // rewritten since, ...) - so "git describe" finds nothing. Without the registry fallback
-      // (`ManifestProvider.publishedVersion`) the whole history would read as unreleased, inflating
+      // (`Plugin.publishedVersion`) the whole history would read as unreleased, inflating
       // this patch into a minor off the "feat:" above.
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
@@ -888,7 +888,7 @@ describe('services/version', () => {
     });
 
     /**
-     * The rewrite itself is `ManifestProvider.stampVersion`'s - how a version is *declared* is the
+     * The rewrite itself is `Plugin.stampVersion`'s - how a version is *declared* is the
      * language's, not rman's. The fixture provider answers with the quoted-constant shape (the one
      * most languages share), so an identifier that is not literally `version` has to be named.
      */

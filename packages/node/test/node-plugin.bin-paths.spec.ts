@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { npmBinPaths } from '../../src/utils/npm-run-path.js';
+import { NodePlugin } from '../src/node-plugin.js';
+
+/** The method under test, as a free function - it reads nothing off `this`, and naming it here
+ *  keeps the assertions below reading the way they did when it was one. */
+const npmBinPaths = (cwd: string): string[] => new NodePlugin().getBinPaths(cwd);
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-runpath-test-'));

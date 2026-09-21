@@ -326,9 +326,9 @@ work: the type composes and a schema does not.
 ## Which ecosystem a package belongs to
 
 `Package.provider` - `'node'` for one read by `rman-node`, empty when no plugin claimed the
-directory. Comes from `ManifestProvider.name`, and that field means the **ecosystem**, not the file
-(`fileName` already says `package.json`; a name repeating it carried no information, which is why it
-went unused until this existed).
+directory. Comes from `TechStack.name`, and that field means the **ecosystem**, not the file
+(`manifestFile` already says `package.json`; a name repeating it carried no information, which is
+why it went unused until this existed).
 
 - **The escape hatch for code that legitimately knows one technology**: check
   `if (pkg.provider === 'node')` before reaching into `manifest.raw` for something only npm has.
@@ -429,7 +429,7 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   true when `SystemInfo`'s npm half moved out: measured, **nothing in the core read it any more** -
   only the declaration was left, and its value set was npm's tooling all along.
 - **`dependencies` is core, and must stay.** It layers on top of whatever
-  `ManifestProvider.dependencies` read, and it is the only way a repository with *no* provider has a
+  `TechStack.readDependencies` read, and it is the only way a repository with *no* provider has a
   graph at all - a repo whose manifests rman cannot read can still state its edges by hand.
   - **A `string[]`, and only that.** It used to accept a `Record<string, string>` as well, documented
     in both the interface and the schema as "an explicit name -> range map" - and the ranges went
@@ -610,7 +610,7 @@ wins:
    - Pattern has no `{name}` (the default `v*`, one repo-wide tag) → `git describe`, i.e. the nearest
      tag **reachable from HEAD**. No single package owns a repo-wide tag, so ancestry is the right
      criterion.
-3. **No tag → the package's own ecosystem.** `ManifestProvider.publishedVersion(pkg)` - `npm view`
+3. **No tag → the package's own ecosystem.** `TechStack.publishedVersion(pkg)` - `npm view`
    for a `node` package, whatever a plugin supplies elsewhere, **nothing at all** for a repository
    naming no plugin. The version it returns is turned into a tag name via `expandTag` and used only
    if **that tag actually exists in git**. The one real scenario it covers: a tag exists but isn't in
@@ -759,7 +759,7 @@ touched package counts as changed.
   build output**: rewriting `build/constants.js` from a build script leaves the checked-in file on a
   placeholder, so anything running from source reports it, the tagged commit never records the
   released version, and the rewrite has to be redone every build.
-  - **How a version is *declared* is `ManifestProvider.stampVersion`'s answer, not the core's**;
+  - **How a version is *declared* is `TechStack.stampVersion`'s answer, not the core's**;
     which files hold one is the repository's, which is why the list is config and the rewrite is a
     seam. `stampVersionConstant` is exported as the helper most providers delegate to - measured, it
     reaches a Go `const version = "…"`, a Gradle/TOML `version = "…"` and a JS `const version =
@@ -872,7 +872,7 @@ touched package counts as changed.
     are the scheme's, so the npm target never reaches for `semver` directly.
   - **`tag` is therefore a plan option, not an apply-only one.** The tag is *decided* in the plan,
     so it has to be visible to `--dry-run` and to the JSON a release pipeline gates on.
-    `npm.target.ts` reads `--tag` in `planOptions`, not only where the publish command is built.
+    `npm-publish-target.ts` reads `--tag` in `planOptions`, not only where the publish command is built.
   - **A calendar version has to be ruled out first**, and that is not a detail: `2026.9.15-1430`
     carries a semver prerelease identifier because that is how the time is spelled. `distTagFor`
     makes the same pair of checks `github-release`'s `resolvePrerelease` does - `!isCalendarVersion`

@@ -7,6 +7,10 @@ export const APPEND_PREFIX = '+';
 /** Where a repository keeps command modules of its own, as a glob or a list of them. */
 export const COMMANDS_KEY = 'commands';
 
+/** The keys whose string entries are globs, and so have to be anchored to the file that wrote
+ *  them - see `anchorContributions`. The same three that always append. */
+const GLOB_KEYS: readonly string[] = ['plugins', COMMANDS_KEY, 'publishTargets'];
+
 /**
  * Keys that **append whether or not you ask** - `+plugins` is accepted and means nothing extra.
  *
@@ -16,14 +20,16 @@ export const COMMANDS_KEY = 'commands';
  * brought. Replacing was the silent failure - `extends`-ing a toolchain config and then adding a
  * plugin of your own dropped the toolchain's, and what you noticed was `Unknown argument: publish`.
  *
- * `commands` is the same kind of statement in glob form - where a repository keeps command modules
- * of its own - so it appends for the same reason: a repository adding a directory of its own never
- * means "and stop loading the ones my shared config ships".
+ * `commands` and `publishTargets` are the same kind of statement - what this repository has, in
+ * instances or in globs naming them - so they append for the same reason: a repository adding one
+ * of its own never means "and stop loading the ones my shared config brought". All three are what
+ * a config *contributes*, and a contribution list is exactly the case where replacing is never
+ * what anyone meant.
  *
  * Do not extend this list casually: a key that always appends can never be *un*-said by a closer
  * layer, which is only acceptable where the value is a set of contributions rather than a decision.
  */
-export const ALWAYS_APPEND: readonly string[] = ['plugins', COMMANDS_KEY];
+export const ALWAYS_APPEND: readonly string[] = ['plugins', COMMANDS_KEY, 'publishTargets'];
 
 /**
  * Where a key keeps what it is replacing, so the replacement can be handed it back as `value`.
@@ -115,10 +121,11 @@ export function mergeConfig(
   // to whatever the previous layer had.
   for (const [key, value] of Object.entries(source)) {
     if (appendTarget(key)) continue;
-    /** `plugins`/`commands`: additive at every layer, so the closer one adds rather than takes
-     *  over. A `commands` glob is anchored to its own file on the way in - see `anchorCommands`. */
+    /** `plugins`/`commands`/`publishTargets`: additive at every layer, so the closer one adds
+     *  rather than takes over. A glob among them is anchored to its own file on the way in - see
+     *  `anchorContributions`. */
     if (ALWAYS_APPEND.includes(key)) {
-      appendList(target, key, key === COMMANDS_KEY ? anchorCommands(value, origin) : value);
+      appendList(target, key, GLOB_KEYS.includes(key) ? anchorContributions(value, origin) : value);
       continue;
     }
     assignMerged(target, key, value, source, origin);
@@ -243,7 +250,9 @@ function toList(value: unknown): unknown[] {
 }
 
 /**
- * Anchors every `commands` glob to the directory of the file that declared it, on the way in.
+ * Anchors every glob in `plugins`/`commands`/`publishTargets` to the directory of the file that
+ * declared it, on the way in. A non-string entry - an instance written straight into the config -
+ * passes through untouched.
  *
  * **Done here, at the merge, because this is the last moment the answer is known.** `commands`
  * always appends, so one resolved list ends up holding entries from the repository's own
@@ -251,17 +260,16 @@ function toList(value: unknown): unknown[] {
  * file per *key*, not per element, so after the merge there is nothing left to attribute them by.
  * Rewriting each glob as it arrives makes the merge trivially correct and costs one `path.resolve`.
  *
- * It is what lets a **shared config ship commands**: `commands: './commands/*.js'` in a package's
- * own config means that package's directory, wherever the repository inheriting it happens to sit.
- * Note that `plugins` does *not* work this way - `loadPlugins` resolves every entry against the
- * repository root's `.rmanrc` whatever file declared it - so a relative path there means something
- * different. The two are not consistent, and this is the side worth being on.
+ * It is what lets a **shared config ship its own contributions**: `commands: './commands/*.js'`
+ * in a published package means that package's directory, wherever the repository inheriting it
+ * happens to sit. All three keys behave the same way; `plugins` used to resolve every entry
+ * against the repository root instead, whatever file declared it, and that asymmetry is gone.
  *
  * `origin` is absent when a caller merges a value it built rather than read (a selector block, the
  * directory chain layering already-resolved configs); those globs have been anchored already, and
  * an absolute path is left alone by `path.resolve` anyway.
  */
-function anchorCommands(value: unknown, origin: string | undefined): unknown {
+function anchorContributions(value: unknown, origin: string | undefined): unknown {
   if (!origin) return value;
   const dir = path.dirname(origin);
   const anchor = (entry: unknown) => (typeof entry === 'string' ? path.resolve(dir, entry) : entry);

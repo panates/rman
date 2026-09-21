@@ -18,14 +18,13 @@ import {
 } from './config.js';
 import { Manifest } from './manifest.js';
 import { Package } from './package.js';
-import { loadPlugins, type PluginCommand } from './plugin.js';
+import { loadPlugins } from './plugin-loader.js';
 import { Workspace } from './workspace.js';
 
 export class Repository extends Package {
   readonly rootPackage: Package;
   /** Commands the repository's plugins contributed, loaded during `create` because the workspace
    *  providers they bring are needed before any package can be found. `cli.ts` registers them. */
-  pluginCommands: PluginCommand[] = [];
   /**
    * Cached repository scope - see `_repositoryScope`.
    *
@@ -412,7 +411,7 @@ export class Repository extends Package {
    *    otherwise: the plugins that know what a package is are named in the config file this step
    *    is looking for.
    * 2. **Load the plugins** the root's config names, which registers their workspace providers
-   *    (and their commands, handed on via `pluginCommands` - `cli.ts` registers those).
+   *    (their commands arrive through `.rmanrc "commands"`, which `cli.ts` reads).
    * 3. **Ask the providers** for the layout. None recognizing it means a repository that is itself
    *    the one package.
    *
@@ -436,12 +435,11 @@ export class Repository extends Package {
     /** The root's own config, raw: `plugins` is a list of package names, so it needs neither the
      *  package list (which does not exist yet) nor expression interpolation. */
     const rootConfig = await readDirConfig(rootDir);
-    const pluginCommands = await loadPlugins(app, rootDir, rootConfig);
+    await loadPlugins(app, rootConfig);
 
     const layout = Workspace.resolve(app, rootDir);
     const packages = (layout?.packageDirs ?? []).map(dir => new Package(dir, app));
     const repo = new Repository(app, layout?.root ?? rootDir, packages.length > 0, packages, from);
-    repo.pluginCommands = pluginCommands;
     repo._linkPackages();
     /** The application is what the plugins registered into a moment ago; from here on it can hand
      *  out services, which need the repository to work on. */

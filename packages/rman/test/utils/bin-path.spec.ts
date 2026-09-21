@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { expect } from 'expect';
 import { RmanApplication } from '../../src/core/application.js';
-import { baseTechStack } from '../../src/core/tech-stack.js';
+import { basePlugin } from '../../src/core/plugin.js';
 import type { BinPath as BinPathTypes } from '../../src/utils/bin-path.js';
 import { BinPath } from '../../src/utils/bin-path.js';
 
@@ -20,7 +20,7 @@ describe('utils/BinPath', () => {
    *  contributor recognizes no package, and how one reaches an application now that a technology
    *  is declared as a whole. */
   function addBinPaths(provider: BinPathTypes.Provider, name = 'test'): void {
-    app.techStacks.add({ name, manifestProvider: baseTechStack.manifestProvider, binPathsProvider: provider });
+    app.plugins.add({ ...basePlugin, name, getBinPaths: provider });
   }
 
   it('has no provider of its own, so the inherited PATH is left exactly as it was', () => {
@@ -44,13 +44,9 @@ describe('utils/BinPath', () => {
   });
 
   it('ignores a repeated registration of the same technology', () => {
-    const stack = {
-      name: 'twice',
-      manifestProvider: baseTechStack.manifestProvider,
-      binPathsProvider: () => ['/once'],
-    };
-    app.techStacks.add(stack);
-    app.techStacks.add(stack);
+    const stack = { ...basePlugin, name: 'twice', getBinPaths: () => ['/once'] };
+    app.plugins.add(stack);
+    app.plugins.add(stack);
     expect(BinPath.resolve(app, '/repo')).toEqual(['/once']);
   });
 

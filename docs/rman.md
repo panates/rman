@@ -2150,7 +2150,7 @@ namespace ChangeHashService {
 
 Auto-detection order, first match winning: (1) the package's own most recent release tag - the
 network-free `findLatestTag` lookup, `git tag --list` for a `{name}`-bearing pattern and
-`git describe` for a repo-wide one; (2) failing that, `ManifestProvider.publishedVersion(pkg)` - the
+`git describe` for a repo-wide one; (2) failing that, `TechStack.publishedVersion(pkg)` - the
 package's **own ecosystem's** registry, mapped onto a tag name via `expandTag` and used only if that
 tag actually exists in git. It is not a "has this been published" check: it borrows a version string
 to guess a tag name, for the case where a tag exists but isn't in HEAD's ancestry. With no plugin

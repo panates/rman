@@ -761,7 +761,7 @@ function getScriptSteps(pkg: Package, script: string): RunService.ScriptStep[] {
  * out again.
  */
 function contributedSlotsFor(pkg: Package, script: string): RunService.ScriptSlots | undefined {
-  const slots = pkg.techStack.runSteps?.(pkg, script);
+  const slots = pkg.plugin.getRunSteps?.(pkg, script);
   return slots && (slots.before?.length || slots.exec?.length || slots.after?.length) ? slots : undefined;
 }
 

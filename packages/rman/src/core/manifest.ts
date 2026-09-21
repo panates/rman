@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { RmanApplication } from './application.js';
 import type { Package } from './package.js';
-import { baseTechStack, type TechStack } from './tech-stack.js';
+import { basePlugin, type Plugin } from './plugin.js';
 import { semverScheme, type VersionScheme } from './version-scheme.js';
 
 /**
@@ -170,17 +170,16 @@ export namespace Manifest {
     manifest: Manifest;
     versionScheme: VersionScheme;
     fileName: string;
-    techStack: TechStack;
+    plugin: Plugin;
   } {
-    for (const techStack of app.techStacks) {
-      const provider = techStack.manifestProvider;
-      const manifest = provider.read(dir);
+    for (const plugin of app.plugins) {
+      const manifest = plugin.manifestProvider.read(dir);
       if (manifest) {
         return {
           manifest,
-          versionScheme: provider.versionScheme ?? semverScheme,
-          fileName: provider.fileName,
-          techStack,
+          versionScheme: plugin.manifestProvider.versionScheme ?? semverScheme,
+          fileName: plugin.manifestProvider.fileName,
+          plugin,
         };
       }
     }
@@ -193,16 +192,16 @@ export namespace Manifest {
       /** Same reasoning: no stack claimed this directory, so it belongs to no technology. The
        *  base stack's name is empty rather than a sentinel like `'unknown'`, which would read as a
        *  technology's name and could collide with a real one's. */
-      techStack: baseTechStack,
+      plugin: basePlugin,
     };
   }
 
   /** Writes through whichever provider recognizes `dir`. Throws when none does: a write that lands
    *  nowhere is worse than one that fails, since the caller has already decided the new version. */
   export function write(app: RmanApplication, dir: string, manifest: Manifest): void {
-    for (const provider of manifestProviders(app)) {
-      if (provider.read(dir)) {
-        provider.write(dir, manifest);
+    for (const stack of app.plugins) {
+      if (stack.manifestProvider.read(dir)) {
+        stack.manifestProvider.write(dir, manifest);
         return;
       }
     }
@@ -220,15 +219,15 @@ export namespace Manifest {
    * of can still describe its own graph by hand.
    */
   export function dependenciesOf(pkg: Package, candidates: readonly Package[]): Package[] {
-    return providerOf(pkg)?.dependencies?.(pkg.manifest, candidates) ?? [];
+    return stackOf(pkg)?.manifestProvider.dependencies?.(pkg.manifest, candidates) ?? [];
   }
 
   /** `${{ pkg.scope }}`/`${{ pkg.unscopedName }}`, by whichever provider recognizes `dir` - and
    *  "no scope, the name is its own unscoped form" when none has an opinion. */
   export function splitName(app: RmanApplication, dir: string, name: string): { scope?: string; unscopedName: string } {
-    for (const provider of manifestProviders(app)) {
-      if (!provider.read(dir)) continue;
-      return provider.splitName?.(name) ?? { unscopedName: name };
+    for (const stack of app.plugins) {
+      if (!stack.manifestProvider.read(dir)) continue;
+      return stack.manifestProvider.splitName?.(name) ?? { unscopedName: name };
     }
     return { unscopedName: name };
   }
@@ -240,12 +239,12 @@ export namespace Manifest {
    * reference each other by path has nothing here to go stale.
    */
   export function updateDependencyVersions(pkg: Package, bumped: ReadonlyMap<Package, string>): void {
-    providerOf(pkg)?.updateDependencyVersions?.(pkg.manifest, bumped);
+    stackOf(pkg)?.manifestProvider.updateDependencyVersions?.(pkg.manifest, bumped);
   }
 
   /**
    * Rewrites a hard-coded version in `content` through `pkg`'s own ecosystem - see
-   * `ManifestProvider.stampVersion`.
+   * `Plugin.stampVersion`.
    *
    * `undefined` covers three cases the caller has to tell apart from each other, and cannot: no
    * provider claimed the package, the provider has no opinion about stamping, or it looked and found
@@ -258,41 +257,36 @@ export namespace Manifest {
     version: string,
     options?: { constant?: string },
   ): string | undefined {
-    return providerOf(pkg)?.stampVersion?.(file, content, version, options);
+    return stackOf(pkg)?.manifestProvider.stampVersion?.(file, content, version, options);
   }
 
   /**
    * What `pkg`'s own ecosystem's registry says its current version is - see
-   * `ManifestProvider.publishedVersion` for the one thing this is for and the one thing it must
+   * `Plugin.publishedVersion` for the one thing this is for and the one thing it must
    * never be used for.
    *
    * `undefined` when the provider has no opinion, which includes every repository that names no
    * plugin: git tags then answer the boundary question alone.
    */
   export async function publishedVersion(pkg: Package): Promise<string | undefined> {
-    return providerOf(pkg)?.publishedVersion?.(pkg);
+    return stackOf(pkg)?.manifestProvider.publishedVersion?.(pkg);
   }
 
-  /** The file names providers look for, for an error message that can say what was expected. */
+  /** The file names the registered technologies look for, for an error message that can say what
+   *  was expected. */
   export function fileNames(app: RmanApplication): string[] {
-    return manifestProviders(app).map(p => p.fileName);
-  }
-
-  /** Every registered stack's manifest provider, in declaration order - the list this namespace's
-   *  own code used to keep. */
-  function manifestProviders(app: RmanApplication): ManifestProvider[] {
-    return [...app.techStacks].map(stack => stack.manifestProvider);
+    return [...app.plugins].map(stack => stack.manifestProvider.fileName);
   }
 
   /**
-   * The provider that claimed `pkg` - its own technology's, with nothing to look up.
+   * The technology that claimed `pkg`, or `undefined` when none did - with nothing to look up.
    *
-   * This used to search the registry by `pkg.provider` and fall back to re-reading the directory,
+   * This used to search a registry by `pkg.provider` and fall back to re-reading the directory,
    * because a package could be constructed before the provider that would claim it was registered.
-   * It cannot now: a package is handed its `TechStack` at construction, by the application that
-   * resolved it.
+   * It cannot now: a package is handed its `Plugin` at construction, by the application that
+   * resolved it. The `name` test is what "none claimed it" looks like - see `basePlugin`.
    */
-  function providerOf(pkg: Package): ManifestProvider | undefined {
-    return pkg.techStack.name ? pkg.techStack.manifestProvider : undefined;
+  function stackOf(pkg: Package): Plugin | undefined {
+    return pkg.plugin.name ? pkg.plugin : undefined;
   }
 }

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import * as api from '../src/index.js';
-import { testTechStack, useTestEcosystem } from './_fixture.js';
+import { testPlugin, useTestEcosystem } from './_fixture.js';
 
 /**
  * A smoke test for the public programmatic API (`src/index.ts`) - it locks in the exported
@@ -50,7 +50,7 @@ describe('public API (src/index.ts)', () => {
   /**
    * The seams a plugin contributes through.
    *
-   * **There are no longer five `addProvider`-shaped ones.** A plugin declares a `TechStack` - the
+   * **There are no longer five `addProvider`-shaped ones.** A plugin declares a `Plugin` - the
    * manifest reader, the workspace layout, the step source, the bin directories and the version
    * planner as one thing - because declaring any of them apart from the others was never meaningful:
    * npm's step source reads `pkg.manifest.raw?.scripts`, so without npm's manifest reader it parses
@@ -63,7 +63,7 @@ describe('public API (src/index.ts)', () => {
     expect(typeof api.RmanApplication).toBe('function');
     expect(typeof api.Registry).toBe('function');
     expect(typeof api.Service).toBe('function');
-    expect(api.baseTechStack.name).toBe('');
+    expect(api.basePlugin.name).toBe('');
     expect(typeof api.Manifest.read).toBe('function');
     expect(typeof api.Workspace.resolve).toBe('function');
     expect(typeof api.BinPath.env).toBe('function');
@@ -110,7 +110,7 @@ describe('public API (src/index.ts)', () => {
       /** The public entry point, used the way a consumer would: one application, one repository,
        *  and the service reached through it. */
       const app = new api.RmanApplication();
-      app.techStacks.add(testTechStack);
+      app.plugins.add(testPlugin);
       await api.Repository.create(dir, { app });
       const originalLog = console.log;
       const logged: unknown[] = [];

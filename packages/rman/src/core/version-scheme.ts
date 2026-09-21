@@ -19,7 +19,7 @@ export type ChangeKind = 'fix' | 'feature' | 'breaking';
  * "is this version on the registry yet", `"workspace:"` range rewriting all assume versions that
  * can be ordered and incremented. This is the seam for an ecosystem that numbers differently (PEP
  * 440, a date-based scheme, a build counter), and it is a *meaning* seam rather than a storage one:
- * `ManifestProvider` answers "where is the version written", this answers "what does the next one
+ * `Plugin`'s manifest members answers "where is the version written", this answers "what does the next one
  * look like".
  *
  * **`bumpNames` and `bumpFor` are the interesting part.** `fix:` -> patch, `feat:` -> minor,

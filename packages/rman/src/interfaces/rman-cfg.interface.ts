@@ -1,6 +1,8 @@
 import type * as yargs from 'yargs';
 import type { RmanApplication } from '../core/application.js';
-import type { RmanPlugin } from '../core/plugin.js';
+import type { CustomCommand } from '../core/custom-command.js';
+import type { Plugin } from '../core/plugin.js';
+import type { PublishTarget } from '../core/publish-target.js';
 import type { RunConditionFn, RunStepValue } from '../core/run-step.js';
 
 /**
@@ -55,6 +57,19 @@ export interface RmanConfig
  * A config author annotates with the plugin's own name for the union - `RmanNodeConfig` - which is
  * what makes the import that carries the augmentation explicit rather than incidental.
  */
+/**
+ * One entry of `.rmanrc "commands"` - a command, or a **glob** naming `.js` modules that
+ * `export default` one.
+ *
+ * Both authoring forms count as "a command": the declarative `app => ({ ... })` factory, which is
+ * the one to write, and the older `defineCommand({ ... })` object a `.rman/*.mjs` uses.
+ */
+export type CommandEntry = string | CustomCommand | RmanConfig.CommandRegisterFunction;
+
+/** One entry of `.rmanrc "publishTargets"` - a target, or a **glob** naming `.js` modules that
+ *  `export default` one. */
+export type PublishTargetEntry = string | PublishTarget;
+
 export interface RmanConfigKeys {
   /**
    * Plugins to load, in declaration order - a *package* contributing commands, where `.rman/*.mjs`
@@ -86,7 +101,7 @@ export interface RmanConfigKeys {
    *
    * Root level only - which commands exist is a property of the repository, not of a package.
    */
-  plugins?: string | RmanPlugin | (string | RmanPlugin)[];
+  plugins?: string | Plugin | (string | Plugin)[];
 
   /**
    * Where this repository keeps command modules of its own - a glob, or a list of them.
@@ -118,7 +133,19 @@ export interface RmanConfigKeys {
    * process, with no loader registered - so a TypeScript repository compiles them first or writes
    * them as `.mjs`.
    */
-  commands?: string | string[];
+  commands?: CommandEntry | CommandEntry[];
+
+  /**
+   * Publish targets this repository has - where a package's artifact ships. An instance, or a glob
+   * naming `.js` modules that `export default` one.
+   *
+   * The same three-key shape as `plugins` and `commands`, and for the same reason: a target is a
+   * contribution, so a config declares it rather than a plugin registering it by hand. rman's own
+   * `docker` target is built in; `rman-node` contributes `npm` from its own config.
+   *
+   * Always appends, and declared at any level - see `plugins`.
+   */
+  publishTargets?: PublishTargetEntry | PublishTargetEntry[];
 
   /**
    * Values for `${{ vars.* }}` to read - a name for something the config would otherwise repeat:
@@ -178,11 +205,11 @@ export interface RmanConfigKeys {
    * **A list, and only a list.** It used to accept a `Record<string, string>` too, documented as "an
    * explicit name -> range map" - and the ranges went nowhere: the one reader took `Object.keys` and
    * dropped the values. Nor could they ever mean anything here, since the cascade works from groups
-   * and severities, and `ManifestProvider.updateDependencyVersions` rewrites ranges in the
+   * and severities, and `Plugin.updateDependencyVersions` rewrites ranges in the
    * *manifest* - a range declared only in `.rmanrc` has no file to be written to. What this key
    * states is an **edge**, and an edge needs two ends and nothing else.
    *
-   * **Core, and it has to be**: it is layered on top of whatever `ManifestProvider.dependencies`
+   * **Core, and it has to be**: it is layered on top of whatever `Plugin.readDependencies`
    * read, and it is the *only* way a repository with no provider at all has a graph - a repo whose
    * manifests rman cannot read can still state its edges by hand. Moving it to an ecosystem plugin
    * would take that away from exactly the repositories that need it.

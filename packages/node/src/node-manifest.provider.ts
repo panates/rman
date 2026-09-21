@@ -1,24 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { Manifest, type ManifestProvider, type Package, stampVersionConstant } from 'rman';
-import { npmViewVersion } from '../utils/npm-view.js';
-import { parseWorkspaceRange } from '../utils/workspace-range.js';
+import { npmViewVersion } from './utils/npm-view.js';
+import { parseWorkspaceRange } from './utils/workspace-range.js';
 
-/**
- * `package.json` as rman's manifest: where an npm package's name and version are written.
- *
- * This is the deepest npm assumption that used to be in rman's core - `Package.name`,
- * `Package.version`, `Package.json` and `Package.isPrivate` all read this file directly, which
- * meant every command that asked a package what it was called was asking npm.
- *
- * The version scheme is left unset, so packages get the core's semver default: npm versions *are*
- * semver, and saying so again here would only be a second place for the two to disagree.
- */
-export const packageJsonManifest: ManifestProvider = {
-  /** The ecosystem, not the file - this is what every package it reads reports as
-   *  `pkg.provider === 'node'`. `fileName` below already says `package.json`. */
-  name: 'node',
-  fileName: 'package.json',
+export class NodeManifestProvider implements ManifestProvider {
+  name = 'node';
+  fileName = 'package.json';
 
   read(dir: string): Manifest | undefined {
     const file = path.join(dir, 'package.json');
@@ -33,7 +21,7 @@ export const packageJsonManifest: ManifestProvider = {
       private: !!raw?.private,
       raw: raw ?? {},
     };
-  },
+  }
 
   /**
    * npm's four dependency fields, and only the entries naming a package of this repository -
@@ -51,14 +39,14 @@ export const packageJsonManifest: ManifestProvider = {
       if (pkg && !result.includes(pkg)) result.push(pkg);
     }
     return result;
-  },
+  }
 
   /** npm's `@scope/name`. A name with no `/` has no scope and is its own unscoped form; the
    *  *last* `/` splits it, so `@scope/a/b` keeps `@scope/a` as the scope the registry would. */
   splitName(name: string): { scope?: string; unscopedName: string } {
     const at = name.lastIndexOf('/');
     return at > 0 ? { scope: name.slice(0, at), unscopedName: name.slice(at + 1) } : { unscopedName: name };
-  },
+  }
 
   /**
    * Rewrites a sibling's range in all four fields after it was bumped.
@@ -84,12 +72,12 @@ export const packageJsonManifest: ManifestProvider = {
         deps[depName] = '^' + to;
       }
     }
-  },
+  }
 
   /**
    * What the npm registry says this package's current version is - used *only* by
    * `detectChangeHash`, to guess a tag name for a package that has no git tag yet. See
-   * `ManifestProvider.publishedVersion` for why that is not a "has this been published" check.
+   * `Plugin.publishedVersion` for why that is not a "has this been published" check.
    *
    * No `--registry`/`--userconfig`: a bare `npm view` run in the package's own directory already
    * honours the repository's `.npmrc`, and the flags exist for `publish`'s CLI overrides, which
@@ -97,7 +85,7 @@ export const packageJsonManifest: ManifestProvider = {
    */
   publishedVersion(pkg: Package): Promise<string | undefined> {
     return npmViewVersion(pkg.name, pkg.dirname);
-  },
+  }
 
   /**
    * npm's source shape: a quoted string assigned to an identifier, which is what a `.ts`/`.js`
@@ -110,7 +98,7 @@ export const packageJsonManifest: ManifestProvider = {
    */
   stampVersion(file: string, content: string, version: string, options?: { constant?: string }) {
     return stampVersionConstant(content, version, options?.constant);
-  },
+  }
 
   write(dir: string, manifest: Manifest): void {
     /**
@@ -121,8 +109,20 @@ export const packageJsonManifest: ManifestProvider = {
      */
     const raw = { ...manifest.raw, version: manifest.version };
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(raw, undefined, 2) + '\n', 'utf-8');
-  },
-};
+  }
+}
+
+/**
+ * `package.json` as rman's manifest: where an npm package's name and version are written.
+ *
+ * This is the deepest npm assumption that used to be in rman's core - `Package.name`,
+ * `Package.version`, `Package.json` and `Package.isPrivate` all read this file directly, which
+ * meant every command that asked a package what it was called was asking npm.
+ *
+ * The version scheme is left unset, so packages get the core's semver default: npm versions *are*
+ * semver, and saying so again here would only be a second place for the two to disagree.
+ */
+export const packageJsonManifest = {} satisfies Partial<Plugin>;
 
 /** npm's four dependency fields. Was `rman`'s `DEPENDENCY_KEYS`, which made the core carry npm's
  *  field names - `publish` imports it from here now. */

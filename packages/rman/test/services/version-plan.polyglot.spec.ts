@@ -5,9 +5,9 @@ import path from 'node:path';
 import { expect } from 'expect';
 import type { ManifestProvider } from '../../src/core/manifest.js';
 import type { Package } from '../../src/core/package.js';
-import type { TechStack } from '../../src/core/tech-stack.js';
+import type { Plugin } from '../../src/core/plugin.js';
 import { VersionPlanService } from '../../src/services/version-plan.service.js';
-import { createRepository, planner, useTechStack, useTestEcosystem } from '../_fixture.js';
+import { createRepository, planner, usePlugin, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-polyglot-plan-'));
@@ -51,7 +51,7 @@ const otherManifest: ManifestProvider = {
   dependencies: () => [],
 };
 
-const otherStack: TechStack = {
+const otherPlugin: Plugin = {
   name: 'other',
   manifestProvider: otherManifest,
   versionPlanner: new OtherPlanService(),
@@ -71,7 +71,7 @@ const otherStack: TechStack = {
  */
 describe('services/version-plan: a polyglot repository', () => {
   useTestEcosystem();
-  useTechStack(otherStack);
+  usePlugin(otherPlugin);
   beforeEach(() => {
     asked.boundary.length = 0;
     asked.cascade.length = 0;

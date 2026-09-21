@@ -1225,14 +1225,19 @@ describe('core/Repository', () => {
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       fs.writeFileSync(
         path.join(dir, '.rmanrc.cjs'),
-        `module.exports = { plugins: [{ name: 'p', init(ctx) {
-           ctx.addCommand({ command: 'x', describe: 'a command', builder: cmd => cmd.option('y'), handler() {} });
-         } }] };\n`,
+        `module.exports = { plugins: [{ name: 'p',
+           manifestProvider: { name: 'p', fileName: 'p.json', read: () => undefined, write: () => {} },
+           init(ctx) { void ctx.app; },
+         }], commands: [{ command: 'x', describe: 'a command', builder: cmd => cmd.option('y'), handler() {} }] };\n`,
       );
       writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
 
       const repo = await createRepository(dir);
       expect(typeof (repo.config.plugins as any)[0].init).toBe('function');
+      /** `commands` is in `CODE_SUBTREES` for the same reason, and learned it the same way: a
+       *  declarative command *is* a function, so left out it was called with the config scope and
+       *  its handler closed over something that was not a repository. */
+      expect(typeof (repo.config.commands as any)[0].builder).toBe('function');
     });
   });
 

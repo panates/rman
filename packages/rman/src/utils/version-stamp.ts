@@ -55,7 +55,7 @@ export function stampVersionLabel(content: string, version: string): string | un
  * ```
  *
  * **A helper, not a policy**: which shape a language declares a version in is
- * `ManifestProvider.stampVersion`'s answer, and this is the one most of them share, exported so
+ * `Plugin.stampVersion`'s answer, and this is the one most of them share, exported so
  * every provider need not re-derive the same regex. Measured, it reaches a Go `const version =
  * "…"`, a Gradle/TOML `version = "…"` and a JS/TS `const version = '…'`.
  *

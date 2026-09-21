@@ -82,56 +82,98 @@ describe('core/plugin', () => {
     return dir;
   }
 
-  /** A module exporting a *config* whose `plugins` hold the plugin - the shape `rman-node` uses. */
-  function configModule(name: string, command: string, says: string): string {
-    return `export default { plugins: [{ name: ${JSON.stringify(name)}, init(ctx) {
-      ctx.addCommand({ command: ${JSON.stringify(command)}, describe: 'from ${name}',
-        handler: c => c.logger.info(${JSON.stringify(says)}) });
-    } }] };`;
+  /** A module exporting a **plugin instance**, which is what a `plugins` glob must find. Written
+   *  as a plain object, importing nothing: `definePlugin` is an identity helper, so a fixture that
+   *  skips it tests the same thing while staying independent of how `'rman'` resolves from a temp
+   *  directory. `manifestProvider` is the one required member - a plugin that cannot recognize a
+   *  package has nothing to apply the rest of itself to. */
+  function pluginModule(name: string): string {
+    return `export default {
+      name: ${JSON.stringify(name)},
+      manifestProvider: { name: ${JSON.stringify(name)}, fileName: '${name}.json',
+        read: () => undefined, write: () => {} },
+    };`;
   }
 
-  it('loads a plugin out of a config-exporting module, which is what a plugin package is now', async () => {
-    const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': configModule('p', 'hello', 'hello from p') });
+  /** A module exporting a command, for a `commands` glob. */
+  function commandModule(command: string, says: string): string {
+    return `export default { command: ${JSON.stringify(command)}, describe: 'from a glob',
+      handler: c => c.logger.info(${JSON.stringify(says)}) };`;
+  }
+
+  it('loads a plugin out of a module that exports one, named by a glob', async () => {
+    const dir = fixture(
+      { plugins: ['./p.mjs'], commands: ['./c.mjs'] },
+      {
+        'p.mjs': pluginModule('p'),
+        'c.mjs': commandModule('hello', 'hello from p'),
+      },
+    );
     const lines = await captureLogs(() => runCli({ argv: ['hello'], cwd: dir }));
     expect(lines.join('\n')).toContain('hello from p');
   });
 
-  it('refuses a module that exports the plugin itself, and says what to do about it', async () => {
-    /** Accepting both shapes would mean telling them apart at runtime, and `name` is a key either
-     *  may have - so the test would be a guess, and guessing "plugin" registers nothing while the
-     *  command reports success. Refusing is the point; the message carries the fix. */
-    const bare = `export default { name: 'bare', init(ctx) {
-      ctx.addCommand({ command: 'bare-cmd', describe: 'from bare', handler: c => c.logger.info('hello from bare') });
-    } };`;
-    const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': bare });
+  /**
+   * **The inverse of what this used to assert**, and the reason the key changed. `plugins` took a
+   * package name whose module exported a *config*, and rman read only that config's own `plugins`
+   * out of it. It takes an instance or a glob naming one now, so a config is the wrong shape -
+   * a package's config reaches a repository through `extends`, which is the key that means "merge
+   * this underneath mine".
+   */
+  it('refuses a module that exports a config instead of a plugin', async () => {
+    const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': `export default { plugins: [] };` });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-    expect(error.message).toContain('must export an rman config');
-    expect(error.message).toContain('looks like the plugin itself');
+    expect(error.message).toContain('takes a plugin or a glob naming modules that export one');
   });
 
-  it('accepts a plugin object declared inline, which only a JS config can do', async () => {
+  it('accepts a plugin declared inline, which only a JS config can do', async () => {
     const dir = tmp();
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', private: true, version: '1.0.0' }));
     fs.writeFileSync(
       path.join(dir, '.rmanrc.mjs'),
-      `export default { plugins: [{ name: 'inline', init(ctx) {
-         ctx.addCommand({ command: 'inline-cmd', describe: 'declared as an object',
-           handler: c => c.logger.info('hello from inline') });
-       } }] };`,
+      `export default {
+         plugins: [{ name: 'inline', manifestProvider: { name: 'inline', fileName: 'i.json',
+           read: () => undefined, write: () => {} } }],
+         commands: [{ command: 'inline-cmd', describe: 'declared as an object',
+           handler: c => c.logger.info('hello from inline') }],
+       };`,
     );
     const lines = await captureLogs(() => runCli({ argv: ['inline-cmd'], cwd: dir }));
     expect(lines.join('\n')).toContain('hello from inline');
   });
 
+  /**
+   * **`init` is the escape hatch, and it still runs** - with the application and nothing else.
+   * Everything a plugin used to register through it is a config key now, so a plugin contributing
+   * only those needs none at all.
+   */
+  it('calls init with the application, for whatever the seams do not name', async () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', private: true, version: '1.0.0' }));
+    fs.writeFileSync(
+      path.join(dir, '.rmanrc.mjs'),
+      `export default { plugins: [{
+         name: 'withinit',
+         manifestProvider: { name: 'withinit', fileName: 'w.json', read: () => undefined, write: () => {} },
+         init(ctx) { globalThis.__rmanInitSawApp = !!ctx.app; },
+       }] };`,
+    );
+    await captureLogs(() => runCli({ argv: ['list'], cwd: dir }));
+    expect((globalThis as Record<string, unknown>).__rmanInitSawApp).toBe(true);
+    delete (globalThis as Record<string, unknown>).__rmanInitSawApp;
+  });
+
   it("keeps an extended config's plugins when the repository names one of its own", async () => {
-    /** No `+plugins` anywhere: `plugins` appends at every layer, because a repository adding a
-     *  plugin never means "and drop the ones my shared config brought". */
+    /** No `+plugins` anywhere: `plugins` appends at every layer, because a repository adding one
+     *  never means "and drop the ones my shared config brought". */
     const dir = fixture(
-      { extends: './base.json', plugins: ['./mine.mjs'] },
+      { extends: './base.json', plugins: ['./mine.mjs'], commands: ['./mine-cmd.mjs'] },
       {
-        'base.json': JSON.stringify({ plugins: ['./theirs.mjs'] }),
-        'theirs.mjs': configModule('theirs', 'theirs-cmd', 'hello from theirs'),
-        'mine.mjs': configModule('mine', 'mine-cmd', 'hello from mine'),
+        'base.json': JSON.stringify({ plugins: ['./theirs.mjs'], commands: ['./theirs-cmd.mjs'] }),
+        'theirs.mjs': pluginModule('theirs'),
+        'mine.mjs': pluginModule('mine'),
+        'theirs-cmd.mjs': commandModule('theirs-cmd', 'hello from theirs'),
+        'mine-cmd.mjs': commandModule('mine-cmd', 'hello from mine'),
       },
     );
 
@@ -143,116 +185,101 @@ describe('core/plugin', () => {
     /** Registering twice would define its commands twice, which yargs does not survive - so this
      *  asserts the command still runs, not merely that loading returned. */
     const dir = fixture(
-      { extends: './base.json', plugins: ['./p.mjs'] },
+      { extends: './base.json', plugins: ['./p.mjs'], commands: ['./c.mjs'] },
       {
         'base.json': JSON.stringify({ plugins: ['./p.mjs'] }),
-        'p.mjs': configModule('p', 'hello', 'hello once'),
+        'p.mjs': pluginModule('p'),
+        'c.mjs': commandModule('hello', 'hello once'),
       },
     );
     const lines = await captureLogs(() => runCli({ argv: ['hello'], cwd: dir }));
     expect(lines.filter(l => l.includes('hello once'))).toHaveLength(1);
   });
 
-  it('says what is missing when a module exports a config with no plugins', async () => {
-    const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': `export default { group: 'x' };` });
+  /**
+   * **A glob matching nothing is an error for `plugins`**, unlike for `commands`, and this is the
+   * measured reason: with it silently ignored, a repository naming a plugin it cannot find loaded
+   * *successfully* with no commands - and the `--help`-on-a-broken-repository spec stopped
+   * exercising the degraded path, taking the rest of the suite down with it when yargs then called
+   * `process.exit`.
+   */
+  it('refuses a plugins glob that matches nothing, rather than loading without it', async () => {
+    const dir = fixture({ plugins: ['./does-not-exist.mjs'] });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-    expect(error.message).toContain('must export an rman config');
-    expect(error.message).toContain('has no "plugins"');
+    expect(error.message).toContain('matched no file');
   });
 
   it('names the shape when a module exports something that is not an object at all', async () => {
     const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': `export default 'oops';` });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-    expect(error.message).toContain('default export is a string');
+    expect(error.message).toContain('is a string');
   });
 
-  it('refuses an entry that is neither a name nor a plugin object', async () => {
+  it('refuses an entry that is neither a glob nor a plugin', async () => {
     const dir = fixture({ plugins: [42] });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-    expect(error.message).toContain('takes a package name, a path, or a plugin object');
+    expect(error.message).toContain('takes a plugin or a glob naming modules that export one');
   });
 
-  it('refuses a plugin object with no name, which everything downstream is keyed by', async () => {
-    const dir = fixture({ plugins: [{ init() {} }] });
+  it('refuses a plugin with no name, which everything downstream is keyed by', async () => {
+    const dir = fixture({ plugins: [{ manifestProvider: {} }] });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-    expect(error.message).toContain('has no "name"');
+    expect(error.message).toContain('keyed by its `name`');
+  });
+
+  /** `publishTargets` is the third key of the same shape, and reaches `app.publishTargets` - which
+   *  is what `publish` builds its `--target` choices from. */
+  it('registers a publish target the config declares', async () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', private: true, version: '1.0.0' }));
+    fs.writeFileSync(
+      path.join(dir, '.rmanrc.mjs'),
+      `export default { publishTargets: [{ name: 'fake', describe: 'a fake target',
+         getPlan: () => [], applyPlan: (ctx, plan) => plan }] };`,
+    );
+    /** Not `publish --help`: yargs' help calls `process.exit`, which kills the mocha process and
+     *  takes the rest of the file with it (measured, twice now). `--target` validates against the
+     *  registry instead, so naming one that is *not* there is the same question asked safely. */
+    const error = await expectCliFailure(() =>
+      runCli({ argv: ['publish', '--target', 'nope', '--dry-run'], cwd: dir }),
+    );
+    expect(error.message).toContain('fake');
   });
 
   /**
-   * **A plugin declares a command the way a built-in does**, by handing `addCommand` a function of
-   * the application instead of a `CustomCommand` object - `declareCommand(app => ({ ... }))`, which
-   * is `registerCommand` minus the push onto the module-level registry every `runCli` walks.
-   *
-   * The fixtures below write the bare function, for the same reason the others write bare objects:
-   * `declareCommand` is an identity helper, so skipping it tests the same runtime path without
-   * depending on how `'rman'` resolves from a temp directory.
+   * **A command declares itself the way a built-in does** - a function of the application, which
+   * is `registerCommand` minus the push onto the module-level registry every `runCli` walks. The
+   * fixture writes the bare function for the same reason the others write bare objects.
    */
   describe('a declarative command', () => {
-    /** A factory, as a plugin would hand one over - options as data, `handler(args)`. */
-    function declarativeModule(name: string): string {
-      return `export default { plugins: [{ name: ${JSON.stringify(name)}, init(ctx) {
-        ctx.addCommand(app => ({
-          command: 'greet [who]',
-          describe: 'from ${name}',
-          configKeys: ['group'],
-          config: { loud: { target: 'cli', describe: 'shout it', type: 'boolean' } },
-          positionals: { who: { describe: 'whom to greet', type: 'string' } },
-          handler: args => {
-            const text = 'hello ' + (args.who ?? app.repository.name);
-            console.log(args.loud ? text.toUpperCase() : text);
-          },
-        }));
-      } }] };`;
+    function declarativeModule(command: string, says: string): string {
+      return `export default app => ({
+        command: ${JSON.stringify(command)},
+        describe: 'declared',
+        configKeys: ['vars'],
+        config: { loud: { target: 'cli', describe: 'say it louder', type: 'boolean' } },
+        handler: args => console.log(${JSON.stringify(says)} + (args.loud ? '!' : '') + ' ' + app.repository.rootPackage.name),
+      });`;
     }
 
-    it('is registered, with its options and positionals', async () => {
-      const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': declarativeModule('p') });
-      expect((await captureLogs(() => runCli({ argv: ['greet', 'world'], cwd: dir }))).join('\n')).toContain(
-        'hello world',
-      );
-      expect((await captureLogs(() => runCli({ argv: ['greet', 'you', '--loud'], cwd: dir }))).join('\n')).toContain(
-        'HELLO YOU',
-      );
+    it('is registered, with its options, and runs once the repository exists', async () => {
+      const dir = fixture({ commands: ['./c.mjs'] }, { 'c.mjs': declarativeModule('greet', 'hi') });
+      const lines = await captureLogs(() => runCli({ argv: ['greet', '--loud'], cwd: dir }));
+      /** `app.repository` in the handler is the point: the factory ran after `Repository.create`,
+       *  not while the config was being read. */
+      expect(lines.join('\n')).toContain('hi! root');
     });
 
-    /**
-     * The factory wants `app.repository`, and `init` runs *inside* `Repository.create` - before any
-     * package is known, since plugins are what find them. Stored and run later is the whole reason
-     * `addCommand` takes a function rather than the metadata.
-     */
-    it('is run after the repository exists, not while the plugin is initialising', async () => {
-      const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': declarativeModule('p') });
-      expect((await captureLogs(() => runCli({ argv: ['greet'], cwd: dir }))).join('\n')).toContain('hello root');
-    });
-
-    /** The trap a hand-copied registration kept falling into: `--config` printed the *whole* config
-     *  for every plugin command until the field was forwarded. Declared, there is nothing to
-     *  forward - `toYargsCommand` is the same function the built-ins go through. */
     it('keeps its configKeys, so --config narrows to what it reads', async () => {
-      const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': declarativeModule('p') });
-      const text = (await captureLogs(() => runCli({ argv: ['greet', '--config'], cwd: dir }))).join('\n');
-      expect(text).toContain('group');
-      expect(text).not.toContain('plugins');
+      const dir = fixture({ commands: ['./c.mjs'] }, { 'c.mjs': declarativeModule('greet', 'hi') });
+      const out = (await captureLogs(() => runCli({ argv: ['greet', '--config'], cwd: dir }))).join('\n');
+      expect(out).toContain('the keys greet reads: vars');
     });
 
     it('still cannot take a built-in name', async () => {
-      const shadow = `export default { plugins: [{ name: 'p', init(ctx) {
-        ctx.addCommand(() => ({ command: 'version', describe: 'nope', handler: () => {} }));
-      } }] };`;
-      const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': shadow });
+      const dir = fixture({ commands: ['./c.mjs'] }, { 'c.mjs': declarativeModule('publish', 'nope') });
       const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-      expect(error.message).toContain('would shadow');
-    });
-
-    /** The same three checks a `CustomCommand` gets, on what the factory returned - a plugin written
-     *  in JavaScript reaches both forms with no type checker in the way. */
-    it('is checked like any other: a missing describe names the plugin and the command', async () => {
-      const bad = `export default { plugins: [{ name: 'p', init(ctx) {
-        ctx.addCommand(() => ({ command: 'greet', handler: () => {} }));
-      } }] };`;
-      const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': bad });
-      const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-      expect(error.message).toContain('Plugin "p" command "greet" has no "describe"');
+      expect(error.message).toContain('publish');
     });
   });
 });

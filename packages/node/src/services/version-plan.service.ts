@@ -14,7 +14,7 @@ import { ChangeHashService, type GitHelper, type Package, VersionPlanService } f
 export class NodeVersionPlanService extends VersionPlanService {
   /**
    * The shared `ChangeHashService.detect`, unmodified: this package's own latest release tag, and failing
-   * that whatever `ManifestProvider.publishedVersion` reports, mapped back onto a tag name.
+   * that whatever `Plugin.publishedVersion` reports, mapped back onto a tag name.
    *
    * **Nothing npm-specific is passed in any more**, and that is the point of the seam moving: the
    * registry lookup is `packageJsonManifest.publishedVersion`'s now, dispatched per package, so this
@@ -51,11 +51,6 @@ export class NodeVersionPlanService extends VersionPlanService {
     return CASCADE_BY_BUMP[bump] ?? 'group';
   }
 }
-
-/** The instance the plugin registers. One is enough: a planner holds no per-run state, and a test
- *  wanting a different registry answer registers its own `ManifestProvider` instead - which
- *  exercises the real path rather than a bypass. */
-export const nodeVersionPlanner = new NodeVersionPlanService();
 
 /** semver's bump names against how far each has to reach - see `NodeVersionPlanService.cascade`. */
 const CASCADE_BY_BUMP: Record<string, VersionPlanService.Cascade> = {

@@ -27,7 +27,7 @@ export namespace ChangeHashService {
      *
      * The keyword used to be `"npm"`, which named a *source* - and the wrong one: auto-detection is
      * mostly git, and the registry it may consult is now the ecosystem's business (see
-     * `ManifestProvider.publishedVersion`). What is being chosen here is a *mode*, so it is spelled
+     * `Plugin.publishedVersion`). What is being chosen here is a *mode*, so it is spelled
      * as one. **A rename, not an alias**: `--from npm` now means a ref literally called `npm`,
      * which is what it should have meant all along.
      */
@@ -103,7 +103,7 @@ export namespace ChangeHashService {
    * so all three commands agree on "since when" for any repo whose tags are the ones `rman version`
    * actually created; (2) failing that (no tag at all yet - e.g. onboarding `rman` onto a repo with
    * real release history but no `rman`-created tags), whatever this package's **own ecosystem**
-   * reports as its published version (`ManifestProvider.publishedVersion`), mapped to a git tag via
+   * reports as its published version (`Plugin.publishedVersion`), mapped to a git tag via
    * `.rmanrc changelog.tagPattern` and used only if that tag actually exists. Either way, if
    * `catchUpFile` is given and exists, the result is widened to also cover anything that file
    * hasn't caught up on yet (see its doc comment). Returns `undefined` when nothing can be resolved
@@ -117,7 +117,7 @@ export namespace ChangeHashService {
     let tagHash = await findLatestTag(git, pkg);
     if (!tagHash) {
       /** Through the package's own ecosystem, not through npm: which registry (if any) knows about
-       *  this package is the `ManifestProvider`'s answer, and in a polyglot repository it differs
+       *  this package is the `Plugin`'s manifest members's answer, and in a polyglot repository it differs
        *  per package. A repository naming no plugin gets `undefined` here and git tags decide
        *  alone. */
       const publishedVersion = await Manifest.publishedVersion(pkg);

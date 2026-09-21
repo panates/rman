@@ -5,14 +5,17 @@ import { Repository, RmanApplication, type ServiceMap, VersionPlanService, Works
 import { runCli as rmanRunCli } from 'rman/cli';
 /**
  * The **plugin**, by name - not the module's default export, which is an rman *config* that carries
- * it (`{ plugins: [nodePlugin] }`).
+ * it (`{ plugins: [new NodePlugin()] }`).
  *
  * Reading the default export was right until the entry point became a config, and then it silently
- * registered nothing: `nodePlugin.manifest` and friends were simply `undefined`, so a spec calling a
+ * registered nothing: `plugin.manifestProvider` and friends were simply `undefined`, so a spec calling a
  * service directly got no manifest provider, no version planner and - the dangerous one - no
  * `BinPath` provider, which left `exec` resolving the **real** `npm` from the inherited PATH.
  */
-import { nodePlugin } from '../src/index.js';
+/** The plugin's own module, not the package entry point: `index.ts` exports what a *user*
+ *  needs, and a test reaching for something it does not export is asking the wrong file. */
+import { NodePlugin } from '../src/node-plugin.js';
+import { NpmPublishTarget } from '../src/npm-publish-target.js';
 
 /**
  * This package's plugin entry point, as an absolute path to the **source** file.
@@ -42,14 +45,19 @@ export function declarePlugin(dir: string): void {
   /**
    * Written at the **repository root**, not at `dir`.
    *
-   * `runCli` is often called from inside a package (that is how the cwd-scoping specs work), and a
-   * `plugins` entry dropped there would never be read: `Workspace.findRoot` takes the *outermost*
-   * `.rmanrc` in the chain, so the root's - which says nothing about plugins - would win and the
-   * commands would simply not exist. Measured as `Unknown argument: clean`.
+   * `runCli` is often called from inside a package (that is how the cwd-scoping specs work), and
+   * an entry dropped there would never be read: `Workspace.findRoot` takes the *outermost*
+   * `.rmanrc` in the chain, so the root's - which says nothing about the plugin - would win and
+   * the commands would simply not exist. Measured as `Unknown argument: clean`.
+   *
+   * **`extends`, not `plugins`, and that is what a real repository writes too.** The entry point
+   * exports an rman *config* - `{ plugins: [new NodePlugin()], commands, publishTargets }` - so
+   * naming it under `plugins`, which takes a plugin or a glob yielding one, is the wrong key. A
+   * repository installing this package writes `extends: 'rman-node'`; this is that, by path.
    */
   const file = path.join(Workspace.findRoot(dir), '.rmanrc');
   const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf-8')) : {};
-  config.plugins = [PLUGIN_ENTRY];
+  config.extends = PLUGIN_ENTRY;
   fs.writeFileSync(file, JSON.stringify(config));
 }
 
@@ -89,21 +97,20 @@ export function useNodeEcosystem(): void {
  * A repository on an application carrying **this plugin's** technology - what a spec calls instead
  * of `Repository.create`.
  *
- * It runs `nodePlugin.init` rather than reading a second list of what the plugin contributes, so
+ * It registers the plugin itself rather than reading a second list of what it contributes, so
  * the specs exercise exactly what a repository naming `rman-node` in `plugins` would get. Commands
  * are dropped: a spec calling a service directly has no CLI to register them with, and
  * `declarePlugin()` is what covers the command path.
  */
 export function createRepository(root?: string, options?: { deep?: number }): Promise<Repository> {
   const app = new RmanApplication();
-  void nodePlugin.init({
-    app,
-    addTechStack(stack) {
-      app.techStacks.add(stack);
-      if (stack.versionPlanner) app.versionPlanner = stack.versionPlanner;
-    },
-    addCommand() {},
-  });
+  /** Registered the way a config's `plugins`/`publishTargets` would - the plugin *is* the
+   *  technology now, so there is no `init` to call for it. Commands are left out: a spec calling a
+   *  service directly has no CLI to register them with, and `declarePlugin()` covers that path. */
+  const plugin = new NodePlugin();
+  app.plugins.add(plugin);
+  if (plugin.versionPlanner) app.versionPlanner = plugin.versionPlanner;
+  app.publishTargets.add(new NpmPublishTarget());
   lastApp = app;
   return Repository.create(root, { ...options, app });
 }

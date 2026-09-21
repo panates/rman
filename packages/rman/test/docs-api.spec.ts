@@ -1,15 +1,7 @@
 import { expect } from 'expect';
-import type {
-  ArgsOf,
-  CommandOption,
-  PublishTarget,
-  RmanConfig,
-  RmanPlugin,
-  ServiceMap,
-  TechStack,
-} from '../src/index.js';
+import type { ArgsOf, CommandOption, Plugin, PublishTarget, RmanConfig, ServiceMap } from '../src/index.js';
 import {
-  baseTechStack,
+  basePlugin,
   ChangelogService,
   declareCommand,
   defineConfig,
@@ -43,7 +35,7 @@ import {
  * **What `docs/rman.md` claims the package exports, checked against what it does.**
  *
  * The API docs went stale across an entire refactor - services became classes, the plugin seams
- * became one `TechStack`, `RmanApplication` appeared - and nothing noticed, because nothing looks:
+ * became one `Plugin`, `RmanApplication` appeared - and nothing noticed, because nothing looks:
  * mocha transpiles without type-checking and no spec imported the names the docs advertise. This
  * file is that missing reader. It is checked by `npm run typecheck`; the assertions below only keep
  * mocha from reporting an empty file.
@@ -63,7 +55,7 @@ describe('docs/rman.md: the documented API surface', () => {
       defineConfig,
       definePlugin,
       declareCommand,
-      baseTechStack,
+      basePlugin,
       targetsOf,
       shipsTo,
       VersionService,
@@ -121,10 +113,10 @@ describe('docs/rman.md: the documented API surface', () => {
   /** The types the page names in its `import type` block. Nothing to assert at runtime - the
    *  annotation either compiles or it does not, which is what `npm run typecheck` is for. */
   it('exports every type its Installation block imports', () => {
-    const named: [RmanConfig, RmanPlugin | undefined, TechStack, PublishTarget | undefined, ServiceMap] = [
+    const named: [RmanConfig, Plugin | undefined, Plugin, PublishTarget | undefined, ServiceMap] = [
       {},
       undefined,
-      baseTechStack,
+      basePlugin,
       undefined,
       {} as ServiceMap,
     ];

@@ -17,16 +17,15 @@ import type { RmanConfig as CommandDeclaration } from './interfaces/rman-cfg.int
 export { defineConfig } from './core/config.js';
 export type { CommandContext, CustomCommand } from './core/custom-command.js';
 export { defineCommand } from './core/custom-command.js';
-/** The manifest seam: where a package's name and version are written, and how it is numbered.
- *  The core has no provider - `package.json` is npm's answer, and lives in `rman-node`. */
-export type { ManifestProvider } from './core/manifest.js';
 /** Both the shape and the registry: `const m: Manifest` and `Manifest.read(dir)` - merged onto one
  *  name so a plugin can augment it the way it augments `SystemInfo`. */
 export { RmanApplication } from './core/application.js';
+/** The manifest seam, grouped on a plugin as `Plugin.manifestProvider`: where a package's name and
+ *  version are written, what it declares, and how it is numbered and stamped. The core has none -
+ *  `package.json` is npm's answer, and lives in `rman-node`. */
+export type { ManifestProvider } from './core/manifest.js';
 export { Manifest } from './core/manifest.js';
 export { Package } from './core/package.js';
-export type { RmanPlugin } from './core/plugin.js';
-export { definePlugin } from './core/plugin.js';
 /** The publish seam: where a package's artifact ships. The core brings `docker` (nobody's
  *  ecosystem); npm's target lives in `rman-node`, and any other technology's in its own plugin. */
 export { declaredTargets, type PublishTarget, shipsTo, targetsOf, unknownTargets } from './core/publish-target.js';
@@ -34,14 +33,17 @@ export { Registry } from './core/registry.js';
 export { Repository } from './core/repository.js';
 export type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from './core/run-step.js';
 export { Service, type ServiceFactory, type ServiceMap } from './core/service.js';
-export { baseTechStack, type TechStack } from './core/tech-stack.js';
+/** **What a plugin is**: one technology, whole - how its packages are recognized and written,
+ *  where they live, what goes on a child's PATH, how its releases are planned, plus an `init` for
+ *  anything the seams do not name. `RmanPlugin` and `TechStack` were two types until 2.0. */
+export { basePlugin, definePlugin, type Plugin, type PluginContext } from './core/plugin.js';
 export type { ChangeKind } from './core/version-scheme.js';
 /** The numbering seam. `VersionScheme` is abstract - `highestVersion`/`highestBump`/`smallestBump`
  *  are implemented from the members around them, so a scheme states only what it must and still
  *  overrides any of the three. `SemverScheme` is exported to subclass rather than restate. */
 export { assertOneScheme, SemverScheme, semverScheme, VersionScheme } from './core/version-scheme.js';
 /** The workspace seam: how a repository's packages are found. A plugin contributes a provider
- *  (see `RmanPlugin.workspace`); the core has none, so `workspaces` is npm's idea and lives in
+ *  (see `Plugin.workspace`); the core has none, so `workspaces` is npm's idea and lives in
  *  `rman-node`. */
 /** `Workspace.Layout`, `Workspace.Provider`, `Workspace.addProvider`, `Workspace.resolve`,
  *  `Workspace.findRoot` - one namespace, so a plugin can augment it. */
@@ -85,7 +87,7 @@ export {
   readBranchGuardOptions,
 } from './utils/branch-guard.js';
 /** Where a repository's locally installed binaries live - the core spells the PATH variable, a
- *  plugin says which directories go on it (see `RmanPlugin.binPaths`). */
+ *  plugin says which directories go on it (see `Plugin.binPaths`). */
 export { BinPath } from './utils/bin-path.js';
 /** A shell command, with the repository's local binaries on PATH - for a command string an author
  *  wrote. `runBin` is the one to reach for when the arguments are assembled in code. */
@@ -116,7 +118,7 @@ export {
   type ProgressStatus,
   type ProgressSummary,
 } from './utils/progress-panel.js';
-/** Version stamping helpers a `ManifestProvider.stampVersion` can delegate to - the quoted-constant
+/** Version stamping helpers a `Plugin.stampVersion` can delegate to - the quoted-constant
  *  pattern most languages share, and the OCI Dockerfile label (which `version` stamps itself, since
  *  the label's value is by specification the package's version). */
 /** A calendar version's time part (`2026.9.15-1430`) is a semver *prerelease identifier* by

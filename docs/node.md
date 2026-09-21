@@ -383,7 +383,7 @@ it too.
 
 | Export | Seam | What it answers |
 | --- | --- | --- |
-| `packageJsonManifest` | `ManifestProvider` | What a package's name, version and dependencies are; `publishedVersion` (`npm view`) and `stampVersion`. Its `name` is `'node'`, which is what `Package.provider` reports. |
+| `packageJsonManifest` | `TechStack`'s manifest members | What a package's name, version and dependencies are; `publishedVersion` (`npm view`) and `stampVersion`. Its `name` is `'node'`, which is what `Package.provider` reports. |
 | `npmWorkspace` | `Workspace.Provider` | Which directories are packages - `workspaces` in the root `package.json`. |
 | `packageJsonSteps` | `RunService.StepSource` | A script a package declares in `package.json#scripts`, including the `pre<script>`/`<script>`/`post<script>` shape - which is also how npm's `preversion`/`version`/`postversion` reach `version`'s own lifecycle, with no second seam. |
 | `nodeVersionPlanner` / `NodeVersionPlanService` | `VersionPlanService` | Where a boundary comes from when a package has no release tag, and how far a bump cascades. `VersionPlanService` is abstract, so `version`/`changed` have nothing to ask without this. |

@@ -11,7 +11,7 @@ function mkTmp(): string {
 
 /**
  * `Package` no longer knows what a `package.json` is - `manifest`/`manifestFileName`/`provider`
- * come from whichever `ManifestProvider` claimed the directory, and the fixture's is the one
+ * come from whichever `Plugin`'s manifest members claimed the directory, and the fixture's is the one
  * registered here. The specs that used to assert `pkg.json`/`reloadJson`/`writeJson` assert the
  * manifest equivalents; the one that used to expect a *throw* for a missing file asserts the
  * fallback instead, which is the deliberate change: `rman info` has to work in a repository whose

@@ -317,7 +317,7 @@ export namespace ChangelogService {
      *  Default (also `"auto"` explicitly): auto-detect it per package instead, from that package's
      *  own most recent release tag first - the same lookup `VersionService`/`changed` use, so this
      *  never disagrees with them - falling back to whatever its own ecosystem's registry reports
-     *  only when it has no tag yet (`ManifestProvider.publishedVersion`, and only ever to guess a
+     *  only when it has no tag yet (`Plugin.publishedVersion`, and only ever to guess a
      *  tag name - see `detectChangeHash`); a package this can't be resolved for either way (never
      *  tagged, unpublished, no plugin) has never been released at all, so its whole history counts
      *  as unreleased - the same view `version` takes. */
