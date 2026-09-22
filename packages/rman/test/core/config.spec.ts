@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { createFileScope, defineConfig, readDirConfig, resolveConfig } from '../../src/core/config.js';
+import type { Package } from '../../src/core/package.js';
+import type { RunStepValue } from '../../src/core/run-step.js';
 import type { RmanConfig } from '../../src/interfaces/rman-config.interface.js';
 
 function mkTmp(): string {
@@ -372,6 +374,99 @@ describe('core/config', () => {
     it('still catches a typo inside a contributed block', () => {
       // @ts-expect-error `commitMesage` is not a key of `version`
       const bad: RmanConfig = { version: { commitMesage: 'typo' } };
+      expect(bad).toBeDefined();
+    });
+  });
+
+  /**
+   * **`RmanConfig` is the author's view, `ResolvedConfig` the reader's - and both halves are pinned
+   * here, by `tsc` over the test tree rather than by mocha.**
+   *
+   * The runtime behaviour has its own specs (`repository.spec.ts`: a function is called per
+   * package, `value` chains, a failure names the path). What those cannot catch is the type going
+   * quiet: a widening that also widened the reader, or a narrowing that ate something it should not
+   * have. Both mistakes compile in one direction only, which is what the controls below turn into
+   * failures.
+   */
+  describe('the author view and the resolved view', () => {
+    /** These are `tsc` assertions, but mocha still *runs* them - so the subject has to exist at
+     *  runtime. A package with an empty resolved config is enough: every read below is optional. */
+    const emptyPackage = () => ({ config: {} }) as unknown as Package;
+
+    it('lets an author write a function wherever rman computes a value', () => {
+      const config: RmanConfig = {
+        /** Derived from a `target: 'config'` option - the whole derived half is a `ConfigValue`,
+         *  which needs no per-key decision (see `CommandConfigFromMetadata`). */
+        changelog: { filePath: ({ vars }) => `${vars.notesDir}/NOTES.md` },
+        version: {
+          commitMessage: ({ pkg }) => `release ${pkg.name}`,
+          /** An `Extra` key decided by hand, because that interface also holds steps. */
+          stamp: ({ pkg }) => [`src/${pkg.basename}-version.ts`],
+          /** A step, unwrapped, still takes its own kind of function. */
+          before: [ctx => void ctx.pkg.name],
+        },
+        /** A publish target's block, contributed through `PublishTargetConfigs`. */
+        publish: { docker: { image: ({ pkg }) => `org/${pkg.unscopedName}` } },
+        /** And a plain value is still a plain value everywhere. */
+        githubRelease: { draft: false },
+      };
+      expect(typeof config.changelog?.filePath).toBe('function');
+    });
+
+    it('hands a reader the value, with the function already gone', () => {
+      const pkg = emptyPackage();
+
+      /** No `typeof === 'function'` and no cast: `interpolateConfig` already called it. */
+      const filePath: string | undefined = pkg.config.changelog?.filePath;
+      const image: string | undefined = pkg.config.publish?.docker?.image;
+      expect([filePath, image]).toBeDefined();
+    });
+
+    /**
+     * **Guard one: a step is not a value.** `ConfigValueContext` carries an index signature, so a
+     * `RunStepFn` is assignable to it - without naming the step types first, `Resolved` collapsed
+     * `run.<script>.exec` to its *return type* and left `RunService` nothing to call.
+     */
+    it('leaves a step function alone on the way to the reader', () => {
+      const pkg = emptyPackage();
+      /** The whole `run` subtree is identical on both views - it holds steps and an `if`, and not
+       *  one `ConfigValue`, so anything the transform touched here would show up as a mismatch. */
+      const run: RmanConfig['run'] = pkg.config.run;
+      const step: RunStepValue = 'tsc -b';
+      expect([run, step]).toBeDefined();
+    });
+
+    /**
+     * **Guard two: `CODE_SUBTREES` is skipped, at every level.** These three hold code all the way
+     * down, and the selector index re-enters the config - so a top-level-only guard misses the copy
+     * inside a `"[*]"` block. Left out, the walk rewrote `Plugin`'s *methods*:
+     * `VersionScheme.smallestBump(): string` became `string`.
+     */
+    it('leaves the contribution keys byte-identical, nested ones included', () => {
+      const pkg = emptyPackage();
+      const plugins: RmanConfig['plugins'] = pkg.config.plugins;
+      const commands: RmanConfig['commands'] = pkg.config.commands;
+      const targets: RmanConfig['publishTargets'] = pkg.config.publishTargets;
+      /** And the copy reached through a selector, which is the level a top-level guard misses. */
+      const nested: RmanConfig['plugins'] = pkg.config['[*]']?.plugins;
+      expect([plugins, commands, targets, nested]).toBeDefined();
+    });
+
+    /**
+     * The controls. Each fails in the opposite direction from the assertions above: if the reader's
+     * view stopped being resolved, a resolved value would still be callable and this directive
+     * would go unused - which `tsc` reports as an error of its own.
+     */
+    it('does not hand the reader something still callable', () => {
+      const pkg = emptyPackage();
+      // @ts-expect-error `filePath` is resolved by the time anything reads it - a string, not a function
+      const wrong = pkg.config.changelog?.filePath?.();
+      expect(wrong).toBeUndefined();
+    });
+
+    it('still refuses a value function whose return type is wrong', () => {
+      // @ts-expect-error `filePath` is a string key, so its function has to return one
+      const bad: RmanConfig = { changelog: { filePath: () => 42 } };
       expect(bad).toBeDefined();
     });
   });

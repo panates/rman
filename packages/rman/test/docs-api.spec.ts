@@ -2,10 +2,12 @@ import { expect } from 'expect';
 import type {
   ArgsOf,
   CommandOption,
+  ConfigValue,
   Plugin,
   PluginContext,
   PositionalOption,
   PublishTarget,
+  ResolvedConfig,
   RmanConfig,
   ServiceMap,
 } from '../src/index.js';
@@ -135,6 +137,10 @@ describe('docs/rman.md: the documented API surface', () => {
     const positionals = {
       stage: { describe: 'where to ship', type: 'string' },
     } satisfies Record<string, PositionalOption>;
-    expect([named.length, Object.keys(positionals)]).toEqual([5, ['stage']]);
+    /** The two views the page now documents, in the two roles it documents them in: the author's
+     *  key may be a function, the reader's is the value. */
+    const authored: ConfigValue<string> = ({ pkg }) => pkg.name;
+    const read: ResolvedConfig = {};
+    expect([named.length, Object.keys(positionals), typeof authored, read]).toEqual([5, ['stage'], 'function', {}]);
   });
 });

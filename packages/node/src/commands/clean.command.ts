@@ -3,6 +3,7 @@ import {
   assertAllowedBranch,
   branchGuardOptions,
   type CommandOption,
+  type ConfigValue,
   declareCommand,
   fromRootOption,
   packageFilterOptions,
@@ -52,9 +53,9 @@ export interface CleanExtraKeys {
   /** Extra files and directories to remove, beyond TypeScript's own output - globs relative to
    *  each package's own directory. Per-package cascaded; a package declaring its own `clean` block
    *  replaces the root's entirely for itself, rather than combining with it. */
-  include?: string | string[];
+  include?: ConfigValue<string | string[]>;
   /** Globs to keep, applied after `include`. */
-  exclude?: string | string[];
+  exclude?: ConfigValue<string | string[]>;
 }
 
 type Args = ArgsOf<typeof config, typeof COMMAND>;

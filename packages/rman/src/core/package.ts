@@ -1,6 +1,6 @@
 import path from 'path';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { RmanApplication } from './application.js';
+import type { ResolvedConfig } from './config.js';
 import { Manifest } from './manifest.js';
 import type { Plugin } from './plugin.js';
 import type { Repository } from './repository.js';
@@ -26,12 +26,16 @@ export class Package {
    * whatever the ecosystem, and comparing by identity removes a lookup from every consumer.
    */
   dependencies: Package[] = [];
-  /** Effective rman config for this package, cascaded from the repository root, with every
-   *  `${{ ... }}` expression already evaluated. */
-  /** **The resolved view**: every value function has already been called by `interpolateConfig`, so
-   *  a reader gets the value rather than `T | (() => T)` - see `RmanConfig` for why an author's
-   *  view would have to be a second type, and why there is not one yet. */
-  config: RmanConfig = {};
+  /**
+   * Effective rman config for this package, cascaded from the repository root, with every
+   * `${{ ... }}` expression already evaluated.
+   *
+   * **`ResolvedConfig`, not `RmanConfig`, and that is the whole two-view split in one line.**
+   * `RmanConfig` is what an *author* writes, where a value may be a function; this is what a
+   * *reader* gets, where it has already been called. Derived from the one the author writes, so
+   * there is no second type to keep in step - see `Resolved`.
+   */
+  config: ResolvedConfig = {};
   /**
    * The repository this package belongs to - so anything holding a package can reach the whole
    * picture (its siblings, the root's config, git) without being handed it separately.

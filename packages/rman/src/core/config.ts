@@ -9,6 +9,7 @@ import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
 import { loadConfigModule } from './load-config-module.js';
 import { mergeConfig, ORIGINS, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
+import type { RunConditionFn, RunStepFn } from './run-step.js';
 
 /**
  * Identity helper for authoring a `.rmanrc.cjs`/`.mjs`/`.js` config with full type-checking and
@@ -451,6 +452,47 @@ export interface ConfigValueContext extends ConfigScope {
  */
 export type ConfigValue<T> = T | ((ctx: ConfigValueContext) => T);
 
+/**
+ * The same config **after** it resolves: every `ConfigValue<T>` is just `T`, because
+ * `interpolateConfig` has already called it.
+ *
+ * **This is the half that lets `RmanConfig` be the author's type.** One type cannot answer both
+ * "what may I write?" (a function is fine - rman calls it) and "what do I get?" (never a function -
+ * it was already called), so it used to answer only the second, and writing a value function was a
+ * compile error the docs themselves committed. Widening `RmanConfig` alone just moves the problem:
+ * measured, six read sites needed a cast. The author's type widens and the *reader's* is computed
+ * from it - one derived type, applied at `Package.config`, rather than a second one to keep in step
+ * by hand.
+ *
+ * **Two guards, and each was measured by leaving it out.**
+ *
+ * - **Steps are named first.** A value function is recognised by its parameter, and
+ *   `ConfigValueContext` carries an index signature - so `RunStepFn` is assignable to it and a
+ *   `run.build.exec` function collapsed to its *return type*, leaving `RunService` nothing to call.
+ * - **`CODE_SUBTREES` is skipped, at every level.** `plugins`/`commands`/`publishTargets` hold code
+ *   all the way down, and the selector index (`[selector]: RmanConfig`) re-enters the config, so a
+ *   top-level-only guard misses the copy inside a `"[*]"` block. Left out, the walk reached
+ *   `Plugin.manifestProvider.versionScheme` and rewrote its **methods**: `smallestBump(): string`
+ *   became `string`, `bumpFor`/`isValid`/`compare`/`next` became `{}`. A function with *fewer*
+ *   parameters is assignable to one with more, so a zero-argument method matches the value-function
+ *   pattern - which makes this transform unsafe over any object carrying methods, and the guard the
+ *   only thing keeping one out of its way.
+ *
+ * Both lists are the runtime's own (`STEP_PATHS`' function types, `CODE_SUBTREES` itself), so the
+ * type follows the rule rather than restating it - the drift `ScopedVars` already demonstrated is
+ * not available here.
+ */
+export type Resolved<T> = T extends RunStepFn | RunConditionFn
+  ? T
+  : T extends (ctx: ConfigValueContext) => infer R
+    ? R
+    : T extends object
+      ? { [K in keyof T]: K extends CodeSubtree ? T[K] : Resolved<T[K]> }
+      : T;
+
+/** `pkg.config`'s type: what every command reads, with the value functions already called. */
+export type ResolvedConfig = Resolved<RmanConfig>;
+
 export interface ConfigScope {
   /** The package the config was resolved for - which is what lets one declaration at the root
    *  still say something package-specific. */
@@ -556,7 +598,12 @@ export interface InterpolateOptions {
   at?: string[];
 }
 
-export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: InterpolateOptions): T {
+/**
+ * **Returns `Resolved<T>`, not `T`, because resolving is what it does.** Calling every value
+ * function is half this function's job, so the type it hands back is the one where they are gone -
+ * which is what makes `pkg.config` a `ResolvedConfig` without a cast anywhere between.
+ */
+export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: InterpolateOptions): Resolved<T> {
   const skip = options?.skip ?? [];
   /**
    * Where `config` sits in the whole config, when a caller hands over a fragment rather than the
@@ -643,7 +690,14 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: In
    *  expression asked for it first or the result did. */
   const result: Record<string, unknown> = {};
   for (const key of Object.keys(config)) result[key] = resolve(key);
-  return result as T;
+  /**
+   * **The one cast in the whole two-view split, and it is here rather than at every read.** No type
+   * can prove that a runtime walk turned `T` into `Resolved<T>`; this walk is what makes it true.
+   * Putting it at this single return is what keeps `pkg.config` honest without a cast in any of the
+   * commands - which is the arrangement the alternative (widening `RmanConfig` alone) gave up, six
+   * read sites at a time.
+   */
+  return result as Resolved<T>;
 }
 
 /**
@@ -717,7 +771,7 @@ export const STEP_PATHS = [
  *
  * These entries are loaded by `loadPlugins` and `cli.ts`, never read as settings.
  */
-export const CODE_SUBTREES = ['plugins', 'commands', 'publishTargets'];
+export const CODE_SUBTREES = ['plugins', 'commands', 'publishTargets'] as const;
 
 const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
 
@@ -1041,7 +1095,7 @@ const VALUE_KEY = 'value';
  */
 function isCodePath(at: (string | number)[]): boolean {
   const segments = at.filter((p): p is string => typeof p === 'string');
-  if (CODE_SUBTREES.includes(segments[0])) return true;
+  if ((CODE_SUBTREES as readonly string[]).includes(segments[0]!)) return true;
   return STEP_PATHS.some(pattern => {
     const parts = pattern.split('.');
     return parts.length === segments.length && parts.every((part, i) => part === '*' || part === segments[i]);
@@ -1336,3 +1390,7 @@ function isUnsetValue(value: unknown): boolean {
 }
 
 const UNSET_MARKER = Symbol('rman.valueUnset');
+
+/** The `CODE_SUBTREES` entries as a type, so the runtime list and `Resolved`'s guard cannot name
+ *  different keys. */
+type CodeSubtree = (typeof CODE_SUBTREES)[number];

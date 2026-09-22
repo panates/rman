@@ -382,6 +382,41 @@ the walk reaches first.
 is **purely a typing aid** - rman never reads it at runtime, it only ever sees the plain object a
 config file exports. So the split is about who can *author* what, and it follows the code.
 
+**`RmanConfig` is the *author's* view; `pkg.config` is `ResolvedConfig`, derived from it.** One type
+cannot answer both questions, because a value may be written as a **function** and by the time
+anything reads a config that function has been called. `Resolved<T>` (in `core/config.ts`) is that
+derivation - one transform, applied at `Package.config` and at `interpolateConfig`'s return - so
+there is no second type to keep in step by hand.
+
+- **The direction was measured wrong first.** Widening `RmanConfig` while `Package.config` still
+  used it moved the cast to every **read** - six sites. The widening was right and leaving the
+  reader on the same name was not.
+- **Deriving the other way round cannot work, and the reason is the name.** `RmanConfig` is also a
+  **namespace** that `rman-node` augments; a `type` alias cannot merge with one, and the circular
+  reference resolves to `{}` *silently* - every key then reads as "does not exist". A derived
+  *reader* view needs no merge, which is why it is the derived half.
+- **`Resolved` has two guards, and each was measured by leaving it out.** Steps are named first
+  (`RunStepFn | RunConditionFn`), because `ConfigValueContext` carries an index signature and a
+  `run.build.exec` function therefore matched the value-function pattern and collapsed to its return
+  type. And `CODE_SUBTREES` is skipped **at every level**, not just the top, because the selector
+  index (`[selector]: RmanConfig`) re-enters the config: without it the walk reached
+  `Plugin.manifestProvider.versionScheme` and rewrote its *methods* - `smallestBump(): string`
+  became `string`, the rest became `{}`. **A function with fewer parameters is assignable to one
+  with more**, so a zero-argument method matches too; this transform is unsafe over anything
+  carrying methods, and the guard is what keeps one out of its way.
+- `CODE_SUBTREES` is `as const` so the guard is `(typeof CODE_SUBTREES)[number]` - the runtime list
+  and the type cannot name different keys.
+- **Which keys may be written as a function is not a per-key judgement for the derived half.** Every
+  `target: 'config'`/`'both'` option is a value by construction, so `CommandConfigFromMetadata`
+  wraps them all in one place. Only hand-written `Extra` keys are decided one at a time, and only
+  `VersionExtraKeys` actually holds both kinds (`stamp` is a value; the three slots are steps). The
+  two mistakes are not symmetric - forgetting `ConfigValue` on a value key just means it cannot be
+  written as a function yet, while putting it on a step key accepts a value function where a step
+  runs - which is why nothing wraps `Extra` automatically.
+- Pinned in `config.spec.ts` ("the author view and the resolved view"), by `tsc` rather than mocha,
+  with a control per claim: reverting the step guard, the every-level guard, the reader's type or
+  the author's widening each turns a different assertion red.
+
 **A command-owned key is declared by the command**, not centrally: `version.*` lives in
 `version.command.ts`, `publish.*` in `publish.command.ts`, and `CommandContribution` assembles the
 block (see "How a command is declared"). A *target's* block likewise - `publish.docker.*` in

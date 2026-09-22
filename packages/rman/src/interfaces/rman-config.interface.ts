@@ -1,5 +1,6 @@
 import type * as yargs from 'yargs';
 import type { RmanApplication } from '../core/application.js';
+import type { ConfigValue } from '../core/config.js';
 import type { CustomCommand } from '../core/custom-command.js';
 import type { Plugin } from '../core/plugin.js';
 import type { PublishTarget } from '../core/publish-target.js';
@@ -17,34 +18,31 @@ import type { RunConditionFn, RunStepValue } from '../core/run-step.js';
  * (see `CommandContribution`). This used to be two files and two types both called `RmanConfig` -
  * one for the config shape, one for the command declarations - which is why the package could not
  * export the second at all.
- */
-/**
- * **This describes the config as a *reader* sees it**, which is what `pkg.config` is: the directory
- * cascade, `"[selector]"` blocks, `extends` and `${{ }}` all applied, and every value function
- * already **called** by `interpolateConfig`. So `CleanService` asking `pkg.config.clean?.include`
- * gets `string | string[]` and needs no cast.
  *
- * **An author may also write a function wherever rman computes a value, and this type does not say
- * so** - a known gap, not a decision. `ConfigValue` names that form and `ConfigValueContext` names
- * what it is handed, so a config can be written with a cast; `docs/rman.md`'s own
- * `changelog: { filePath: ({ vars }) => vars.notesFile }` does not compile without one.
+ * **This is the type an *author* writes**, and `ResolvedConfig` - derived from it - is what a
+ * *reader* gets. One type could not be both: a value may be written as a **function** here, because
+ * rman calls it while the config resolves, and by the time anything reads `pkg.config` it has
+ * already been called. Answering only the reader's question is what this type used to do, and it
+ * made `docs/rman.md`'s own `changelog: { filePath: ({ vars }) => ... }` a compile error.
  *
- * **Two attempts at closing it are recorded here so the third does not repeat them:**
+ * **The direction matters, and it was measured the wrong way round first.** Widening this type
+ * while `Package.config` still used it moved the cast to every **read** - six sites broke
+ * (`version.command.ts`, `publish-target.ts`, `changelog.service.ts`, three in
+ * `github-release.service.ts`). The widening was right; leaving the reader on the same name was not.
+ * So the author's view is the declared one and the reader's is computed: see `Resolved`, which also
+ * records the two guards that make a mechanical transform safe here.
  *
- * - *Widening this type* to `T | (() => T)` puts a cast at every **read** site instead - measured,
- *   six broke: `version.command.ts`, `publish-target.ts`, `changelog.service.ts` and three in
- *   `github-release.service.ts`. A reader and an author need two types, not one.
- * - *Deriving an input view mechanically* (`AsConfigValuesDeep` over this) fails twice over. It
- *   cannot be this name: `RmanConfig` is **also a namespace** (`RmanConfig.CommandConfigs`,
- *   `CommandContribution`, …) that `rman-node` augments, a `type` alias cannot merge with a
- *   namespace, and the resulting circular reference resolves to `{}` **silently** - measured, every
- *   key then read as "does not exist", `vars` and `run` included. Under a second name it compiles
- *   and still degrades types: `vars: Record<string, unknown>` becomes `ConfigValue<{}>`, so a
- *   resolved config is no longer a valid input, and every object-valued key goes the same way.
+ * **Deriving the other direction is what cannot work, and the reason is this name.** `RmanConfig` is
+ * also a **namespace** (`RmanConfig.CommandConfigs`, `CommandContribution`, …) that `rman-node`
+ * augments; a `type` alias cannot merge with a namespace, and the resulting circular reference
+ * resolves to `{}` **silently** - measured, every key then read as "does not exist", `vars` and
+ * `run` included. A derived *reader* view needs no such merge, which is why it is the half that is
+ * derived.
  *
- * What is left is to **declare** the input view per contribution, beside the resolved one, so the
- * step/value split is stated rather than inferred - a `CommandOption`'s keys may be wrapped, an
- * `Extra`'s must not, and only the author of a key knows which it is.
+ * Which keys may be written as a function is not a judgement made key by key: every option a
+ * command declares is one, because an option's value is by construction a value rather than a step
+ * (`CommandConfigFromMetadata`). Only the hand-written `Extra` keys are decided individually, since
+ * that is where a step key lives.
  */
 export interface RmanConfig extends RmanConfigKeys, RmanConfig.CommandConfigs {
   /**
@@ -566,10 +564,17 @@ export namespace RmanConfig {
    * `choices` narrows further, and is the one place the caller has to help: an array literal widens
    * to `string[]` on its own, so `choices: ['a', 'b'] as const` is what yields `'a' | 'b'`. Without
    * the assertion it falls back to the declared `type`.
+   *
+   * **Every one of them is a `ConfigValue`, and that needs no per-key judgement.** An option
+   * declares a `type` yargs can parse, so what it contributes to `.rmanrc` is by construction a
+   * *value* - never a step, which is why steps arrive through `Extra` instead and have to be decided
+   * one at a time. So the whole derived half widens here, in one place, and a config author may
+   * write `changelog: { filePath: ({ vars }) => ... }` for any of them. `Resolved` takes it back off
+   * again for the reader.
    */
   export type CommandConfigFromMetadata<T extends CommandMetadata> = T['config'] extends infer C
     ? C extends Record<string, CommandOption>
-      ? { [K in keyof ConfigOnly<C>]?: OptionValue<ConfigOnly<C>[K]> }
+      ? { [K in keyof ConfigOnly<C>]?: ConfigValue<OptionValue<ConfigOnly<C>[K]>> }
       : {}
     : {};
 

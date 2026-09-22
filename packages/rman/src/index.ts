@@ -25,7 +25,15 @@ export { defineConfig } from './core/config.js';
  * `value`, i.e. what an expression sees. Not to be confused with `RunStepContext`, which is what a
  * step gets, later, with a working directory and a `runBin`.
  */
-export type { ConfigScope, ConfigValue, ConfigValueContext, FileScope, PackageScope } from './core/config.js';
+export type {
+  ConfigScope,
+  ConfigValue,
+  ConfigValueContext,
+  FileScope,
+  PackageScope,
+  Resolved,
+  ResolvedConfig,
+} from './core/config.js';
 export type { CommandContext, CustomCommand } from './core/custom-command.js';
 export { defineCommand } from './core/custom-command.js';
 /** Both the shape and the registry: `const m: Manifest` and `Manifest.read(dir)` - merged onto one

@@ -1,6 +1,7 @@
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
 import EasyTable from 'easy-table';
+import type { ConfigValue } from '../core/config.js';
 import type { RunStepValue } from '../core/run-step.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { VersionService } from '../services/version.service.js';
@@ -125,6 +126,19 @@ const config = {
  * are written out, intersected with the derived ones by `CommandContribution`, and the key still
  * has exactly one owner. Everything above that *is* expressible is declared as an option instead:
  * `Extra` is the escape hatch, not the default.
+ *
+ * **It is also the one interface in the tree holding both kinds of function**, so the value/step
+ * split is made here by hand, key by key. `stamp` is a **value**, so it is a `ConfigValue` and may
+ * be written as a function evaluated while the config resolves. The three slots are **steps**: they
+ * already take a function and it means something else - code `version` calls when the write
+ * happens, with a `RunStepContext`. Wrapping one would accept a value function where a step is what
+ * actually runs.
+ *
+ * A new key here goes on one side or the other, and the two mistakes are not symmetric: forgetting
+ * `ConfigValue` on a value key is benign (it simply cannot be written as a function yet, which is
+ * where every key started), while putting it on a step key is not. That asymmetry is why nothing
+ * wraps these automatically - see `CommandConfigFromMetadata` for the half that can be, because an
+ * option's value is a value by construction.
  */
 export interface VersionExtraKeys {
   /** Files whose hard-coded version is rewritten to the version being written, in the same commit
@@ -135,7 +149,7 @@ export interface VersionExtraKeys {
    *  Stamping the source, not the build output: a build-time rewrite leaves the checked-in file
    *  claiming a placeholder, so anything running from source reports that placeholder, git never
    *  records the released version, and the rewrite has to be redone on every build. */
-  stamp?: VersionStampEntry | VersionStampEntry[];
+  stamp?: ConfigValue<VersionStampEntry | VersionStampEntry[]>;
   /** Command(s) run at the version write itself, when the package does not declare a hook for that
    *  slot of its own (`version` in a Node repository's `package.json#scripts`, whatever a plugin's
    *  step source answers elsewhere - the package's own declaration wins, as in `run`). An array

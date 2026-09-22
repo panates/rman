@@ -113,6 +113,8 @@ import {
 } from 'rman';
 import type {
   RmanConfig,
+  ResolvedConfig,
+  ConfigValue,
   Plugin,
   PluginContext,
   PublishTarget,
@@ -1002,9 +1004,20 @@ export default {
     buildDir: 'build',
   },
   '[*]': {
-    changelog: { filePath: ({ vars }) => vars.notesFile },
+    changelog: { filePath: ({ vars }) => `${vars.buildDir}/NOTES.md` },
     clean: { include: ({ vars }) => [vars.buildDir, '*.tsbuildinfo'] },
   },
+};
+```
+
+A layer *below* is what `value` reads, so deriving from one takes two files - a shared config and
+the repository that `extends` it, or a directory above and one below. Not two blocks in one object:
+`'[*]'` twice in a single literal is one key written twice, and JavaScript keeps the last.
+
+```js
+// the repository's own .rmanrc.mjs, extending the config above
+export default {
+  extends: '@acme/rman-config',
   '[*]': {
     // `value` is what the layers underneath resolved to - the general form of `+key`
     clean: { include: ({ value, vars, pkg }) => [...value, path.join(vars.coveragePath, pkg.basename)] },
@@ -1055,6 +1068,26 @@ change - the stand-in is an array, not `undefined`. The one consequence:
 array or object, cannot see what it is overriding, and has to be written in a language with no
 editor support inside a quoted value. A function is checked by TypeScript, refactorable, and can
 import whatever it needs.
+
+#### Two views of one config
+
+A function is valid where an author writes a config and impossible where code reads one, because by
+then rman has already called it. So there are two types, and only one of them is written by hand:
+
+| | |
+| --- | --- |
+| `RmanConfig` | what an **author** writes - `defineConfig`, `/** @type {import('rman').RmanConfig} */`. A value may be a function here. |
+| `ResolvedConfig` | what `pkg.config` is - **derived** from `RmanConfig` by `Resolved<T>`, with every value function replaced by what it returns. |
+
+A command reading `pkg.config.changelog?.filePath` gets a `string`, with no cast and no
+`typeof === 'function'` check; a config writing that same key may hand over a function. Nothing has
+to be declared twice - the reader's view is computed.
+
+**A step is not a value, and the types keep them apart.** `run.<script>.before`/`.exec`/`.after`,
+`run.<script>.if` and `version.<slot>` take a function that rman calls *later*, with a
+`RunStepContext`; the derivation leaves those exactly as declared. So do `plugins`, `commands` and
+`publishTargets`, which are code all the way down. Which keys accept a value function is decided by
+the key, the same rule the runtime applies.
 
 > **A value function must compute and return, never act.** It runs while the config resolves -
 > which *every* command does - so one that copies a file copies it on `rman list`, `rman info` and

@@ -1,3 +1,4 @@
+import type { ConfigValue } from '../core/config.js';
 import type { PublishTarget } from '../core/publish-target.js';
 import type { ScopedVars } from '../interfaces/rman-config.interface.js';
 import { DOCKER_TARGET, type DockerPublishService } from '../services/docker-publish.service.js';
@@ -14,27 +15,30 @@ import { DOCKER_TARGET, type DockerPublishService } from '../services/docker-pub
  */
 export interface DockerPublishOptions extends DockerPublishOptionsKeys, ScopedVars {}
 
+/** Every key here is a **value**, so every one is a `ConfigValue` - this target declares no step,
+ *  which is what makes the whole block uniform (see `VersionExtraKeys` for the interface where it
+ *  is not). */
 export interface DockerPublishOptionsKeys {
   /** DockerHub image name/repository - bare (e.g. `"my-app"`) to be prefixed with
    *  `--docker-namespace`/`DOCKERHUB_NAMESPACE`, or already-namespaced (contains a `/`) to use
    *  verbatim. */
-  image: string;
+  image: ConfigValue<string>;
   /** Relative to the package's own directory. Default `"Dockerfile"`. */
-  dockerfile?: string;
+  dockerfile?: ConfigValue<string>;
   /** Default `["linux/amd64"]`. */
-  platforms?: string[];
+  platforms?: ConfigValue<string[]>;
   /** Build `cwd` override, relative to the repository root - only needed when the Dockerfile's
    *  own `COPY`/`ADD` paths expect something other than the package's own directory (rare). */
-  cwd?: string;
+  cwd?: ConfigValue<string>;
   /** Named `docker buildx build --build-context <name>=<path>` entries, keyed by name - each
    *  path is relative to the package's own directory (or absolute). */
-  buildContexts?: Record<string, string>;
+  buildContexts?: ConfigValue<Record<string, string>>;
   /** `docker buildx build --build-arg <name>=<value>` entries - a value of exactly `"$NAME"`
    *  expands to `process.env.NAME` at build time (e.g. to pass a CI secret through). */
-  buildArgs?: Record<string, string>;
+  buildArgs?: ConfigValue<Record<string, string>>;
   /** A file (relative to the package's own directory) whose contents become the DockerHub repo's
    *  full description, if present. Default `"DOCKER_README.md"`. */
-  readme?: string;
+  readme?: ConfigValue<string>;
 }
 
 /**
