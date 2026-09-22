@@ -56,10 +56,11 @@ export class RmanApplication {
 
   readonly logger: Logger;
 
-  /** Which stack claims a directory - the first whose manifest provider recognizes it, because
-   *  before a package is read there is nothing else to go on. */
-  techStackFor(dir: string): Plugin {
-    return this.plugins.first(stack => (stack.manifestProvider.read(dir) ? stack : undefined)) ?? basePlugin;
+  /** Which plugin claims a directory - the first whose manifest provider recognizes it, because
+   *  before a package is read there is nothing else to go on. `basePlugin` when none does, so the
+   *  caller needs no guard. */
+  pluginFor(dir: string): Plugin {
+    return this.plugins.first(plugin => (plugin.manifestProvider.read(dir) ? plugin : undefined)) ?? basePlugin;
   }
 
   /**

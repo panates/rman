@@ -259,7 +259,7 @@ export function createRepository(root?: string, options?: { deep?: number }): Pr
 export function createApp(): RmanApplication {
   const app = new RmanApplication();
   /**
-   * **A spec's own stacks go on first, and the order is load-bearing.** `techStackFor` takes the
+   * **A spec's own stacks go on first, and the order is load-bearing.** `pluginFor` takes the
    * first stack whose manifest provider recognizes a directory, and the fixture's claims anything
    * with a `package.json` - which every package the fixture writes has. Registered after it, a
    * second technology could never claim one, so a polyglot repository was not expressible at all.

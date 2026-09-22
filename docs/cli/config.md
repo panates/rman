@@ -26,7 +26,7 @@ Everything that makes a config hard to read back by hand:
 | directory cascade | a parent directory's `.rmanrc`, then the package's own, closest winning |
 | `"[selector]"` blocks | `"[*]"` and any glob that matches this package's **name** |
 | `extends` | configs merged *underneath* the file naming them |
-| `+key` | appended to whatever it is appended to, rather than replacing it |
+| `value` | a key deriving from what the layers below it resolved to |
 | `${{ ... }}` | evaluated for **this** package - `pkg`, `repository`, `file`, `env`, ... |
 
 ```bash
@@ -38,7 +38,7 @@ run:
   build:
     before:
       - echo base          # from the extended config
-      - echo per-package   # +before, appended rather than replacing
+      - echo per-package   # from [...value, ...], added rather than replacing
     exec: tsc -b tsconfig-build.json   # the package's own, beating "[*]"
 clean:
   include:

@@ -417,7 +417,7 @@ export class Repository extends Package {
    *
    * **A repository whose `.rmanrc` names no plugin has no packages beyond itself**, and that is the
    * boundary working rather than failing: `workspaces` in a `package.json` is npm's idea, so it
-   * takes `plugins: ['rman-node']` to be read as one.
+   * takes `extends: 'rman-node'` - or the plugin itself under `plugins` - to be read as one.
    */
   static async create(root?: string, options?: { deep?: number; app?: RmanApplication }): Promise<Repository> {
     const from = root || process.cwd();

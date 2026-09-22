@@ -1,5 +1,14 @@
 import { expect } from 'expect';
-import type { ArgsOf, CommandOption, Plugin, PublishTarget, RmanConfig, ServiceMap } from '../src/index.js';
+import type {
+  ArgsOf,
+  CommandOption,
+  Plugin,
+  PluginContext,
+  PositionalOption,
+  PublishTarget,
+  RmanConfig,
+  ServiceMap,
+} from '../src/index.js';
 import {
   basePlugin,
   ChangelogService,
@@ -113,13 +122,19 @@ describe('docs/rman.md: the documented API surface', () => {
   /** The types the page names in its `import type` block. Nothing to assert at runtime - the
    *  annotation either compiles or it does not, which is what `npm run typecheck` is for. */
   it('exports every type its Installation block imports', () => {
-    const named: [RmanConfig, Plugin | undefined, Plugin, PublishTarget | undefined, ServiceMap] = [
+    const named: [RmanConfig, Plugin, PluginContext | undefined, PublishTarget | undefined, ServiceMap] = [
       {},
-      undefined,
       basePlugin,
+      undefined,
       undefined,
       {} as ServiceMap,
     ];
-    expect(named).toHaveLength(5);
+    /** `PositionalOption` beside `CommandOption`, because `positionals` is the other half of a
+     *  command's surface - and the half that could not be typed without importing yargs until it
+     *  was exported. */
+    const positionals = {
+      stage: { describe: 'where to ship', type: 'string' },
+    } satisfies Record<string, PositionalOption>;
+    expect([named.length, Object.keys(positionals)]).toEqual([5, ['stage']]);
   });
 });

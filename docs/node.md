@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 171ca25
-package-version: 1.3.0
-date: 2026-09-20
+git-commit: 9557470
+package-version: 2.0.0-beta.2
+date: 2026-09-22
 
 Verified against `packages/node/src/` as of the commit above. Before trusting/updating this file in
 a later session, run:
 
-  git diff 171ca25..HEAD -- packages/node/src/
+  git diff 9557470..HEAD -- packages/node/src/
 
 and update only the sections touched by what that diff actually shows. Once verified again, bump
 `git-commit`/`package-version`/`date` above to the new HEAD.
@@ -25,17 +25,23 @@ happens to be true of most repositories rman has been used on.
 
 ```yaml
 # .rmanrc.yml
-plugins: ['rman-node']
+extends: 'rman-node'
 ```
 
-Naming it does three kinds of thing at once, and they are worth telling apart:
+**`extends`, not `plugins`.** This package's entry point exports an rman *config*, and `extends` is
+how a config is inherited - `plugins: ['rman-node']` is refused, because that key takes a plugin or
+a glob naming modules that export one, never a package name. The one line brings four kinds of
+thing at once, and they are worth telling apart:
 
-| | What it adds | Where it plugs in |
+| | What it adds | The config key it arrives under |
 | --- | --- | --- |
-| **Commands** | `ci`, `clean` | `declareCommand()` + `ctx.addCommand()` |
-| **A publish target** | `npm` - its flags on `rman publish`, its registry check, and which packages are npm's by default | `ctx.app.publishTargets` |
-| **A technology** | what a package *is* (`package.json`), where packages are (`workspaces`), how a version is planned, what `pre<script>`/`post<script>` mean, `node_modules/.bin` on PATH | one `TechStack`, via `ctx.addTechStack()` |
-| **Augmentations** | the npm half of `SystemInfo` (what `info` prints), and the `.rmanrc` keys below | `augment*()` + `declare module 'rman'` |
+| **A technology** | what a package *is* (`package.json`), where packages are (`workspaces`), how a version is planned, what `pre<script>`/`post<script>` mean, `node_modules/.bin` on PATH | `plugins` |
+| **Commands** | `ci`, `clean` | `commands` |
+| **A publish target** | `npm` - its flags on `rman publish`, its registry check, and which packages are npm's by default | `publishTargets` |
+| **Augmentations** | the npm half of `SystemInfo` (what `info` prints), and the `.rmanrc` keys below | not a key - `augment*()` at import, plus `declare module 'rman'` |
+
+All three keys **append**, so inheriting this config never costs a repository the plugins, commands
+or targets it declares itself.
 
 Without this package, `rman clean` is `Unknown argument: clean`, and a repository has **no manifest
 reader at all** - which is the point: another ecosystem supplies its own through the same seams,
@@ -64,29 +70,18 @@ ESM-only, requires **Node.js >= 20**, and takes `rman` itself as a peer. Everyth
 imported from the package root:
 
 ```ts
-import {
-  defineConfig,
-  nodePlugin,
-  nodeTechStack,
-  augmentTechStack,
-  npmPublishTarget,
-  NPM_TARGET,
-  PublishService,
-  CiService,
-  CleanService,
-  NodeVersionPlanService,
-  nodeVersionPlanner,
-  packageJsonManifest,
-  npmWorkspace,
-  packageJsonSteps,
-  augmentSystemInfo,
-  npmBinPaths,
-  DEPENDENCY_KEYS,
-  parseWorkspaceRange,
-  resolveWorkspaceRange,
-} from 'rman-node';
-import type { RmanNodeConfig, NodeConfigKeys, ParsedWorkspaceRange } from 'rman-node';
+import { CiService, CleanService, NodeVersionPlanService, NPM_TARGET, NpmPublishTarget, PublishService } from 'rman-node';
+import type { NodeConfigKeys, ParsedWorkspaceRange, RmanNodeConfig } from 'rman-node';
 ```
+
+**That is the whole surface, and it is short on purpose.** The entry point exports what a *user*
+needs; the plugin, the manifest reader, the workspace provider, the step source and the bin-path
+walk are not among them, because nothing outside this package has anything to do with them by hand
+- they arrive through the config. Its own specs reach them by their file paths rather than through
+`index.ts`, which is what keeps this list from growing to serve the tests.
+
+Pinned by [`docs-api.spec.ts`](../packages/node/test/docs-api.spec.ts), so a name removed from the
+package fails to compile rather than going stale here.
 
 ## Config keys
 
@@ -97,7 +92,7 @@ Three `.rmanrc` keys only mean something because the repository is a Node one - 
 | --- | --- | --- | --- |
 | `packageManager` | root only | `NodeConfigKeys` | Which package manager `ci`/`publish` shell out to, and whose version `info` reports. `npm` \| `yarn` \| `pnpm` \| `bun`, default `npm`. **Here because no single command owns it** - `ci` and the `npm` target both read it. |
 | `clean` | per package, cascaded | `clean.command.ts` | `include`/`exclude` globs beyond TypeScript's own output, and `skip`. A package declaring its own `clean` replaces the root's entirely for itself. A **command contribution**, like every built-in's own key. |
-| `publish.npm.directory` | per package, cascaded | `npmPublishTarget` | Where this package's publishable output lives, relative to its own directory. The target's own block, through the `PublishTargetConfigs` slot, beside the `docker` one rman itself declares. |
+| `publish.npm.directory` | per package, cascaded | `NpmPublishTarget` | Where this package's publishable output lives, relative to its own directory. The target's own block, through the `PublishTargetConfigs` slot, beside the `docker` one rman itself declares. |
 
 All three are typed where they are *read* - `CleanService` reaching `pkg.config.clean` needs no
 cast. What differs is only who says so:
@@ -159,7 +154,7 @@ export default defineConfig({
 Computes and applies `npm publish` (or the equivalent for yarn/pnpm/bun) across every non-private
 package whose local version isn't already on the registry.
 
-**Reached through `npmPublishTarget`, not directly, when `rman publish` runs** - this is the
+**Reached through `NpmPublishTarget`, not directly, when `rman publish` runs** - this is the
 implementation behind the `npm` [publish target](rman.md#publishtarget), and stays callable on its
 own. See [Commands, and the `npm` publish target](#commands-and-the-npm-publish-target).
 
@@ -381,50 +376,48 @@ it too.
 
 ## Seams this plugin fills
 
-| Export | Seam | What it answers |
-| --- | --- | --- |
-| `packageJsonManifest` | `TechStack`'s manifest members | What a package's name, version and dependencies are; `publishedVersion` (`npm view`) and `stampVersion`. Its `name` is `'node'`, which is what `Package.provider` reports. |
-| `npmWorkspace` | `Workspace.Provider` | Which directories are packages - `workspaces` in the root `package.json`. |
-| `packageJsonSteps` | `RunService.StepSource` | A script a package declares in `package.json#scripts`, including the `pre<script>`/`<script>`/`post<script>` shape - which is also how npm's `preversion`/`version`/`postversion` reach `version`'s own lifecycle, with no second seam. |
-| `nodeVersionPlanner` / `NodeVersionPlanService` | `VersionPlanService` | Where a boundary comes from when a package has no release tag, and how far a bump cascades. `VersionPlanService` is abstract, so `version`/`changed` have nothing to ask without this. |
-| `npmBinPaths` | `BinPath.Provider` | `node_modules/.bin`, walked up the directory chain, so a repository's pinned `eslint`/`tsc` is what a `run` step actually executes. |
+A plugin **is** one technology in rman 2.0 - the seams below are its own members rather than
+separately registered providers, which is why they are not exported: there is nothing to register.
 
-`DEPENDENCY_KEYS` is the list those readers use: `dependencies`, `devDependencies`,
-`peerDependencies`, `optionalDependencies`.
+| `Plugin` member | What it answers |
+| --- | --- |
+| `name` | `'node'` - what `Package.provider` reports, and the key the registry de-duplicates by. |
+| `manifestProvider` | What a package's name, version and dependencies are; `publishedVersion` (`npm view`) and `stampVersion`. Grouped rather than flattened, because nine members about one file read better as a named group. |
+| `getWorkspace` | Which directories are packages - `workspaces` in the root `package.json`. |
+| `getRunSteps` | A script a package declares in `package.json#scripts`, including the `pre<script>`/`<script>`/`post<script>` shape - which is also how npm's `preversion`/`version`/`postversion` reach `version`'s own lifecycle, with no second seam. A *query*, not a hook, which is why it is `get…` rather than `on…`. |
+| `getBinPaths` | `node_modules/.bin`, walked up the directory chain, so a repository's pinned `eslint`/`tsc` is what a `run` step actually executes. |
+| `versionPlanner` | Where a boundary comes from when a package has no release tag, and how far a bump cascades. `VersionPlanService` is abstract, so `version`/`changed` have nothing to ask without this. |
 
-They are declared together as **one `TechStack`**, because they only mean anything together -
-`packageJsonSteps` reads `pkg.manifest.raw.scripts`, so it is meaningless without
-`packageJsonManifest` having produced that manifest. The plugin is a name and an `init`:
+**They only mean anything together**, which is what the single type says: `getRunSteps` reads
+`pkg.manifest.raw.scripts`, so contributing it without `manifestProvider` leaves it parsing whatever
+another technology produced. The coupling was always real - `TechStack` and `RmanPlugin` were two
+types until 2.0, with six independently registered seams, and declaring one without the others
+type-checked.
 
 ```ts
-export const nodeTechStack: TechStack = {
-  name: 'node',
-  manifestProvider: packageJsonManifest,
-  workspaceProvider: npmWorkspace,
-  runSteps: packageJsonSteps,
-  binPathsProvider: npmBinPaths,
-  versionPlanner: nodeVersionPlanner,
-};
+// node-plugin.ts
+export class NodePlugin implements Plugin {
+  name = 'node';
+  manifestProvider = new NodeManifestProvider();
+  versionPlanner = new NodeVersionPlanService();
+  getWorkspace(root: string) { /* reads `workspaces` */ }
+  getRunSteps(pkg: Package, script: string) { /* reads package.json#scripts */ }
+  getBinPaths(cwd: string) { /* node_modules/.bin, walked up */ }
+}
 
-export const nodePlugin = definePlugin({
-  name: 'rman-node',
-  init(ctx) {
-    ctx.addTechStack(nodeTechStack);
-    ctx.app.publishTargets.add(npmPublishTarget);
-    for (const command of [ciCommand, cleanCommand]) ctx.addCommand(command);
-  },
+// index.ts - what the entry point actually default-exports
+export default defineConfig({
+  plugins: [new NodePlugin()],
+  commands: [ciCommand, cleanCommand],
+  publishTargets: [new NpmPublishTarget()],
 });
-
-/** What the entry point actually default-exports. */
-export default defineConfig({ plugins: [nodePlugin] });
 ```
 
-**The default export is an `.rmanrc` config, not the plugin** - which is what a package naming
-itself in `plugins` hands over. Exposing exactly one plugin was the shape of the plugin this package
-happens to contain today; adding a second would have changed what every repository importing it
-receives. As a config it is the same kind of thing as the file that names it. Only its `plugins` are
-read - config keys reach a repository through `extends`. `nodePlugin` is exported by name for code
-registering it directly.
+**The default export is an `.rmanrc` config, not the plugin**, and a repository inherits it with
+`extends`. As a config it is the same kind of thing as the file that names it, and free to grow a
+second plugin or another command without changing shape - which a package exporting exactly one
+plugin could not do. `init` is still a `Plugin` member for anything the seams do not name; this
+plugin needs none, because commands and targets are config keys.
 
 **One caveat about the `workspace` seam, and it is a real limitation:** `Workspace.resolve` takes the
 first provider that answers, so in a polyglot repository the ecosystem listed first in `plugins`
@@ -464,7 +457,7 @@ other command's.
 
 **`publish` is not one of them.** The command is the core's
 ([`docs/cli/publish.md`](cli/publish.md)); what this package contributes is one
-[publish target](rman.md#publishtarget) named `npm` - `npmPublishTarget`, a thin adapter over
+[publish target](rman.md#publishtarget) named `npm` - `NpmPublishTarget`, a thin adapter over
 [`PublishService`](#publishservice):
 
 - **its own flags** on `rman publish`: `--package-manager`, `--access`, `--tag`, `--otp`,

@@ -123,12 +123,12 @@ export function defineCommand(command: CustomCommand): CustomCommand {
 }
 
 /**
- * One command module that loaded, in whichever form it exported - the same two-optional-fields
- * shape `PluginCommand` uses, because the two are the same choice made in two places.
+ * One command module that loaded, in whichever form it exported.
  *
- * Both forms are accepted for the reason `PluginContext.addCommand` accepts both: the declarative
- * one is what rman asks a command author to write, and a repository's own command should not be
- * stuck on the older shape just because it lives in a file rather than in a package.
+ * Both forms are accepted, and the same pair is accepted for a command written straight into
+ * `.rmanrc "commands"` - one key, one set of rules. The declarative factory is what rman asks a
+ * command author to write; a repository's own command should not be stuck on the older object
+ * shape just because it lives in a file rather than in a config.
  */
 export interface LoadedCommand {
   /** The command's name - its file's basename, or the first word of an explicit `command`. */
@@ -163,7 +163,7 @@ export function defaultCommandGlobs(rootDir: string): string[] {
 
 /**
  * Loads every command module matching `patterns` - absolute globs, already anchored to whichever
- * config file declared them (see `anchorCommands`).
+ * config file declared them (see `anchorContributions`).
  *
  * A repository matching nothing pays for one glob and no imports, which matters because this runs
  * on *every* rman invocation, `info` included.

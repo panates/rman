@@ -256,7 +256,7 @@ below, and a `"[selector]"` narrows the audience.**
 running its own pre/post hooks in the same directory - `RunService` must keep skipping the bookend
 when `!repository.monorepo`, or every hook runs twice (measured).
 
-## Config inheritance: `extends` and `+key`
+## Config inheritance: `extends`
 
 [`src/core/extends-config.ts`](src/core/extends-config.ts),
 [`src/core/merge-config.ts`](src/core/merge-config.ts).
@@ -274,17 +274,23 @@ when `!repository.monorepo`, or every hook runs twice (measured).
     either direction - a shared config aiming at the root alone writes `"[/]"`, and one aiming at
     the packages writes `"[*]"`. (This bullet said the opposite until the selector redesign, and was
     measured wrong: a base declaring `group` unmarked resolves onto the root **and** `pkg-a`.)
-- **`+key`** appends instead of replacing, through the single `mergeConfig` every layer uses.
-  Scalars promote to lists; on an object the prefix is ignored (objects already merge); `key` and
-  `+key` together apply replacement first.
-  - **Trap: an append must stay outstanding until something to append to exists.** Resolving it
-    eagerly passes unit tests and is wrong: a directory's own file forms merge into an *empty*
-    object long before the selector blocks and parent directories they append to, so collapsing
-    `+key` there silently discarded them (measured - a package appending to both `"[*]"` and
-    `"[*-dialect]"` kept only its own step). `finalizeConfig` collapses whatever is still
-    outstanding once the chain ends, and only then.
-- `+key` needs no separate typing: `WithAppend<T>` generates the append form for every key by
-  remapping, so nothing drifts and a typo is caught there.
+- **There is no `+key`, and there was.** It appended instead of replacing; `value` says the same
+  thing and says it better - it composes (three layers each deriving from the one below), it can
+  reorder or filter rather than only append, and it needs no machinery keeping an append
+  *outstanding* until the layer it belongs to turns up (which `finalizeConfig`, also gone, existed
+  for). It also carried a bug `value` does not: appending onto a value that was a sole `${{ }}`
+  expression returning an array **nested** it, because the merge promoted the expression *string*
+  to a list and interpolation only later turned that element into the array - measured with a
+  control, `[['a','b'],'c']` where a literal list gave `['a','b','c']`.
+  - **A `+key` still in a config is refused, not ignored** (`mergeConfig`), naming the key, the file
+    and what to write instead. rman validates no config keys - there is no schema behind `.rmanrc`
+    any more - so an unknown key is dropped in silence: measured, a consumer's `+include: ['extra']`
+    resolved to the inherited list unchanged, exactly as if the line were not there. A bare `+` is
+    left alone, since it names no key.
+  - `WithAppend<T>` is gone with it, and with it the two-clause trap on `RmanConfig` that generated
+    the append forms for contributed keys.
+  - **`plugins`, `commands` and `publishTargets` still append without being asked** - see
+    `ALWAYS_APPEND`. There that is what the *key* means rather than a choice made per layer.
 
 ## The type is the only config surface - there is no JSON Schema
 
@@ -315,7 +321,7 @@ work: the type composes and a schema does not.
   needs one published leaf **per combination of plugins** - which no plugin can publish, since it
   cannot know the others.
 - **Merging the documents into one generated file** also works, on plain draft-07, keeping `$ref: "#"`
-  recursion and `+key` (measured). But it is not a JSON Schema feature at all: it is a build step of
+  recursion and the `+key` of the day (measured). But it is not a JSON Schema feature at all: it is a build step of
   our own, the merge semantics (arrays append? conflicts throw?) become ours to get wrong, a
   plugin's fragment alone is not a valid schema (its `$ref`s dangle into the core's definitions), and
   no other tool can read the result.
@@ -326,7 +332,7 @@ work: the type composes and a schema does not.
 ## Which ecosystem a package belongs to
 
 `Package.provider` - `'node'` for one read by `rman-node`, empty when no plugin claimed the
-directory. Comes from `TechStack.name`, and that field means the **ecosystem**, not the file
+directory. Comes from `Plugin.name`, and that field means the **ecosystem**, not the file
 (`manifestFile` already says `package.json`; a name repeating it carried no information, which is
 why it went unused until this existed).
 
@@ -356,7 +362,7 @@ a command an author wrote (`eslint .`) runs the repo's pinned copy rather than a
 who owns which half:
 
 - **Which directories** is the ecosystem's, and the core has none. `node_modules/.bin` walked up the
-  directory chain is npm's layout; `rman-node` contributes it (`RmanPlugin.binPaths`). Measured: a
+  directory chain is npm's layout; `rman-node` contributes it (`Plugin.getBinPaths`). Measured: a
   `run` step calling a binary in `node_modules/.bin` fails with `command not found` in a repository
   naming no plugin, and runs with `rman-node` named.
 - **How a PATH is spelled** is the OS's, and stays in the core: `PATH` everywhere but Windows, where
@@ -387,7 +393,7 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   config shape and `rman-cfg.interface.ts` for the command declarations - and one package cannot
   export two things under one name, so the second was unreachable from outside rman entirely. They
   are one file now: `RmanConfigKeys` for the keys no command owns, `CommandConfigs` for what the
-  commands contribute, and `RmanConfig` extending both plus their `WithAppend` forms.
+  commands contribute, and `RmanConfig` extending both.
 - **`run` is the one key that stays hand-written, and `Extra` cannot take it.** `CommandContribution`
   wraps a contributed block in `ConfigBlock`, which folds in `ScopedVars` - and `run` is keyed by
   script name, so `vars` would have to satisfy the index signature too. Measured both halves:
@@ -396,13 +402,8 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   signature`. Contributing `run` would gain nothing and add a `vars` nobody can write.
 
 - **`ConfigBlock` gives a contributed key the same shape a hand-written one had** - the keys, their
-  `+key` forms, and `vars`. A hand-written interface said that with three clauses
-  (`extends XKeys, WithAppend<XKeys>, ScopedVars`) and every new one had to remember all three.
-- **Trap: `WithAppend` maps over what it is given, so `RmanConfig` needs *two* clauses** -
-  `WithAppend<RmanConfigKeys>` **and** `WithAppend<CommandConfigs>`. Mapping only the first stopped
-  generating `+version`/`+publish` the moment those keys moved out of `RmanConfigKeys`. Caught by
-  `config.spec.ts`'s type-level pin, which is the only thing that looks: mocha transpiles without
-  type-checking, so every assertion still passed.
+  `vars`. A hand-written interface said that with three clauses
+  (`extends XKeys, ScopedVars`) and every new one had to remember each.
 - **Trap: an augmentation only applies where its module is in the program.** The contributions live
   in `src/cmd/*.command.ts`, so `index.ts` imports [`src/commands.ts`](packages/rman/src/commands.ts)
   for them - not just `cli.ts`. Reached from `cli.ts` alone, the keys existed for rman and for
@@ -412,8 +413,8 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   `declare module 'rman' { interface RmanConfigKeys extends NodeConfigKeys {} }`. That is what keeps
   `pkg.config.clean` typed at the place it is *read* (`CleanService`), which a standalone
   `RmanNodeConfig` could never do - the reader holds a `Package`, and `Package.config` is the core's
-  type. `WithAppend<RmanConfigKeys>` is a mapped type evaluated where it is used, so `+clean` comes
-  along on its own.
+  type. The augmentation is evaluated where it is used, so `clean` is typed at the place it is
+  read.
 - **`RmanNodeConfig` (exported from `rman-node`, with its own `defineConfig`) is the authoring
   name** - so the import that carries the augmentation is explicit instead of a side effect someone
   has to remember. Named, not a second `RmanConfig`: one name per meaning.
@@ -429,7 +430,7 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   true when `SystemInfo`'s npm half moved out: measured, **nothing in the core read it any more** -
   only the declaration was left, and its value set was npm's tooling all along.
 - **`dependencies` is core, and must stay.** It layers on top of whatever
-  `TechStack.readDependencies` read, and it is the only way a repository with *no* provider has a
+  the plugin's manifest provider read, and it is the only way a repository with *no* provider has a
   graph at all - a repo whose manifests rman cannot read can still state its edges by hand.
   - **A `string[]`, and only that.** It used to accept a `Record<string, string>` as well, documented
     in both the interface and the schema as "an explicit name -> range map" - and the ranges went
@@ -459,7 +460,7 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
 
 [`src/commands/config.command.ts`](packages/rman/src/commands/config.command.ts). Prints
 `Package.config` for `Repository.currentPackage` (the root package otherwise, and with `--root`),
-which is the *resolved* object - directory cascade, `"[selector]"` blocks, `extends`, `+key` and
+which is the *resolved* object - directory cascade, `"[selector]"` blocks, `extends` and
 `${{ }}` all already applied. It computes nothing of its own; the value it prints is the one every
 command reads, which is the point of having it.
 
@@ -610,7 +611,7 @@ wins:
    - Pattern has no `{name}` (the default `v*`, one repo-wide tag) → `git describe`, i.e. the nearest
      tag **reachable from HEAD**. No single package owns a repo-wide tag, so ancestry is the right
      criterion.
-3. **No tag → the package's own ecosystem.** `TechStack.publishedVersion(pkg)` - `npm view`
+3. **No tag → the package's own ecosystem.** `Plugin.manifestProvider.publishedVersion(pkg)` - `npm view`
    for a `node` package, whatever a plugin supplies elsewhere, **nothing at all** for a repository
    naming no plugin. The version it returns is turned into a tag name via `expandTag` and used only
    if **that tag actually exists in git**. The one real scenario it covers: a tag exists but isn't in
@@ -666,7 +667,7 @@ touched package counts as changed.
 
 - **Question A**, from the same plan `changed` shows
   (`VersionPlanService.getPlanner().getPlan`); `VersionService.applyPlan` does the writes.
-- **`VersionPlanService` is abstract - a technology supplies the planner** (`TechStack.versionPlanner`,
+- **`VersionPlanService` is abstract - a technology supplies the planner** (`Plugin.versionPlanner`,
   `rman-node`'s `NodeVersionPlanService`), and `version`/`changed` fail naming that key when none
   is registered. It does not degrade to a built-in default - a wrong boundary or cascade releases a
   plausible, untrue set of packages.
@@ -759,7 +760,7 @@ touched package counts as changed.
   build output**: rewriting `build/constants.js` from a build script leaves the checked-in file on a
   placeholder, so anything running from source reports it, the tagged commit never records the
   released version, and the rewrite has to be redone every build.
-  - **How a version is *declared* is `TechStack.stampVersion`'s answer, not the core's**;
+  - **How a version is *declared* is the manifest provider's `stampVersion` answer, not the core's**;
     which files hold one is the repository's, which is why the list is config and the rewrite is a
     seam. `stampVersionConstant` is exported as the helper most providers delegate to - measured, it
     reaches a Go `const version = "…"`, a Gradle/TOML `version = "…"` and a JS `const version =
@@ -1048,7 +1049,7 @@ function:
 | | |
 | --- | --- |
 | `run.<script>`, `run.<script>.before`/`.exec`/`.after`, `run.<script>.if`, `version.before`/`.exec`/`.after` | **code** (`STEP_PATHS`) - left alone, called later by `run`/`version` |
-| `plugins`, and everything below it | **code** (`CODE_SUBTREES`) - an `RmanPlugin` is functions all the way down |
+| `plugins`, `commands`, `publishTargets`, and everything below them | **code** (`CODE_SUBTREES`) - a `Plugin`, a command and a target are functions all the way down |
 | everything else | **a value** - called by `interpolateConfig`, exactly where a `${{ }}` would be |
 
 - **The key decides, and it already did.** `run.build.exec: 'tsc -b'` is a shell command and
@@ -1112,16 +1113,46 @@ underneath, which is the general form of `+key` and the one thing an expression 
   from it. Those top-level keys are lazy memoized getters (so key order in the file means nothing
   and a cycle is reported rather than half-resolved); spreading would fire every one on every call,
   and one of them throwing would blame the wrong key.
-- **`value` is `undefined` when nothing below set the key, and is deliberately not defaulted to
-  `[]`** - that would be a guess about the key's type, wrong for every key that is not a list. The
-  case matters because a function written to extend an inherited list is also the *first* layer in a
-  repository that inherits nothing, and V8 reports that as `value is not iterable`, naming neither
-  the key nor the reason. So `callValueFn`'s catch adds the reason itself when `previous` was
-  undefined **and the function actually read it** - recorded through a getter, never inferred from
-  the message. Without that second condition the hint went out with *every* failure of a first-layer
-  function: a frozen-object `TypeError` from `read()` arrived wearing advice about spreading an
-  inherited list, which is precisely the send-the-reader-to-the-wrong-place mistake the hint exists
-  to prevent. Matching on V8's wording is the other way to get this wrong.
+- **`value` spreads as empty when nothing below set the key, so `[...value, 'x']` needs no guard**
+  (`unsetValue` in `config.ts`). That case is not exotic: a value written to extend an inherited
+  list is also the *first* layer in a repository that inherits nothing.
+  - **It was `undefined`, with `value ?? []` required at every site, and the reasoning for that was
+    half right.** Defaulting to a plain `[]` would indeed be a guess about the key's type - so the
+    stand-in is an empty array that **refuses to be a string or a number**, and a non-list use
+    throws naming the key rather than quietly getting `''` or `'1'`. Measured on the three shapes:
+    `[...value, 'x']` -> `['x']`; `` `${value}-x` `` -> throws; `value + 1` -> throws. That last one
+    is a case the old answer got *wrong*: `undefined + 1` is `NaN`, which serialized to `null` and
+    read like a configured value.
+  - **An array rather than a bespoke object, so configs already written keep working**: `value ?? []`
+    returns it (not nullish), and `.length`/`.map`/`.concat`/`.join`/`Array.isArray` all behave as
+    before - measured one by one. The single consequence is that `value === undefined` is now
+    `false`; ask `value.length === 0`.
+  - The sentinel's own error carries `rmanValueHint`, so `walkWithPrevious`'s catch leaves it alone.
+    That catch still adds a note when a value **read `value`** and then failed for a reason of its
+    own - recorded through a getter, never inferred from V8's wording. Without that second condition
+    the note went out with *every* failure of a first-layer function: a frozen-object `TypeError`
+    from `read()` arrived wearing advice about spreading an inherited list, which is the
+    send-the-reader-to-the-wrong-place mistake it exists to prevent.
+- **A chain on the *source* of a merge is carried over, like its `ORIGINS`** (`assignMerged` ->
+  `graftChain`). The link below a key used to be recorded only for a key being **replaced**, and the
+  shape that broke is the ordinary one for a shared config: a base and its consumer both writing
+  `"[*]"`. Those two blocks merge into one before `matchingSelectors` sees them - recording the
+  chain on the merged block - and that block is then merged into a `result` that does not hold the
+  key yet, so there was nothing to chain onto and the source's chain was dropped.
+  - Measured: a base declaring `clean.include: ['build']` and a consumer's `"[*]"` deriving from it
+    answered `['dist']`, losing `build` outright. An **unmarked** key and a **differently named**
+    selector always worked - they merge into a target that already holds the key - which is why this
+    went unnoticed.
+  - Grafted by copying, never in place: a chain is shared by every package that resolved through
+    that layer.
+  - **Layer order is the selectors' declaration order, across files.** A base's `"[pkg-a]"` is the
+    last word even when the consumer's `"[*]"` sits in the closer file - the documented rule, and
+    the cost of having dropped specificity ranking.
+- **`+key` carried a bug `value` does not, and that is part of why it is gone.** Appending onto a
+  value that was a sole expression returning an array **nested** it - measured with a control,
+  `{ base: '${{ ["a","b"] }}', '+base': ['c'] }` gave `[['a','b'],'c']` while a literal `['a','b']`
+  gave `['a','b','c']` - because the merge promoted the expression *string* to a list and
+  interpolation only later turned that element into the array. Removed rather than fixed.
 
 **A value function computes and returns; it must never act - and `FileScope` must never gain a way
 to.** Both halves are the same rule, and the rule is about *when*: this runs while the config
@@ -1170,6 +1201,19 @@ so none of them has anything a function could replace.
 - **Failure is a throw**, as a non-zero exit is for a shell step and as `runBin` already rejects. A
   step that can only report trouble by returning something nobody reads is a step that passes while
   doing nothing.
+  - **Its message is reported by `runFunctionStep`, because nothing else does it.** A shell step's
+    reason arrives on its own - the output streams out and `exec` names the command and its exit
+    code - while a function step's throw goes to the catch that marks the package failed and
+    rethrows an error the CLI treats as already-logged. Measured on a real config whose build step
+    threw a worded explanation of a missing `tsconfig.json`: the run printed
+    `error build pkg-forgot ┆ exec failed ┆ buildWithTsc`, exited 1, and the message appeared
+    nowhere - so the one line that said what to do was the one line dropped. Written where a shell
+    step's output goes: through `onLine` with the panel on, to stderr with it off.
+  - **A *falsy* throw used to read as success.** `let stepError: any` plus `if (stepError) throw
+    stepError` meant `throw undefined` - legal JavaScript, and what a rejection carrying nothing
+    gives you - printed **success** and exited 0. Normalized to an `Error` now. Only the panel-off
+    path had it; with the panel on there is no local catch. Found by the spec written for the
+    message fix above, which is the only reason it is not still there.
 - **`console` is redirected only while the progress panel is on**, which is the same split `exec`
   already makes (`stdio: 'pipe'` + `onLine` with the panel, `'inherit'` without). A function writing
   to the real stdout would print *over* the panel it is being rendered inside. Steps should prefer
@@ -1225,9 +1269,9 @@ const versionCommand = registerCommand(app => ({ command: COMMAND, config, handl
 
 - **`registerCommand` for a built-in, `declareCommand` for a plugin's**, and the difference is one
   line: the first pushes onto `commandRegistry`, a module-level array `runCli` always walks. A
-  plugin using it would hand its commands to repositories that never named the plugin - the module
-  is imported the moment anything imports the package. A plugin passes the function to
-  `ctx.addCommand` instead.
+  package using it would hand its commands to repositories that never named it - the module is
+  imported the moment anything imports the package. A package puts the function in its config's
+  `commands` instead, and `cli.ts` calls it once the repository exists.
 - **A factory of `app`, not the metadata**, because a command closes over the repository and over
   whatever the application carries (`publish` reads `app.publishTargets` to build its own options).
   For a plugin that is also a necessity: `init` runs *inside* `Repository.create`, before any
@@ -1272,8 +1316,8 @@ const versionCommand = registerCommand(app => ({ command: COMMAND, config, handl
 | | Who | Shape |
 | --- | --- | --- |
 | `registerCommand` | rman's own `src/cmd/*.command.ts` | declarative, auto-registered |
-| `declareCommand` + `ctx.addCommand` | a plugin | declarative, registered when the plugin loads |
-| `defineCommand` (`CustomCommand`) | `.rman/*.mjs`, and a plugin not yet converted | hand-written `builder`, `handler(context, args)` |
+| `declareCommand`, in a config's `commands` | a package, or a repository | declarative, registered when the config is read |
+| `defineCommand` (`CustomCommand`) | `.rman/*.mjs`, and anything not yet converted | hand-written `builder`, `handler(context, args)` |
 
 The third is not deprecated: a repository's own command has no `app` to close over and wants the
 `CommandContext` it gets. `cli.ts` turns either plugin form into a `CommandModule` and there is one
@@ -1320,11 +1364,23 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
 - **A broken module warns and is skipped; a clash with a *built-in* throws.** Not an inconsistency:
   a module that fails to load affects only itself, while `rman publish` resolving to two different
   things has no safe guess. Both name the file and the reason.
-- **A clash with a *plugin's* command is neither - the repository wins, silently.** Measured: a
-  `.rman/clean.mjs` in a repository naming `rman-node` simply becomes `rman clean`, with no notice.
-  That is the intended escape hatch and the same precedence a package's own `.rmanrc` has over an
-  `extends` base, so don't "fix" it into an error - but know it when a plugin's command appears not
-  to work.
+- **A clash with a *contributed* command is neither - the repository wins.** A `.rman/clean.mjs`
+  in a repository that inherits `clean` simply becomes `rman clean`: the intended escape hatch, and
+  the same precedence a package's own `.rmanrc` has over an `extends` base, so don't "fix" it into
+  an error.
+  - **One registration per name, keeping the last** (`byName` in `cli.ts`), which is the precedence
+    yargs already applied - made explicit rather than left to it. Both used to be registered, and
+    what that cost was the help output: measured, `rman --help` listed `deploy` twice, once with
+    each description, with nothing to say which would run. Only the listing was wrong - `rman
+    deploy --help` already showed the winner's options alone and the loser's flag was rejected.
+  - **Said out loud at `verbose`, because deduplicating silently is what would make this the trap
+    it used to be**: two rows at least hinted something was doubled, while one row and no note
+    leaves "my plugin's command does nothing" with no thread to pull. Not a warning - an override is
+    a correct thing to do.
+  - The note reads `--log-level` **straight off argv** (`argvLogLevel`), the way `-v`/`-h` are
+    answered: commands are registered before `parseAsync`, since registering them is what makes
+    parsing possible, so a diagnostic emitted there cannot come from `args.logLevel`. Measured - it
+    was silent for `--log-level verbose` and appeared only when `.rmanrc` said so.
 - **The built-in name list is derived, not written** (`builtInNames` in
   [`src/cli.ts`](packages/rman/src/cli.ts)): it walks the same `commandRegistry` the commands are
   registered from, so the two cannot disagree and adding a command can't quietly leave a
@@ -1333,13 +1389,15 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   one name still written down. It covers **built-ins only**, which is why the rule above differs for
   plugins - and note that `publish` crossed that line when it moved into the core, so a
   `.rman/publish.mjs` that used to win silently is now a clash that throws.
-- **A bare name resolves through the *repository's* `node_modules` first, and falls back to whatever
-  is installed beside rman itself** (`resolveConfigTarget` / `resolveBesideRman` in
-  [`src/core/resolve-target.ts`](packages/rman/src/core/resolve-target.ts)). A globally installed
-  rman's siblings are the globally installed packages, which is what makes the bootstrap work:
-  `rman ci` exists to create `node_modules`, `ci` is `rman-node`'s command, so on a fresh clone the
-  plugin cannot be found in the directory the command was going to make. Measured - with both
-  installed globally, a clone answered `"plugins" target "rman-node" could not be resolved ... is it
+- **A bare name in `extends` resolves through the *repository's* `node_modules` first, and falls
+  back to whatever is installed beside rman itself** (`resolveConfigTarget` / `resolveBesideRman` in
+  [`src/core/resolve-target.ts`](packages/rman/src/core/resolve-target.ts)). **`extends` is now its
+  only caller** - `plugins` takes an instance or a glob and resolves no names at all, so the error
+  quoted below can no longer come from that key. A globally installed rman's siblings are the
+  globally installed packages, which is what makes the bootstrap work: `rman ci` exists to create
+  `node_modules`, `ci` is `rman-node`'s command, so on a fresh clone the package cannot be found in
+  the directory the command was going to make. Measured on the `plugins` spelling of the day - with
+  both installed globally, a clone answered `target "rman-node" could not be resolved ... is it
   installed in this repository?`, which was true and useless.
   - **A fallback, never a search order.** The repository is always tried first and its copy always
     wins, or a global install could silently override a pinned one.
@@ -1376,15 +1434,21 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
     reason is the payoff: a shared config can ship commands without wrapping them in a plugin.
   - **Always appends** (`ALWAYS_APPEND`), like `plugins`: naming a directory of your own never
     means "and stop loading the ones my shared config ships". Consequence to state rather than
-    hide - a closer layer cannot un-say one, and declaring `commands` anywhere replaces the
+    hide - a closer layer cannot un-say one, and declaring a **glob** anywhere replaces the
     `.rman/` default, because the key appends across layers and not onto a built-in fallback.
+  - **Trap: a glob replaces that default and an instance does not**, so a shared config shipping
+    its commands as `'./commands/*.js'` silently takes the `.rman/` directory away from every
+    repository inheriting it. Measured both ways on one pair of repositories: with the base
+    declaring instances, the consumer's own `.rman/hello.mjs` is in `rman --help`; with a glob it
+    is simply gone. **A config meant to be inherited lists its commands individually.**
   - **Not a root-level key**, unlike `plugins`: a package's own `.rmanrc` may contribute. The
     commands stay repository-wide - there is one command list - so a package declaring one is
     contributing it to the repository. The cascade then names the same glob once per package, so
     `commandGlobs` dedups by pattern and the loader again by resolved file; two different globs
     can name one file, which is why the second pass is the one that matters.
-  - **Both export forms are accepted**, as `PluginContext.addCommand` accepts both. The
-    declarative factory is stored unrun and executed in `cli.ts` where `app.repository` exists.
+  - **Both export forms are accepted**, and the same pair is accepted for a command written
+    straight into the key - one key, one set of rules. The declarative factory is stored unrun and
+    executed in `cli.ts` where `app.repository` exists.
     **The file name is the fallback for `command`** on either form - a convention a file has and a
     plugin does not, which is why `checkCustomCommand` refuses nameless metadata and `cli.ts`
     fills the name in before calling it. The name for the clash check comes from what the factory
@@ -1397,29 +1461,44 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
 
 ## `plugins`: one shape, and always additive
 
-- **A `plugins` entry is a package name, a path, or the plugin object itself.** The object form is
-  what a JS config uses to declare a plugin without publishing a package, and it is the form a
-  plugin package's own config holds.
+- **A `plugins` entry is the plugin itself, or a glob naming `.js` modules that `export default`
+  one** - the same two forms `commands` and `publishTargets` take. The instance is what a JS config
+  uses to declare a plugin without publishing a package, and it is the form a plugin package's own
+  config holds.
+- **A package name is not one of the forms, and `plugins: ['rman-node']` is never valid.** That
+  package's entry point exports an rman *config* - `{ plugins, commands, publishTargets }` - and a
+  config's way into a repository is `extends`. The two are different statements: `extends` inherits
+  everything the package declares, while `plugins` names the technologies themselves. Refused with
+  a message saying so, rather than half-read.
 - **A plugin package exports an `RmanConfig`, never a plugin** - `rman-node`'s entry point is
-  `export default defineConfig({ plugins: [nodePlugin] })`, and `loadPlugins` recurses into that
-  config's `plugins`. A package exposing exactly one plugin was the shape of the plugin it happens
-  to contain: a second one would change what every repository importing it receives, where a config
-  is the same kind of thing as the file naming it and simply grows.
+  `export default defineConfig({ plugins: [new NodePlugin()], commands, publishTargets })`. A
+  package exposing exactly one plugin was the shape of the plugin it happens to contain: a second
+  one would change what every repository importing it receives, where a config is the same kind of
+  thing as the file naming it and simply grows.
+  - **`manifestProvider` is checked at load, and it is the one member that is not optional.**
+    Every other seam is answered by its absence (`basePlugin`); this one is what makes a plugin a
+    *technology* at all. Checked at runtime because the type cannot reach a JavaScript config, and
+    an rman **1.x plugin** is exactly the object that got all the way in: `{ name, init }` was the
+    whole of one, `name` was all the loader looked at, so it registered successfully and then died
+    *inside its own `init`* with `ctx.addCommand is not a function` - measured while converting
+    `@panates/rman-node`, fifteen failures naming neither the plugin nor the version it was written
+    against. `init` still exists in 2.0, so nothing earlier gives the shape away.
   - **Never re-accept a module that exports the plugin directly.** Supporting both meant deciding
     which it was at runtime, and there is no reliable test - `name` is a key a config may have too,
     so it came down to "a name plus at least one seam", a guess. Guessing "plugin" registers nothing
     and reports success. It is refused now, with a message naming the fix; the seam list survives
     only inside `describeExport`, where it shapes a sentence and decides nothing.
-  - **Only `plugins` is read out of an imported config.** Merging its other keys would let a plugin
-    configure a repository by being installed; a config's way in is `extends`.
+  - **Nothing is read *out of* an imported config any more** - that recursion is gone with the
+    package-name form. A config reaches a repository through `extends` and by no other route, which
+    is what keeps installing a package from configuring the repository on its own.
 - **`plugins` always appends (`ALWAYS_APPEND` in `merge-config.ts`), so there is no `+plugins`.**
   Every other key lets a closer layer overrule a value, but a plugin *adds* commands and seams, and
   a repository naming one never means "and drop the ones my shared config brought". Replacement was
   the silent failure: `extends` a toolchain config, add a plugin of your own, and what you noticed
   was `Unknown argument: publish`.
   - An entry already in the list is dropped, by identity - two layers naming `'rman-node'` is
-    ordinary, not a mistake. **An explicit `+key` is *not* de-duplicated**: `plugins` repeats as a
-    consequence of the rule, while a repeated `+before` is what the author typed.
+    ordinary, not a mistake. De-duplication is for these keys only, and it is why `appendList`
+    checks `ALWAYS_APPEND` rather than de-duplicating everything it merges.
   - `register` also allows **one registration per plugin name**, which catches what identity cannot
     (two objects claiming a name, an object duplicating a named package). Registering twice defines
     its commands twice, which yargs does not survive.
@@ -1463,7 +1542,7 @@ no version planner - so a spec that needs one **brings it**.
   reads a manifest takes an app too: `createApp()` for a bare `new Package(dir, app)` or an
   `exec(cmd, { cwd, app })`, and `Repository.app` (non-enumerable) wherever one is already in hand.
 - **[`packages/rman/test/_fixture.ts`](packages/rman/test/_fixture.ts)** is the core's synthetic
-  ecosystem: `useTestEcosystem()` arranges a `testTechStack` named `'test'` (not `'node'`) - a
+  ecosystem: `useTestEcosystem()` arranges a `testPlugin` named `'test'` (not `'node'`) - a
   manifest reader, a workspace provider and a step source in one - plus a `TestVersionPlanService`,
   and `createApp()`/`createRepository()`/`runCli()` put them on a fresh application.
   `service(name)`/`planner()` read one back off the last application built. **It must not import
@@ -1473,13 +1552,13 @@ no version planner - so a spec that needs one **brings it**.
     the map instead of stubbing a function, so `ChangeHashService.detect` is exercised through the
     real provider - and `registryCalls` can assert the registry was **not** consulted, which a
     throwing stub only ever did by accident.
-  - `useTechStack(stack)` adds a **second technology**, for a spec about a polyglot repository.
+  - `usePlugin(plugin)` adds a **second technology**, for a spec about a polyglot repository.
     **A spec's own stacks are registered first, and that is load-bearing**: `techStackFor` takes the
     first whose manifest provider recognizes a directory, and the fixture's claims anything with a
     `package.json` - which every package the fixture writes has. Registered after it, a second
     technology could never claim one, so a polyglot repository was not expressible at all.
     `useLocalBin`'s stack recognizes nothing, so being first costs it nothing.
-  - `useLocalBin()` adds a bin-only `TechStack` offering `<dir>/local-bin` **at every level from
+  - `useLocalBin()` adds a bin-only `Plugin` offering `<dir>/local-bin` **at every level from
     cwd upward**. Walking up is not decoration: `exec` runs a step in the *package's* directory, so a
     provider offering only `<cwd>/local-bin` serves a command run at the repository root and nothing
     else. Measured, and the failure was dangerous - a stubbed `docker` was invisible from
@@ -1670,7 +1749,7 @@ Rules:
   `docs/rman.md`'s Installation block advertises and type-checks its command-declaration example
   verbatim, so a name the package stops exporting fails at compile time. It is a **floor, not a
   contract**: a name *added* to the package does not fail it, and no prose is checked at all. The
-  whole arc that made services classes, replaced four plugin seams with `TechStack` and introduced
+  whole arc that made services classes, merged the plugin seams into one `Plugin` and introduced
   `RmanApplication` left the page describing none of it, because nothing looked - mocha transpiles
   without type-checking and no spec imported what the page claims.
 - **Check anchors after any heading change**, with the `github-slugger` pass - 162 links across

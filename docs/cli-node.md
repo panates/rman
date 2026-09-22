@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 0ec1e88
-package-version: 1.0.12
-date: 2026-09-17
+git-commit: 9557470
+package-version: 2.0.0-beta.2
+date: 2026-09-22
 
 Verified against `packages/node/src/commands/*.command.ts` as of the commit above. Before trusting/
 updating this file (or `docs/cli/{publish,ci,clean}.md`) in a later session, run:
 
-  git diff 0ec1e88..HEAD -- packages/node/src/commands/
+  git diff 9557470..HEAD -- packages/node/src/commands/
 
 and update only the pages touched by what that diff actually shows. Once verified again, bump
 `git-commit`/`package-version`/`date` here and in each page's own baseline comment.
@@ -66,9 +66,9 @@ package filtering (`--scope`/`--ignore`/`--deps`/`--dependents`), the branch gua
 package you are standing in, with `--from-root`/`-r` to override. See
 [cli-rman.md#shared-option-groups](cli-rman.md#shared-option-groups).
 
-That is what `RmanPlugin` is for: a plugin's command is meant to look like a built-in rather than
-like a script someone bolted on, so the filter, the guard and the progress panel are all exported
-from `rman` for it to reuse.
+That is the point of declaring a command rather than hand-writing it: a contributed command is
+meant to look like a built-in rather than like a script someone bolted on, so the filter, the guard
+and the progress panel are all exported from `rman` for it to reuse.
 
 ## Config keys
 

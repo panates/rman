@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 171ca25
-package-version: 1.3.0
-date: 2026-09-20
+git-commit: 9557470
+package-version: 2.0.0-beta.2
+date: 2026-09-22
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff 171ca25..HEAD -- packages/rman/src/
+  git diff 9557470..HEAD -- packages/rman/src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -43,8 +43,7 @@ utilities (`ChangeHashService`, `Logger`). For the CLI itself (commands, flags,
 - [Installation](#installation)
 - [Core concepts](#core-concepts)
   - [`RmanApplication`](#rmanapplication)
-  - [`TechStack`](#techstack)
-  - [`RmanPlugin`](#rmanplugin)
+  - [`Plugin`](#plugin)
   - [Declaring a command](#declaring-a-command)
   - [`Repository`](#repository)
   - [`Package`](#package)
@@ -92,7 +91,7 @@ import {
   defineConfig,
   definePlugin,
   declareCommand,
-  baseTechStack,
+  basePlugin,
   targetsOf,
   shipsTo,
   VersionService,
@@ -114,11 +113,12 @@ import {
 } from 'rman';
 import type {
   RmanConfig,
-  RmanPlugin,
-  TechStack,
+  Plugin,
+  PluginContext,
   PublishTarget,
   ServiceMap,
   CommandOption,
+  PositionalOption,
   ArgsOf,
 } from 'rman';
 ```
@@ -145,13 +145,13 @@ starts empty and is thrown away whole, so two repositories in one process share 
 class RmanApplication {
   constructor(options?: { logLevel?: LogLevel });
 
-  readonly techStacks: Registry<TechStack>;       // the technologies this run knows about
+  readonly plugins: Registry<Plugin>;             // the technologies this run knows about
   readonly publishTargets: Registry<PublishTarget>; // where a package's artifact can ship
   readonly logger: Logger;
   versionPlanner?: VersionPlanService;            // the plan orchestrator - see VersionPlanService
 
   get repository(): Repository;                   // throws before one is attached
-  techStackFor(dir: string): TechStack;           // the first stack whose manifest reader claims it
+  pluginFor(dir: string): Plugin;                 // the first plugin whose manifest reader claims it
 
   getService<K extends keyof ServiceMap>(name: K): ServiceMap[K];
   setService<K extends keyof ServiceMap>(name: K, factory: (app: RmanApplication) => ServiceMap[K]): void;
@@ -178,60 +178,64 @@ await Repository.create(undefined, { app: own });
   question whose answer is the *sum* of what was contributed; a question with exactly one answer is
   a service instead.
 
-### `TechStack`
+### `Plugin`
 
 **A technology, as one unit.** What a package *is*, where packages are, where its scripts come
-from, which directories hold its binaries, and how its releases are planned - five answers that
-only make sense together, which is why they are not five separate seams.
+from, which directories hold its binaries, and how its releases are planned - answers that only
+make sense together, which is why they are not separate seams.
 
 ```ts
-interface TechStack {
-  name: string;                          // what Package.provider reports
-  manifestProvider: ManifestProvider;    // required - the rest are optional
-  workspaceProvider?: Workspace.Provider;
-  runSteps?: RunService.StepSource;
-  binPathsProvider?: BinPath.Provider;
+interface Plugin {
+  name: string;                        // what Package.provider reports
+  manifestProvider: ManifestProvider;  // required - everything below is optional
+  getWorkspace?: Workspace.Provider;
+  getBinPaths?: BinPath.Provider;
+  getRunSteps?: RunService.StepSource;
   versionPlanner?: VersionPlanService;
-}
-```
-
-The core ships `baseTechStack`, which recognizes nothing - a repository naming no plugin falls back
-to it and gets a package named after its directory at `0.0.0`. `rman-node` contributes
-`nodeTechStack`; another ecosystem contributes its own.
-
-### `RmanPlugin`
-
-**A name and an `init`.** Everything a plugin contributes it registers there, so a new extension
-point never means a new field on an interface every plugin is written against.
-
-```ts
-interface RmanPlugin {
-  name: string;
-  init(ctx: PluginContext): void | Promise<void>;
+  init?(ctx: PluginContext): void | Promise<void>;
 }
 
 interface PluginContext {
-  readonly app: RmanApplication;
-  addTechStack(stack: TechStack): void;
-  addCommand(command: CustomCommand | CommandRegisterFunction): void;
+  app: RmanApplication;
 }
 ```
 
+**`RmanPlugin` and `TechStack` were two types until 2.0, and are now one.** The plugin existed only
+to *register* the stack - its whole `init` was `ctx.addTechStack(...)` plus a command or two - and
+once a config carries commands and publish targets itself, that registration step has nothing left
+to do. What remains of a plugin is the technology.
+
+- **Everything optional is answered by its absence**, never by a default rman invented. The core
+  ships `basePlugin`, whose reader recognizes nothing: a repository naming no plugin falls back to
+  it and gets a package named after its directory at `0.0.0`. No `getWorkspace` means no packages
+  beyond the root; no `versionPlanner` means `version`/`changed` fail naming the key rather than
+  releasing a plausible but untrue set.
+- **`manifestProvider` is checked when the plugin loads**, and is the one member that is not
+  optional - it is what makes a plugin a technology at all. An rman 1.x plugin (`{ name, init }`)
+  is exactly the object that reaches that check, and it is refused with a message saying so.
+- **`getRunSteps`, not `onBuildRunSteps`**: it is a *query*, and not build-specific - `version`
+  reads the same seam for `preversion`/`version`/`postversion`.
+- **`init` is the escape hatch, not the front door.** Commands and publish targets are `.rmanrc`
+  keys, so a plugin contributing only those needs no `init`. It runs during `Repository.create`,
+  before any package is known, so `ctx.app.repository` throws there; anything wanting the
+  repository belongs in a command's factory instead.
+
+A published plugin is not usually named in `plugins` at all. Its package exports a config carrying
+it, and the repository writes `extends`:
+
 ```ts
-export const nodePlugin = definePlugin({
-  name: 'rman-node',
-  init(ctx) {
-    ctx.addTechStack(nodeTechStack);
-    ctx.app.publishTargets.add(npmPublishTarget); // anything else goes straight onto ctx.app
-    ctx.addCommand(ciCommand);
-  },
+// the package's entry point
+export default defineConfig({
+  plugins: [new NodePlugin()],
+  commands: [ciCommand, cleanCommand],
+  publishTargets: [new NpmPublishTarget()],
 });
 ```
 
-`init` runs **during `Repository.create`, before any package is known** - so `ctx.app.repository`
-throws there. A plugin deciding something per package does it inside its own provider, which is
-asked later. A plugin package's entry point exports an **rman config**, not the plugin:
-`export default defineConfig({ plugins: [nodePlugin] })`.
+```yaml
+# the repository
+extends: 'rman-node'
+```
 
 ### Declaring a command
 
@@ -261,13 +265,13 @@ export const deployCommand = declareCommand(app => ({
 }));
 ```
 
-- **`declareCommand` for a plugin, `registerCommand` for rman's own.** The difference is one line:
-  `registerCommand` pushes onto a module-level registry every run walks, so a plugin using it would
-  hand its commands to repositories that never named the plugin. A plugin passes the function to
-  `ctx.addCommand`.
+- **`declareCommand` for anything contributed, `registerCommand` for rman's own.** The difference
+  is one line: `registerCommand` pushes onto a module-level registry every run walks, so a package
+  using it would hand its commands to repositories that never named it. A package puts the function
+  in its config's `commands` instead.
 - **A factory of `app`, not the metadata.** A command closes over the repository, and over whatever
-  the application carries - `publish` reads `app.publishTargets` to build its own option list. For a
-  plugin it is also a necessity: `init` runs before any package is known, so the factory is stored
+  the application carries - `publish` reads `app.publishTargets` to build its own option list. It is
+  also a necessity: the config is read before any package is known, so the factory is stored
   and called later.
 - **`target: 'cli' | 'config' | 'both'`** decides whether an option is a flag, a `.rmanrc` key, or
   both. The `config`/`both` ones become the command's slice of `RmanConfig` automatically, so the
@@ -381,14 +385,14 @@ class Package {
   config: RmanConfig; // this package's own effective, cascaded .rmanrc config
   repository: Repository; // the repository it belongs to (a repository's own is itself)
   parent?: Package; // the package whose directory contains this one; undefined for the root
-  techStack: TechStack; // the technology whose manifest provider claimed this directory
+  plugin: Plugin; // the technology whose manifest provider claimed this directory
   versionScheme: VersionScheme; // how its versions are numbered (semver by default)
 
   get basename(): string; // path.basename(dirname)
   get name(): string; // from the manifest
   get version(): string; // from the manifest
   get isPrivate(): boolean; // !!manifest.private
-  get provider(): string; // which ecosystem read it - 'node', ''; see TechStack
+  get provider(): string; // which ecosystem read it - 'node', ''; see Plugin
   get isRoot(): boolean; // whether this is the repository's own root package
 
   reloadManifest(): Manifest; // re-reads from disk through its own technology's provider
@@ -528,30 +532,46 @@ inherited by the root is the repository's baseline, and inherited by a package's
 that package's. A base that must always mean the root says `"[/]"`, which is fixed wherever it is
 inherited from.
 
-### Appending instead of replacing (`+key`)
+### Adding to what you inherited (`value`)
 
 ```yaml
-# the root says          before: "rm ./build"
-# a package adds        +before: "rm ./cache"
-# it resolves to         before: ["rm ./build", "rm ./cache"]
+# the root says   before: "rm ./build"
+# a package says  before: "${{ [...value, 'rm ./cache'] }}"
+# it resolves to  before: ["rm ./build", "rm ./cache"]
 ```
 
-`+key` adds to whatever `key` already resolved to - from a parent directory, a `"[selector]"` block,
-or an `extends` base - instead of taking its place. It is what makes a shared config liveable: a
-base declaring `before: ["rm ./build"]` would otherwise force every repository wanting one more step
-to restate the whole list, and a restated list is a copy of the base, frozen at the version it was
+`value` is what this key resolved to in the layers **below** this one - a parent directory, a
+`"[selector]"` block, or an `extends` base. It is what makes a shared config liveable: a base
+declaring `before: ["rm ./build"]` would otherwise force every repository wanting one more step to
+restate the whole list, and a restated list is a copy of the base, frozen at the version it was
 copied from.
 
-- Scalars are promoted to lists on the way, so neither side has to be written as an array. With
-  nothing inherited anywhere, `+key` simply becomes the value.
-- On an **object** the prefix is ignored, because there the two spellings already coincide: objects
-  merge whether or not you asked them to.
-- `key` and `+key` in the same object both apply, the replacement first.
-- Appends accumulate in merge order: `extends` base → parent directories → each level's unmarked
-  keys → that level's selector blocks in declaration order.
+- **It is the list form of whatever is underneath**, so `[...value, 'x']` needs no guard: nothing
+  inherited spreads as empty, and a scalar (`before: "rm ./build"`) spreads as one element. Every
+  key this is reached for is declared `X | X[]`, where the list is the type and the scalar is
+  shorthand - so normalizing it decides nothing new.
+- It still **reads as the scalar** where one makes sense: `` `${value}.md` `` on an inherited
+  `"out"` is `"out.md"`. A *list* underneath refuses that rather than splicing `a,b` into a
+  sentence, and so does nothing-underneath.
+- A **boolean** is handed over as itself, so `!value` works. It is never a list nor a list's
+  shorthand, and an object cannot be fixed up for it - `!` and `? :` have no hook.
+- The cost: `value === 'build'` is `false` and `value.includes('bui')` matches elements rather than
+  substrings. Use `==`, `` `${value}` `` or `String(value)`.
+- Layers resolve bottom-up in merge order: `extends` base → parent directories → each level's
+  unmarked keys → that level's selector blocks in declaration order. Three layers each deriving
+  from the one below them compose.
 
-`WithAppend` generates an append form for every key of the type, so `defineConfig` catches `+befor`
-as readily as `befor` - see [Editor support (types)](#editor-support-types).
+**There was a `+key` prefix and it is gone.** It said "add to what this resolved to below", which is
+what `value` says - and `value` says it better: it composes, it can reorder or filter rather than
+only append, and it needed no machinery keeping an append *outstanding* until the layer it belonged
+to turned up. It also carried a bug `value` does not: appending onto a value that was a sole
+`${{ }}` expression returning an array nested it. A `+key` still in a config is **refused**, naming
+the key and what to write instead - rman validates no config keys, so ignoring it would drop the
+line in silence.
+
+Three keys still append without being asked, and there that is what the *key* means rather than a
+choice made per layer: `plugins`, `commands` and `publishTargets`, each of which names
+contributions rather than a setting a closer layer could sensibly overrule.
 
 ### Expressions (`${{ ... }}`)
 
@@ -982,7 +1002,7 @@ export default {
   },
   '[*]': {
     // `value` is what the layers underneath resolved to - the general form of `+key`
-    clean: { include: ({ value, vars, pkg }) => [...(value ?? []), path.join(vars.coveragePath, pkg.basename)] },
+    clean: { include: ({ value, vars, pkg }) => [...value, path.join(vars.coveragePath, pkg.basename)] },
   },
 };
 ```
@@ -1005,11 +1025,26 @@ It receives one object with **exactly** what an expression can name - `pkg`, `re
 A string that is *nothing but* one expression keeps that value's own type, which is what lets an
 expression hand a real list back.
 
-**`value` is `undefined` when nothing below sets the key**, which is the case a function written to
-extend an inherited list also has to handle - it is the first layer in a repository that inherits
-nothing. Write `value ?? []` (or `?? ''`). It is deliberately not defaulted to `[]`: that would be a
-guess about the key's type and wrong for every key that is not a list. The error says so when a
-spread trips over it, since V8's own `value is not iterable` names neither the key nor the reason.
+**`value` spreads as empty when nothing below sets the key**, so `[...value, 'x']` needs no guard.
+That case is not exotic: a value written to extend an inherited list is also the first layer in a
+repository that inherits nothing.
+
+It used to be `undefined`, with `value ?? []` required at every site, on the grounds that defaulting
+to `[]` would be a guess about the key's type - wrong for every key that is not a list. That
+objection is answered rather than dropped: a non-list use **throws**, naming the key.
+
+| | |
+| --- | --- |
+| `[...value, 'x']` | `['x']` |
+| `` `${value}-x` `` | throws, naming the key |
+| `value + 1` | throws, naming the key |
+
+The last row is one the old answer got wrong: `undefined + 1` is `NaN`, which serialized to `null`
+and read like a configured value.
+
+`value ?? []` still works and still means the same thing, so a config already written needs no
+change - the stand-in is an array, not `undefined`. The one consequence:
+`value === undefined` is now `false`; ask `value.length === 0` instead.
 
 **Why this is not just a nicer `${{ }}`:** an expression is a string, so it cannot carry a real
 array or object, cannot see what it is overriding, and has to be written in a language with no
@@ -1238,7 +1273,7 @@ namespace VersionPlanService {
   function getPlanner(app: RmanApplication): VersionPlanService;
 }
 
-/** Abstract - a technology supplies it (`TechStack.versionPlanner`). */
+/** Abstract - a technology supplies it (`Plugin.versionPlanner`). */
 abstract class VersionPlanService {
   getPlan(repository: Repository, options?: VersionPlanService.Options): Promise<VersionPlanService.Entry[]>;
 
@@ -1485,7 +1520,7 @@ const plan = await VersionPlanService.getPlanner(app).getPlan(repository, { igno
 
 ### `VersionPlanService`
 
-**Abstract - a technology supplies it**, through `TechStack.versionPlanner`. `version`/`changed`
+**Abstract - a technology supplies it**, through `Plugin.versionPlanner`. `version`/`changed`
 fail naming that key when a repository's plugins contribute none: there is no version plan that is
 merely a diminished one, and a wrong boundary or cascade releases a plausible, untrue set of
 packages.
@@ -2150,7 +2185,7 @@ namespace ChangeHashService {
 
 Auto-detection order, first match winning: (1) the package's own most recent release tag - the
 network-free `findLatestTag` lookup, `git tag --list` for a `{name}`-bearing pattern and
-`git describe` for a repo-wide one; (2) failing that, `TechStack.publishedVersion(pkg)` - the
+`git describe` for a repo-wide one; (2) failing that, the plugin's `manifestProvider.publishedVersion(pkg)` - the
 package's **own ecosystem's** registry, mapped onto a tag name via `expandTag` and used only if that
 tag actually exists in git. It is not a "has this been published" check: it borrows a version string
 to guess a tag name, for the case where a tag exists but isn't in HEAD's ancestry. With no plugin

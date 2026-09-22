@@ -1,15 +1,15 @@
 <!--
 docs-baseline
-git-commit: b6924c69810870582f615a81c97b587e4057910d
-package-version: 1.0.3
-date: 2026-09-13
+git-commit: 9557470
+package-version: 2.0.0-beta.2
+date: 2026-09-22
 
 Verified against `packages/rman/src/cli.ts` and every `packages/rman/src/cmd/*.command.ts` as
 of the commit above (and the matching specs for behavior examples). `rman-node`'s three commands
 have their own index, [cli-node.md](cli-node.md). Before trusting/updating this file (or any page
 under `docs/cli/`) in a later session, run:
 
-  git diff b6924c69810870582f615a81c97b587e4057910d..HEAD -- packages/rman/src/cli.ts packages/rman/src/cmd/
+  git diff 9557470..HEAD -- packages/rman/src/cli.ts packages/rman/src/cmd/
 
 and update only the pages touched by what that diff actually shows - don't regenerate everything
 unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -87,11 +87,11 @@ Without it, `rman clean` is `Unknown argument: clean`. A plugin that cannot be *
 rather than a skip: silently losing a command the repository is built around is worse than not
 starting.
 
-**A plugin declares a command the way a built-in does** - `declareCommand(app => ({ ... }))`, with
-its options as data rather than a hand-written `builder`, and hands it to `ctx.addCommand`:
+**A package declares a command the way a built-in does** - `declareCommand(app => ({ ... }))`, with
+its options as data rather than a hand-written `builder`, and puts it in its config's `commands`:
 
 ```js
-import { declareCommand, packageFilterOptions } from 'rman';
+import { declareCommand, defineConfig, packageFilterOptions } from 'rman';
 
 const deploy = declareCommand(app => ({
   command: 'deploy [stage]',
@@ -101,38 +101,48 @@ const deploy = declareCommand(app => ({
   handler: async args => { /* app.repository is available here */ },
 }));
 
-export default defineConfig({ plugins: [definePlugin({ name: 'mine', init: ctx => ctx.addCommand(deploy) })] });
+export default defineConfig({ commands: [deploy] });
 ```
 
+**No plugin is involved, and that is the change 2.0 made.** A plugin is one *technology* - a
+manifest reader, a workspace provider, a version planner - and a command is not one, so a package
+that only ships commands declares them and needs nothing else. The registration step this replaces
+(`ctx.addCommand`, on a `PluginContext`) is gone.
+
 `declareCommand`, not the `registerCommand` rman's own commands use: that one pushes onto a registry
-every run walks, so a plugin using it would give its commands to repositories that never named the
-plugin. The function is called once the repository exists - `app.repository` throws during `init`,
-since plugins are what find the packages.
+every run walks, so a package using it would give its commands to repositories that never named it.
+The factory is called once the repository exists - `app.repository` throws while the config is being
+read, since plugins are what find the packages.
 
-**A plugin package exports an `.rmanrc` config, not a single plugin** - its entry point ends with
-`export default defineConfig({ plugins: [ ... ] })`, and rman reads that config's own `plugins`.
-That is what keeps a package free to carry a second plugin later without changing what every
-repository importing it receives. Only `plugins` is read out of it; a config's other keys reach a
-repository through `extends`, the key that means "merge this underneath mine". A module exporting
-the plugin object itself is refused, with a message saying where to put it - accepting both shapes
-would mean telling them apart at runtime, and `name` is a key either may have.
+**A package's entry point exports an `.rmanrc` config**, and a repository inherits it with
+`extends`:
 
-**An entry may also be the plugin object itself**, which is how a JS config declares one without a
-package:
+```yaml
+extends: 'rman-node' # its plugins, commands and publish targets all arrive
+```
+
+`plugins: ['rman-node']` is **refused**, naming the fix: that key takes a plugin or a glob naming
+modules that export one, never a package name. The two are different statements - `extends` inherits
+everything the package declares, while `plugins` names the technologies themselves.
+
+**An entry may be the plugin object itself**, which is how a JS config declares one without
+publishing a package:
 
 ```js
 // .rmanrc.mjs
 import { defineConfig, definePlugin } from 'rman';
 
 export default defineConfig({
-  plugins: [
-    'rman-node',
-    definePlugin({ name: 'mine', init: ctx => ctx.addCommand(/* ... */) }),
-  ],
+  extends: 'rman-node',
+  plugins: [definePlugin({ name: 'cargo', manifestProvider: cargoManifest })],
 });
 ```
 
-**`plugins` always appends - there is no `+plugins` to write.** Every other key lets a closer layer
+**or a glob**, which is what a YAML config has instead: `plugins: './plugins/*.js'`, anchored to the
+file that declared it, each match exporting one as its default. A glob matching nothing is an error -
+a plugin that does not load is not a plugin.
+
+**`plugins` always appends.** Every other key lets a closer layer
 overrule the value; a plugin *adds* commands and seams, and a repository naming one never means
 "and drop the ones my shared config brought". That used to be a replacement, and the way you found
 out was `Unknown argument: publish`. An entry already in the list is not repeated, and a plugin

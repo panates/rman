@@ -201,7 +201,7 @@ rman exec --topo=false pwd         # every package independently, alphabetical o
 ### `rman config`
 
 Prints the **effective** config for the package of the current directory - after the directory
-cascade, `"[selector]"` blocks, `extends`, `+key` appends and `${{ ... }}` expressions have all been
+cascade, `"[selector]"` blocks, `extends` and `${{ ... }}` expressions have all been
 applied. What rman actually sees there, which no single file shows.
 
 ```bash
@@ -326,7 +326,7 @@ rman import ../my-old-standalone-repo --dest libs   # under libs/ instead of pac
 already. After importing, add the new directory to your `workspaces` glob if it isn't already
 covered, then run `rman ci` to install it.
 
-## Shared config (`extends`) and appending (`+key`)
+## Shared config (`extends`) and adding to it (`value`)
 
 House rules live in one package, and a repository names it:
 
@@ -337,13 +337,18 @@ extends: '@panates/rman-monorepo'
 '[*]':
   run:
     build:
-      +before: 'rm -rf ./cache' # adds to the base's step, rather than replacing it
+      # adds to the base's step, rather than replacing it
+      before: "${{ [...value, 'rm -rf ./cache'] }}"
 ```
 
 `extends` merges underneath the file naming it (a package, a path, or a list), and may itself be
-chained. `+key` appends to whatever the key already resolved to - from the base, a parent directory,
-or a selector - which is what lets a repository add one step without restating a list it doesn't
-own. See [docs/rman.md](https://github.com/panates/rman/blob/main/docs/rman.md#inheriting-a-shared-config-extends).
+chained. `value` is what the key already resolved to - from the base, a parent directory, or a
+selector - which is what lets a repository add one step without restating a list it doesn't own. It
+is the list form of whatever is underneath, so the spread needs no guard even when nothing is.
+See [docs/rman.md](https://github.com/panates/rman/blob/main/docs/rman.md#inheriting-a-shared-config-extends).
+
+There was a `+key` prefix for this and it is gone; one still in a config is refused, naming what to
+write instead.
 
 ## Your own commands
 
