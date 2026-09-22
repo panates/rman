@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { runCli, useNodeEcosystem } from '../_fixture.js';
+import { appWithStubBin, runCli, useNodeEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-ci-cmd-test-'));
@@ -45,29 +45,40 @@ describe('commands/ci', () => {
     for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
   });
 
-  /** Drops a fake `<name>` (npm/yarn/...) executable on PATH for the duration of `fn()`, logging
-   *  its own cwd to a file instead of installing anything for real, then restores PATH regardless
-   *  of outcome. A `node_modules/.bin` shim (the usual trick - see utils/exec.spec.ts's "PATH
-   *  augmentation" test) doesn't work here: `ci`'s own wipe step deletes `node_modules` (stub and
-   *  all) *before* the install step that would run it, so the stub has to live somewhere the wipe
-   *  never touches - a real PATH prepend, same as `withFakeNpmOnPath` in changelog.command.spec.ts. */
-  async function withStubPackageManager<T>(name: string, fn: (logFile: string) => Promise<T>): Promise<T> {
-    const binDir = tmp();
+  /**
+   * A fake `<name>` (npm/yarn/…) that logs its own cwd instead of installing anything, in a
+   * directory contributed through a **`BinPath` provider** - and the *provider* is the point.
+   *
+   * Two ways that look right and are not:
+   *
+   * - **A `node_modules/.bin` shim**, the usual trick (see `utils/exec.spec.ts`), cannot work here:
+   *   `ci`'s own wipe step deletes `node_modules` - stub and all - *before* the install step that
+   *   would run it.
+   * - **Prepending `process.env.PATH`**, which this did. `BinPath.env` appends the inherited PATH
+   *   **last**, after every provider's directories, and `NodePlugin.getBinPaths` ends with the
+   *   running `node`'s own directory. On a version-managed machine that directory holds real
+   *   `npm`, `yarn` and `pnpm` - so the stub lost and `ci --package-manager yarn` ran the **real**
+   *   yarn. Measured: nvm's `bin` has all three, and the spec failed reporting only
+   *   "expected true, received false" while rman's own log said `Running "yarn install"` and
+   *   `ci completed (0.3s)`.
+   *
+   * That second one is the trap CLAUDE.md records for `docker` - a stub invisible from a package,
+   * the real binary running instead - and it had the same consequence here: the suite shelled out
+   * to a real package manager.
+   *
+   * So the stub directory is handed to `appWithStubBin`, registered *before* `NodePlugin`, which is
+   * what puts it first.
+   */
+  function stubPackageManager(name: string): { dir: string; logFile: string } {
+    const dir = tmp();
     const logFile = path.join(tmp(), `${name}-calls.log`);
-    const script = path.join(binDir, name);
+    const script = path.join(dir, name);
     fs.writeFileSync(
       script,
       `#!/usr/bin/env node\nrequire('fs').appendFileSync(${JSON.stringify(logFile)}, process.cwd() + '\\n');\n`,
     );
     fs.chmodSync(script, 0o755);
-
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
-    try {
-      return await fn(logFile);
-    } finally {
-      process.env.PATH = originalPath;
-    }
+    return { dir, logFile };
   }
 
   /** A `node -e '...'` command that writes `content` to `file` - single-quoted for the shell,
@@ -123,13 +134,26 @@ describe('commands/ci', () => {
 
   it('--package-manager selects which install command actually runs', async () => {
     const dir = fixtureNoRootScript();
-    await withStubPackageManager('yarn', async yarnLogFile => {
-      await withStubPackageManager('npm', async npmLogFile => {
-        await captureLogs(() => runCli({ cwd: dir, argv: ['ci', '--package-manager', 'yarn', '--no-progress'] }));
-        expect(fs.existsSync(yarnLogFile)).toBe(true);
-        expect(fs.existsSync(npmLogFile)).toBe(false);
-      });
-    });
+    const binDir = tmp();
+    const yarn = stubPackageManager('yarn');
+    const npm = stubPackageManager('npm');
+    /** Both stubs in one directory, so the provider offers a single path and neither can win by
+     *  being listed first - which is the whole question the case asks. */
+    for (const from of [yarn.dir, npm.dir]) {
+      for (const entry of fs.readdirSync(from)) fs.copyFileSync(path.join(from, entry), path.join(binDir, entry));
+    }
+    fs.chmodSync(path.join(binDir, 'yarn'), 0o755);
+    fs.chmodSync(path.join(binDir, 'npm'), 0o755);
+
+    await captureLogs(() =>
+      runCli({
+        cwd: dir,
+        argv: ['ci', '--package-manager', 'yarn', '--no-progress'],
+        app: appWithStubBin(binDir),
+      }),
+    );
+    expect(fs.existsSync(yarn.logFile)).toBe(true);
+    expect(fs.existsSync(npm.logFile)).toBe(false);
   });
 
   it('rejects a --package-manager outside the known choices before ever touching the filesystem', async () => {

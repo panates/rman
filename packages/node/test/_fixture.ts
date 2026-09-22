@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Repository, RmanApplication, type ServiceMap, VersionPlanService, Workspace } from 'rman';
+import { basePlugin, Repository, RmanApplication, type ServiceMap, VersionPlanService, Workspace } from 'rman';
 import { runCli as rmanRunCli } from 'rman/cli';
 /**
  * The **plugin**, by name - not the module's default export, which is an rman *config* that carries
@@ -69,9 +69,29 @@ export function declarePlugin(dir: string): void {
  * happens immediately before the CLI reads the config, which is the only moment that is always
  * late enough.
  */
-export function runCli(options?: { argv?: string[]; cwd?: string }): Promise<void> {
+export function runCli(options?: { argv?: string[]; cwd?: string; app?: RmanApplication }): Promise<void> {
   if (options?.cwd) declarePlugin(options.cwd);
   return rmanRunCli(options);
+}
+
+/**
+ * An application carrying a **bin-only plugin** that offers `dir` - so a stub binary there beats
+ * everything `NodePlugin` contributes.
+ *
+ * `BinPath.env` concatenates providers in registration order and appends the *inherited* PATH last,
+ * and `NodePlugin.getBinPaths` ends with the running `node`'s own directory. So a stub reached by
+ * prepending `process.env.PATH` loses to any real binary sitting beside `node` - which on a
+ * version-managed machine is all of `npm`, `yarn` and `pnpm`. Measured: `ci --package-manager yarn`
+ * ran the **real** yarn from nvm's bin directory, and the spec asserting on its stub failed while
+ * reporting only "expected true, received false".
+ *
+ * Passed to `runCli` so `loadPlugins` registers `NodePlugin` *after* this one, which is what puts
+ * `dir` first. The same shape as the core fixture's `useLocalBin`, and the same reason it exists.
+ */
+export function appWithStubBin(dir: string): RmanApplication {
+  const app = new RmanApplication();
+  app.plugins.add({ name: 'stub-bin', manifestProvider: basePlugin.manifestProvider, getBinPaths: () => [dir] });
+  return app;
 }
 
 /**
