@@ -1,105 +1,14 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import fastGlob from 'fast-glob';
-import type { RmanConfig as CommandDeclaration, RmanConfig } from '../interfaces/rman-cfg.interface.js';
-import { RmanApplication } from './application.js';
-import type { CustomCommand } from './custom-command.js';
+import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import type { RmanApplication } from './application.js';
+import { COMMANDS_KEY } from './merge-config.js';
 import type { Plugin } from './plugin.js';
 import type { PublishTarget } from './publish-target.js';
 
 /** The `.rmanrc` key naming plugin packages to load. */
 export const PLUGINS_KEY = 'plugins';
-
-/**
- * What a plugin package hands rman.
- *
- * An object rather than a bare array of commands, for the reason `CommandContext` is one: a plugin
- * will eventually contribute more than commands (config defaults, publish targets, a package
- * provider for a non-Node repository), and nothing written against this should have to change when
- * it does.
- */
-export interface RmanPlugin {
-  /** For error messages and `--help` grouping. Conventionally the package's own name. */
-  name: string;
-  /**
-   * **One entry point, called once, with the application.** Everything a plugin contributes it
-   * registers here.
-   *
-   * This replaced a growing list of declared fields - `manifest`, `workspace`, `runSteps`,
-   * `binPaths`, `versionPlanner`, then `plugins`, then `commands`. Each new extensible thing
-   * meant another field on an interface every plugin is written against, and a plugin could never
-   * offer an extension point of its own: only rman's fields could be contributed to.
-   *
-   * Called during `Repository.create`, **before any package is known** - plugins are what find
-   * them. `ctx.app.repository` therefore throws here; a plugin deciding something per package does
-   * it inside its own provider, which is asked later.
-   *
-   * A plugin whose `init` throws fails the whole load rather than leaving what it managed to
-   * register in place: a half-installed technology answers some questions and not others, which is
-   * worse than not being there.
-   */
-  init(ctx: PluginContext): void | Promise<void>;
-}
-
-/**
- * What a plugin registers through - the application, plus the two helpers that need to know *which*
- * plugin is asking.
- *
- * `addCommand` is one of those: a command carries the label and specifier it came from, so a broken
- * one can be reported by name. `ctx.app` is everything else - `setService` to replace one of the
- * core's, `plugins` directly, and whatever the application grows later without this interface
- * having to grow with it.
- */
-export interface PluginContext {
-  readonly app: RmanApplication;
-  /** Adds a technology, and its version planner if it brings one. */
-  addTechStack(stack: Plugin): void;
-  /**
-   * Adds a command, tagged with the plugin it came from.
-   *
-   * **Two forms, and the first is the one to write.** `declareCommand(app => ({ ... }))` is the
-   * same declaration the built-ins use - options as data, checked for typos, with `--config` keys
-   * and `ArgsOf` typing falling out of it. The older `CustomCommand` object (a hand-written
-   * `builder`, a handler taking a context) still works and is what a `.rman/*.mjs` command is.
-   */
-  addCommand(command: CustomCommand | CommandDeclaration.CommandRegisterFunction): void;
-}
-
-/**
- * One command a plugin contributed, in whichever form it was declared, plus who contributed it.
- *
- * The plugin and specifier travel with it because every message about a command is keyed by them -
- * which plugin declared the one that clashes, which one failed to register. `cli.ts` is what turns
- * either form into a yargs registration; nothing between here and there has to tell them apart.
- */
-export type PluginCommand = { plugin: string; file: string } & (
-  | { register: CommandDeclaration.CommandRegisterFunction; custom?: undefined }
-  | { custom: CustomCommand; register?: undefined }
-);
-
-/**
- * Identity helper for authoring a plugin with full type-checking - the `defineConfig`/
- * `defineCommand` pattern again, for the same reason. Returns `plugin` unchanged.
- *
- * **A plugin package's entry point exports a *config*, not this**, so that a package is an
- * `.rmanrc` like any other and can carry a second plugin later without changing shape:
- *
- * ```js
- * // rman-node's entry point
- * import { defineConfig, definePlugin } from 'rman';
- * import publishCommand from './commands/publish.js';
- *
- * export const nodePlugin = definePlugin({ name: 'rman-node', commands: [publishCommand] });
- * export default defineConfig({ plugins: [nodePlugin] });
- * ```
- *
- * **A module exporting the plugin itself is refused**, with a message saying so. Accepting both
- * would mean telling a plugin from a config at runtime, and `name` is a key either may have - the
- * test would be a guess, and guessing "plugin" registers nothing while reporting success.
- */
-export function definePlugin(plugin: RmanPlugin): RmanPlugin {
-  return plugin;
-}
 
 /**
  * The repository's plugins and publish targets, registered onto `app`.
@@ -136,6 +45,30 @@ export async function loadPlugins(app: RmanApplication, rootConfig: RmanConfig):
       throw new Error(
         `"${PLUGINS_KEY}" takes a plugin or a glob naming modules that export one - ${from} gave ` +
           `${describeExport(plugin)}. Every message about a plugin is keyed by its \`name\`.`,
+      );
+    }
+    /**
+     * **`manifestProvider` is the one member that is not optional, so it is checked.**
+     *
+     * Every other seam is answered by its absence (see `basePlugin`); this one is what makes a
+     * plugin a *technology* at all - without it nothing it claims can be read, and the plugin
+     * answers no question rman would ask it.
+     *
+     * It is checked here because the type cannot reach a JavaScript config, and a 1.x plugin is
+     * exactly the object that gets this far: `{ name, init }` was the whole of one, and `name` was
+     * all `loadPlugins` looked at. Measured on the real case - `@panates/rman-node`'s 1.x plugin
+     * loaded, registered, and then died inside its own `init` with
+     * `TypeError: ctx.addCommand is not a function`, fifteen times over, naming neither the plugin
+     * nor the version it was written against. The `init` seam still exists, so there is no earlier
+     * point at which the shape gives itself away.
+     */
+    if (!isPlainObject(plugin.manifestProvider)) {
+      throw new Error(
+        `Plugin "${plugin.name}" (${from}) has no "manifestProvider" - a plugin is one technology, ` +
+          `and that is where its packages keep their identity. A plugin whose only job was to ` +
+          `register commands is an rman 1.x plugin: commands, publish targets and other plugins ` +
+          `are "${COMMANDS_KEY}", "publishTargets" and "${PLUGINS_KEY}" keys of a config now, so ` +
+          `such a plugin has nothing left to do and should be deleted.`,
       );
     }
     /** One registration per name. Twice would define the same commands twice, which yargs does not
@@ -238,7 +171,15 @@ function describeExport(exported: unknown): string {
     : `Its default export has no "${PLUGINS_KEY}".`;
 }
 
-const PLUGIN_SEAMS = ['init', 'name'] as const;
+/**
+ * The members only a plugin has, for that sentence alone.
+ *
+ * **`name` is deliberately not one of them**, and it used to be: a config may carry a `name` too,
+ * so anything with one "looked like a plugin" - which sent the author of a perfectly ordinary
+ * config to go and wrap it in `plugins`. Each of these belongs to a technology and to nothing
+ * else, `manifestProvider` first because it is the one a plugin cannot be without.
+ */
+const PLUGIN_SEAMS = ['manifestProvider', 'getWorkspace', 'getBinPaths', 'getRunSteps', 'versionPlanner'] as const;
 
 /** A config object, as opposed to an array or anything with its own prototype. */
 function isPlainObject(value: unknown): value is Record<string, any> {

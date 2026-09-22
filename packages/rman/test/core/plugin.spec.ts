@@ -227,6 +227,27 @@ describe('core/plugin', () => {
     expect(error.message).toContain('keyed by its `name`');
   });
 
+  /**
+   * **An rman 1.x plugin, which is the one wrong shape that used to get all the way in.**
+   *
+   * `{ name, init }` was the whole of a 1.x plugin - its `init` called `ctx.addTechStack()` and
+   * `ctx.addCommand()` - and `name` was all this loader checked, so such an object registered
+   * successfully and then died *inside its own `init`* with `ctx.addCommand is not a function`.
+   * Measured on the real case while converting `@panates/rman-node`: fifteen failures naming
+   * neither the plugin nor the version it was written against. `init` still exists in 2.0, so
+   * nothing earlier gives the shape away - `manifestProvider` is the only member that does.
+   *
+   * Checked at runtime because the type cannot reach a JavaScript config, which is the form every
+   * plugin outside this repository is written in.
+   */
+  it('refuses a 1.x plugin - a name and an init, with no technology behind them', async () => {
+    const dir = fixture({ plugins: ['./old.mjs'] }, { 'old.mjs': `export default { name: 'legacy', init() {} };` });
+    const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
+    expect(error.message).toContain('has no "manifestProvider"');
+    /** The message has to say where to go instead, or it only reports that something is wrong. */
+    expect(error.message).toContain('rman 1.x plugin');
+  });
+
   /** `publishTargets` is the third key of the same shape, and reaches `app.publishTargets` - which
    *  is what `publish` builds its `--target` choices from. */
   it('registers a publish target the config declares', async () => {
