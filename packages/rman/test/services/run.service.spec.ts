@@ -91,6 +91,32 @@ async function captureLogs(fn: () => Promise<void>): Promise<{ lines: string[]; 
   return { lines, error };
 }
 
+/**
+ * `captureLogs`, watching **stderr as well** - for a step's own failure message, which goes there.
+ *
+ * A separate helper rather than widening `captureLogs`, and the reason is measured: forty-odd
+ * cases in this file assert `lines.some(...)` is `false`, so folding another stream into the same
+ * array risks turning one of those into a pass or a failure for a reason nobody asked about.
+ *
+ * **This is also the mistake that made the specs below pass their first negative control for the
+ * wrong reason.** They asserted on `captureLogs().lines`, `console.error` is not in it, so they
+ * were red with the fix *and* without it - and reverting the fix and seeing red looked like proof.
+ * A control that cannot come out green proves nothing.
+ */
+async function captureAllLogs(fn: () => Promise<void>): Promise<{ lines: string[]; error?: Error }> {
+  const originalError = console.error;
+  const lines: string[] = [];
+  console.error = (...args: unknown[]) => {
+    lines.push(stripAnsi(args.map(a => (typeof a === 'string' ? a : String(a))).join(' ')));
+  };
+  try {
+    const result = await captureLogs(fn);
+    return { lines: [...lines, ...result.lines], error: result.error };
+  } finally {
+    console.error = originalError;
+  }
+}
+
 describe('run: config resolution helpers', () => {
   useTestEcosystem();
 
@@ -747,6 +773,40 @@ describe('run: Run.runScript() integration', () => {
       expect(error).toBeDefined();
       expect(lines.some(l => l.includes('failed') && l.includes('boom'))).toBe(true);
       expect(lines.some(l => l.includes('0 succeeded'))).toBe(true);
+    });
+
+    /**
+     * **And it says *why*, which for a long time it did not.**
+     *
+     * A shell step's reason arrives on its own - the output streams out and `exec` names the
+     * command and its exit code. A function step has neither, so the message was simply dropped:
+     * the run printed `error build pkg-a ┆ exec failed ┆ boom` and exited 1, and `step exploded`
+     * appeared nowhere. Measured on a real shared config whose build step threw a worded
+     * explanation of a missing `tsconfig.json` - the one line that said what to do was the one
+     * line lost, and the spec above passed throughout, because it only ever looked for the word
+     * `failed` and the function's name.
+     *
+     * This covers the panel-off path, which is what CI and every non-TTY run take. The panel-on
+     * path goes through the same `runFunctionStep` and writes the message to the step's own log
+     * via `onLine`, where a shell step's output already goes.
+     */
+    it("reports the thrown message, not just that a step named 'boom' failed", async () => {
+      await fixture({
+        'pkg-a': { rmanrcJs: `{ run: { build: { exec: function boom() { throw new Error('step exploded'); } } } }` },
+      });
+      const { lines } = await captureAllLogs(() => service('run').runScript('build', { progress: false }));
+      expect(lines.some(l => l.includes('step exploded'))).toBe(true);
+    });
+
+    /** A step may throw anything, and `String(undefined)` in a run log is worse than admitting
+     *  nothing was said - so a non-`Error` is described rather than stringified blindly. */
+    it('describes a non-Error throw instead of logging an empty line', async () => {
+      await fixture({
+        'pkg-a': { rmanrcJs: `{ run: { build: { exec: function boom() { throw undefined; } } } }` },
+      });
+      const { lines, error } = await captureAllLogs(() => service('run').runScript('build', { progress: false }));
+      expect(error).toBeDefined();
+      expect(lines.some(l => l.includes('the step threw undefined'))).toBe(true);
     });
 
     it("labels the step with the function's own name, so the log says which one ran", async () => {

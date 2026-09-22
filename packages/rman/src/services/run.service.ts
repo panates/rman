@@ -94,14 +94,27 @@ export class RunService extends Service {
              *  (unbuffered, unprefixed), followed by our own one-line-per-step summary. */
             printLegacyExecutingLine(commandName, pkgLabel, step, pkgLogLevel);
             const stepStart = Date.now();
-            let stepError: any;
+            let stepError: Error | undefined;
             try {
               /** No capture with the panel off: the step owns the terminal, exactly as a shell
                *  step's `stdio: 'inherit'` does. */
               if (step.run) await runFunctionStep(step.run, pkg, cwd);
               else await exec(step.command, { cwd, stdio: 'inherit', app: pkg.repository.app });
             } catch (e) {
-              stepError = e;
+              /**
+               * **Normalized to an `Error`, because a *falsy* throw was indistinguishable from no
+               * failure at all.** This was `let stepError: any` with `if (stepError) throw
+               * stepError` below, so a step doing `throw undefined` - legal JavaScript, and what a
+               * rejected promise carrying nothing gives you - left `stepError` falsy: the step
+               * line printed **success**, nothing was rethrown, and the run exited 0. Found by the
+               * spec written for the message-reporting fix above, which is the only reason it is
+               * not still there. A step that fails while reporting success is the one outcome this
+               * slot exists to rule out.
+               *
+               * Only the panel-off path had it: with the panel on there is no local catch, and the
+               * outer one runs whatever was thrown.
+               */
+              stepError = e instanceof Error ? e : new Error(messageOf(e));
             }
             printLegacyStepLine(commandName, pkgLabel, step, Date.now() - stepStart, pkgLogLevel, stepError);
             if (stepError) throw stepError;
@@ -654,6 +667,19 @@ function toStep(slot: string, value: RunStepValue): RunService.ScriptStep {
  *
  * Restored in a `finally`, because a step that throws must not leave the rest of the run writing
  * into a log nobody reads.
+ *
+ * **Its failure message is reported here, because nothing else does it.** A shell step's reason
+ * reaches the user on its own - the output streams through `onLine` or straight to the terminal,
+ * and `exec` names the command and its exit code. A function step has neither: it fails by
+ * throwing, and the throw goes to the outer `catch` that marks the package failed and rethrows an
+ * error the CLI treats as already-logged. Measured on a real config whose build step threw a
+ * carefully worded message about a missing `tsconfig.json`: the run printed
+ * `error build pkg-forgot ┆ exec failed ┆ buildWithTsc` and exited 1, and the message appeared
+ * nowhere at all - so the one thing that said what to do was the one thing dropped.
+ *
+ * Written where a shell step's output goes, so it needs no second channel: through `onLine` with
+ * the panel on (the step's own log, which is what the panel shows for a failed item), and to
+ * stderr with it off, ahead of the `failed` line - the order a shell step already produces.
  */
 async function runFunctionStep(
   run: RunStepFn,
@@ -663,7 +689,12 @@ async function runFunctionStep(
 ): Promise<void> {
   const context = RunService.createStepContext(pkg, cwd);
   if (!onLine) {
-    await run(context);
+    try {
+      await run(context);
+    } catch (e: any) {
+      console.error(colors.red(messageOf(e)));
+      throw e;
+    }
     return;
   }
   const console_ = globalThis.console as unknown as Record<string, (...args: any[]) => void>;
@@ -678,9 +709,21 @@ async function runFunctionStep(
   }
   try {
     await run(context);
+  } catch (e: any) {
+    /** Through the patched `console` deliberately - `onLine` is still installed at this point, so
+     *  the message lands in this step's log rather than over the panel it is drawn inside. */
+    for (const line of messageOf(e).split('\n')) onLine(line);
+    throw e;
   } finally {
     for (const method of CAPTURED_CONSOLE) console_[method] = original[method];
   }
+}
+
+/** What a thrown value has to say for itself. A step may throw anything, and `String(undefined)`
+ *  reading as `undefined` in a run log is worse than saying nothing was said. */
+function messageOf(error: unknown): string {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return message.trim() || `the step threw ${inspect(error)}`;
 }
 
 const CAPTURED_CONSOLE = ['log', 'info', 'warn', 'error', 'debug'] as const;
