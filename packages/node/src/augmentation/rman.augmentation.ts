@@ -22,8 +22,7 @@ declare module 'rman' {
    * key list, so `pkg.config.clean` is typed wherever it is read (`CleanService` included) without
    * a cast, and without the core declaring a key it knows nothing about.
    *
-   * `WithAppend<RmanConfigKeys>` is a mapped type evaluated where it is used, so `+clean` comes
-   * along on its own.
+   * The augmentation is evaluated where it is used, so `clean` is typed at the place it is read.
    */
   interface RmanConfigKeys extends NodeConfigKeys {}
 

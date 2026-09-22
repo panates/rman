@@ -360,8 +360,6 @@ describe('core/config', () => {
           /** Contributed by the core's own docker target, through `PublishTargetConfigs`. */
           docker: { image: 'org/app', platforms: ['linux/arm64'] },
         },
-        /** The append forms, which `ConfigBlock` generates rather than each interface restating. */
-        '+version': { stamp: ['extra.ts'] },
       };
       expect(config.version?.commitMessage).toBe('chore(release): v{version}');
     });

@@ -19,7 +19,10 @@ import { defineConfig, type RmanNodeConfig } from '../../src/interfaces/rman-con
 describe('interfaces/rman-config', () => {
   it("adds this plugin's keys to the core's own config type", () => {
     const config: RmanNodeConfig = {
-      plugins: ['rman-node'],
+      /** `extends`, not `plugins: ['rman-node']` - a package name is not one of `plugins`' forms,
+       *  which take the plugin itself or a glob naming modules that export one. This package's
+       *  entry point exports a *config*, and `extends` is how a config is inherited. */
+      extends: 'rman-node',
       packageManager: 'pnpm',
       '[*]': {
         clean: { include: 'build', exclude: ['keep.js'] },
@@ -49,14 +52,18 @@ describe('interfaces/rman-config', () => {
    * **`clean.*` is a command contribution now, not a hand-written key.** `skip` is derived from
    * `clean.command.ts`'s own `config` block; `include`/`exclude` come through `Extra`, because a
    * `CommandOption` cannot say "a glob *or* a list of them" - and that union is what a config
-   * author actually writes. All three have to survive the move, and so does `+clean`, which now
-   * comes from `WithAppend<CommandConfigs>` rather than `WithAppend<RmanConfigKeys>`.
+   * author actually writes. All three have to survive the move.
+   *
+   * There is no `'+clean'` here any more: the `+key` prefix is gone, and a closer layer adding to
+   * what it inherited asks for `value` instead. Not written out as a function here, because the
+   * *type* does not admit one - `include` is `string | string[]`, while at runtime any non-step key
+   * may also be a value function. That gap is older than this change and is not what this case is
+   * about.
    */
-  it('delivers every clean key through the command contribution, append form included', () => {
+  it('delivers every clean key through the command contribution', () => {
     const config: RmanConfig = {
       clean: { include: 'build', skip: false },
       '[*]': { clean: { include: ['build', '*.tsbuildinfo'], exclude: 'keep.js' } },
-      '+clean': { include: 'extra' },
     };
     expect(config.clean?.include).toBe('build');
   });

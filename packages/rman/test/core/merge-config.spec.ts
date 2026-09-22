@@ -1,28 +1,12 @@
 import { expect } from 'expect';
-import { appendTarget, finalizeConfig, mergeConfig } from '../../src/core/merge-config.js';
+import { mergeConfig } from '../../src/core/merge-config.js';
 
 describe('core/merge-config', () => {
-  describe('appendTarget()', () => {
-    it('names the key an append is aimed at', () => {
-      expect(appendTarget('+before')).toBe('before');
-      expect(appendTarget('before')).toBeUndefined();
-      // Nothing to append to - a bare prefix names no key at all.
-      expect(appendTarget('+')).toBeUndefined();
-    });
-  });
-
   describe('mergeConfig()', () => {
     it('replaces a plain key and merges a nested object, as a deep merge always has', () => {
       const target = { group: true, publish: { target: ['npm'], skip: false } };
       mergeConfig(target, { group: false, publish: { skip: true } });
       expect(target).toEqual({ group: false, publish: { target: ['npm'], skip: true } });
-    });
-
-    it('appends with `+key`, promoting either side from a scalar', () => {
-      // The case a shared config can't live without: add a step without restating the base's list.
-      const target = { before: 'rm ./build' };
-      mergeConfig(target, { '+before': 'rm ./cache' });
-      expect(target).toEqual({ before: ['rm ./build', 'rm ./cache'] });
     });
 
     it('appends `plugins` without being asked, since replacing is never what it would mean', () => {
@@ -40,84 +24,57 @@ describe('core/merge-config', () => {
       expect(target).toEqual({ plugins: ['rman-node', 'other'] });
     });
 
-    it('does not de-duplicate an explicit `+key`, which was written rather than inferred', () => {
-      /** Asymmetric on purpose: `plugins` appends by itself, so a repeat is a consequence of the
-       *  rule; a repeated `+before` is what the author actually typed. */
-      const target = { before: ['echo x'] };
-      mergeConfig(target, { '+before': 'echo x' });
-      expect(target).toEqual({ before: ['echo x', 'echo x'] });
-    });
-
-    it('takes a bare `plugins` from a scalar too, and `+plugins` means nothing extra', () => {
+    it('takes a bare `plugins` from a scalar too', () => {
       const target: Record<string, any> = { plugins: 'a' };
       mergeConfig(target, { plugins: 'b' });
-      mergeConfig(target, { '+plugins': 'c' });
+      mergeConfig(target, { plugins: 'c' });
       expect(target).toEqual({ plugins: ['a', 'b', 'c'] });
     });
 
-    it('accumulates across layers, in the order they were merged', () => {
+    /** A contribution key accumulates across layers, in the order they were merged - which is the
+     *  whole of what `ALWAYS_APPEND` buys. Every *other* key replaces; a closer layer deriving from
+     *  what it inherited asks for `value` instead. */
+    it('accumulates a contribution key across layers, in the order they were merged', () => {
       const target: Record<string, any> = {};
-      mergeConfig(target, { before: ['a'] });
-      mergeConfig(target, { '+before': 'b' });
-      mergeConfig(target, { '+before': ['c', 'd'] });
-      expect(target.before).toEqual(['a', 'b', 'c', 'd']);
+      mergeConfig(target, { commands: ['a'] });
+      mergeConfig(target, { commands: 'b' });
+      mergeConfig(target, { commands: ['c', 'd'] });
+      expect(target.commands).toEqual(['a', 'b', 'c', 'd']);
     });
 
-    it('keeps an append outstanding until something to append to turns up', () => {
-      // The layer providing it may still be coming: a directory's own file forms are merged into
-      // an empty object long before the selector blocks and parent directories they append to are.
-      // Collapsing it here lost both of those.
+    /**
+     * **A retired `+key` is refused, not ignored**, and that is the whole difference between a
+     * breaking change a repository can diagnose and one that changes its behaviour in silence.
+     *
+     * rman validates no config keys - there is no schema behind `.rmanrc` any more - so an unknown
+     * key is simply dropped. Measured before the check: a consumer's `+include: ['extra']` resolved
+     * to the inherited list unchanged, exactly as if the line were not there.
+     */
+    it('refuses a retired `+key`, naming what to write instead', () => {
+      expect(() => mergeConfig({}, { '+before': ['x'] }, '/repo/.rmanrc.yml')).toThrow(
+        /"\+before" is no longer a config key \(\/repo\/\.rmanrc\.yml\)/,
+      );
+      /** The message has to carry the replacement, or it only reports that something is wrong. */
+      expect(() => mergeConfig({}, { '+before': ['x'] })).toThrow(/\[\.\.\.value, 'x'\]/);
+    });
+
+    /** A bare `+` names no key, so it is an ordinary key that happens to be punctuation - not an
+     *  append anyone wrote, and not worth refusing. */
+    it('leaves a bare `+` alone', () => {
       const target: Record<string, any> = {};
-      mergeConfig(target, { '+before': 'mine' });
-      expect(target).toEqual({ '+before': ['mine'] });
-
-      // Two layers with nothing but appends accumulate, still outstanding.
-      mergeConfig(target, { '+before': 'and mine' });
-      expect(target).toEqual({ '+before': ['mine', 'and mine'] });
-
-      // And the moment a plain value arrives, they land on it.
-      const withBase: Record<string, any> = { before: 'inherited' };
-      mergeConfig(withBase, target);
-      expect(withBase).toEqual({ before: ['inherited', 'mine', 'and mine'] });
+      mergeConfig(target, { '+': 'odd but harmless' });
+      expect(target).toEqual({ '+': 'odd but harmless' });
     });
 
-    it('honors `key` and `+key` in the same object - replace first, then append', () => {
-      const target = { before: ['inherited'] };
-      mergeConfig(target, { before: 'mine', '+before': 'and also' });
-      // The replacement wins over what was inherited; the append lands on top of *it*.
-      expect(target).toEqual({ before: ['mine', 'and also'] });
-    });
-
-    it('ignores the prefix on an object, where merging is what it already does', () => {
-      const target = { docker: { buildArgs: { A: '1' } } };
-      mergeConfig(target, { '+docker': { buildArgs: { B: '2' } } });
-      expect(target).toEqual({ docker: { buildArgs: { A: '1', B: '2' } } });
-    });
-
-    it('ignores the prefix on a scalar, which behaves as the plain key would', () => {
-      const target = { group: 'dialects' };
-      mergeConfig(target, { '+group': 'other' });
-      expect(target).toEqual({ group: ['dialects', 'other'] });
+    /** And every other key replaces, which is the rule `+key` used to carve an exception out of. */
+    it('replaces an ordinary list key rather than appending to it', () => {
+      const target: Record<string, any> = { before: ['a'] };
+      mergeConfig(target, { before: ['b'] });
+      expect(target.before).toEqual(['b']);
     });
   });
 
-  describe('finalizeConfig()', () => {
-    it('turns an outstanding append into the value itself - nothing was inherited', () => {
-      expect(finalizeConfig({ '+before': ['only'] })).toEqual({ before: ['only'] });
-      expect(finalizeConfig({ run: { build: { '+before': 'only' } } })).toEqual({
-        run: { build: { before: ['only'] } },
-      });
-    });
-
-    it('leaves a config with no appends exactly as it is', () => {
-      const config = { group: true, run: { build: { before: ['a'], exec: 'tsc' } } };
-      expect(finalizeConfig(config)).toEqual(config);
-    });
-
-    it('folds an outstanding append onto a plain key declared alongside it', () => {
-      expect(finalizeConfig({ before: 'a', '+before': ['b'] })).toEqual({ before: ['a', 'b'] });
-    });
-
+  describe('immutability', () => {
     it('leaves the source untouched - a base config is merged into many packages', () => {
       const source = { publish: { target: ['npm'] }, before: ['a'] };
       const a: Record<string, any> = {};

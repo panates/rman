@@ -1,4 +1,4 @@
-import type { RmanConfig, ScopedVars, WithAppend } from 'rman';
+import type { RmanConfig, ScopedVars } from 'rman';
 import type { CiService } from '../services/ci.service.js';
 
 /**
@@ -39,7 +39,7 @@ export namespace RmanNodeConfig {
    * *not* a target's read as though it belonged to publishing in general. `target` and `skip` are
    * genuinely `publish`'s own; `directory` never was.
    */
-  export interface NpmPublishOptions extends NpmPublishOptionsKeys, WithAppend<NpmPublishOptionsKeys>, ScopedVars {}
+  export interface NpmPublishOptions extends NpmPublishOptionsKeys, ScopedVars {}
 
   export interface NpmPublishOptionsKeys {
     /** Where this package's publishable output lives, relative to its own directory (e.g.
@@ -61,7 +61,7 @@ export namespace RmanNodeConfig {
  * import { defineConfig } from 'rman-node';
  *
  * export default defineConfig({
- *   plugins: ['rman-node'],
+ *   extends: 'rman-node',
  *   '[*]': { clean: { include: 'build' }, publish: { npm: { directory: 'build' } } },
  * });
  * ```

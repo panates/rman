@@ -73,7 +73,7 @@ describe('commands/config', () => {
       path.join(dir, 'packages/a/.rmanrc'),
       JSON.stringify({
         group: 'a-line',
-        run: { build: { exec: 'tsc -b tsconfig-build.json', '+before': 'echo mine' } },
+        run: { build: { exec: 'tsc -b tsconfig-build.json', before: "${{ [...value, 'echo mine'] }}" } },
       }),
     );
     return dir;
@@ -98,7 +98,7 @@ describe('commands/config', () => {
     expect(lines[0]).toContain(path.join('packages', 'a'));
 
     const config = parsed(lines);
-    /** The package's own statement wins over `"[*]"`, and `+before` *appends* to it rather than
+    /** The package's own statement wins over `"[*]"`, and `[...value]` *adds* to it rather than
      *  replacing - the two rules this command exists to make visible. */
     expect(config.run.build.exec).toBe('tsc -b tsconfig-build.json');
     expect(config.run.build.before).toEqual(['echo shared', 'echo mine']);

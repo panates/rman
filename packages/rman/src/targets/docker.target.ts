@@ -1,5 +1,5 @@
 import type { PublishTarget } from '../core/publish-target.js';
-import type { ScopedVars, WithAppend } from '../interfaces/rman-cfg.interface.js';
+import type { ScopedVars } from '../interfaces/rman-cfg.interface.js';
 import { DOCKER_TARGET, type DockerPublishService } from '../services/docker-publish.service.js';
 
 /**
@@ -12,8 +12,7 @@ import { DOCKER_TARGET, type DockerPublishService } from '../services/docker-pub
  * Required once `"docker"` is one of a package's `publish.target`s - `publish --target docker`
  * errors clearly on a package that opts in and leaves this out.
  */
-export interface DockerPublishOptions
-  extends DockerPublishOptionsKeys, WithAppend<DockerPublishOptionsKeys>, ScopedVars {}
+export interface DockerPublishOptions extends DockerPublishOptionsKeys, ScopedVars {}
 
 export interface DockerPublishOptionsKeys {
   /** DockerHub image name/repository - bare (e.g. `"my-app"`) to be prefixed with

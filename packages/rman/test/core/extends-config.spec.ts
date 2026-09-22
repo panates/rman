@@ -51,22 +51,33 @@ describe('core/extends-config', () => {
     expect(await readDirConfig(dir)).toEqual({ group: 'from-b', logLevel: 'info' });
   });
 
-  it('resolves a base that is itself built on another, and lets `+key` accumulate down the chain', async () => {
-    // The pairing that makes a shared config liveable: each layer adds a step instead of restating
-    // the list, which would freeze a copy of the base at the version it was copied from.
+  /**
+   * **A base may itself `extends` another**, and the whole chain is merged before the file naming it
+   * - which is what lets a shared config be built out of layers rather than copied.
+   *
+   * It used to assert that `+key` accumulated down the chain here too, and that pairing is gone
+   * with the prefix: a layer adding to what it inherited now derives from `value`, which the
+   * **merge** only records - it is resolved when the config is interpolated, per package. So the
+   * accumulation is pinned where it can be observed, on a resolved repository (see
+   * `repository.spec.ts`, "hands over a value inherited through the base's own selector block" and
+   * the two beside it); what this case can see is that each layer of the chain arrived at all.
+   */
+  it('resolves a base that is itself built on another', async () => {
     const dir = fixture(
       {
-        'index.mjs': 'export default { "[*]": { run: { build: { before: "base" } } } };\n',
-        'strict.mjs': 'export default { extends: "@test/base", "[*]": { run: { build: { "+before": "strict" } } } };\n',
-        '.rmanrc.yml': "extends: '@test/base/strict'\n\"[*]\":\n  run:\n    build:\n      +before: 'repo'\n",
+        'index.mjs': 'export default { logLevel: "verbose", "[*]": { group: "from-base" } };\n',
+        'strict.mjs': 'export default { extends: "@test/base", allowBranch: ["main"] };\n',
+        '.rmanrc.yml': "extends: '@test/base/strict'\n\"[*]\":\n  run:\n    build:\n      exec: 'tsc -b'\n",
       },
       { '.': './index.mjs', './strict': './strict.mjs' },
     );
     const config: any = await readDirConfig(dir);
-    // Each layer's append lands as soon as there is something to land on, and the base is merged
-    // first - so they resolve here rather than staying outstanding, in chain order.
-    expect(config['[*]'].run.build.before).toEqual(['base', 'strict', 'repo']);
-    expect(config['[*]'].run.build['+before']).toBeUndefined();
+    /** One key from each of the three layers: the deepest base, the middle one, and the file that
+     *  named it - so nothing in the chain was skipped or overwritten wholesale. */
+    expect(config.logLevel).toBe('verbose');
+    expect(config.allowBranch).toEqual(['main']);
+    expect(config['[*]'].group).toBe('from-base');
+    expect(config['[*]'].run.build.exec).toBe('tsc -b');
   });
 
   it('reads a YAML or JSON base as well as a module', async () => {

@@ -18,16 +18,7 @@ import type { RunConditionFn, RunStepValue } from '../core/run-step.js';
  * one for the config shape, one for the command declarations - which is why the package could not
  * export the second at all.
  */
-export interface RmanConfig
-  extends
-    RmanConfigKeys,
-    WithAppend<RmanConfigKeys>,
-    RmanConfig.CommandConfigs,
-    /** **Both clauses, or a contributed key loses its append form.** `WithAppend` maps over what it
-     *  is given, so mapping `RmanConfigKeys` alone stopped generating `+version`/`+publish` the
-     *  moment those keys moved out of it - caught by `config.spec.ts`'s type-level pin, which is
-     *  the only thing that looks. */
-    WithAppend<RmanConfig.CommandConfigs> {
+export interface RmanConfig extends RmanConfigKeys, RmanConfig.CommandConfigs {
   /**
    * Configs to inherit from, merged **underneath** this one - a shared package
    * (`"@panates/rman-monorepo"`), a relative path, or an array applied in declaration order.
@@ -43,15 +34,14 @@ export interface RmanConfig
 }
 
 /**
- * **The `.rmanrc` keys no command owns**, without the `+key` append forms or `extends` - kept
- * separate from `RmanConfig` only so `WithAppend` has something to map over. A key a *command* owns
- * is declared beside that command and arrives through `RmanConfig.CommandConfigs` instead.
+ * **The `.rmanrc` keys no command owns**, without `extends` - kept
+ * separate from `RmanConfig` only so the two halves stay legible. A key a *command* owns is
+ * declared beside that command and arrives through `RmanConfig.CommandConfigs` instead.
  *
  * **A plugin adds its own keys here, by declaration merging** - `rman-node` contributes `clean`
  * from its own `interfaces/rman-config.interface.ts`, so `pkg.config.clean` stays typed wherever it
  * is read without the core having to know npm has a `node_modules` or that TypeScript has build
- * output. `WithAppend` is a mapped type evaluated at use, so an augmented key gets its `+key` form
- * too. (A *target's* block is different again: `publish.npm.*` goes through the
+ * output. (A *target's* block is different again: `publish.npm.*` goes through the
  * `PublishTargetConfigs` slot, beside the core's own `publish.docker.*`.)
  *
  * A config author annotates with the plugin's own name for the union - `RmanNodeConfig` - which is
@@ -72,34 +62,44 @@ export type PublishTargetEntry = string | PublishTarget;
 
 export interface RmanConfigKeys {
   /**
-   * Plugins to load, in declaration order - a *package* contributing commands, where `.rman/*.mjs`
-   * contributes one repository's own.
+   * The technologies this repository holds, in declaration order - how its packages are
+   * recognized, where they are, how their versions are planned. One per ecosystem: `rman-node`
+   * contributes the `node` one, a Cargo plugin would contribute `cargo`, and a polyglot repository
+   * names both.
    *
-   * Each entry is **either a package name (or path) to import, or a plugin object itself**:
-   *
-   * ```yaml
-   * # .rmanrc.yml - imported by name, resolved through the repository's own node_modules
-   * plugins: ['rman-node']
-   * ```
+   * Each entry is **a plugin, or a glob naming `.js` modules that `export default` one** - the same
+   * two forms `commands` and `publishTargets` take:
    *
    * ```js
-   * // .rmanrc.mjs - or handed over directly, which a JS config can do and a YAML one cannot
+   * // .rmanrc.mjs - the instance, which a JS config can hand over and a YAML one cannot
    * import { defineConfig, definePlugin } from 'rman';
-   * export default defineConfig({ plugins: [definePlugin({ name: 'mine', commands: [...] })] });
+   * export default defineConfig({ plugins: [definePlugin({ name: 'cargo', manifestProvider })] });
    * ```
    *
-   * The object form is what lets a **plugin package export a config** rather than a single plugin:
-   * `rman-node`'s entry point is `export default defineConfig({ plugins: [ ... ] })`, so it is an
-   * `.rmanrc` like any other and is free to grow a second plugin without changing its shape. When an
-   * imported module exports a config this way, **only its `plugins` are read** - a config's other
-   * keys reach a repository through `extends`, which is the key that means "merge this underneath
-   * mine".
+   * A *published* plugin is not usually named here at all: its package exports a config carrying
+   * it, so the repository writes `extends` and the plugin arrives with everything else the package
+   * declares. `rman-node` deliberately exports no `NodePlugin` for this reason - there is nothing a
+   * consumer needs to do with it by hand.
    *
-   * This is how everything that only means something in a Node repository lives outside rman's
-   * core. A plugin that cannot be loaded is an error, not a skip: silently losing `rman publish` is
-   * worse than not starting.
+   * ```yaml
+   * # .rmanrc.yml - a glob, anchored to this file's own directory
+   * plugins: './plugins/*.js'
+   * ```
    *
-   * Root level only - which commands exist is a property of the repository, not of a package.
+   * **A package name is not one of the forms, and `plugins: ['rman-node']` is never valid.** That
+   * package's entry point exports an rman *config* - `{ plugins, commands, publishTargets }` - and
+   * a config's way into a repository is `extends`, the key that means "merge this underneath
+   * mine". The two are different statements: `extends: 'rman-node'` inherits everything the
+   * package declares, while `plugins` names the technologies themselves. Naming the package here
+   * is refused with a message saying so, rather than half-read.
+   *
+   * A plugin that cannot be loaded is an error, not a skip - silently losing a manifest reader
+   * means every package reads as nameless at `0.0.0`, which looks like a working repository.
+   *
+   * **Root level only, and unlike `commands` this is forced rather than chosen**: `loadPlugins`
+   * runs inside `Repository.create` *before* the packages are known, because a plugin's
+   * `getWorkspace` is what finds them - so there are no package configs to read. An entry in a
+   * package's own `.rmanrc` is never seen.
    */
   plugins?: string | Plugin | (string | Plugin)[];
 
@@ -110,28 +110,38 @@ export interface RmanConfigKeys {
    * commands: ['tools/commands/*.mjs']
    * ```
    *
-   * **The easy half of `plugins`.** A package contributing a tech stack, a publish target or a
-   * version planner needs a plugin; a repository that just wants a command of its own should not
-   * have to write one. `.rman/*.mjs` is simply this key's default value rather than a second
-   * mechanism beside it - one source of repository-level commands, one precedence slot.
+   * **Where a command comes from, whoever ships it.** A repository writing one of its own, and a
+   * package contributing three, reach yargs by this one key - so there is one source of
+   * non-built-in commands and one precedence slot. `.rman/*.{js,mjs,cjs}` is simply this key's
+   * default value rather than a second mechanism beside it, and a package needs no plugin to
+   * contribute a command: a plugin is a *technology*, and a command is not one.
    *
    * **A relative glob is anchored to the file that declared it**, not to the repository root (see
-   * `anchorCommands`), so a shared config can ship commands with `commands: './commands/*.js'` and
-   * have it mean its own directory. `plugins` does *not* behave this way, deliberately noted here
-   * because the two look alike.
+   * `anchorContributions`), so a shared config can ship commands with `commands: './commands/*.js'`
+   * and have it mean its own directory.
    *
-   * **Always appends** (`ALWAYS_APPEND`), like `plugins` and for the same reason: naming a
-   * directory of your own never means "and stop loading the ones my shared config ships". It
-   * follows that a closer layer cannot *un*-say one.
+   * **Always appends** (`ALWAYS_APPEND`), like the other two contribution keys and for the same
+   * reason: naming a directory of your own never means "and stop loading the ones my shared config
+   * ships". It follows that a closer layer cannot *un*-say one.
    *
-   * Declared at any level, and every level's globs are loaded - which is what makes it useful in a
-   * package's own `.rmanrc`. The commands themselves are still repository-wide, because there is
-   * one command list; a package declaring one is contributing it to the repository.
+   * **Trap: a glob replaces the `.rman/` default and an instance does not.** The default applies
+   * only when *no* glob was declared anywhere - the key appends onto other layers, not onto a
+   * built-in fallback - so a shared config shipping its commands by glob silently takes the
+   * `.rman/` directory away from every repository inheriting it. Measured both ways on the same
+   * pair of repositories: with the shared config declaring instances, the consumer's own
+   * `.rman/hello.mjs` is in `rman --help`; with it declaring `'./commands/*.js'`, that command is
+   * simply gone. **A config meant to be inherited should therefore list its commands
+   * individually.**
    *
-   * A module exports either form: the declarative `app => ({ ... })` a plugin would use, or the
-   * `defineCommand({ ... })` object. **`.ts` is not loadable** - rman imports these in its own
-   * process, with no loader registered - so a TypeScript repository compiles them first or writes
-   * them as `.mjs`.
+   * Declared at any level, unlike `plugins` and `publishTargets`, because by the time this is read
+   * the packages exist - so a package's own `.rmanrc` may contribute one. The commands themselves
+   * are still repository-wide, because there is one command list; a package declaring one is
+   * contributing it to the repository.
+   *
+   * A module exports either form: the declarative `app => ({ ... })` factory, which is the one to
+   * write, or the `defineCommand({ ... })` object. **`.ts` is not loadable** - rman imports these in
+   * its own process, with no loader registered - so a TypeScript repository compiles them first or
+   * writes them as `.mjs`.
    */
   commands?: CommandEntry | CommandEntry[];
 
@@ -139,11 +149,13 @@ export interface RmanConfigKeys {
    * Publish targets this repository has - where a package's artifact ships. An instance, or a glob
    * naming `.js` modules that `export default` one.
    *
-   * The same three-key shape as `plugins` and `commands`, and for the same reason: a target is a
+   * The same two forms as `plugins` and `commands`, and for the same reason: a target is a
    * contribution, so a config declares it rather than a plugin registering it by hand. rman's own
    * `docker` target is built in; `rman-node` contributes `npm` from its own config.
    *
-   * Always appends, and declared at any level - see `plugins`.
+   * Always appends. **Root level only, like `plugins` and for the same mechanical reason** - both
+   * are read by `loadPlugins` inside `Repository.create`, before there is a package whose config
+   * could be consulted. `commands` is the one of the three that is read at any level.
    */
   publishTargets?: PublishTargetEntry | PublishTargetEntry[];
 
@@ -252,15 +264,6 @@ export interface RmanConfigKeys {
 export const commandRegistry: RmanConfig.CommandRegisterFunction[] = [];
 
 /**
- * Adds a `+key` alongside every key of `T`, which **appends** to whatever that key already resolved
- * to instead of replacing it - see `mergeConfig`.
- *
- * Generated by key remapping rather than written out, so a key added to the interface gets its
- * append form automatically and the two can never drift apart.
- */
-export type WithAppend<T> = { [K in keyof T as `+${K & string}`]?: T[K] };
-
-/**
  * The one key every nested config node may carry: `vars` scoping that node's subtree - a fresh copy
  * per level, merged per key over the level above. See `withScopedVars` in `core/config.ts` for what
  * it does at resolution time, and docs/rman.md#scoped-vars for how it reads.
@@ -335,6 +338,21 @@ export namespace RmanConfig {
     cliName?: string;
   };
 
+  /**
+   * One declared positional, as `CommandMetadata.positionals` holds them - yargs' own type, named
+   * here so a command's author can reach it.
+   *
+   * **An alias with no additions, and it earns its place anyway.** `positionals` was the one part
+   * of a declaration that could only be typed by importing yargs, and a plugin does not depend on
+   * yargs - rman does. Nothing enforced that, because a returned object literal is checked
+   * structurally: measured on a JavaScript plugin, `positionals: { paths: { type: 'string' } }`
+   * widens `'string'` to `string` and fails `PositionalOptionsType`, with the error arriving on
+   * the whole `commands` key several levels of "is not assignable" away from the word that caused
+   * it. A `satisfies Record<string, PositionalOption>` beside the options' own puts it back on the
+   * line. Same reasoning as the flat `CommandOption` in `index.ts`.
+   */
+  export type PositionalOption = yargs.PositionalOptions;
+
   export type CommandMetadata = {
     command: string;
     /** Other names the command answers to - `list` is also `ls`. */
@@ -387,7 +405,7 @@ export namespace RmanConfig {
      * part of the command string, which is the only place it can be, since that is what yargs
      * parses.
      */
-    positionals?: Record<string, yargs.PositionalOptions>;
+    positionals?: Record<string, PositionalOption>;
     handler: (argv: yargs.Arguments) => void;
   };
 
@@ -518,12 +536,12 @@ export namespace RmanConfig {
    * forms, and the `vars` that scopes the subtree.
    *
    * This is what a hand-written options interface said by extending
-   * `XOptionsKeys, WithAppend<XOptionsKeys>, ScopedVars` - three clauses every new one had to
-   * remember. Derived, it cannot be forgotten. `WithAppend` is applied to the keys **before**
+   * `XOptionsKeys, ScopedVars` - clauses every new one had to remember. Derived, it cannot be
+   * forgotten. `ScopedVars` is folded in **before**
    * `ScopedVars` is added, so no `+vars` is generated: appending to `vars` means nothing, since
    * objects merge either way.
    */
-  export type ConfigBlock<K> = K & WithAppend<K> & ScopedVars;
+  export type ConfigBlock<K> = K & ScopedVars;
 
   /** The declared `configKey`, or the first word of `command`. */
   export type ConfigKeyOf<T> = T extends { configKey: infer K extends string }
@@ -580,7 +598,7 @@ export namespace RmanConfig {
    */
   export type RunConfig = Record<string, RunStepValue | RunStepValue[] | RunScriptOptions>;
 
-  export interface RunScriptOptions extends RunScriptOptionsKeys, WithAppend<RunScriptOptionsKeys>, ScopedVars {}
+  export interface RunScriptOptions extends RunScriptOptionsKeys, ScopedVars {}
 
   /**
    * **Which level a key is read at is not uniform, and it follows what the key decides.**
@@ -666,15 +684,16 @@ export function registerCommand<M extends RmanConfig.CommandMetadata>(
  * The same declaration, **without** the registration - for a command that must exist only when
  * something asks for it.
  *
- * That is exactly a plugin's situation: `commandRegistry` is a module-level array walked by every
- * `runCli`, so a plugin pushing onto it would give its commands to repositories that never named
- * the plugin - the module is imported as soon as anything imports the package. A plugin hands the
- * function to `ctx.addCommand` instead, and it is called once the repository exists.
+ * That is exactly a contributed command's situation: `commandRegistry` is a module-level array
+ * walked by every `runCli`, so a package pushing onto it would give its commands to repositories
+ * that never named it - the module is imported as soon as anything imports the package. A package
+ * puts the function in its config's `commands` instead, and `cli.ts` calls it once the repository
+ * exists.
  *
- * **Why a factory rather than the metadata itself**, for a plugin in particular: `init` runs
- * *inside* `Repository.create`, before the packages are known (plugins are what find them), so
- * `app.repository` throws there. The function is stored and run later, in `cli.ts`, where the
- * built-ins' own factories run.
+ * **Why a factory rather than the metadata itself**: the config is resolved *inside*
+ * `Repository.create`, before the packages are known (plugins are what find them), so
+ * `app.repository` throws at that point. The function is stored unrun and called later, in
+ * `cli.ts`, where the built-ins' own factories run.
  *
  * Everything `registerCommand` documents about inference - `M & ValidMeta<M>`, the `as const` on
  * `command`, the metadata riding on the return type - applies here unchanged; the two differ in one

@@ -55,7 +55,7 @@ export { Workspace } from './core/workspace.js';
  *
  * `declareCommand`, not `registerCommand`: the latter pushes onto a module-level registry every
  * `runCli` walks, so a plugin using it would give its commands to repositories that never named it.
- * A plugin hands the function to `ctx.addCommand`.
+ * Anything else puts the function in its config's `commands`.
  *
  * **Flat names rather than `RmanConfig.CommandOption`**, and they outlived the reason they were
  * introduced: a second file exported a `RmanConfig` too, so the namespace holding these was
@@ -65,6 +65,9 @@ export { Workspace } from './core/workspace.js';
  */
 export { declareCommand } from './interfaces/rman-cfg.interface.js';
 export type CommandOption = CommandDeclaration.CommandOption;
+/** One declared positional, for the same reason `CommandOption` is here: it is the other half of a
+ *  command's surface, and it was the half a plugin could not name without importing yargs. */
+export type PositionalOption = CommandDeclaration.PositionalOption;
 export type CommandMetadata = CommandDeclaration.CommandMetadata;
 export type CommandRegisterFunction = CommandDeclaration.CommandRegisterFunction;
 /** The argv a command's handler is annotated with - see `RmanConfig.ArgsOf` for why it is annotated
