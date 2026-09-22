@@ -4,12 +4,12 @@ git-commit: 9557470
 package-version: 2.0.0-beta.2
 date: 2026-09-22
 
-Verified against `packages/rman/src/cli.ts` and every `packages/rman/src/cmd/*.command.ts` as
+Verified against `packages/rman/src/cli.ts` and every `packages/rman/src/commands/*.command.ts` as
 of the commit above (and the matching specs for behavior examples). `rman-node`'s three commands
 have their own index, [cli-node.md](cli-node.md). Before trusting/updating this file (or any page
 under `docs/cli/`) in a later session, run:
 
-  git diff 9557470..HEAD -- packages/rman/src/cli.ts packages/rman/src/cmd/
+  git diff 9557470..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/
 
 and update only the pages touched by what that diff actually shows - don't regenerate everything
 unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/

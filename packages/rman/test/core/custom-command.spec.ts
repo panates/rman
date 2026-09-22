@@ -153,7 +153,7 @@ describe('core/custom-command', () => {
    * are the same walk and cannot disagree.
    *
    * What *can* still go wrong is one step earlier: a command registers itself as a side effect of
-   * its module being imported, so a new file in `src/cmd/` that nothing imports is simply not a
+   * its module being imported, so a new file in `src/commands/` that nothing imports is simply not a
    * command - no error, no entry in `--help`, and a repository's own command free to take its name.
    * That is the drift this pins, now against `commands.ts` rather than `cli.ts`.
    */
@@ -162,12 +162,12 @@ describe('core/custom-command', () => {
     const barrel = fs.readFileSync(path.resolve(srcDir, 'commands.ts'), 'utf-8');
 
     const files = fs
-      .readdirSync(path.resolve(srcDir, 'cmd'))
+      .readdirSync(path.resolve(srcDir, 'commands'))
       .filter(f => f.endsWith('.command.ts'))
       .map(f => f.replace(/\.ts$/, '.js'));
     expect(files.length).toBeGreaterThan(0);
 
-    const missing = files.filter(f => !barrel.includes(`import './cmd/${f}'`));
+    const missing = files.filter(f => !barrel.includes(`import './commands/${f}'`));
     expect(missing).toEqual([]);
   });
 

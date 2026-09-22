@@ -23,7 +23,7 @@ import {
 import type { Package } from './core/package.js';
 import { checkCustomCommand } from './core/plugin-loader.js';
 import { Repository } from './core/repository.js';
-import { commandRegistry, type RmanConfig } from './interfaces/rman-cfg.interface.js';
+import { commandRegistry, type RmanConfig } from './interfaces/rman-config.interface.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/logger.js';
 import { filterPackages, readFromRootOption, readPackageFilterOptions } from './utils/package-filter.js';
 import { printableConfig } from './utils/printable-config.js';

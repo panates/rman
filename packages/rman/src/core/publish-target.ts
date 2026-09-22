@@ -1,4 +1,4 @@
-import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { PackageFilterOptions } from '../utils/package-filter.js';
 import type { RmanApplication } from './application.js';
 import type { Package } from './package.js';

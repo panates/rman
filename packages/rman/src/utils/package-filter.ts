@@ -1,7 +1,7 @@
 import micromatch from 'micromatch';
 import type { Argv } from 'yargs';
 import type { Package } from '../core/package.js';
-import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 
 /** Shared by every command that iterates packages (`run`/`build`/`test`/`exec`, `list`, `ci`,
  *  `clean`, `version`, `publish`, `changelog`) - narrows *which* packages a command applies to,

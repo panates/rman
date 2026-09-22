@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
-import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { isSelectorKey } from './config.js';
 import { loadConfigModule } from './load-config-module.js';
 import { mergeConfig } from './merge-config.js';

@@ -1,4 +1,4 @@
-import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { readPackageFilterOptions } from '../utils/package-filter.js';
 import { runOptions } from '../utils/run-options.js';

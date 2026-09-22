@@ -1,6 +1,6 @@
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 
 const COMMAND = 'github-release' as const;
@@ -155,7 +155,7 @@ const githubReleaseCommand = registerCommand(app => {
 
 export default githubReleaseCommand;
 
-declare module '../interfaces/rman-cfg.interface.js' {
+declare module '../interfaces/rman-config.interface.js' {
   namespace RmanConfig {
     interface CommandConfigs extends RmanConfig.CommandContribution<ReturnType<typeof githubReleaseCommand>> {}
   }

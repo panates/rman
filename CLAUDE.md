@@ -378,7 +378,7 @@ the walk reaches first.
 
 ## Config types: whoever reads a key declares it
 
-[`packages/rman/src/interfaces/rman-cfg.interface.ts`](packages/rman/src/interfaces/rman-cfg.interface.ts)
+[`packages/rman/src/interfaces/rman-config.interface.ts`](packages/rman/src/interfaces/rman-config.interface.ts)
 is **purely a typing aid** - rman never reads it at runtime, it only ever sees the plain object a
 config file exports. So the split is about who can *author* what, and it follows the code.
 
@@ -389,11 +389,12 @@ block (see "How a command is declared"). A *target's* block likewise - `publish.
 is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBranch`, `skip`,
 `group`, `dependencies`, and `run`.
 
-- **There used to be two files, both exporting a `RmanConfig`** - `rman-config.interface.ts` for the
-  config shape and `rman-cfg.interface.ts` for the command declarations - and one package cannot
-  export two things under one name, so the second was unreachable from outside rman entirely. They
-  are one file now: `RmanConfigKeys` for the keys no command owns, `CommandConfigs` for what the
-  commands contribute, and `RmanConfig` extending both.
+- **There used to be two files, both exporting a `RmanConfig`** - one for the config shape and one
+  for the command declarations - and one package cannot export two things under one name, so the
+  second was unreachable from outside rman entirely. They are one file now,
+  `rman-config.interface.ts`: `RmanConfigKeys` for the keys no command owns, `CommandConfigs` for
+  what the commands contribute, and `RmanConfig` extending both. (It was `rman-cfg.interface.ts`
+  while the two coexisted, and took the plain name back once it was alone.)
 - **`run` is the one key that stays hand-written, and `Extra` cannot take it.** `CommandContribution`
   wraps a contributed block in `ConfigBlock`, which folds in `ScopedVars` - and `run` is keyed by
   script name, so `vars` would have to satisfy the index signature too. Measured both halves:
@@ -405,7 +406,7 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   `vars`. A hand-written interface said that with three clauses
   (`extends XKeys, ScopedVars`) and every new one had to remember each.
 - **Trap: an augmentation only applies where its module is in the program.** The contributions live
-  in `src/cmd/*.command.ts`, so `index.ts` imports [`src/commands.ts`](packages/rman/src/commands.ts)
+  in `src/commands/*.command.ts`, so `index.ts` imports [`src/commands.ts`](packages/rman/src/commands.ts)
   for them - not just `cli.ts`. Reached from `cli.ts` alone, the keys existed for rman and for
   nobody else: `rman-node` reading `pkg.config.publish` got `Property 'publish' does not exist on
   type 'RmanConfig'` (measured). Pinned in `custom-command.spec.ts`.
@@ -796,7 +797,7 @@ touched package counts as changed.
 
 ### `publish` - the core's command; a *target* is what a plugin contributes
 
-[`src/cmd/publish.command.ts`](packages/rman/src/cmd/publish.command.ts),
+[`src/commands/publish.command.ts`](packages/rman/src/commands/publish.command.ts),
 [`src/core/publish-target.ts`](packages/rman/src/core/publish-target.ts).
 
 - **Question B.** Each target asks its **own** registry whether this version is already out there:
@@ -1253,7 +1254,7 @@ Don't take a doubled message as evidence that a new throw site is wrong.
 
 ## How a command is declared
 
-[`src/interfaces/rman-cfg.interface.ts`](packages/rman/src/interfaces/rman-cfg.interface.ts),
+[`src/interfaces/rman-config.interface.ts`](packages/rman/src/interfaces/rman-config.interface.ts),
 [`src/core/command-builder.ts`](packages/rman/src/core/command-builder.ts). **A command says what it
 has; one function says what yargs is told.** A hand-written `builder` was the second place every
 fact about a command lived, and a typo in it was a flag that silently never existed.
@@ -1315,7 +1316,7 @@ const versionCommand = registerCommand(app => ({ command: COMMAND, config, handl
 
 | | Who | Shape |
 | --- | --- | --- |
-| `registerCommand` | rman's own `src/cmd/*.command.ts` | declarative, auto-registered |
+| `registerCommand` | rman's own `src/commands/*.command.ts` | declarative, auto-registered |
 | `declareCommand`, in a config's `commands` | a package, or a repository | declarative, registered when the config is read |
 | `defineCommand` (`CustomCommand`) | `.rman/*.mjs`, and anything not yet converted | hand-written `builder`, `handler(context, args)` |
 

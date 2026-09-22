@@ -33,7 +33,7 @@ service, the `.rmanrc`/`.rmanrc.yml` configuration schema those services read, a
 utilities (`ChangeHashService`, `Logger`). For the CLI itself (commands, flags,
 `--help` text), see [docs/cli-rman.md](cli-rman.md) (or [README.md](../README.md) for a fast-start overview).
 
-> **Not part of this API:** anything under `src/cmd/*.command.ts` and `cli.ts`'s `runCli` -
+> **Not part of this API:** anything under `src/commands/*.command.ts` and `cli.ts`'s `runCli` -
 > those are CLI-only (argv parsing, colored console output, confirmation prompts) and are not
 > re-exported from the package's main entry point. If you need `runCli` itself (e.g. to embed the
 > CLI in another tool), import it from `rman/cli.js` explicitly.

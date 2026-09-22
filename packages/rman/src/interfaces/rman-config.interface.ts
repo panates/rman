@@ -323,7 +323,7 @@ export namespace RmanConfig {
    * const versionCommand = registerCommand(...);
    * export default versionCommand;
    *
-   * declare module '../interfaces/rman-cfg.interface.js' {
+   * declare module '../interfaces/rman-config.interface.js' {
    *   namespace RmanConfig {
    *     interface CommandConfigs extends CommandContribution<ReturnType<typeof versionCommand>> {}
    *   }

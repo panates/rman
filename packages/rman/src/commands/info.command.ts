@@ -1,6 +1,6 @@
 import colors from 'ansi-colors';
 import semver from 'semver';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { SystemInfo } from '../services/system-info.js';
 
 const COMMAND = 'info' as const;

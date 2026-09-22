@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import publishCommand from '../../src/cmd/publish.command.js';
+import publishCommand from '../../src/commands/publish.command.js';
 import { type PublishTarget, shipsTo } from '../../src/core/publish-target.js';
 import { filterPackages } from '../../src/utils/package-filter.js';
 import { createRepository, runCli, service, useTarget, useTestEcosystem } from '../_fixture.js';

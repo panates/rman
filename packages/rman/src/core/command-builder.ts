@@ -1,5 +1,5 @@
 import type { Argv, CommandModule } from 'yargs';
-import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 
 /**
  * Turns a command's **declaration** into the yargs registration it describes.

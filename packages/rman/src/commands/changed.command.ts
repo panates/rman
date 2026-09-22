@@ -1,5 +1,5 @@
 import colors from 'ansi-colors';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { VersionPlanService } from '../services/version-plan.service.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 

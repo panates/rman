@@ -4,7 +4,7 @@
  * (e.g. `ChangelogService`, `ListService`, `RunService`, `VersionService`),
  * re-exported here via `./services.js`. Purpose-specific functions, not one generic `run`/`get`
  * per domain - CLI-only concerns (argv parsing, `--help` text, and all console/file presentation)
- * stay in `cli.ts` and the individual `cmd/*.command.ts` modules, which are not exported here.
+ * stay in `cli.ts` and the individual `commands/*.command.ts` modules, which are not exported here.
  *
  * **This is also the plugin contract.** A plugin (`rman-node`, say) is an ordinary package that
  * imports from here, so everything a command needs in order to live outside rman has to be
@@ -12,7 +12,7 @@
  * *not* exported is deliberately private: config resolution internals, the expression evaluator,
  * the command registry.
  */
-import type { RmanConfig as CommandDeclaration } from './interfaces/rman-cfg.interface.js';
+import type { RmanConfig as CommandDeclaration } from './interfaces/rman-config.interface.js';
 
 export { defineConfig } from './core/config.js';
 /**
@@ -74,7 +74,7 @@ export { Workspace } from './core/workspace.js';
  * these stay because they are the better names for the job. A plugin author declaring a flag wants
  * `CommandOption`; the config it happens to contribute to is not what they are naming.
  */
-export { declareCommand } from './interfaces/rman-cfg.interface.js';
+export { declareCommand } from './interfaces/rman-config.interface.js';
 export type CommandOption = CommandDeclaration.CommandOption;
 /** One declared positional, for the same reason `CommandOption` is here: it is the other half of a
  *  command's surface, and it was the half a plugin could not name without importing yargs. */
@@ -86,7 +86,7 @@ export type CommandRegisterFunction = CommandDeclaration.CommandRegisterFunction
 export type ArgsOf<C, Cmd extends string> = CommandDeclaration.ArgsOf<C, Cmd>;
 export type GlobalArgs = CommandDeclaration.GlobalArgs;
 export * from './commands.js';
-export * from './interfaces/rman-cfg.interface.js';
+export * from './interfaces/rman-config.interface.js';
 export * from './services.js';
 
 // --- what a command needs to behave like a built-in one -----------------------------------------

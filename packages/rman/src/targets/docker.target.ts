@@ -1,5 +1,5 @@
 import type { PublishTarget } from '../core/publish-target.js';
-import type { ScopedVars } from '../interfaces/rman-cfg.interface.js';
+import type { ScopedVars } from '../interfaces/rman-config.interface.js';
 import { DOCKER_TARGET, type DockerPublishService } from '../services/docker-publish.service.js';
 
 /**

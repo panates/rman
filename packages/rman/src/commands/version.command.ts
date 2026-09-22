@@ -2,7 +2,7 @@ import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
 import EasyTable from 'easy-table';
 import type { RunStepValue } from '../core/run-step.js';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { VersionService } from '../services/version.service.js';
 import { VersionPlanService } from '../services/version-plan.service.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
@@ -272,7 +272,7 @@ export default versionCommand;
  * stale interface behind. Only `target: 'config'`/`'both'` options come through, so `--interactive`
  * and the other CLI-only flags stay off the config type.
  */
-declare module '../interfaces/rman-cfg.interface.js' {
+declare module '../interfaces/rman-config.interface.js' {
   namespace RmanConfig {
     interface CommandConfigs extends RmanConfig.CommandContribution<
       ReturnType<typeof versionCommand>,

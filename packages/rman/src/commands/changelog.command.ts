@@ -1,5 +1,5 @@
 import colors from 'ansi-colors';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
 import { Logger, resolveRootLogLevel } from '../utils/logger.js';
 import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
@@ -131,7 +131,7 @@ const changelogCommand = registerCommand(app => {
 
 export default changelogCommand;
 
-declare module '../interfaces/rman-cfg.interface.js' {
+declare module '../interfaces/rman-config.interface.js' {
   namespace RmanConfig {
     interface CommandConfigs extends RmanConfig.CommandContribution<ReturnType<typeof changelogCommand>> {}
   }

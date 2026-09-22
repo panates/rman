@@ -1,6 +1,6 @@
 import path from 'node:path';
 import colors from 'ansi-colors';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 
 const COMMAND = 'import <path>' as const;
 

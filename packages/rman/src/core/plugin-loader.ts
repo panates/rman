@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import fastGlob from 'fast-glob';
-import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { RmanApplication } from './application.js';
 import { COMMANDS_KEY } from './merge-config.js';
 import type { Plugin } from './plugin.js';

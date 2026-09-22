@@ -3,7 +3,7 @@ import colors from 'ansi-colors';
 import * as yaml from 'js-yaml';
 import { DEFERRED_PATHS } from '../core/config.js';
 import type { Package } from '../core/package.js';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { fromRootOption, readFromRootOption } from '../utils/package-filter.js';
 import { printableConfig } from '../utils/printable-config.js';
 

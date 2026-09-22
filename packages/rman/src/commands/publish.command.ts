@@ -3,7 +3,7 @@ import colors from 'ansi-colors';
 import type { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/package.js';
 import { type PublishTarget, unknownTargets } from '../core/publish-target.js';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { DockerPublishOptions } from '../targets/docker.target.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
@@ -221,7 +221,7 @@ export default publishCommand;
  * by the core's docker target and `publish.npm.directory` by `rman-node`'s npm one, each from its own
  * package, and neither can collide with the other or with what the command derives.
  */
-declare module '../interfaces/rman-cfg.interface.js' {
+declare module '../interfaces/rman-config.interface.js' {
   namespace RmanConfig {
     interface CommandConfigs extends RmanConfig.CommandContribution<
       ReturnType<typeof publishCommand>,

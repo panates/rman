@@ -10,24 +10,24 @@
  * applies where the module declaring it is part of the program. Reached only from `cli.ts`, those
  * keys existed for rman itself and for nobody else: `rman-node` reading `pkg.config.publish` got
  * `Property 'publish' does not exist on type 'RmanConfig'` (measured, the moment the keys stopped
- * being hand-written centrally, in what is now `rman-cfg.interface.ts`).
+ * being hand-written centrally, in what is now `rman-config.interface.ts`).
  */
-import './cmd/build.command.js';
-import './cmd/changed.command.js';
-import './cmd/changelog.command.js';
-import './cmd/config.command.js';
-import './cmd/diff.command.js';
-import './cmd/exec.command.js';
-import './cmd/github-release.command.js';
-import './cmd/import.command.js';
-import './cmd/info.command.js';
-import './cmd/list.command.js';
-import './cmd/publish.command.js';
-import './cmd/run.command.js';
-import './cmd/test.command.js';
-import './cmd/version.command.js';
+import './commands/build.command.js';
+import './commands/changed.command.js';
+import './commands/changelog.command.js';
+import './commands/config.command.js';
+import './commands/diff.command.js';
+import './commands/exec.command.js';
+import './commands/github-release.command.js';
+import './commands/import.command.js';
+import './commands/info.command.js';
+import './commands/list.command.js';
+import './commands/publish.command.js';
+import './commands/run.command.js';
+import './commands/test.command.js';
+import './commands/version.command.js';
 
 /** The config shapes a command declares by hand, where an option cannot describe them - see
  *  `RmanConfig.CommandContribution`'s `Extra`. Exported so a plugin can name one. */
-export type { PublishExtraKeys, PublishTargetConfigs } from './cmd/publish.command.js';
-export type { VersionExtraKeys, VersionStampEntry } from './cmd/version.command.js';
+export type { PublishExtraKeys, PublishTargetConfigs } from './commands/publish.command.js';
+export type { VersionExtraKeys, VersionStampEntry } from './commands/version.command.js';

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import colors from 'ansi-colors';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-cfg.interface.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
 import { GitHelper } from '../utils/git.js';
 import { fromRootOption, readFromRootOption } from '../utils/package-filter.js';
