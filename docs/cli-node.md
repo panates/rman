@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: PENDING
+git-commit: 7d0e2cb
 package-version: 2.0.0-beta.2
 date: 2026-09-22
 
 Verified against `packages/node/src/commands/*.command.ts` as of the commit above. Before trusting/
 updating this file (or `docs/cli/{publish,ci,clean}.md`) in a later session, run:
 
-  git diff PENDING..HEAD -- packages/node/src/commands/
+  git diff 7d0e2cb..HEAD -- packages/node/src/commands/
 
 and update only the pages touched by what that diff actually shows. Once verified again, bump
 `git-commit`/`package-version`/`date` above. `docs/cli/{ci,clean}.md` carry no baseline of their

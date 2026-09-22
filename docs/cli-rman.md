@@ -1,6 +1,6 @@
 <!--
 docs-baseline
-git-commit: PENDING
+git-commit: 7d0e2cb
 package-version: 2.0.0-beta.2
 date: 2026-09-22
 
@@ -9,7 +9,7 @@ of the commit above (and the matching specs for behavior examples). `rman-node`'
 have their own index, [cli-node.md](cli-node.md). Before trusting/updating this file (or any page
 under `docs/cli/`) in a later session, run:
 
-  git diff PENDING..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/
+  git diff 7d0e2cb..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/
 
 and update only the pages touched by what that diff actually shows - don't regenerate everything
 unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/

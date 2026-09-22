@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: PENDING
+git-commit: 7d0e2cb
 package-version: 2.0.0-beta.2
 date: 2026-09-22
 
 Verified against `packages/node/src/` as of the commit above. Before trusting/updating this file in
 a later session, run:
 
-  git diff PENDING..HEAD -- packages/node/src/
+  git diff 7d0e2cb..HEAD -- packages/node/src/
 
 and update only the sections touched by what that diff actually shows. Once verified again, bump
 `git-commit`/`package-version`/`date` above to the new HEAD.
