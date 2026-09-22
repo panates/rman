@@ -437,7 +437,27 @@ export namespace RmanConfig {
      * parses.
      */
     positionals?: Record<string, PositionalOption>;
-    handler: (argv: yargs.Arguments) => void;
+    /**
+     * **The parameter is the command's own business, so this states no type for it.**
+     * A handler annotates itself with `ArgsOf<typeof config, typeof COMMAND>`, which this interface
+     * cannot compute for it - `M` is inferred from the literal the handler sits in, so naming it
+     * here is the circularity `ArgsOf` documents.
+     *
+     * It was `(argv: yargs.Arguments) => void`, and that was **not** a neutral placeholder: a
+     * parameter is checked contravariantly, so every command's own `Args` had to be a *supertype* of
+     * yargs' `{ [argName: string]: unknown }`. An index signature does not make a property present,
+     * so any required key put the declaration out of assignment - which is what forced `ArgsOf` to
+     * mark **everything** optional, required positionals included. Measured when it stopped:
+     * `Property 'script' is missing in type '{ [argName: string]: unknown; ... }' but required in
+     * type '{ script: string; }'`, on `run` and `import` alone.
+     *
+     * `never` is the spelling for "any parameter type is acceptable" - it constrains the *shape*
+     * (one argument, returning nothing a caller reads) and leaves the type to the annotation. It is
+     * not an `any` that could leak: nothing ever reads argv through this field, since
+     * `toYargsCommand` casts the handler to yargs' own and that cast is the single place the two
+     * descriptions of argv are admitted to disagree.
+     */
+    handler: (argv: never) => void;
   };
 
   /**
@@ -479,11 +499,37 @@ export namespace RmanConfig {
    * Two lines, and in exchange the typo checking stays and a renamed option can no longer survive
    * silently in the handler behind an `as`.
    *
-   * Every option is optional - a flag that was not passed is absent, whatever `demandOption` says
-   * on the CLI side.
+   * **A `<required>` positional is required here too, and that is the one thing argv genuinely
+   * guarantees.** yargs refuses the call before the handler runs - measured on both commands that
+   * declare one: `rman run` and `rman import` each exit 1 with `Not enough non-option arguments:
+   * got 0, need at least 1`. Typed optional, the two handlers had to say so themselves
+   * (`args.script as string`, `args.path!`), and an `as` in a handler is exactly what declaring
+   * commands exists to remove - it is also how a renamed positional would survive silently. The
+   * rule is purely syntactic (`<x>` vs `[x]`), so it needs nothing but the command string, which
+   * is already the only place that says whether a positional is variadic.
+   *
+   * **What had made everything optional was not a judgement about argv - it was `handler`'s own
+   * parameter type**, which is where that story is written down. Worth knowing before adding a
+   * required key here: the constraint was three types away from the one that looked responsible.
+   * The claim and the parsing are pinned together in `cli.spec.ts` ("cli: a required positional"),
+   * since a type asserting a key is present is only honest while yargs refuses the call without it.
+   *
+   * **Every option stays optional, `default:` included, and that asymmetry is deliberate.**
+   * Narrowing on `default` needs *two* conditions, not one: the default must be present **and**
+   * `target !== 'config'`, because `toYargsCommand` never registers a `target: 'config'` option, so
+   * yargs never applies its default and the key is simply absent from argv. Written with the one
+   * obvious condition the type would claim a key is present where the runtime has `undefined` -
+   * failing in the direction that crashes. The gain does not pay for that risk yet: rman declares
+   * exactly **one** real option default (`config --json`), read as `if (args.json)`, so `undefined`
+   * and `false` already behave alike. The day a contributed command wants it, both conditions are
+   * written down here. `demandOption` would take the same pair of conditions and no declared
+   * command uses it - the only mention in the tree is a `CustomCommand`'s hand-written `builder`,
+   * which does not go through `ArgsOf` at all.
    */
   export type ArgsOf<C, Cmd extends string> = { [K in keyof C]?: OptionValue<C[K]> } & {
-    [K in PositionalsOf<Cmd>]?: PositionalValue<Cmd, K>;
+    [K in RequiredPositionalsOf<Cmd>]: PositionalValue<Cmd, K>;
+  } & {
+    [K in Exclude<PositionalsOf<Cmd>, RequiredPositionalsOf<Cmd>>]?: PositionalValue<Cmd, K>;
   } & GlobalArgs;
 
   /**
@@ -783,6 +829,20 @@ type ValidPositionals<M> = M extends { command: infer C extends string; position
 
 /** A trailing `..`/`...` is yargs' variadic marker, not part of the positional's name. */
 type StripDots<S extends string> = S extends `${infer N}...` ? N : S extends `${infer N}..` ? N : S;
+
+/**
+ * The names a command string declares as **required** positionals - `'run <script> [args..]'` is
+ * `'script'` alone. `ArgsOf`'s only caller, which is why it is private: whether a positional is
+ * required is `ArgsOf`'s question, while `PositionalsOf` answers the different one `ValidPositionals`
+ * asks - which names the string declares at all.
+ *
+ * Unlike `PositionalsOf` it recurses through **one** branch, so a `[bracketed]` name is never
+ * emitted; the recursion still steps past one, since `${string}` matches whatever precedes the next
+ * `<`.
+ */
+type RequiredPositionalsOf<C extends string> = C extends `${string}<${infer N}>${infer Rest}`
+  ? StripDots<N> | RequiredPositionalsOf<Rest>
+  : never;
 
 /** A variadic positional (`[command..]`) collects a list; every other one is a single value. The
  *  command string is the only place that says which, since it is what yargs parses. */

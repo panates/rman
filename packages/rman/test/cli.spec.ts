@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { version } from '../src/constants.js';
+import type { ArgsOf, CommandOption } from '../src/index.js';
 import { runCli, useTestEcosystem } from './_fixture.js';
 
 /** Runs `fn` with console.log captured (plain, unmodified) instead of printed - proves what the
@@ -260,6 +261,82 @@ describe('cli: global --config', () => {
     expect(out).not.toContain('ran shared');
     /** Silent at the default level - the note is a diagnostic, not a warning. */
     expect(out).not.toContain('overridden by');
+  });
+});
+
+/**
+ * **`ArgsOf` types a `<required>` positional as present, and this is the half that makes that
+ * honest.** The type is a claim about argv, and only yargs can keep it - so the claim and the
+ * parsing are pinned together, in one place, rather than the type asserting something no test ever
+ * exercises. `run <script>` and `import <path>` are the only two commands that declare one.
+ *
+ * Before this, both handlers stated it themselves (`args.script as string`, `args.path!`) because
+ * `CommandMetadata.handler` took `yargs.Arguments`, whose index signature makes every required key
+ * unassignable - so `ArgsOf` had to mark everything optional. The `as` is gone from both; if it
+ * comes back, this suite is where to look first.
+ */
+describe('cli: a required positional', () => {
+  useTestEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  it('is refused by yargs before the handler runs, so the handler never sees it absent', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-cli-test-'));
+    dirs.push(dir);
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', version: '1.0.0' }));
+    fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+
+    /** yargs' `.fail()` prints to stdout and `runCli` rethrows to stderr - both silenced, so the
+     *  assertion reads the rejection rather than the report. */
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      await captureLogs(async () => {
+        await expect(runCli({ cwd: dir, argv: ['run'] })).rejects.toThrow(/Not enough non-option arguments/);
+      });
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  /**
+   * **A type-level check, run by `tsc` over the test tree rather than by mocha.** Each
+   * `@ts-expect-error` is its own negative control: revert the narrowing and the error it expects
+   * stops happening, so the directive itself becomes the failure.
+   */
+  describe('ArgsOf', () => {
+    const someOptions = {
+      json: { target: 'cli', describe: 'x', type: 'boolean', default: false },
+      wait: { target: 'cli', describe: 'y', type: 'boolean' },
+    } satisfies Record<string, CommandOption>;
+
+    it('makes `<required>` present, and leaves everything else optional', () => {
+      type RunArgs = ArgsOf<typeof someOptions, 'run <script>'>;
+      type ExecArgs = ArgsOf<typeof someOptions, 'exec [command..]'>;
+
+      /** No `!` and no `??`: `<script>` is a `string`, not a `string | undefined`. */
+      const script: string = ({} as RunArgs).script;
+      expect(typeof script).toBe('undefined');
+
+      /** `[command..]` is optional, and variadic, which the command string is the only place to say. */
+      const command: string[] | undefined = ({} as ExecArgs).command;
+      expect(command).toBe(undefined);
+
+      /** A `default:` does **not** make an option present - narrowing on it would need a second
+       *  condition (`target !== 'config'`), since `toYargsCommand` never registers a config-only
+       *  option and yargs therefore never applies its default. See `ArgsOf`'s own comment. */
+      const noDefaults: Pick<RunArgs, 'json' | 'wait'> = {};
+      expect(noDefaults).toEqual({});
+      /** And the premise of that: `json` really does declare one. */
+      expect(someOptions.json.default).toBe(false);
+
+      // @ts-expect-error `<script>` is required by the command string, so it cannot be left out
+      const missing: Pick<RunArgs, 'script'> = {};
+      expect(missing).toEqual({});
+    });
   });
 });
 

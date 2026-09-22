@@ -27,7 +27,7 @@ const runCommand = registerCommand(app => {
     ],
     handler: async (args: Args) => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));
-      await app.getService('run').runScript(args.script as string, { ...readRunOptions(args), commandName: 'run' });
+      await app.getService('run').runScript(args.script, { ...readRunOptions(args), commandName: 'run' });
     },
   };
 });

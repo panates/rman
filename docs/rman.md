@@ -289,6 +289,11 @@ export const deployCommand = declareCommand(app => ({
   (`'deploy'`), and so are the positional names, which are checked against `positionals`.
 - **`ArgsOf` is annotated, never inferred** - hence the two hoisted consts. Inferring `argv` and
   keeping the metadata's own typo-checking cannot both work in one signature.
+- **A `<required>` positional arrives required; everything else is optional.** yargs refuses the
+  call before the handler runs, so `args.stage` would be a plain `string` had the example written
+  `deploy <stage>` - no `!` and no `?? fallback`. An **option** stays optional even with a
+  `default:`, so read one as `args.wait ?? true`: whether yargs applies a default depends on the
+  option's `target`, and the type does not make that distinction.
 - **A second parameter, `Extra`, is for what an option cannot describe** - `{ file, constant }`, or
   "a shell command or a function". Reach for it only when the shape genuinely resists; a `string[]`
   is `type: 'string'` plus `array: true`.
