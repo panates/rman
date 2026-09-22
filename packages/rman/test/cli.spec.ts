@@ -205,6 +205,62 @@ describe('cli: global --config', () => {
     const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['audit'] }))).join('\n');
     expect(out).toContain('audited');
   });
+
+  /**
+   * **A repository's own command overriding a contributed one registers once, not twice.**
+   *
+   * The override itself is the intended escape hatch and deliberately not an error - the same
+   * precedence a package's own `.rmanrc` has over an `extends` base - and it was already clean:
+   * measured, `rman deploy --help` showed the winner's options alone and the loser's flag was
+   * rejected. What was wrong was the *listing*: both got registered, so `rman --help` printed
+   * `deploy` twice, once with each description, with nothing to say which of the two would run.
+   *
+   * Both halves are asserted, because keeping only the second would pass while silently changing
+   * which command wins: the survivor must be the repository's own, since `loaded` follows
+   * `direct` and yargs took the last.
+   */
+  it("registers one command per name when a repository's own overrides a contributed one", async () => {
+    const dir = fixture();
+    const shared = path.join(dir, 'node_modules', 'shared-dup');
+    fs.mkdirSync(shared, { recursive: true });
+    fs.writeFileSync(
+      path.join(shared, 'package.json'),
+      JSON.stringify({ name: 'shared-dup', version: '1.0.0', type: 'module', exports: './index.js' }),
+    );
+    fs.writeFileSync(
+      path.join(shared, 'index.js'),
+      `export default { commands: [() => ({ command: 'deploy', describe: 'SHARED deploy',
+         handler: () => console.log('ran shared') })] };\n`,
+    );
+    fs.mkdirSync(path.join(dir, '.rman'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.rman', 'deploy.mjs'),
+      `export default { command: 'deploy', describe: 'REPO deploy', handler: () => console.log('ran repo') };`,
+    );
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ extends: 'shared-dup' }));
+
+    /**
+     * **The override note is what pins the deduplication**, and deliberately so: `rman --help` is
+     * the visible symptom but unusable from a spec, because yargs answers it with `process.exit`
+     * and that kills the mocha process. The note is printed from the same branch that drops the
+     * duplicate - `commands.length < localModules.length` - so it cannot be true unless exactly
+     * one survived. Without the fix both register, the branch never runs, and this is silent.
+     *
+     * At `verbose` because an override is a correct thing to do; the default output stays clean,
+     * which the second half asserts.
+     */
+    const verbose = (await captureLogs(() => runCli({ cwd: dir, argv: ['deploy', '--log-level', 'verbose'] }))).join(
+      '\n',
+    );
+    expect(verbose).toContain('"deploy" from "commands" is overridden by');
+    expect(verbose).toContain('deploy.mjs');
+
+    const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['deploy'] }))).join('\n');
+    expect(out).toContain('ran repo');
+    expect(out).not.toContain('ran shared');
+    /** Silent at the default level - the note is a diagnostic, not a warning. */
+    expect(out).not.toContain('overridden by');
+  });
 });
 
 /**

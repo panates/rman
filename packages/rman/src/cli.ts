@@ -161,7 +161,43 @@ export async function runCli(options?: { argv?: string[]; cwd?: string; app?: Rm
       const meta = checkCustomCommand({ ...declared, command: declared.command?.trim() || c.name }, c.file);
       return { name: commandName(meta.command), file: c.file, module: toYargsCommand(meta) };
     });
-    const commands = localModules;
+    /**
+     * **One command per name, keeping the last** - which is the precedence that already applied,
+     * made visible instead of left to yargs.
+     *
+     * A repository's own `.rman/check.mjs` overriding a command its config contributed is the
+     * intended escape hatch, and it is deliberately not an error: the same precedence a package's
+     * own `.rmanrc` has over an `extends` base. But both were being *registered*, and what that
+     * cost was the help output - measured, `rman --help` listed `deploy` twice, once with each
+     * description, and nothing said which of the two would run.
+     *
+     * Only the listing was wrong; the override itself was already clean (`rman deploy --help`
+     * showed the winner's options alone, and the loser's flag was rejected), which is why this is
+     * a registration fix and not a change to how a clash resolves. Registered later wins because
+     * `loaded` follows `direct` - a `.rman/` file after a contributed command - and yargs took the
+     * last, so keeping the last keeps today's behaviour exactly.
+     *
+     * The survivor takes the *loser's* position in the list, since that is where the name was
+     * first seen. Help ordering only.
+     */
+    const byName = new Map<string, (typeof localModules)[number]>();
+    for (const command of localModules) byName.set(command.name, command);
+    const commands = [...byName.values()];
+    /**
+     * Said out loud, at `verbose`, because deduplicating silently is what would make this the
+     * trap it is warned about elsewhere: before, two rows at least hinted that something was
+     * doubled - after, the overridden command is simply absent, and "my plugin's command does
+     * nothing" has no thread to pull. Not a warning: an override is a correct thing to do, and a
+     * repository that does it on purpose should not be nagged on every invocation.
+     */
+    if (commands.length < localModules.length) {
+      const logger = new Logger(argvLogLevel(_argv) ?? resolveRootLogLevel(repository));
+      const survivors = new Set(commands);
+      for (const lost of localModules.filter(c => !survivors.has(c))) {
+        const winner = byName.get(lost.name)!;
+        logger.verbose(`"${lost.name}" from ${lost.file} is overridden by ${winner.file}.`);
+      }
+    }
     assertNoBuiltinShadowing(commands, builtInNames(builtIns));
     for (const { module } of commands) program.command(module);
     /** Warned about, not thrown: one unparseable file must not take the other commands with it.
@@ -422,4 +458,25 @@ function toCustomModule(custom: CustomCommand, repository: Repository, app: Rman
       return custom.handler(context, args);
     },
   };
+}
+
+/**
+ * `--log-level` read straight off argv, for a message printed **before** yargs parses anything.
+ *
+ * Commands are registered before `parseAsync` runs - registering them is what makes parsing
+ * possible - so a diagnostic emitted at registration time cannot come from `args.logLevel`.
+ * Measured: the override note in `runCli` was silent for `--log-level verbose` and appeared only
+ * when `.rmanrc` said so, which is the one spelling a reader would not reach for first.
+ *
+ * A peek, not a parser. Both spellings, first match wins, and a value that is not a level is left
+ * alone for yargs to reject in its own words - this must not become a second place where an
+ * invalid `--log-level` is diagnosed.
+ */
+function argvLogLevel(argv: string[]): LogLevel | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    const value = arg === '--log-level' ? argv[i + 1] : arg.startsWith('--log-level=') ? arg.slice(12) : undefined;
+    if (value && (LOG_LEVELS as string[]).includes(value)) return value as LogLevel;
+  }
+  return undefined;
 }
