@@ -28,6 +28,9 @@ export class Package {
   dependencies: Package[] = [];
   /** Effective rman config for this package, cascaded from the repository root, with every
    *  `${{ ... }}` expression already evaluated. */
+  /** **The resolved view**: every value function has already been called by `interpolateConfig`, so
+   *  a reader gets the value rather than `T | (() => T)` - see `RmanConfig` for why an author's
+   *  view would have to be a second type, and why there is not one yet. */
   config: RmanConfig = {};
   /**
    * The repository this package belongs to - so anything holding a package can reach the whole

@@ -15,6 +15,17 @@
 import type { RmanConfig as CommandDeclaration } from './interfaces/rman-cfg.interface.js';
 
 export { defineConfig } from './core/config.js';
+/**
+ * **A config value written as a function**, and the scope it is handed. Exported because a config
+ * author could not name either: `interpolateConfig` calls a function wherever a `${{ }}` could
+ * stand, but the only function form the types admitted was a *step* - so the primary spelling of
+ * `value` was unexpressible.
+ *
+ * `ConfigValueContext` is what a value function receives; `ConfigScope` is the same thing without
+ * `value`, i.e. what an expression sees. Not to be confused with `RunStepContext`, which is what a
+ * step gets, later, with a working directory and a `runBin`.
+ */
+export type { ConfigScope, ConfigValue, ConfigValueContext, FileScope, PackageScope } from './core/config.js';
 export type { CommandContext, CustomCommand } from './core/custom-command.js';
 export { defineCommand } from './core/custom-command.js';
 /** Both the shape and the registry: `const m: Manifest` and `Manifest.read(dir)` - merged onto one

@@ -406,6 +406,51 @@ export interface GitScope {
  * string** - that is `${{ pkg.version }}`. Same word, two different things, and the plain one
  * belongs to the config because every other config key is reachable that way.
  */
+/**
+ * What a **value function** is handed - `clean: { include: ({ value, pkg }) => [...] }`.
+ *
+ * The same scope a `${{ }}` expression sees, plus `value`. There is no asymmetry between the two
+ * spellings and that is an invariant with a spec on it: the argument *is* the expression context
+ * with `value` on it, so a member defined straight onto the argument would split them silently and
+ * a config author would meet a name that works in one spelling and not the other.
+ *
+ * **The config's own top-level keys are bound bare too**, and they cannot be typed here - they come
+ * from the config being interpolated rather than from this object. Reach them through `pkg.config`
+ * when a type matters, or accept `any` from the bare name.
+ *
+ * **Not what a *step* function is handed.** `run.<script>.exec` and `version.<slot>` take a
+ * `RunStepFn`, which gets a `RunStepContext` (`pkg`, `repository`, `cwd`, `runBin`, `logger`) when
+ * its turn comes - a different object at a different time, which is the whole distinction the two
+ * forms exist to draw. Never widen a step key to accept this one.
+ */
+export interface ConfigValueContext extends ConfigScope {
+  /**
+   * What this key resolved to in the layers **below** this one - the list form of it, so
+   * `[...value, 'x']` needs no guard. `any` rather than a generic: the key's own type is what the
+   * function must return, while `value` is whatever the layers underneath happened to produce, and
+   * a scalar underneath arrives as a one-element list. See `previousValue`.
+   */
+  value: any;
+  /** The config's own top-level keys, bound bare - `vars`, `publish`, `clean`, … */
+  [key: string]: any;
+}
+
+/**
+ * A config value that may be **written as a function instead**, computed per package at the moment
+ * the config resolves.
+ *
+ * `T` is what the function has to return, so the same checking applies either way - measured, with
+ * a control: a typo inside a wrapped object is still caught, and so is one inside an object a value
+ * function *returns*.
+ *
+ * **Not for a step key.** `run.<script>.before`/`.exec`/`.after`, `run.<script>.if` and
+ * `version.<slot>` already take a function, and it means something else there - code for `run` to
+ * call in its own time, with its own context. Wrapping one of those would produce a type that
+ * accepts a value function where a step is what actually runs. The key path decides which a
+ * function is (`STEP_PATHS`, `CODE_SUBTREES`), and the type can only follow that split by hand.
+ */
+export type ConfigValue<T> = T | ((ctx: ConfigValueContext) => T);
+
 export interface ConfigScope {
   /** The package the config was resolved for - which is what lets one declaration at the root
    *  still say something package-specific. */

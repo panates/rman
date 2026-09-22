@@ -18,6 +18,34 @@ import type { RunConditionFn, RunStepValue } from '../core/run-step.js';
  * one for the config shape, one for the command declarations - which is why the package could not
  * export the second at all.
  */
+/**
+ * **This describes the config as a *reader* sees it**, which is what `pkg.config` is: the directory
+ * cascade, `"[selector]"` blocks, `extends` and `${{ }}` all applied, and every value function
+ * already **called** by `interpolateConfig`. So `CleanService` asking `pkg.config.clean?.include`
+ * gets `string | string[]` and needs no cast.
+ *
+ * **An author may also write a function wherever rman computes a value, and this type does not say
+ * so** - a known gap, not a decision. `ConfigValue` names that form and `ConfigValueContext` names
+ * what it is handed, so a config can be written with a cast; `docs/rman.md`'s own
+ * `changelog: { filePath: ({ vars }) => vars.notesFile }` does not compile without one.
+ *
+ * **Two attempts at closing it are recorded here so the third does not repeat them:**
+ *
+ * - *Widening this type* to `T | (() => T)` puts a cast at every **read** site instead - measured,
+ *   six broke: `version.command.ts`, `publish-target.ts`, `changelog.service.ts` and three in
+ *   `github-release.service.ts`. A reader and an author need two types, not one.
+ * - *Deriving an input view mechanically* (`AsConfigValuesDeep` over this) fails twice over. It
+ *   cannot be this name: `RmanConfig` is **also a namespace** (`RmanConfig.CommandConfigs`,
+ *   `CommandContribution`, …) that `rman-node` augments, a `type` alias cannot merge with a
+ *   namespace, and the resulting circular reference resolves to `{}` **silently** - measured, every
+ *   key then read as "does not exist", `vars` and `run` included. Under a second name it compiles
+ *   and still degrades types: `vars: Record<string, unknown>` becomes `ConfigValue<{}>`, so a
+ *   resolved config is no longer a valid input, and every object-valued key goes the same way.
+ *
+ * What is left is to **declare** the input view per contribution, beside the resolved one, so the
+ * step/value split is stated rather than inferred - a `CommandOption`'s keys may be wrapped, an
+ * `Extra`'s must not, and only the author of a key knows which it is.
+ */
 export interface RmanConfig extends RmanConfigKeys, RmanConfig.CommandConfigs {
   /**
    * Configs to inherit from, merged **underneath** this one - a shared package
@@ -29,6 +57,9 @@ export interface RmanConfig extends RmanConfigKeys, RmanConfig.CommandConfigs {
    *
    * Top level only: a `"[selector]"` block naming one is an error rather than a no-op, since
    * inheritance is a statement about this config and not about the packages a selector names.
+   *
+   * Resolved away long before a reader sees one, and kept on this type because `rman config` prints
+   * the object it was resolved from.
    */
   extends?: string | string[];
 }
