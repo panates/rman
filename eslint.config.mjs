@@ -7,7 +7,7 @@ export default [
     /** `build` is per package now. `old` is the gitignored pre-v1 tree kept locally for
      *  reference - it was only ever passing because its imports happened to be declared in the
      *  root package.json, which the monorepo split moved into `packages/rman`. */
-    ignores: ['**/build/**', '**/node_modules/**', 'old/**'],
+    ignores: ['packages/*/build/**', '**/node_modules/**', 'old/**'],
   },
   ...panatesEslint.configs.node,
   {
