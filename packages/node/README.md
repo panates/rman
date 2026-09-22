@@ -16,7 +16,7 @@ npm i -D rman-node
 
 ```yaml
 # .rmanrc.yml
-plugins: ['rman-node']
+extends: rman-node
 ```
 
 A plugin that cannot be loaded is an error, not a skip: silently losing `rman clean` is worse
@@ -95,7 +95,7 @@ what carries the augmentation:
 import { defineConfig } from 'rman-node';
 
 export default defineConfig({
-  plugins: ['rman-node'],
+  extends: 'rman-node',
   packageManager: 'pnpm',
   '[*]': { clean: { include: 'build' }, publish: { npm: { directory: 'build' } } },
 });

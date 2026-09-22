@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 9557470
+git-commit: PENDING
 package-version: 2.0.0-beta.2
 date: 2026-09-22
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff 9557470..HEAD -- packages/rman/src/
+  git diff PENDING..HEAD -- packages/rman/src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -115,6 +115,8 @@ import type {
   RmanConfig,
   ResolvedConfig,
   ConfigValue,
+  ConfigValueContext,
+  ConfigScope,
   Plugin,
   PluginContext,
   PublishTarget,
@@ -389,7 +391,7 @@ class Package {
   manifest: Manifest; // this package's identity, as its own technology read it
   manifestFileName: string; // absolute path to the file it was read from ('' if none)
   dependencies: Package[]; // in-repo packages this one depends on (full transitive closure)
-  config: RmanConfig; // this package's own effective, cascaded .rmanrc config
+  config: ResolvedConfig; // its own effective, cascaded .rmanrc - value functions already called
   repository: Repository; // the repository it belongs to (a repository's own is itself)
   parent?: Package; // the package whose directory contains this one; undefined for the root
   plugin: Plugin; // the technology whose manifest provider claimed this directory
@@ -527,6 +529,11 @@ wins. A bare name resolves through *that file's* own `node_modules`, which is wh
 shared config lives - so a subpath works too (`"@panates/rman-monorepo/strict"`). The target may be
 YAML, JSON, or a module exporting a config through `defineConfig`, and may itself `extends` another;
 a cycle is reported rather than recursed into.
+
+A module base may be ESM or CommonJS - `.mjs`, `.cjs`, or a `.js` read as whichever its nearest
+`package.json` says. (Through 2.0.0-beta.2 a CommonJS base came back as an empty object under an
+ESM loader hook, and an empty object is a valid config, so it contributed nothing and said nothing.
+Both paths share one loader now.)
 
 Resolution happens per directory, once that directory's own file forms are combined - `extends` is
 the base they sit on, and the directory chain then layers on top exactly as before. `extends` is
@@ -1216,11 +1223,17 @@ function typed with `RmanNodeConfig`, and the import is what carries the plugin'
 import { defineConfig } from 'rman-node';
 
 export default defineConfig({
-  plugins: ['rman-node'],
+  extends: 'rman-node',
   packageManager: 'pnpm',
   '[*]': { clean: { include: 'build' } },
 });
 ```
+
+**`extends`, not `plugins`** - and this is worth stating because the page said `plugins` until
+2.0.0-beta.3. A published plugin package exports an rman *config* (its plugin, its commands, its
+publish targets), and a config's way into a repository is `extends`; `plugins` names technologies
+themselves, and a bare string there is a **glob**. Measured on the old spelling:
+`"plugins" glob ".../rman-node" matched no file`, exit 1 from every command.
 
 **The JSON and YAML forms have no editor support, deliberately.** rman used to ship a JSON Schema
 for them; it was removed because a schema cannot describe a config whose keys are contributed by
@@ -1568,7 +1581,7 @@ Two roles, and they resolve differently:
 | | |
 | --- | --- |
 | **Orchestrator** | `app.versionPlanner` - one slot, last registration wins. Drives groups, the commit→size reading, the cross-group ripple and the root's release identity: none of it belongs to a technology, and all of it is computed for the whole repository at once. |
-| **Per package** | `detectBoundary` and `cascade`, asked of `pkg.techStack.versionPlanner` (falling back to the orchestrator). |
+| **Per package** | `detectBoundary` and `cascade`, asked of `pkg.plugin.versionPlanner` (falling back to the orchestrator). |
 
 That split is not cosmetic. Both used to come off the single slot, so in a polyglot repository a
 Cargo package's boundary fell back to `npm view` and its cascade assumed npm's caret ranges -

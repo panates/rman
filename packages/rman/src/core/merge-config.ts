@@ -262,8 +262,28 @@ function toList(value: unknown): unknown[] {
 function anchorContributions(value: unknown, origin: string | undefined): unknown {
   if (!origin) return value;
   const dir = path.dirname(origin);
-  const anchor = (entry: unknown) => (typeof entry === 'string' ? path.resolve(dir, entry) : entry);
+  const anchor = (entry: unknown) =>
+    typeof entry === 'string' && !looksLikePackageName(entry) ? path.resolve(dir, entry) : entry;
   return Array.isArray(value) ? value.map(anchor) : anchor(value);
+}
+
+/**
+ * Whether an entry is shaped like a **package name** rather than a glob - `rman-node`,
+ * `@panates/rman-node`, but not `*.js`, `./x.js` or `commands/*.mjs`.
+ *
+ * Such an entry is left unanchored, because it is not a relative path and turning it into one
+ * destroys the only evidence of what the author meant. A package name is never valid in these keys
+ * (a package's config arrives through `extends`), so the whole value of keeping it intact is the
+ * error message: anchored, `plugins: ['rman-node']` failed with `glob ".../rman-node" matched no
+ * file`, which sends the reader to check their paths. `loadPlugins` can now say what they actually
+ * wrote and what to write instead - which two doc pages already promised it did.
+ *
+ * Shape, not a resolver call: decidable without touching the disk, and a wrong guess only chooses
+ * which of two error messages a failing entry gets. An extension is excluded so a bare `plugin.js`
+ * beside the config is still anchored as the relative path it is.
+ */
+function looksLikePackageName(entry: string): boolean {
+  return /^(?:@[a-z0-9-~][\w.-]*\/)?[a-z0-9-~][\w.-]*$/i.test(entry) && !/\.[cm]?js$/i.test(entry);
 }
 
 /** A config object, as opposed to an array or anything with its own prototype - only the former

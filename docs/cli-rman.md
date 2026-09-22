@@ -1,6 +1,6 @@
 <!--
 docs-baseline
-git-commit: 9557470
+git-commit: PENDING
 package-version: 2.0.0-beta.2
 date: 2026-09-22
 
@@ -9,11 +9,14 @@ of the commit above (and the matching specs for behavior examples). `rman-node`'
 have their own index, [cli-node.md](cli-node.md). Before trusting/updating this file (or any page
 under `docs/cli/`) in a later session, run:
 
-  git diff 9557470..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/
+  git diff PENDING..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/
 
 and update only the pages touched by what that diff actually shows - don't regenerate everything
 unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
-`package-version`/`date` here and in every `docs/cli/*.md` page's own baseline comment.
+`package-version`/`date` above.
+
+The `docs/cli/*.md` pages carry no baseline of their own - this block covers them, since they are
+verified from the same diff. (It used to say to bump theirs too; none has ever had one.)
 -->
 
 # rman CLI Reference
@@ -76,12 +79,15 @@ that declared it - so a shared config can ship commands without wrapping them in
 ### A plugin
 
 A plugin is an ordinary package that contributes commands (and more - see
-[docs/node.md](node.md) for what else). Name it and its commands appear:
+[docs/node.md](node.md) for what else). Inherit its config and its commands appear:
 
 ```yaml
 # .rmanrc.yml
-plugins: ['rman-node']
+extends: rman-node
 ```
+
+`extends`, not `plugins` - a plugin package exports an rman *config*, and `plugins` takes the
+technologies themselves. Writing the package name there is refused, naming this as the fix.
 
 Without it, `rman clean` is `Unknown argument: clean`. A plugin that cannot be *loaded* is an error
 rather than a skip: silently losing a command the repository is built around is worse than not

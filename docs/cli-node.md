@@ -1,16 +1,17 @@
 <!--
 docs-baseline
-git-commit: 9557470
+git-commit: PENDING
 package-version: 2.0.0-beta.2
 date: 2026-09-22
 
 Verified against `packages/node/src/commands/*.command.ts` as of the commit above. Before trusting/
 updating this file (or `docs/cli/{publish,ci,clean}.md`) in a later session, run:
 
-  git diff 9557470..HEAD -- packages/node/src/commands/
+  git diff PENDING..HEAD -- packages/node/src/commands/
 
 and update only the pages touched by what that diff actually shows. Once verified again, bump
-`git-commit`/`package-version`/`date` here and in each page's own baseline comment.
+`git-commit`/`package-version`/`date` above. `docs/cli/{ci,clean}.md` carry no baseline of their
+own - this block covers them, since they are verified from the same diff.
 -->
 
 # `rman-node` CLI Reference
@@ -22,11 +23,13 @@ API.
 
 ```yaml
 # .rmanrc.yml
-plugins: ['rman-node']
+extends: rman-node
 ```
 
-Without that line, `rman clean` is `Unknown argument: clean`. The line may also be **inherited**
-through `extends`, so a shared config package can deliver the whole toolchain at once - see
+Without that line, `rman clean` is `Unknown argument: clean`. **`extends`, not `plugins`**: this
+package's entry point exports an rman *config* - its plugin, its commands, its publish target - and
+`extends` is how a config is inherited. A `plugins` entry naming it is refused, saying so. The line
+may itself be inherited, so a shared config package can deliver the whole toolchain at once - see
 [Where a command comes from](cli-rman.md#where-a-command-comes-from).
 
 ## Commands

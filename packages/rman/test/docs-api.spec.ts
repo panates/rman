@@ -2,7 +2,9 @@ import { expect } from 'expect';
 import type {
   ArgsOf,
   CommandOption,
+  ConfigScope,
   ConfigValue,
+  ConfigValueContext,
   Plugin,
   PluginContext,
   PositionalOption,
@@ -140,6 +142,9 @@ describe('docs/rman.md: the documented API surface', () => {
     /** The two views the page now documents, in the two roles it documents them in: the author's
      *  key may be a function, the reader's is the value. */
     const authored: ConfigValue<string> = ({ pkg }) => pkg.name;
+    /** The two scopes a config author names: what an expression sees, and that plus `value`. */
+    const scopes: [ConfigScope | undefined, ConfigValueContext | undefined] = [undefined, undefined];
+    void scopes;
     const read: ResolvedConfig = {};
     expect([named.length, Object.keys(positionals), typeof authored, read]).toEqual([5, ['stage'], 'function', {}]);
   });

@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 9557470
+git-commit: PENDING
 package-version: 2.0.0-beta.2
 date: 2026-09-22
 
 Verified against `packages/node/src/` as of the commit above. Before trusting/updating this file in
 a later session, run:
 
-  git diff 9557470..HEAD -- packages/node/src/
+  git diff PENDING..HEAD -- packages/node/src/
 
 and update only the sections touched by what that diff actually shows. Once verified again, bump
 `git-commit`/`package-version`/`date` above to the new HEAD.
@@ -118,6 +118,11 @@ declare module 'rman' {
 }
 ```
 
+Every one of these keys is a **value**, so each may be written as a function instead - `clean.include`,
+`clean.exclude`, `packageManager`, `publish.npm.directory`. A reader still gets the value, because
+`pkg.config` is the resolved view; see
+[two views of one config](rman.md#two-views-of-one-config).
+
 **All three live in that one block, and that is forced rather than chosen.** A *second*
 `declare module 'rman'` anywhere in this package silently disables the first - measured twice now,
 the second time while moving `clean`: it left `SystemInfo.PackageManager` unresolved at four call
@@ -133,7 +138,7 @@ import that carries that augmentation - explicit, rather than a side effect some
 import { defineConfig } from 'rman-node';
 
 export default defineConfig({
-  plugins: ['rman-node'],
+  extends: 'rman-node',
   packageManager: 'pnpm',
   '[*]': { clean: { include: 'build' }, publish: { npm: { directory: 'build' } } },
 });

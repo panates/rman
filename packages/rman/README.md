@@ -99,7 +99,7 @@ this package - each is about npm or TypeScript rather than about repositories. N
 `.rmanrc` to get them:
 
 ```yaml
-plugins: ['rman-node']
+extends: rman-node
 ```
 
 **`publish` is here, but *where* a package ships is a plugin's to say.** A **publish target** is

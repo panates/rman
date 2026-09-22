@@ -209,6 +209,41 @@ describe('core/plugin', () => {
     expect(error.message).toContain('matched no file');
   });
 
+  /**
+   * **A package name in `plugins` is the mistake the docs kept making**, so the message names the
+   * fix rather than the symptom. `docs/rman.md` and both published READMEs all wrote
+   * `plugins: ['rman-node']`; measured, every command exited 1 saying only
+   * `glob ".../rman-node" matched no file`, which sends the reader to check their paths when what
+   * they wrote is a package - whose config reaches a repository through `extends`.
+   *
+   * Reaching the loader intact is the other half: `mergeConfig` anchors a contribution glob to the
+   * file that declared it, and anchoring `rman-node` into `<dir>/rman-node` erased the evidence.
+   */
+  it('tells a package name in "plugins" to be an "extends" instead, naming the package', async () => {
+    const dir = fixture({ plugins: ['rman-node'] });
+    const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
+    expect(error.message).toContain('looks like a package name');
+    expect(error.message).toContain('extends: "rman-node"');
+  });
+
+  it('says the same for a scoped package name, scope included', async () => {
+    const dir = fixture({ plugins: ['@panates/rman-node'] });
+    const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
+    expect(error.message).toContain('extends: "@panates/rman-node"');
+  });
+
+  /**
+   * The control for the two above: the predicate must not swallow a real glob, or a mistyped path
+   * would be answered with advice about `extends`. `./does-not-exist.mjs` is covered by the case
+   * further up; this is the bare-looking one, which is the shape that would over-fire.
+   */
+  it('still calls a bare glob a glob, rather than mistaking it for a package', async () => {
+    const dir = fixture({ plugins: ['*.mjs'] });
+    const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
+    expect(error.message).toContain('matched no file');
+    expect(error.message).not.toContain('looks like a package name');
+  });
+
   it('names the shape when a module exports something that is not an object at all', async () => {
     const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': `export default 'oops';` });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));

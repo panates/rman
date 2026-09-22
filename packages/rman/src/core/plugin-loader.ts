@@ -140,6 +140,30 @@ async function resolveEntries(declared: unknown, key: string): Promise<ResolvedE
      * most repositories have no such directory.
      */
     if (!files.length) {
+      /**
+       * **A package name gets the answer it is actually asking for.** A bare `rman-node` here is a
+       * glob that matches nothing, and "matched no file" sends the reader to check their paths -
+       * when what they wrote is a *package*, whose config reaches a repository through `extends`.
+       * Two documents promised this message named the fix (`docs/rman.md`, `docs/cli-rman.md`) and
+       * it did not; measured, `plugins: ['rman-node']` exited 1 saying only that a glob matched
+       * nothing.
+       *
+       * Reaching this intact takes `mergeConfig`'s help: it anchors a contribution glob to the file
+       * that declared it, which used to turn `rman-node` into `<dir>/rman-node` and erase the
+       * evidence. `looksLikePackageName` there leaves this shape alone; the same predicate is
+       * spelled again here rather than shared, because the two modules answer different questions
+       * with it and a merge concern importing a loader concern (or the reverse) is the coupling
+       * neither wants.
+       */
+      const isPackageName = /^(?:@[a-z0-9-~][\w.-]*\/)?[a-z0-9-~][\w.-]*$/i.test(entry) && !/\.[cm]?js$/i.test(entry);
+      if (isPackageName) {
+        throw new Error(
+          `"${key}" entry "${entry}" looks like a package name, and this key does not take one - ` +
+            `it takes a plugin, or a glob naming modules that export one. A plugin package exports ` +
+            `an rman config, so write \`extends: "${entry}"\` instead, which merges everything that ` +
+            `package declares underneath your own config.`,
+        );
+      }
       throw new Error(`"${key}" glob "${entry}" matched no file. A plugin that does not load is not a plugin.`);
     }
     for (const file of [...new Set(files.map(f => path.resolve(f)))].sort()) {
