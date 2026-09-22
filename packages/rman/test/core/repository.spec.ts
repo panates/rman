@@ -1087,6 +1087,73 @@ describe('core/Repository', () => {
       expect(repo.config.version?.stamp).toEqual(['build']);
     });
 
+    /**
+     * **The base and its consumer both writing `"[*]"` is the shape a shared config actually
+     * takes**, and it was the one shape where the inherited value went missing.
+     *
+     * The chain below a key was only ever recorded for a key being *replaced*: those two blocks
+     * merge into one before `matchingSelectors` sees them - recording the chain on the merged
+     * block - and that block is then merged into a `result` which does not hold the key yet, so
+     * `mergeConfig` had nothing to chain onto and dropped what the source carried. It propagates a
+     * source's own chain now, the way it already did for `ORIGINS`.
+     *
+     * Measured before the fix: `['dist']`, with `'build'` gone. The negative control is the
+     * assertion itself - there is no other way to reach `'build'` from here.
+     *
+     * The two shapes that always worked are the reason this went unnoticed, and they are asserted
+     * beside it: both merge into a target that already holds the key.
+     */
+    it("hands over a value inherited through the base's own selector block", async () => {
+      /** **A JSON base, not a `.cjs` one** - measured, an `extends` to a relative `.cjs` resolves
+       *  under mocha without error and then contributes nothing, so a spec written that way asserts
+       *  on a base that was never read. Data is all a base needs here; the function is the
+       *  consumer's. */
+      const dir = jsFixture(
+        `{ extends: './base.json', '[*]': { version: { stamp: ({ value }) => [...value, 'dist'] } } }`,
+      );
+      writeJson(dir, 'base.json', { '[*]': { version: { stamp: ['build'] } } });
+      const repo = await createRepository(dir);
+      expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['build', 'dist']);
+    });
+
+    it('does the same for an unmarked key and for a differently-named selector', async () => {
+      const unmarked = jsFixture(
+        `{ version: { stamp: ['build'] },
+           '[pkg-a]': { version: { stamp: ({ value }) => [...value, 'dist'] } } }`,
+      );
+      expect((await createRepository(unmarked)).getPackage('pkg-a')?.config.version?.stamp).toEqual(['build', 'dist']);
+
+      const twoSelectors = jsFixture(
+        `{ '[*]':     { version: { stamp: ['build'] } },
+           '[pkg-a]': { version: { stamp: ({ value }) => [...value, 'dist'] } } }`,
+      );
+      expect((await createRepository(twoSelectors)).getPackage('pkg-a')?.config.version?.stamp).toEqual([
+        'build',
+        'dist',
+      ]);
+    });
+
+    /**
+     * Three layers, and the order is the **declaration order of the selectors** - not the order of
+     * the files. `"[*]"` is written before `"[pkg-a]"`, so the base's `"[pkg-a]"` is the last word
+     * even though the consumer's `"[*]"` is in the closer file; that is the documented rule, and
+     * the cost CLAUDE.md names for having dropped specificity ranking.
+     *
+     * Here to pin the *order* rather than the presence: before the fix this answered
+     * `['top', 'mid']`, so getting `'base'` back could have arrived anywhere in the list.
+     */
+    it('keeps the layers in selector-declaration order across files', async () => {
+      const dir = jsFixture(
+        `{ extends: './base.json', '[*]': { version: { stamp: ({ value }) => [...value, 'top'] } } }`,
+      );
+      writeJson(dir, 'base.json', {
+        '[*]': { version: { stamp: ['base'] } },
+        '[pkg-a]': { version: { stamp: "${{ [...value, 'mid'] }}" } },
+      });
+      const repo = await createRepository(dir);
+      expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['base', 'top', 'mid']);
+    });
+
     it('resolves the inherited value before handing it over, expressions included', async () => {
       const dir = jsFixture(
         `{ version: { stamp: ['\${{ pkg.name }}-base'] },
@@ -1096,13 +1163,96 @@ describe('core/Repository', () => {
       expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['pkg-a-base', 'extra']);
     });
 
-    it('gives `value` as undefined when nothing below sets the key, and says so when that throws', async () => {
-      // Undefined rather than `[]`: defaulting would be a guess about the key's type, and wrong for
-      // every key that is not a list. So the error has to name the cause instead - V8's own
-      // "value is not iterable" names neither the key nor the reason.
-      const dir = jsFixture(`{ '[*]': { version: { stamp: ({ value }) => [...value] } } }`);
-      await expect(createRepository(dir)).rejects.toThrow(/`value` is undefined here/);
-      await expect(createRepository(dir)).rejects.toThrow(/nothing below this layer sets "version.stamp"/);
+    /**
+     * **`value` spreads as empty when nothing below sets the key, so a list needs no guard.**
+     *
+     * It used to be `undefined`, and the guard was `value ?? []` at every site - on the grounds
+     * that defaulting to `[]` would be a guess about the key's type, wrong for every key that is
+     * not a list. Forgetting it was not quiet: the spread threw V8's `value is not iterable`, and
+     * since resolving the config is what every command does first, one missing guard in a shared
+     * config took `rman list` and `rman info` down with it.
+     */
+    it('spreads as empty when nothing below sets the key, with no guard', async () => {
+      const dir = jsFixture(`{ '[*]': { version: { stamp: ({ value }) => [...value, 'extra'] } } }`);
+      const repo = await createRepository(dir);
+      expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['extra']);
+    });
+
+    /** And the old spelling keeps working, which is what makes this safe for configs already
+     *  written: the stand-in is an array, so it is not nullish and `?? []` returns it unchanged. */
+    it('still works when a config guards it the old way', async () => {
+      const dir = jsFixture(`{ '[*]': { version: { stamp: ({ value }) => [...(value ?? []), 'extra'] } } }`);
+      const repo = await createRepository(dir);
+      expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['extra']);
+    });
+
+    /**
+     * **The objection to defaulting is answered rather than ignored: a non-list use throws.**
+     *
+     * This is the half a plain `[]` would get wrong - it would hand back `''` and `'1'` and look
+     * like a configured value. The number case is one the *old* answer got wrong too:
+     * `undefined + 1` is `NaN`, which serialized to `null`.
+     */
+    it('refuses to be a string or a number when nothing is underneath, naming the key', async () => {
+      for (const body of [`\`\${value}-suffix\``, `value + 1`]) {
+        const dir = jsFixture(`{ '[*]': { version: { commitMessage: ({ value }) => ${body} } } }`);
+        await expect(createRepository(dir)).rejects.toThrow(/`value` cannot be used as a string or a number/);
+        await expect(createRepository(dir)).rejects.toThrow(/nothing below this layer sets it/);
+      }
+    });
+
+    /**
+     * **A scalar underneath is handed over as a one-element list, and that is not a guess about the
+     * key's type.** Every key `value` is reached for is declared `X | X[]` - the list *is* the type
+     * and the scalar is shorthand, which `CleanService` and `RunService` already normalize. So
+     * `[...value, 'x']` works whether the layer below wrote `'build'` or `['build']`, and nothing
+     * has to know which.
+     *
+     * Handing the raw string over instead is what a spread cannot survive: `[...'build']` is six
+     * characters, which no key wants.
+     */
+    it('hands a scalar underneath over as a one-element list', async () => {
+      const dir = jsFixture(
+        `{ version: { stamp: 'build' },
+           '[*]':   { version: { stamp: ({ value }) => [...value, 'dist'] } } }`,
+      );
+      const repo = await createRepository(dir);
+      expect(repo.getPackage('pkg-a')?.config.version?.stamp).toEqual(['build', 'dist']);
+    });
+
+    /** And it still *reads* as the scalar wherever one makes sense, through `Symbol.toPrimitive` -
+     *  so a genuinely string-shaped key derives from what it inherited as it always did. */
+    it('still reads as the scalar in a string or a number', async () => {
+      const dir = jsFixture(
+        `{ changelog: { filePath: 'out' },
+           '[*]':     { changelog: { filePath: ({ value }) => value + '.md' } } }`,
+      );
+      expect((await createRepository(dir)).getPackage('pkg-a')?.config.changelog?.filePath).toBe('out.md');
+    });
+
+    /** A **list** underneath refuses both, because splicing `a,b` into a sentence is a mistake worth
+     *  naming rather than rendering as `a,b`. */
+    it('refuses to splice a list into a string', async () => {
+      const dir = jsFixture(
+        `{ version: { commitMessage: ['a', 'b'] },
+           '[*]':   { version: { commitMessage: ({ value }) => value + '-x' } } }`,
+      );
+      await expect(createRepository(dir)).rejects.toThrow(/the layer below it is a list/);
+    });
+
+    /**
+     * **A boolean is the one carve-out: handed over as itself.**
+     *
+     * It is never a list nor a list's shorthand, and it cannot be fixed up for - `!value` and
+     * `value ? :` use ToBoolean, which has no hook and answers `true` for every object, so a
+     * wrapped `false` would read as `true`. Measured, which is why this case exists at all.
+     */
+    it('hands a boolean underneath over as itself, so inverting it works', async () => {
+      const dir = jsFixture(
+        `{ version: { changelog: false },
+           '[*]':   { version: { changelog: ({ value }) => !value } } }`,
+      );
+      expect((await createRepository(dir)).getPackage('pkg-a')?.config.version?.changelog).toBe(true);
     });
 
     it('names the config path when a function throws', async () => {
@@ -1305,13 +1455,21 @@ describe('core/Repository', () => {
         path.join(dir, '.rmanrc.cjs'),
         `module.exports = {
            vars: { computed: ({ repository }) => repository.basename },
-           '[*]': { group: ({ value }) => [...value] },
+           '[*]': { group: ({ value }) => { void value.length; throw new Error('my own mistake'); } },
          };\n`,
       );
       writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
 
-      /** The failure is the `[...value]`, and it must arrive alone. */
-      await expect(createRepository(dir)).rejects.toThrow(/`value` is undefined here/);
+      /**
+       * The failure is the throw, and it must arrive alone.
+       *
+       * **The vehicle used to be `[...value]`** - back when `value` was `undefined` with nothing
+       * underneath, so spreading it threw, which is how the real shared config surfaced this. It
+       * spreads as empty now, so it is no longer a failure at all and would have left this case
+       * asserting on a repository that resolved fine. A throw of its own keeps the subject intact;
+       * `value.length` is still read, so the `value` binding is still part of the path under test.
+       */
+      await expect(createRepository(dir)).rejects.toThrow(/my own mistake/);
       await expect(createRepository(dir)).rejects.not.toThrow(/forms a cycle/);
     });
 

@@ -9,7 +9,7 @@ import { pathToFileURL } from 'url';
 import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
-import { finalizeConfig, mergeConfig, ORIGINS, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
+import { mergeConfig, ORIGINS, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
 
 /**
  * Identity helper for authoring a `.rmanrc.cjs`/`.mjs`/`.js` config with full type-checking and
@@ -183,10 +183,7 @@ export async function resolveConfig(
       for (const block of matchingSelectors(local, packageName, isRoot)) mergeConfig(result, block);
     }
   }
-  /** Every layer has had its turn, so an append still outstanding has nothing left to attach to
-   *  and becomes the value itself. Done here rather than per layer: until the chain is finished,
-   *  the key it appends to may still be coming. */
-  return finalizeConfig(result);
+  return result;
 }
 
 /** A config key naming packages rather than settings: `"[*]"`, `"[/]"`, `"[pkg-a]"`. The
@@ -955,7 +952,8 @@ function shortenOrigin(file: string): string {
  *
  * **Always bound, even with nothing underneath.** Left unbound, an expression naming it fails with
  * V8's `value is not defined`, which reads as "there is no such thing" rather than "nothing below
- * this layer set it" - two different mistakes needing two different fixes.
+ * this layer set it" - two different mistakes needing two different fixes. With nothing underneath
+ * it is `unsetValue()` rather than `undefined` - see there.
  *
  * The chain resolves bottom-up, so a layer deriving from a layer that itself derived from something
  * is handed the finished value rather than a half-resolved expression.
@@ -968,8 +966,10 @@ function walkWithPrevious(
   at: (string | number)[],
   skip: string[],
 ): unknown {
-  const resolved =
-    previous === undefined ? undefined : walkWithPrevious(previous.value, previous.previous, scope, context, at, skip);
+  const resolved = previousValue(
+    previous === undefined ? undefined : walkWithPrevious(previous.value, previous.previous, scope, context, at, skip),
+    at,
+  );
 
   const outer = Object.getOwnPropertyDescriptor(context, VALUE_KEY);
   /** A getter, so the catch below can tell whether the value **actually read `value`**: the hint is
@@ -988,22 +988,18 @@ function walkWithPrevious(
     return walk(item, scope, context, at, skip);
   } catch (e: any) {
     /**
-     * **`value` is `undefined` when no layer underneath set this key**, and a value written to
-     * extend an inherited list is also the *first* layer in a repository that inherits nothing.
-     * V8 reports that as `value is not iterable`, naming neither the key nor the reason.
+     * **The hint is only about *reading* `value`**, so it is attached only when the value did -
+     * recorded through the getter above, never matched on V8's wording. Attaching it to any other
+     * failure is the send-the-reader-to-the-wrong-place mistake it exists to prevent.
      *
-     * Here rather than in `callValueFn`, so the expression and the function spelling get the same
-     * sentence from the same place. `rmanValueHint` keeps a rethrow from stacking it twice as the
-     * error passes back up through the enclosing keys.
-     *
-     * Not papered over by defaulting `value` to `[]`: that would be a guess about the key's type,
-     * and wrong for every key that is not a list.
+     * The sentence itself comes from `unsetValue`, which knows the key and throws at the exact
+     * point of misuse; all this adds is the case the sentinel cannot catch, where a value reads
+     * `value` and fails for a reason of its own. `rmanValueHint` keeps a rethrow from stacking it
+     * twice as the error passes back up through the enclosing keys.
      */
-    if (wasRead && resolved === undefined && !e?.rmanValueHint) {
+    if (wasRead && isUnsetValue(resolved) && !e?.rmanValueHint) {
       e.rmanValueHint = true;
-      e.message =
-        `${e.message}\n  \`value\` is undefined here - nothing below this layer sets "${describeAt(at)}.` +
-        `\n  Write \`value ?? []\` (or \`?? ''\`) if it has to work as the first layer too.`;
+      e.message = `${e.message}\n  Note: nothing below this layer sets "${describeAt(at)}, so \`value\` is empty.`;
     }
     throw e;
   } finally {
@@ -1244,3 +1240,78 @@ function deepFreeze(value: unknown): void {
   Object.freeze(value);
   for (const item of Object.values(value)) deepFreeze(item);
 }
+
+/**
+ * What a layer is handed as `value`: **the list form of whatever is underneath it.**
+ *
+ * `value` exists for one job - extending what a closer layer inherited, the general form of `+key`,
+ * and `+key` only ever meant append. So the shape a spread wants is the shape to hand over:
+ * `[...value, 'x']` works with no guard whether the layers below said nothing, said `'build'`, or
+ * said `['build']`.
+ *
+ * **Coercing a scalar into a one-element list is not a guess about the key's type.** Every key this
+ * is reached for is declared `X | X[]` - `clean.include`, `clean.exclude`, `version.stamp`,
+ * `version.before`/`.exec`/`.after` - where the list is the type and the scalar is *shorthand*.
+ * `CleanService` and `RunService` already normalize it; doing it here as well decides nothing new.
+ * And spreading a string into its characters, which is what handing the raw value over did, is not
+ * something any key wants.
+ *
+ * It reads as the scalar wherever a scalar is what makes sense, through `Symbol.toPrimitive`:
+ * `` `${value}-x` `` is `'build-x'` and `value + 1` is `6`. A *list* underneath refuses both, since
+ * splicing `a,b` into a sentence is a mistake worth naming; so does nothing-underneath.
+ *
+ * **A boolean is handed over as itself**, the one carve-out, because it is never a list nor a
+ * list's shorthand - and an object cannot be fixed up for it: `!value` and `value ? :` use
+ * ToBoolean, which has no hook and answers `true` for every object, so a wrapped `false` would read
+ * as `true`. Measured. `[...value]` on one then throws, which is right - spreading a boolean means
+ * nothing.
+ *
+ * **The cost, stated rather than hidden: strict equality and string methods on an inherited
+ * scalar.** `value === 'build'` is `false` and `value.includes('bui')` is `false` (an array's
+ * `includes` matches elements, not substrings). `value == 'build'`, `` `${value}` === 'build' `` and
+ * `String(value).includes('bui')` all work, and `value.length` is the number of layers' worth of
+ * entries rather than a string's length. That is the trade for the append case never needing a
+ * guard; `value` was introduced for the append case.
+ */
+function previousValue(raw: unknown, at: (string | number)[]): unknown {
+  /** Never a list, and unfixable as one - see above. */
+  if (typeof raw === 'boolean') return raw;
+  const list = raw === undefined ? [] : Array.isArray(raw) ? [...raw] : [raw];
+  Object.defineProperty(list, UNSET_MARKER, { value: raw === undefined });
+  return Object.defineProperty(list, Symbol.toPrimitive, {
+    value: (hint: string) => {
+      if (raw === undefined) {
+        throw unusable(at, 'nothing below this layer sets it, so it is empty', "`value ?? ''`, `value ?? 0`");
+      }
+      if (typeof raw !== 'string' && typeof raw !== 'number') {
+        throw unusable(
+          at,
+          `the layer below it is ${Array.isArray(raw) ? 'a list' : 'an object'}`,
+          '`value.join(", ")` for a list',
+        );
+      }
+      return hint === 'string' ? String(raw) : raw;
+    },
+  });
+}
+
+/** The one sentence both refusals share: what was asked for, why it cannot be done, what to write
+ *  instead. Marked `rmanValueHint` so `walkWithPrevious`'s catch leaves it alone - that note exists
+ *  to explain an empty `value` to an error that does not mention it, and this error *is* that
+ *  explanation. */
+function unusable(at: (string | number)[], because: string, instead: string): Error {
+  const error: any = new Error(
+    `\`value\` cannot be used as a string or a number here - ${because}, for "${describeAt(at)}. ` +
+      `It spreads as a list (\`[...value, x]\`); to use it as something else, say what it should be - ${instead}.`,
+  );
+  error.rmanValueHint = true;
+  return error;
+}
+
+/** Whether `value` stands for "no layer underneath set this key" - by the marker `previousValue`
+ *  puts on it, never by emptiness, since a layer may legitimately resolve to `[]`. */
+function isUnsetValue(value: unknown): boolean {
+  return Array.isArray(value) && (value as any)[UNSET_MARKER] === true;
+}
+
+const UNSET_MARKER = Symbol('rman.valueUnset');
