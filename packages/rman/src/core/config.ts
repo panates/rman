@@ -394,20 +394,6 @@ export interface GitScope {
 }
 
 /**
- * What a `${{ ... }}` expression can see - the bindings of the fresh global it is evaluated in.
- * Namespaced rather than a flat bag of loose names: one obvious place per fact, and room to add
- * helpers to `pkg`/`repository` later without crowding the global.
- *
- * Alongside these, **the config's own top-level keys are bound bare** (`${{ changelog.filePath }}`,
- * `${{ clean.include }}`) - see `interpolateConfig`. They are not listed here because they come
- * from the config being interpolated, not from this object; a name here wins over a config key of
- * the same name.
- *
- * **Trap: bare `${{ version }}` is the `version` *options block*, not the package's version
- * string** - that is `${{ pkg.version }}`. Same word, two different things, and the plain one
- * belongs to the config because every other config key is reachable that way.
- */
-/**
  * What a **value function** is handed - `clean: { include: ({ value, pkg }) => [...] }`.
  *
  * The same scope a `${{ }}` expression sees, plus `value`. There is no asymmetry between the two
@@ -493,6 +479,20 @@ export type Resolved<T> = T extends RunStepFn | RunConditionFn
 /** `pkg.config`'s type: what every command reads, with the value functions already called. */
 export type ResolvedConfig = Resolved<RmanConfig>;
 
+/**
+ * What a `${{ ... }}` expression can see - the bindings of the fresh global it is evaluated in.
+ * Namespaced rather than a flat bag of loose names: one obvious place per fact, and room to add
+ * helpers to `pkg`/`repository` later without crowding the global.
+ *
+ * Alongside these, **the config's own top-level keys are bound bare** (`${{ changelog.filePath }}`,
+ * `${{ clean.include }}`) - see `interpolateConfig`. They are not listed here because they come
+ * from the config being interpolated, not from this object; a name here wins over a config key of
+ * the same name.
+ *
+ * **Trap: bare `${{ version }}` is the `version` *options block*, not the package's version
+ * string** - that is `${{ pkg.version }}`. Same word, two different things, and the plain one
+ * belongs to the config because every other config key is reachable that way.
+ */
 export interface ConfigScope {
   /** The package the config was resolved for - which is what lets one declaration at the root
    *  still say something package-specific. */

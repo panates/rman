@@ -148,8 +148,8 @@ export class DockerPublishService extends Service {
 const execFileAsync = promisify(execFile);
 
 /** `docker manifest inspect <image>:<tag>` - `false` for any failure (tag doesn't exist yet, no
- *  network, not logged in, ...), same catch-everything shape as `PublishService`'s own
- *  `defaultNpmViewVersion`. */
+ *  network, not logged in, ...), the same catch-everything shape every target's registry check has:
+ *  "is this version out there" must never fail the run for a reason that is not an answer. */
 async function defaultImageExists(image: string, tag: string): Promise<boolean> {
   try {
     await execFileAsync('docker', ['manifest', 'inspect', `${image}:${tag}`]);

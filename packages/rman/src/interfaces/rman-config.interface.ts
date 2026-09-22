@@ -63,6 +63,19 @@ export interface RmanConfig extends RmanConfigKeys, RmanConfig.CommandConfigs {
 }
 
 /**
+ * One entry of `.rmanrc "commands"` - a command, or a **glob** naming `.js` modules that
+ * `export default` one.
+ *
+ * Both authoring forms count as "a command": the declarative `app => ({ ... })` factory, which is
+ * the one to write, and the older `defineCommand({ ... })` object a `.rman/*.mjs` uses.
+ */
+export type CommandEntry = string | CustomCommand | RmanConfig.CommandRegisterFunction;
+
+/** One entry of `.rmanrc "publishTargets"` - a target, or a **glob** naming `.js` modules that
+ *  `export default` one. */
+export type PublishTargetEntry = string | PublishTarget;
+
+/**
  * **The `.rmanrc` keys no command owns**, without `extends` - kept
  * separate from `RmanConfig` only so the two halves stay legible. A key a *command* owns is
  * declared beside that command and arrives through `RmanConfig.CommandConfigs` instead.
@@ -76,19 +89,6 @@ export interface RmanConfig extends RmanConfigKeys, RmanConfig.CommandConfigs {
  * A config author annotates with the plugin's own name for the union - `RmanNodeConfig` - which is
  * what makes the import that carries the augmentation explicit rather than incidental.
  */
-/**
- * One entry of `.rmanrc "commands"` - a command, or a **glob** naming `.js` modules that
- * `export default` one.
- *
- * Both authoring forms count as "a command": the declarative `app => ({ ... })` factory, which is
- * the one to write, and the older `defineCommand({ ... })` object a `.rman/*.mjs` uses.
- */
-export type CommandEntry = string | CustomCommand | RmanConfig.CommandRegisterFunction;
-
-/** One entry of `.rmanrc "publishTargets"` - a target, or a **glob** naming `.js` modules that
- *  `export default` one. */
-export type PublishTargetEntry = string | PublishTarget;
-
 export interface RmanConfigKeys {
   /**
    * The technologies this repository holds, in declaration order - how its packages are

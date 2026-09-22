@@ -239,34 +239,26 @@ describe('commands/changelog', () => {
   });
 
   describe('auto-detect narration ("--from" omitted)', () => {
-    /** Shims a fake `npm` binary onto PATH for the duration of `fn()` - `defaultNpmViewVersion`
-     *  shells out to the real `npm` via `node:child_process`, which isn't routed through this
-     *  project's own PATH-augmenting `exec()` util, so it has to be a real PATH change rather than
-     *  a `node_modules/.bin` shim. Restores the original PATH afterward regardless of outcome. */
-    async function withFakeNpmOnPath<T>(fn: () => Promise<T>): Promise<T> {
-      const binDir = mkTmp();
-      dirs.push(binDir);
-      const script = path.join(binDir, 'npm');
-      // responds to "npm view <name> version" with nothing - same as an unpublished package -
-      // so the command still falls through to its normal not-yet-pushed-commits behavior.
-      fs.writeFileSync(script, '#!/usr/bin/env node\nprocess.stdout.write("");\n');
-      fs.chmodSync(script, 0o755);
-
-      const originalPath = process.env.PATH;
-      process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
-      try {
-        return await fn();
-      } finally {
-        process.env.PATH = originalPath;
-      }
-    }
-
+    /**
+     * **No npm stub here, and none is needed** - which is worth stating, because this case used to
+     * shim a fake `npm` onto `process.env.PATH` and the shim had stopped doing anything.
+     *
+     * The registry question belongs to the *ecosystem* now: `ChangeHashService.detect` asks the
+     * package's own manifest provider for `publishedVersion`, and the core's test provider answers
+     * from `registryVersions` - empty unless a spec fills it, so the answer is "never published"
+     * and nothing reaches a network. The old comment even named `defaultNpmViewVersion`, a function
+     * that no longer exists.
+     *
+     * Measured before deleting it: with the `PATH` line neutered the whole file is 56 passing,
+     * exit 0. Deleting a stub that is load-bearing is how a suite starts shelling out to a real
+     * binary, so the control came first.
+     */
     it('narrates the boundary detection before generating, when --from is omitted', async () => {
       const { dir } = fixtureWithOneFeature();
-      const lines = await withFakeNpmOnPath(() => captureLogs(() => runCli({ cwd: dir, argv: ['changelog'] })));
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['changelog'] }));
       expect(lines.some(l => l.includes("Detecting each package's last release..."))).toBe(true);
-      // the fake npm reports nothing published, so it still falls back to "not yet pushed" and
-      // finds the same real commit.
+      /** Nothing is published, so detection falls back to "not yet pushed" and finds the real
+       *  commit. */
       expect(lines.some(l => l.includes('a shiny new feature'))).toBe(true);
     });
   });
