@@ -80,6 +80,33 @@ describe('core/extends-config', () => {
     expect(config['[*]'].run.build.exec).toBe('tsc -b');
   });
 
+  /**
+   * **A CommonJS base contributes, and used to contribute nothing at all.**
+   *
+   * `extends` loaded a module with a bare `await import()`, whose CJS-interop synthesis some ESM
+   * loader hooks - the swc-node transpiler this suite registers via `--import` among them - can
+   * short-circuit into an **empty object**. An empty object is a valid config, so it merged
+   * silently and the base simply was not there.
+   *
+   * The same file loaded correctly as a *directory's* own `.rmanrc.cjs`, because that path always
+   * went through the careful loader; `extends` now shares it (`loadConfigModule`).
+   *
+   * **All three forms in one case, because the failure was specific to one.** Measured with the fix
+   * reverted: `.cjs` answered `undefined` while `.mjs` and `.json` were unaffected - so a case
+   * covering only the module forms in general, or only `.mjs`, would have stayed green throughout.
+   */
+  it('reads a CommonJS base, not only an ESM or JSON one', async () => {
+    const forms: Record<string, string> = {
+      'base.cjs': "module.exports = { logLevel: 'verbose' };\n",
+      'base.mjs': "export default { logLevel: 'verbose' };\n",
+      'base.json': '{ "logLevel": "verbose" }',
+    };
+    for (const [file, body] of Object.entries(forms)) {
+      const dir = fixture({ [file]: body, '.rmanrc.yml': `extends: './node_modules/@test/base/${file}'\n` });
+      expect(await readDirConfig(dir)).toEqual({ logLevel: 'verbose' });
+    }
+  });
+
   it('reads a YAML or JSON base as well as a module', async () => {
     const dir = fixture({
       'base.yml': "logLevel: 'verbose'\n",

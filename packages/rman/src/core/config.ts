@@ -2,13 +2,12 @@ import { DOMParser } from '@xmldom/xmldom';
 import fs from 'fs';
 import ini from 'ini';
 import * as yaml from 'js-yaml';
-import { createRequire } from 'module';
 import path from 'path';
 import semver from 'semver';
-import { pathToFileURL } from 'url';
 import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
+import { loadConfigModule } from './load-config-module.js';
 import { mergeConfig, ORIGINS, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
 
 /**
@@ -34,29 +33,6 @@ export function defineConfig(config: RmanConfig): RmanConfig {
  *  or a `.js` under a `"type": "commonjs"` package.json) and native ESM (`.mjs`, or a `.js` under
  *  `"type": "module"`) are supported - the reason `readDirConfig`/`resolveConfig` are async at all. */
 const JS_CONFIG_FILES = ['.rmanrc.cjs', '.rmanrc.mjs', '.rmanrc.js'];
-
-const requireJsConfig = createRequire(import.meta.url);
-
-/**
- * Loads `file`'s config object. Tries `require()` first - not just an optimization: a CommonJS
- * module's `module.exports` is more reliably observed this way than through dynamic `import()`'s
- * CJS-interop synthesis, which some ESM loader hooks (e.g. ts-node/swc-node-style transpilers
- * registered via `--import`) can end up short-circuiting into an empty object. `require()` throws
- * `ERR_REQUIRE_ESM` for a genuinely-ESM file (`.mjs`, or `.js` under `"type": "module"`) - only
- * then does this fall back to `import()`, the one case that actually needs it. Either path can
- * hand back an ES module namespace instead of a plain object (Node's `require(esm)` support does
- * this too, not just `import()`), so `.default` is preferred whenever present.
- */
-async function loadJsConfig(file: string): Promise<any> {
-  let mod: any;
-  try {
-    mod = requireJsConfig(file);
-  } catch (e: any) {
-    if (e?.code !== 'ERR_REQUIRE_ESM') throw e;
-    mod = await import(pathToFileURL(file).href);
-  }
-  return mod?.default ?? mod;
-}
 
 /**
  * Reads the rman configuration defined at a single directory level, merging
@@ -102,7 +78,7 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
   for (const jsFileName of JS_CONFIG_FILES) {
     const jsFile = path.join(dirname, jsFileName);
     if (fs.existsSync(jsFile)) {
-      const obj = await loadJsConfig(jsFile);
+      const obj = await loadConfigModule(jsFile);
       if (obj && typeof obj === 'object') {
         assertNoSelectorExtends(obj, jsFile);
         if (EXTENDS_KEY in obj) extendsFrom = jsFile;

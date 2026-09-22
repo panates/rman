@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import * as yaml from 'js-yaml';
 import type { RmanConfig } from '../interfaces/rman-cfg.interface.js';
 import { isSelectorKey } from './config.js';
+import { loadConfigModule } from './load-config-module.js';
 import { mergeConfig } from './merge-config.js';
 import { resolveConfigTarget } from './resolve-target.js';
 
@@ -72,8 +72,16 @@ export function assertNoSelectorExtends(config: RmanConfig, file: string): void 
   }
 }
 
-/** Loads one resolved target. YAML and JSON are read directly; anything else goes through the
- *  module loader, so a shared config can be a `defineConfig` module with real logic in it. */
+/**
+ * Loads one resolved target. YAML and JSON are read directly; anything else goes through
+ * `loadConfigModule`, so a shared config can be a `defineConfig` module with real logic in it.
+ *
+ * **Through that function rather than a bare `await import()`, which is what this used to do.**
+ * The two are not equivalent under an ESM loader hook: a `.cjs` base came back as an empty object,
+ * and an empty object is a valid config, so it contributed nothing and said nothing. See there for
+ * the measurement - the same file loaded correctly when it was a *directory's* own `.rmanrc.cjs`,
+ * because that path always used the careful loader.
+ */
 async function loadConfigFile(file: string): Promise<RmanConfig> {
   const ext = path.extname(file);
   if (ext === '.yml' || ext === '.yaml') {
@@ -81,8 +89,7 @@ async function loadConfigFile(file: string): Promise<RmanConfig> {
     return asConfig(obj, file);
   }
   if (ext === '.json') return asConfig(JSON.parse(fs.readFileSync(file, 'utf-8')), file);
-  const mod: any = await import(pathToFileURL(file).href);
-  return asConfig(mod?.default ?? mod, file);
+  return asConfig(await loadConfigModule(file), file);
 }
 
 function asConfig(value: unknown, file: string): RmanConfig {
