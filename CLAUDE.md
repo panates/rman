@@ -712,7 +712,7 @@ touched package counts as changed.
   the root's release identity - none of which belongs to any one technology, and all of which is
   computed for the whole repository at once. The two decisions that *are* a technology's are asked
   per package instead:
-  - **`detectBoundary`** through `plannerFor(pkg)` = `pkg.techStack.versionPlanner ?? this`;
+  - **`detectBoundary`** through `plannerFor(pkg)` = `pkg.plugin.versionPlanner ?? this`;
   - **`cascade`** through `cascadeFor(members, bump)`, once per group.
   - **This was a real bug, of exactly the shape the `['npm']` publish default was.** Both came off
     the single slot, so in a polyglot repository a Cargo package's boundary fell back to `npm view`
@@ -839,7 +839,7 @@ touched package counts as changed.
 
   | Criterion | Source | Claims by default? | Implementation |
   | --- | --- | --- | --- |
-  | **b-1** npm-targeted packages | the local version is among the registry's published `versions` | a package `rman-node` read the manifest of | `npmPublishTarget` → `PublishService` (`rman-node`) |
+  | **b-1** npm-targeted packages | the local version is among the registry's published `versions` | a package `rman-node` read the manifest of | `NpmPublishTarget` → `PublishService` (`rman-node`) |
   | **b-2** docker-targeted packages | `docker manifest inspect <image>:<version>` | nothing - opt-in | `dockerPublishTarget` → `DockerPublishService` (core) |
   | **b-3** the repository itself (see `github-release`) | a GitHub Release exists for the repository's release tag | n/a - never optional, and not a target | `GithubReleaseService` (core) |
 
@@ -942,7 +942,7 @@ touched package counts as changed.
   in it, and it is deleted again afterwards.
   - **This whole section is the `npm` target's**, not `publish`'s: a build directory, a generated
     manifest and `"workspace:"` ranges are all facts about npm. `PublishService` in `rman-node` is
-    where it lives, reached through `npmPublishTarget`.
+    where it lives, reached through `NpmPublishTarget`.
   - **The `"workspace:"` protocol lives in `rman-node`** (`utils/workspace-range.ts`), not in the
     core: it is a statement about a `package.json` dependency field, and the core never read it -
     it was only exported from there because `publish` needed it before `publish` itself moved out.
@@ -1124,8 +1124,9 @@ underneath, which is the general form of `+key` and the one thing an expression 
   began as a wrapper around the *function* - the only kind of value you can hang a property on - and
   that is exactly why it had to move: `value` belongs to an expression string just as much, and a
   string carries nothing. A symbol is invisible to `Object.entries`, `JSON.stringify` and js-yaml,
-  so it travels through `mergeConfig` and `rman config` without either knowing it is there;
-  `finalizeConfig` rebuilds objects from `Object.entries` and so has to copy it across by hand.
+  so it travels through `mergeConfig` and `rman config` without either knowing it is there.
+  (`finalizeConfig` rebuilt objects from `Object.entries` and had to copy it across by hand; it went
+  with `+key`, which is what it existed for.)
 - **Each entry is a link, not a slot.** Three layers each deriving from the one below need
   `A <- expr2 <- expr3`, and a single slot loses `A` the moment `expr3` arrives. Resolved bottom-up,
   so a layer is always handed a finished value rather than a half-resolved expression.
@@ -1458,7 +1459,8 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   third source of repository-level commands and a third precedence question - the shape rejected
   for `clean` ("two commands with one name and a rule between them"). Folding the directory into
   the key leaves one source, one slot, and a zero-config path that behaves exactly as before.
-  - **A relative glob is anchored to the file that declared it**, in `mergeConfig` (`anchorCommands`),
+  - **A relative glob is anchored to the file that declared it**, in `mergeConfig`
+    (`anchorContributions`),
     which is the last moment the answer is known: `commands` always appends, so one resolved list
     holds entries from the repository's `.rmanrc`, each `extends` base and every directory above,
     and `ORIGINS` records one file per *key*, not per element. After the merge there is nothing
@@ -1480,7 +1482,7 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   - **Not a root-level key**, unlike `plugins`: a package's own `.rmanrc` may contribute. The
     commands stay repository-wide - there is one command list - so a package declaring one is
     contributing it to the repository. The cascade then names the same glob once per package, so
-    `commandGlobs` dedups by pattern and the loader again by resolved file; two different globs
+    `commandEntries` dedups by pattern and the loader again by resolved file; two different globs
     can name one file, which is why the second pass is the one that matters.
   - **Both export forms are accepted**, and the same pair is accepted for a command written
     straight into the key - one key, one set of rules. The declarative factory is stored unrun and
@@ -1589,7 +1591,7 @@ no version planner - so a spec that needs one **brings it**.
     real provider - and `registryCalls` can assert the registry was **not** consulted, which a
     throwing stub only ever did by accident.
   - `usePlugin(plugin)` adds a **second technology**, for a spec about a polyglot repository.
-    **A spec's own stacks are registered first, and that is load-bearing**: `techStackFor` takes the
+    **A spec's own plugins are registered first, and that is load-bearing**: `pluginFor` takes the
     first whose manifest provider recognizes a directory, and the fixture's claims anything with a
     `package.json` - which every package the fixture writes has. Registered after it, a second
     technology could never claim one, so a polyglot repository was not expressible at all.
@@ -1647,9 +1649,9 @@ no version planner - so a spec that needs one **brings it**.
   **636 passing** in parallel was **595 passing / 41 failing** serially, on the same commit. Workers
   load only the files assigned to them, so a spec that depends on another file's import-time side
   effect - or is rescued by one - passes there and nowhere else.
-- **`useNodeEcosystem()` reads `nodePlugin`, the named export - never the module's default**, which
-  is an rman *config* (`{ plugins: [nodePlugin] }`). Reading the default silently registered
-  nothing: `plugin.manifest` and friends were `undefined`, so a service-level spec had no manifest
+- **A fixture registers the plugin class itself (`new NodePlugin()`) - never the module's default**,
+  which is an rman *config* (`{ plugins: [new NodePlugin()] }`). Reading the default silently
+  registered nothing: `plugin.manifest` and friends were `undefined`, so a service-level spec had no manifest
   provider, no version planner, and **no `BinPath` provider** - which left `exec` resolving the real
   `npm` from the inherited PATH. The suite reached `registry.npmjs.org` with an actual
   `PUT /pkg-a`, and only `ENEEDAUTH` stopped it. The docker rule applies here word for word: a test
