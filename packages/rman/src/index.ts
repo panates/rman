@@ -51,10 +51,28 @@ export { Registry } from './core/registry.js';
 export { Repository } from './core/repository.js';
 export type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from './core/run-step.js';
 export { Service, type ServiceFactory, type ServiceMap } from './core/service.js';
-/** **What a plugin is**: one technology, whole - how its packages are recognized and written,
- *  where they live, what goes on a child's PATH, how its releases are planned, plus an `init` for
- *  anything the seams do not name. `RmanPlugin` and `TechStack` were two types until 2.0. */
-export { basePlugin, definePlugin, type Plugin, type PluginContext } from './core/plugin.js';
+/**
+ * **`Platform` is one technology, whole**; **`Plugin` is whatever a package contributes**, platforms
+ * among them.
+ *
+ * A platform says how its packages are recognized and written, where they live, what goes on a
+ * child's PATH and how its releases are planned - `manifestProvider` is what makes one, and it is
+ * required. A plugin carries `platforms` and an `init` for anything the seams do not name yet; a
+ * bare `Platform` is accepted wherever a `Plugin` is, as sugar for the plugin that provides only it.
+ *
+ * **Both must be declared through their factory.** `loadPlugins` checks for the mark, because an
+ * rman 1.x plugin was `{ name, init }` and so is a 2.x plugin contributing nothing but an `init` -
+ * no shape test can tell them apart.
+ */
+export {
+  basePlatform,
+  definePlatform,
+  definePlugin,
+  isPlatform,
+  type Platform,
+  type Plugin,
+  type PluginContext,
+} from './core/plugin.js';
 export type { ChangeKind } from './core/version-scheme.js';
 /** The numbering seam. `VersionScheme` is abstract - `highestVersion`/`highestBump`/`smallestBump`
  *  are implemented from the members around them, so a scheme states only what it must and still

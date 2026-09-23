@@ -5,7 +5,7 @@ import path from 'node:path';
 import { expect } from 'expect';
 import type { ManifestProvider } from '../../src/core/manifest.js';
 import type { Package } from '../../src/core/package.js';
-import type { Plugin } from '../../src/core/plugin.js';
+import { definePlatform, type Platform } from '../../src/core/plugin.js';
 import { VersionPlanService } from '../../src/services/version-plan.service.js';
 import { createRepository, planner, usePlugin, useTestEcosystem } from '../_fixture.js';
 
@@ -51,11 +51,11 @@ const otherManifest: ManifestProvider = {
   dependencies: () => [],
 };
 
-const otherPlugin: Plugin = {
+const otherPlatform: Platform = definePlatform({
   name: 'other',
   manifestProvider: otherManifest,
   versionPlanner: new OtherPlanService(),
-};
+});
 
 /**
  * **Which planner answers for a package is the package's own technology's.**
@@ -71,7 +71,7 @@ const otherPlugin: Plugin = {
  */
 describe('services/version-plan: a polyglot repository', () => {
   useTestEcosystem();
-  usePlugin(otherPlugin);
+  usePlugin(otherPlatform);
   beforeEach(() => {
     asked.boundary.length = 0;
     asked.cascade.length = 0;

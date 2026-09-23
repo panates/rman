@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { runCli as rmanRunCli } from '../../../src/cli.js';
+import { registerPlugin } from '../../../src/core/plugin-loader.js';
 import {
-  basePlugin,
+  basePlatform,
+  definePlatform,
   Repository,
   RmanApplication,
   type ServiceMap,
@@ -10,17 +12,17 @@ import {
   Workspace,
 } from '../../../src/index.js';
 /**
- * The **plugin**, by name - not the module's default export, which is an rman *config* that carries
- * it (`{ plugins: [new NodePlugin()] }`).
+ * The **platform**, by name - not the module's default export, which is an rman *config* that
+ * carries it (`{ plugins: [nodePlatform] }`).
  *
  * Reading the default export was right until the entry point became a config, and then it silently
- * registered nothing: `plugin.manifestProvider` and friends were simply `undefined`, so a spec calling a
- * service directly got no manifest provider, no version planner and - the dangerous one - no
- * `BinPath` provider, which left `exec` resolving the **real** `npm` from the inherited PATH.
+ * registered nothing: `platform.manifestProvider` and friends were simply `undefined`, so a spec
+ * calling a service directly got no manifest provider, no version planner and - the dangerous one -
+ * no `BinPath` provider, which left `exec` resolving the **real** `npm` from the inherited PATH.
  */
-/** The plugin's own module, not the package entry point: `index.ts` exports what a *user*
+/** The platform's own module, not the package entry point: `index.ts` exports what a *user*
  *  needs, and a test reaching for something it does not export is asking the wrong file. */
-import { NodePlugin } from '../../../src/plugins/node/node.plugin.js';
+import { NodePlatform } from '../../../src/plugins/node/node.platform.js';
 import { NpmPublishTarget } from '../../../src/plugins/node/npm-publish-target.js';
 
 /**
@@ -88,7 +90,10 @@ export function runCli(options?: { argv?: string[]; cwd?: string; app?: RmanAppl
  */
 export function appWithStubBin(dir: string): RmanApplication {
   const app = new RmanApplication();
-  app.plugins.add({ name: 'stub-bin', manifestProvider: basePlugin.manifestProvider, getBinPaths: () => [dir] });
+  registerPlugin(
+    app,
+    definePlatform({ name: 'stub-bin', manifestProvider: basePlatform.manifestProvider, getBinPaths: () => [dir] }),
+  );
   return app;
 }
 
@@ -122,12 +127,12 @@ export function useNodeEcosystem(): void {
  */
 export function createRepository(root?: string, options?: { deep?: number }): Promise<Repository> {
   const app = new RmanApplication();
-  /** Registered the way a config's `plugins`/`publishTargets` would - the plugin *is* the
-   *  technology now, so there is no `init` to call for it. Commands are left out: a spec calling a
-   *  service directly has no CLI to register them with, and `declarePlugin()` covers that path. */
-  const plugin = new NodePlugin();
-  app.plugins.add(plugin);
-  if (plugin.versionPlanner) app.versionPlanner = plugin.versionPlanner;
+  /** Registered the way a config's `plugins`/`publishTargets` would, through the loader's own
+   *  `registerPlugin` - a bare platform is sugar for the plugin providing it, and a fixture
+   *  normalizing that by hand is a second implementation of the thing under test. Commands are left
+   *  out: a spec calling a service directly has no CLI to register them with, and `declarePlugin()`
+   *  covers that path. */
+  registerPlugin(app, definePlatform(new NodePlatform()));
   app.publishTargets.add(new NpmPublishTarget());
   lastApp = app;
   return Repository.create(root, { ...options, app });

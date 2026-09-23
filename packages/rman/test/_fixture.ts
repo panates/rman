@@ -5,7 +5,8 @@ import { runCli as cliRunCli } from '../src/cli.js';
 import { RmanApplication } from '../src/core/application.js';
 import type { ManifestProvider } from '../src/core/manifest.js';
 import type { Package } from '../src/core/package.js';
-import { basePlugin, type Plugin } from '../src/core/plugin.js';
+import { basePlatform, definePlatform, definePlugin, type Platform } from '../src/core/plugin.js';
+import { registerPlugin } from '../src/core/plugin-loader.js';
 import type { PublishTarget } from '../src/core/publish-target.js';
 import { Repository } from '../src/core/repository.js';
 import type { ServiceMap } from '../src/core/service.js';
@@ -15,6 +16,22 @@ import { RunService } from '../src/services/run.service.js';
 import { VersionPlanService } from '../src/services/version-plan.service.js';
 import type { GitHelper } from '../src/utils/git.js';
 import { stampVersionConstant } from '../src/utils/version-stamp.js';
+
+/**
+ * **The declaration factories, reachable from a config module written into a temp directory.**
+ *
+ * A plugin has to be declared through `definePlatform`/`definePlugin` - the loader refuses a plain
+ * object, because a plain object is exactly what an rman 1.x plugin is. So a fixture's `.rmanrc.mjs`
+ * or `./p.mjs` can no longer be a bare literal, and it cannot `import { definePlatform } from 'rman'`
+ * either: it sits in a bare temp directory with no `node_modules`, and importing the *built* copy
+ * would put a second core in the process - the one thing `tsconfig-test.json`'s `paths` exists to
+ * prevent.
+ *
+ * `runCli` runs in this process, so handing the real functions over here is what keeps those
+ * modules using the implementation rather than restamping the mark themselves. A second spelling of
+ * the brand is a second thing to keep in step, and the one that would rot in silence.
+ */
+Object.assign(globalThis, { __rmanDefinePlatform: definePlatform, __rmanDefinePlugin: definePlugin });
 
 /**
  * The ecosystem rman's **core** specs run against.
@@ -189,23 +206,26 @@ export function useTestEcosystem(): void {
  */
 export function useLocalBin(): void {
   beforeEach(() => {
-    extraPlugins.push({
-      /** A technology contributing only directories is a real shape - a PATH contributor
-       *  recognizes no package - and the base plugin's reader is what keeps it from claiming any. */
-      manifestProvider: basePlugin.manifestProvider,
-      name: 'local-bin',
-      getBinPaths: cwd => {
-        const dirs: string[] = [];
-        let previous: string | undefined;
-        let dir = path.resolve(cwd);
-        while (previous !== dir) {
-          dirs.push(path.join(dir, 'local-bin'));
-          previous = dir;
-          dir = path.resolve(dir, '..');
-        }
-        return dirs;
-      },
-    });
+    extraPlugins.push(
+      definePlatform({
+        /** A technology contributing only directories is a real shape - a PATH contributor
+         *  recognizes no package - and the base platform's reader is what keeps it from claiming
+         *  any. */
+        manifestProvider: basePlatform.manifestProvider,
+        name: 'local-bin',
+        getBinPaths: cwd => {
+          const dirs: string[] = [];
+          let previous: string | undefined;
+          let dir = path.resolve(cwd);
+          while (previous !== dir) {
+            dirs.push(path.join(dir, 'local-bin'));
+            previous = dir;
+            dir = path.resolve(dir, '..');
+          }
+          return dirs;
+        },
+      }),
+    );
   });
 }
 
@@ -232,9 +252,9 @@ export function useTarget(target: PublishTarget): void {
  * marker file leaves every other package to the fixture's, which is what makes one repository hold
  * two ecosystems.
  */
-export function usePlugin(stack: Plugin): void {
+export function usePlugin(platform: Platform): void {
   beforeEach(() => {
-    extraPlugins.push(stack);
+    extraPlugins.push(platform);
   });
 }
 
@@ -259,16 +279,19 @@ export function createRepository(root?: string, options?: { deep?: number }): Pr
 export function createApp(): RmanApplication {
   const app = new RmanApplication();
   /**
-   * **A spec's own stacks go on first, and the order is load-bearing.** `pluginFor` takes the
-   * first stack whose manifest provider recognizes a directory, and the fixture's claims anything
-   * with a `package.json` - which every package the fixture writes has. Registered after it, a
-   * second technology could never claim one, so a polyglot repository was not expressible at all.
-   * `useLocalBin`'s stack recognizes nothing (`basePlugin`'s reader), so being first
+   * **A spec's own platforms go on first, and the order is load-bearing.** `platformFor` takes the
+   * first platform whose manifest provider recognizes a directory, and the fixture's claims
+   * anything with a `package.json` - which every package the fixture writes has. Registered after
+   * it, a second technology could never claim one, so a polyglot repository was not expressible at
+   * all. `useLocalBin`'s platform recognizes nothing (`basePlatform`'s reader), so being first
    * costs it nothing.
+   *
+   * Through `registerPlugin` rather than onto the registries by hand: a bare platform is sugar for
+   * the plugin providing it, and a fixture normalizing that itself is a second implementation of
+   * the thing under test.
    */
-  for (const stack of extraPlugins) app.plugins.add(stack);
-  app.plugins.add(testPlugin);
-  app.versionPlanner = testPlugin.versionPlanner;
+  for (const platform of extraPlugins) registerPlugin(app, platform);
+  registerPlugin(app, testPlatform);
   for (const target of extraTargets) app.publishTargets.add(target);
   lastApp = app;
   return app;
@@ -304,16 +327,16 @@ export function service<K extends keyof ServiceMap>(name: K): ServiceMap[K] {
  * Named `'test'` rather than `'node'` on purpose: a core spec must not be able to pass because
  * `rman-node`'s answers happened to be right.
  */
-export const testPlugin: Plugin = {
+export const testPlatform: Platform = definePlatform({
   name: 'test',
   manifestProvider: testManifest,
   getWorkspace: testWorkspace,
   getRunSteps: testSteps,
   versionPlanner: new TestVersionPlanService(),
-};
+});
 
-/** Stacks a spec asked for on top of the fixture's own - see `useLocalBin`. */
-const extraPlugins: Plugin[] = [];
+/** Platforms a spec asked for on top of the fixture's own - see `useLocalBin`. */
+const extraPlugins: Platform[] = [];
 
 /** Publish targets a spec asked for, on top of the core's own `docker` - see `useTarget`. */
 const extraTargets: PublishTarget[] = [];

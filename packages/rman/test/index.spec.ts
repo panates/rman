@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import * as api from '../src/index.js';
-import { testPlugin, useTestEcosystem } from './_fixture.js';
+import { testPlatform, useTestEcosystem } from './_fixture.js';
 
 /**
  * A smoke test for the public programmatic API (`src/index.ts`) - it locks in the exported
@@ -75,7 +75,10 @@ describe('public API (src/index.ts)', () => {
     expect(typeof api.RmanApplication).toBe('function');
     expect(typeof api.Registry).toBe('function');
     expect(typeof api.Service).toBe('function');
-    expect(api.basePlugin.name).toBe('');
+    expect(api.basePlatform.name).toBe('');
+    expect(typeof api.definePlatform).toBe('function');
+    expect(typeof api.definePlugin).toBe('function');
+    expect(typeof api.isPlatform).toBe('function');
     expect(typeof api.Manifest.read).toBe('function');
     expect(typeof api.Workspace.resolve).toBe('function');
     expect(typeof api.BinPath.env).toBe('function');
@@ -122,7 +125,7 @@ describe('public API (src/index.ts)', () => {
       /** The public entry point, used the way a consumer would: one application, one repository,
        *  and the service reached through it. */
       const app = new api.RmanApplication();
-      app.plugins.add(testPlugin);
+      app.platforms.add(testPlatform);
       await api.Repository.create(dir, { app });
       const originalLog = console.log;
       const logged: unknown[] = [];

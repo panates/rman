@@ -69,7 +69,7 @@ export function detectBuiltin(dir: string): DetectedBuiltin | undefined {
   if (cache.has(resolved)) return cache.get(resolved);
   let found: DetectedBuiltin | undefined;
   for (const [name, builtin] of Object.entries(BUILTIN_PLUGINS)) {
-    const platform = builtin.plugin();
+    const platform = builtin.platform();
     /** `read` is the question. Its answer is thrown away - the manifest is read again for real once
      *  the platform is registered, and reading it twice is cheaper than keeping a half-built
      *  package around to decide whether it should exist. */

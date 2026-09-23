@@ -3,7 +3,7 @@ import path from 'node:path';
 import parseNpmScript from '@netlify/parse-npm-script';
 import glob from 'fast-glob';
 import type { Package } from '../../core/package.js';
-import type { Plugin } from '../../core/plugin.js';
+import type { Platform } from '../../core/plugin.js';
 import type { Workspace } from '../../core/workspace.js';
 import type { RunService } from '../../services/run.service.js';
 import { NodeManifestProvider } from './node-manifest.provider.js';
@@ -13,7 +13,7 @@ import { NodeVersionPlanService } from './services/version-plan.service.js';
  *  reach a shell it would do nothing - but it is filtered out above instead. */
 const PLACEHOLDER = '#';
 
-export class NodePlugin implements Plugin {
+export class NodePlatform implements Platform {
   /** The ecosystem, not the file - this is what every package it reads reports as
    *  `pkg.provider === 'node'`. `manifestProvider.fileName` already says `package.json`. */
   name = 'node';

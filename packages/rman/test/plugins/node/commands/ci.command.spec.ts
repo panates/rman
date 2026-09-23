@@ -55,7 +55,7 @@ describe('commands/ci', () => {
    *   `ci`'s own wipe step deletes `node_modules` - stub and all - *before* the install step that
    *   would run it.
    * - **Prepending `process.env.PATH`**, which this did. `BinPath.env` appends the inherited PATH
-   *   **last**, after every provider's directories, and `NodePlugin.getBinPaths` ends with the
+   *   **last**, after every provider's directories, and `NodePlatform.getBinPaths` ends with the
    *   running `node`'s own directory. On a version-managed machine that directory holds real
    *   `npm`, `yarn` and `pnpm` - so the stub lost and `ci --package-manager yarn` ran the **real**
    *   yarn. Measured: nvm's `bin` has all three, and the spec failed reporting only
@@ -66,7 +66,7 @@ describe('commands/ci', () => {
    * the real binary running instead - and it had the same consequence here: the suite shelled out
    * to a real package manager.
    *
-   * So the stub directory is handed to `appWithStubBin`, registered *before* `NodePlugin`, which is
+   * So the stub directory is handed to `appWithStubBin`, registered *before* `NodePlatform`, which is
    * what puts it first.
    */
   function stubPackageManager(name: string): { dir: string; logFile: string } {

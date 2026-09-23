@@ -7,7 +7,13 @@ import type { Workspace } from './workspace.js';
 
 /**
  * **One technology, as a whole** - Node, Cargo, Maven. Everything rman needs in order to treat a
- * directory as a package of that technology, plus an `init` for anything that is not a seam.
+ * directory as a package of that technology.
+ *
+ * **This was called `Plugin`, and the name was a lie.** `manifestProvider` is required, which makes
+ * the type a *platform* by definition: a package that only ships commands never touches it, because
+ * commands are a config key. So the narrow thing took the narrow name, and `Plugin` became the
+ * broad one that may carry platforms - a plugin *provides* platforms, and may provide more than
+ * one (a package shipping both `maven` and `gradle` is one plugin, two platforms).
  *
  * These were six independent fields on a plugin, each with its own registry, and declaring one
  * without the others type-checked. It is not a shape that admits sense: `getRunSteps` reads
@@ -27,17 +33,17 @@ import type { Workspace } from './workspace.js';
  * which is the *data* this produces rather than the reader.
  *
  * **Everything optional is answered by its absence**, never by a default rman invented - see
- * `basePlugin`.
+ * `basePlatform`.
  */
-export interface Plugin {
+export interface Platform {
   /**
-   * **The ecosystem this speaks for**, surfaced on every package it reads as `Package.provider` -
+   * **The ecosystem this speaks for**, surfaced on every package it reads as `Package.platform` -
    * `'node'` for the built-in of that name. Short and about the technology, not about the file:
    * `manifestProvider.fileName` already says `package.json`, and a name repeating it would tell a
    * caller nothing it did not have.
    *
    * This is what lets code that *does* know one ecosystem check before acting on a package -
-   * `if (pkg.provider === 'node')` - which matters most in a repository holding more than one,
+   * `if (pkg.platform === 'node')` - which matters most in a repository holding more than one,
    * since a manifest is read per directory and two packages can legitimately answer to different
    * technologies. It is also the de-duplication key: registering twice under one name is refused,
    * because it would define the same commands twice and yargs does not survive that.
@@ -74,10 +80,35 @@ export interface Plugin {
   /** How this technology's releases are planned - where a package's change boundary comes from
    *  when it has no release tag, and how far into its group a bump reaches. */
   versionPlanner?: VersionPlanService;
+}
+
+/**
+ * **A plugin is whatever a package contributes; a platform is one of the things it can contribute.**
+ *
+ * The broad half of the split. `Platform` is a technology and nothing else - required manifest
+ * reader, workspace layout, bin paths, steps, version planning. What is left over is this: an
+ * `init` for whatever the seams do not name yet, and the **declaration** that this plugin provides
+ * platforms.
+ *
+ * **`platforms` is a list, and that is not symmetry.** One package can speak for more than one
+ * technology - `maven` and `gradle` are the same toolchain family and a single plugin shipping both
+ * is the natural shape. A singular field would have made the second one a separate package for no
+ * reason.
+ *
+ * A bare `Platform` is accepted anywhere a `Plugin` is, as sugar for `{ name, platforms: [it] }` -
+ * which is what almost every entry is.
+ */
+export interface Plugin {
+  /** How this plugin is named in messages, and the de-duplication key: registering twice under one
+   *  name is refused. A platform contributed by it keeps its *own* name, which is what a package
+   *  reports as `pkg.platform`. */
+  name: string;
+
+  /** The technologies this plugin provides, if any. */
+  platforms?: Platform[];
 
   /**
-   * Anything this plugin contributes that is not one of the seams above, run once when it is
-   * registered.
+   * Anything this plugin contributes that is not a platform, run once when it is registered.
    *
    * **The escape hatch, not the front door.** Commands and publish targets are `.rmanrc` keys
    * (`commands`, `publishTargets`), so a plugin contributing only those declares them in its own
@@ -102,17 +133,33 @@ export interface PluginContext {
   app: RmanApplication;
 }
 
-/** Identity helper, so a plugin can be written as an object literal and still be checked - the
- *  same shape `defineConfig` has. Returns `plugin` unchanged. */
+/** Whether `value` came from `definePlatform` or `definePlugin`. */
+export function isDeclared(value: unknown): boolean {
+  return !!value && typeof value === 'object' && (value as Record<symbol, unknown>)[declaredKey()] === true;
+}
+
+/** Declares a **platform** - one technology, whole. Returns it unchanged apart from the mark. */
+export function definePlatform(platform: Platform): Platform {
+  return brand(platform);
+}
+
+/** Declares a **plugin** - whatever a package contributes, platforms included. Returns it unchanged
+ *  apart from the mark. */
 export function definePlugin(plugin: Plugin): Plugin {
-  return plugin;
+  return brand(plugin);
+}
+
+/** Whether `value` is a platform rather than the broader plugin - `manifestProvider` is what makes
+ *  one, and it is the only required member either type has beyond `name`. */
+export function isPlatform(value: Plugin | Platform): value is Platform {
+  return !!(value as Platform).manifestProvider;
 }
 
 /**
- * The plugin a package gets when **none** claimed its directory - a repository naming no plugin,
- * or a directory none of the named ones recognized.
+ * The platform a package gets when **none** claimed its directory - a repository naming no
+ * platform, or a directory none of the named ones recognized.
  *
- * It exists so `Package.plugin` need not be optional. `Package.provider` was an empty string for
+ * It exists so `Package.platform` need not be optional. `Package.provider` was an empty string for
  * exactly this case, and every reader had to know that; an object with an empty `name` says the
  * same thing without a guard, and `pkg.provider === 'node'` - the check CLAUDE.md prescribes -
  * reads the same either way.
@@ -130,7 +177,7 @@ export function definePlugin(plugin: Plugin): Plugin {
  * - no `versionPlanner` -> `version`/`changed` fail naming the key, rather than releasing a
  *   plausible but untrue set of packages from a default nobody chose.
  */
-export const basePlugin: Plugin = {
+export const basePlatform: Platform = definePlatform({
   name: '',
   manifestProvider: {
     name: '',
@@ -140,4 +187,41 @@ export const basePlugin: Plugin = {
     read: (): Manifest | undefined => undefined,
     write: (): void => undefined,
   },
-};
+});
+
+/**
+ * **Marks an object as declared through one of the factories below**, so `loadPlugins` can tell a
+ * 2.x contribution from anything else that happens to have the same shape.
+ *
+ * It exists for one measured case, and there is no structural check that could replace it: an rman
+ * **1.x plugin was `{ name, init }`**, and under this split a 2.x plugin that only runs an `init`
+ * is *also* `{ name, init }`. They are indistinguishable by shape. The guard used to be
+ * `manifestProvider` being required - which only worked while the one type was both halves.
+ *
+ * Non-enumerable, so it never reaches `JSON.stringify`, `rman config` or a `toEqual` diff, the same
+ * way `ORIGINS` and `PREVIOUS_VALUES` travel.
+ *
+ * The cost, stated rather than hidden: a plain object literal in `plugins` is no longer accepted.
+ * `definePlatform`/`definePlugin` is one import and one call, and it is the explicit declaration
+ * that a runtime check needs - a type cannot reach a JavaScript config.
+ *
+ * **A function rather than a `const`, and that is not a preference.** The file layout puts private
+ * declarations below the exported ones, and `basePlatform` is an exported const whose initializer
+ * *calls* `definePlatform` - so a `const DECLARED` below it sits in its temporal dead zone while the
+ * module is still evaluating. Measured: the whole suite failed to load with
+ * `ReferenceError: Cannot access 'DECLARED' before initialization`. A function declaration hoists,
+ * so the key is resolved when it is asked for instead of when the module reaches this line.
+ *
+ * **`Symbol.for`, so two copies of rman in one process agree about the mark.** A per-module symbol
+ * would have a plugin declared against one copy refused by the other - with a message about rman
+ * 1.x plugins, which is the one explanation guaranteed to be wrong.
+ */
+function declaredKey(): symbol {
+  return Symbol.for('rman.declared');
+}
+
+/** Stamps the mark, non-enumerably, and hands the object back. */
+function brand<T extends object>(value: T): T {
+  Object.defineProperty(value, declaredKey(), { value: true, enumerable: false, configurable: true });
+  return value;
+}

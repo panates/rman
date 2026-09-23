@@ -218,7 +218,7 @@ export abstract class VersionPlanService {
    * `Plugin` contributing no planner of its own means.
    */
   protected plannerFor(pkg: Package): VersionPlanService {
-    return pkg.plugin.versionPlanner ?? this;
+    return pkg.platform.versionPlanner ?? this;
   }
 
   /**

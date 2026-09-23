@@ -2,7 +2,7 @@ import type { VersionPlanService } from '../services/version-plan.service.js';
 import { Logger, type LogLevel } from '../utils/logger.js';
 import { registerCoreServices } from './core-services.js';
 import { registerCoreTargets } from './core-targets.js';
-import { basePlugin, type Plugin } from './plugin.js';
+import { basePlatform, type Platform, type Plugin } from './plugin.js';
 import type { PublishTarget } from './publish-target.js';
 import { Registry } from './registry.js';
 import type { Repository } from './repository.js';
@@ -23,11 +23,25 @@ import type { ServiceFactory, ServiceMap } from './service.js';
  */
 export class RmanApplication {
   /**
-   * The technologies this invocation knows about, in `plugins` declaration order.
+   * The **technologies** this invocation knows about, in `plugins` declaration order.
    *
    * One registry rather than the four it replaces (`manifest`, `workspace`, `binPaths`,
    * `runSteps`): a technology is a whole, and declaring part of one was never meaningful - see
-   * `Plugin`.
+   * `Platform`.
+   *
+   * **Flattened out of the plugins**, because this is what every seam actually iterates - a
+   * manifest is read by a platform, a workspace is laid out by a platform, a PATH is contributed by
+   * a platform. A plugin providing two of them puts two entries here, and a plugin providing none
+   * puts none.
+   */
+  readonly platforms = new Registry<Platform>();
+
+  /**
+   * The **plugins** themselves, in declaration order - what a config named, before the platforms
+   * were taken out of them.
+   *
+   * Kept apart from `platforms` because the two answer different questions: this is who contributed,
+   * that is what they contributed. `init` runs per plugin; nothing else reads this.
    */
   readonly plugins = new Registry<Plugin>();
 
@@ -49,18 +63,18 @@ export class RmanApplication {
    * and the root's release identity, none of which belongs to any one technology.
    *
    * The two decisions that *are* a technology's - `detectBoundary` and `cascade` - are asked of
-   * each package's own `Plugin.versionPlanner` instead (`VersionPlanService.plannerFor`), so a
+   * each package's own `Platform.versionPlanner` instead (`VersionPlanService.plannerFor`), so a
    * polyglot repository no longer resolves both through whichever plugin registered last.
    */
   versionPlanner?: VersionPlanService;
 
   readonly logger: Logger;
 
-  /** Which plugin claims a directory - the first whose manifest provider recognizes it, because
-   *  before a package is read there is nothing else to go on. `basePlugin` when none does, so the
+  /** Which platform claims a directory - the first whose manifest provider recognizes it, because
+   *  before a package is read there is nothing else to go on. `basePlatform` when none does, so the
    *  caller needs no guard. */
-  pluginFor(dir: string): Plugin {
-    return this.plugins.first(plugin => (plugin.manifestProvider.read(dir) ? plugin : undefined)) ?? basePlugin;
+  platformFor(dir: string): Platform {
+    return this.platforms.first(p => (p.manifestProvider.read(dir) ? p : undefined)) ?? basePlatform;
   }
 
   /**

@@ -2,7 +2,7 @@ import path from 'path';
 import type { RmanApplication } from './application.js';
 import type { ResolvedConfig } from './config.js';
 import { Manifest } from './manifest.js';
-import type { Plugin } from './plugin.js';
+import type { Platform } from './plugin.js';
 import type { Repository } from './repository.js';
 import { semverScheme, type VersionScheme } from './version-scheme.js';
 
@@ -69,8 +69,8 @@ export class Package {
   manifestFileName: string;
 
   /**
-   * **The technology this package belongs to** - the stack whose manifest provider claimed the
-   * directory, or `basePlugin` when none did.
+   * **The technology this package belongs to** - the platform whose manifest provider claimed the
+   * directory, or `basePlatform` when none did.
    *
    * Per *package*, not per repository: the question is asked per directory, so a polyglot monorepo
    * can hold a `node` package beside a `cargo` one and a command sweeping `getPackages()` can tell
@@ -78,7 +78,7 @@ export class Package {
    * live, where its scripts come from, how its releases are planned - so anything that used to walk
    * four separate registries asking "is this yours?" now asks the package it already has.
    */
-  plugin: Plugin;
+  platform: Platform;
 
   /**
    * **Which ecosystem this package belongs to** - `'node'` for one the `node` built-in read. Empty when
@@ -91,7 +91,7 @@ export class Package {
    * contribute, so narrowing it here would mean the core listing plugins it cannot know about.
    */
   get provider(): string {
-    return this.plugin.name;
+    return this.platform.name;
   }
 
   /**
@@ -108,11 +108,11 @@ export class Package {
     readonly dirname: string,
     app: RmanApplication,
   ) {
-    const { manifest, versionScheme, fileName, plugin } = Manifest.read(app, dirname);
+    const { manifest, versionScheme, fileName, platform } = Manifest.read(app, dirname);
     this.manifest = manifest;
     this.versionScheme = versionScheme;
     this.manifestFileName = fileName ? path.join(dirname, fileName) : '';
-    this.plugin = plugin;
+    this.platform = platform;
   }
 
   get basename(): string {
@@ -155,21 +155,21 @@ export class Package {
   /** Re-reads from disk through **its own** technology's provider - no search, since the package
    *  already knows which one claimed it, and a second opinion on a re-read was never wanted. */
   reloadManifest(): Manifest {
-    const stack = this.plugin;
-    this.manifest = stack.manifestProvider.read(this.dirname) ?? {
+    const platform = this.platform;
+    this.manifest = platform.manifestProvider.read(this.dirname) ?? {
       name: path.basename(this.dirname),
       version: '0.0.0',
       raw: {},
     };
-    this.versionScheme = stack.manifestProvider.versionScheme ?? this.versionScheme;
-    this.manifestFileName = stack.manifestProvider.fileName
-      ? path.join(this.dirname, stack.manifestProvider.fileName)
+    this.versionScheme = platform.manifestProvider.versionScheme ?? this.versionScheme;
+    this.manifestFileName = platform.manifestProvider.fileName
+      ? path.join(this.dirname, platform.manifestProvider.fileName)
       : '';
     return this.manifest;
   }
 
   /** Writes the current manifest back through its provider. */
   writeManifest(): void {
-    this.plugin.manifestProvider.write(this.dirname, this.manifest);
+    this.platform.manifestProvider.write(this.dirname, this.manifest);
   }
 }

@@ -67,9 +67,8 @@ describe('core/plugin', () => {
   /**
    * A repository, plus however many plugin modules the case needs.
    *
-   * The modules are written as **plain objects**, importing nothing: `definePlugin`/`defineConfig`
-   * are identity helpers, so a fixture that skips them is testing the same thing while staying
-   * independent of how `'rman'` happens to resolve from a temp directory.
+   * The modules import nothing - a temp directory has no `node_modules` to resolve `'rman'`
+   * through. What they need from it arrives on `globalThis`; see the `before` above.
    */
   function fixture(config: unknown, modules: Record<string, string> = {}): string {
     const dir = tmp();
@@ -82,17 +81,15 @@ describe('core/plugin', () => {
     return dir;
   }
 
-  /** A module exporting a **plugin instance**, which is what a `plugins` glob must find. Written
-   *  as a plain object, importing nothing: `definePlugin` is an identity helper, so a fixture that
-   *  skips it tests the same thing while staying independent of how `'rman'` resolves from a temp
-   *  directory. `manifestProvider` is the one required member - a plugin that cannot recognize a
-   *  package has nothing to apply the rest of itself to. */
+  /** A module exporting a **platform**, which is the shape almost every `plugins` entry has - one
+   *  technology, accepted wherever a plugin is. `manifestProvider` is the one required member: a
+   *  platform that cannot recognize a package has nothing to apply the rest of itself to. */
   function pluginModule(name: string): string {
-    return `export default {
+    return `export default globalThis.__rmanDefinePlatform({
       name: ${JSON.stringify(name)},
       manifestProvider: { name: ${JSON.stringify(name)}, fileName: '${name}.json',
         read: () => undefined, write: () => {} },
-    };`;
+    });`;
   }
 
   /** A module exporting a command, for a `commands` glob. */
@@ -132,8 +129,9 @@ describe('core/plugin', () => {
     fs.writeFileSync(
       path.join(dir, '.rmanrc.mjs'),
       `export default {
-         plugins: [{ name: 'inline', manifestProvider: { name: 'inline', fileName: 'i.json',
-           read: () => undefined, write: () => {} } }],
+         plugins: [globalThis.__rmanDefinePlatform({ name: 'inline',
+           manifestProvider: { name: 'inline', fileName: 'i.json',
+             read: () => undefined, write: () => {} } })],
          commands: [{ command: 'inline-cmd', describe: 'declared as an object',
            handler: c => c.logger.info('hello from inline') }],
        };`,
@@ -152,11 +150,14 @@ describe('core/plugin', () => {
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', private: true, version: '1.0.0' }));
     fs.writeFileSync(
       path.join(dir, '.rmanrc.mjs'),
-      `export default { plugins: [{
+      `export default { plugins: [globalThis.__rmanDefinePlugin({
          name: 'withinit',
-         manifestProvider: { name: 'withinit', fileName: 'w.json', read: () => undefined, write: () => {} },
+         platforms: [globalThis.__rmanDefinePlatform({
+           name: 'withinit',
+           manifestProvider: { name: 'withinit', fileName: 'w.json', read: () => undefined, write: () => {} },
+         })],
          init(ctx) { globalThis.__rmanInitSawApp = !!ctx.app; },
-       }] };`,
+       })] };`,
     );
     await captureLogs(() => runCli({ argv: ['list'], cwd: dir }));
     expect((globalThis as Record<string, unknown>).__rmanInitSawApp).toBe(true);
@@ -269,18 +270,41 @@ describe('core/plugin', () => {
    * `ctx.addCommand()` - and `name` was all this loader checked, so such an object registered
    * successfully and then died *inside its own `init`* with `ctx.addCommand is not a function`.
    * Measured on the real case while converting `@panates/rman-node`: fifteen failures naming
-   * neither the plugin nor the version it was written against. `init` still exists in 2.0, so
-   * nothing earlier gives the shape away - `manifestProvider` is the only member that does.
+   * neither the plugin nor the version it was written against.
+   *
+   * **The guard used to be `manifestProvider` being required, and the split took that away.** Under
+   * `Platform`/`Plugin` a 2.x plugin contributing nothing but an `init` is *also* `{ name, init }` -
+   * indistinguishable by shape, so no shape test can tell them apart and the declaration has to be
+   * explicit. That is what `definePlatform`/`definePlugin` mark, and what this refuses the absence
+   * of.
    *
    * Checked at runtime because the type cannot reach a JavaScript config, which is the form every
    * plugin outside this repository is written in.
    */
-  it('refuses a 1.x plugin - a name and an init, with no technology behind them', async () => {
+  it('refuses a 1.x plugin - a name and an init, with no declaration behind them', async () => {
     const dir = fixture({ plugins: ['./old.mjs'] }, { 'old.mjs': `export default { name: 'legacy', init() {} };` });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-    expect(error.message).toContain('has no "manifestProvider"');
+    expect(error.message).toContain('was not declared with definePlatform() or definePlugin()');
     /** The message has to say where to go instead, or it only reports that something is wrong. */
     expect(error.message).toContain('rman 1.x plugin');
+  });
+
+  /**
+   * **The control for the one above**: the same `{ name, init }`, declared. It must load, or the
+   * guard would be indistinguishable from "an `init`-only plugin is not allowed" - which is the
+   * opposite of what `init` exists for.
+   */
+  it('accepts the same shape once it is declared, which is the whole difference', async () => {
+    const dir = fixture(
+      { plugins: ['./new.mjs'] },
+      {
+        'new.mjs': `export default globalThis.__rmanDefinePlugin({ name: 'modern',
+          init(ctx) { globalThis.__rmanModernInit = !!ctx.app; } });`,
+      },
+    );
+    await captureLogs(() => runCli({ argv: ['list'], cwd: dir }));
+    expect((globalThis as Record<string, unknown>).__rmanModernInit).toBe(true);
+    delete (globalThis as Record<string, unknown>).__rmanModernInit;
   });
 
   /** `publishTargets` is the third key of the same shape, and reaches `app.publishTargets` - which

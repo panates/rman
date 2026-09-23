@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { readDirConfig } from '../../src/core/config.js';
-import type { Plugin } from '../../src/core/plugin.js';
+import { definePlatform, type Platform } from '../../src/core/plugin.js';
 import { BUILTIN_PLUGINS } from '../../src/plugins/builtins.js';
 import { clearDetectionCache, detectBuiltin, detectedBuiltinOf } from '../../src/plugins/detect.js';
 import { createRepository, useTestEcosystem } from '../_fixture.js';
@@ -59,7 +59,7 @@ describe('plugins/detect', () => {
      */
     it('finds whatever a platform claims, with no filename of its own', () => {
       const dir = tmp({ 'Cargo.toml': '[package]\nname = "x"\n' });
-      const cargo: Plugin = {
+      const cargo: Platform = definePlatform({
         name: 'cargo',
         manifestProvider: {
           name: 'cargo',
@@ -67,9 +67,9 @@ describe('plugins/detect', () => {
           read: d => (fs.existsSync(path.join(d, 'Cargo.toml')) ? { name: 'x', version: '0.0.0', raw: {} } : undefined),
           write: () => undefined,
         },
-      };
+      });
       const restore = BUILTIN_PLUGINS.cargo;
-      BUILTIN_PLUGINS.cargo = { plugin: () => cargo, contribute: () => ({ plugins: [cargo] }) };
+      BUILTIN_PLUGINS.cargo = { platform: () => cargo, contribute: () => ({ plugins: [cargo] }) };
       try {
         clearDetectionCache();
         expect(detectBuiltin(dir)).toEqual({ name: 'cargo', because: 'Cargo.toml' });

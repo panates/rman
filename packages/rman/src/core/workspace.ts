@@ -44,8 +44,8 @@ export namespace Workspace {
 
   /** The first provider that recognizes `root`, in declaration order. */
   export function resolve(app: RmanApplication, root: string): Layout | undefined {
-    for (const stack of app.plugins) {
-      const layout = stack.getWorkspace?.(root);
+    for (const platform of app.platforms) {
+      const layout = platform.getWorkspace?.(root);
       if (layout) return layout;
     }
     return undefined;

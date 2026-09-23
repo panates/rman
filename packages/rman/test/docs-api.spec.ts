@@ -5,6 +5,7 @@ import type {
   ConfigScope,
   ConfigValue,
   ConfigValueContext,
+  Platform,
   Plugin,
   PluginContext,
   PositionalOption,
@@ -14,10 +15,11 @@ import type {
   ServiceMap,
 } from '../src/index.js';
 import {
-  basePlugin,
+  basePlatform,
   ChangelogService,
   declareCommand,
   defineConfig,
+  definePlatform,
   definePlugin,
   DockerPublishService,
   ExecService,
@@ -25,6 +27,7 @@ import {
   GithubReleaseService,
   ImportService,
   isCalendarVersion,
+  isPlatform,
   ListService,
   LOG_LEVELS,
   Logger,
@@ -66,9 +69,10 @@ describe('docs/rman.md: the documented API surface', () => {
       Registry,
       Service,
       defineConfig,
+      definePlatform,
       definePlugin,
       declareCommand,
-      basePlugin,
+      basePlatform,
       targetsOf,
       shipsTo,
       VersionService,
@@ -126,13 +130,21 @@ describe('docs/rman.md: the documented API surface', () => {
   /** The types the page names in its `import type` block. Nothing to assert at runtime - the
    *  annotation either compiles or it does not, which is what `npm run typecheck` is for. */
   it('exports every type its Installation block imports', () => {
-    const named: [RmanConfig, Plugin, PluginContext | undefined, PublishTarget | undefined, ServiceMap] = [
+    const named: [RmanConfig, Platform, PluginContext | undefined, PublishTarget | undefined, ServiceMap] = [
       {},
-      basePlugin,
+      basePlatform,
       undefined,
       undefined,
       {} as ServiceMap,
     ];
+    /** **Both halves of the split, in the relationship the page describes**: a platform is one
+     *  technology, a plugin is what a package contributes, and a bare platform is accepted wherever
+     *  a plugin is. Each assignment is a claim the compiler checks. */
+    const umbrella: Plugin = definePlugin({ name: 'demo', platforms: [basePlatform] });
+    const sugar: Plugin = basePlatform;
+    expect(umbrella.platforms).toEqual([basePlatform]);
+    expect(isPlatform(sugar)).toBe(true);
+    expect(isPlatform(umbrella)).toBe(false);
     /** `PositionalOption` beside `CommandOption`, because `positionals` is the other half of a
      *  command's surface - and the half that could not be typed without importing yargs until it
      *  was exported. */

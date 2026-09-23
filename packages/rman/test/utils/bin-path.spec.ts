@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { expect } from 'expect';
 import { RmanApplication } from '../../src/core/application.js';
-import { basePlugin } from '../../src/core/plugin.js';
+import { basePlatform, definePlatform } from '../../src/core/plugin.js';
 import type { BinPath as BinPathTypes } from '../../src/utils/bin-path.js';
 import { BinPath } from '../../src/utils/bin-path.js';
 
@@ -20,7 +20,7 @@ describe('utils/BinPath', () => {
    *  contributor recognizes no package, and how one reaches an application now that a technology
    *  is declared as a whole. */
   function addBinPaths(provider: BinPathTypes.Provider, name = 'test'): void {
-    app.plugins.add({ ...basePlugin, name, getBinPaths: provider });
+    app.platforms.add(definePlatform({ ...basePlatform, name, getBinPaths: provider }));
   }
 
   it('has no provider of its own, so the inherited PATH is left exactly as it was', () => {
@@ -44,9 +44,9 @@ describe('utils/BinPath', () => {
   });
 
   it('ignores a repeated registration of the same technology', () => {
-    const stack = { ...basePlugin, name: 'twice', getBinPaths: () => ['/once'] };
-    app.plugins.add(stack);
-    app.plugins.add(stack);
+    const platform = definePlatform({ ...basePlatform, name: 'twice', getBinPaths: () => ['/once'] });
+    app.platforms.add(platform);
+    app.platforms.add(platform);
     expect(BinPath.resolve(app, '/repo')).toEqual(['/once']);
   });
 

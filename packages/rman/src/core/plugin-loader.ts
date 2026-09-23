@@ -4,7 +4,7 @@ import fastGlob from 'fast-glob';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { RmanApplication } from './application.js';
 import { COMMANDS_KEY } from './merge-config.js';
-import type { Plugin } from './plugin.js';
+import { isDeclared, isPlatform, type Platform, type Plugin } from './plugin.js';
 import type { PublishTarget } from './publish-target.js';
 
 /** The `.rmanrc` key naming plugin packages to load. */
@@ -48,27 +48,25 @@ export async function loadPlugins(app: RmanApplication, rootConfig: RmanConfig):
       );
     }
     /**
-     * **`manifestProvider` is the one member that is not optional, so it is checked.**
+     * **Declared through `definePlatform`/`definePlugin`, and checked for it.**
      *
-     * Every other seam is answered by its absence (see `basePlugin`); this one is what makes a
-     * plugin a *technology* at all - without it nothing it claims can be read, and the plugin
-     * answers no question rman would ask it.
+     * The guard used to be `manifestProvider` being required, which worked only while one type was
+     * both halves. A 2.x plugin that contributes nothing but an `init` is `{ name, init }` - and so
+     * was an rman **1.x plugin**, exactly. They are indistinguishable by shape, so a shape test
+     * cannot tell them apart and the declaration has to be explicit.
      *
-     * It is checked here because the type cannot reach a JavaScript config, and a 1.x plugin is
-     * exactly the object that gets this far: `{ name, init }` was the whole of one, and `name` was
-     * all `loadPlugins` looked at. Measured on the real case - `@panates/rman-node`'s 1.x plugin
-     * loaded, registered, and then died inside its own `init` with
+     * Measured on the real case before there was any guard: `@panates/rman-node`'s 1.x plugin
+     * loaded, registered, and died inside its own `init` with
      * `TypeError: ctx.addCommand is not a function`, fifteen times over, naming neither the plugin
-     * nor the version it was written against. The `init` seam still exists, so there is no earlier
-     * point at which the shape gives itself away.
+     * nor the version it was written against.
      */
-    if (!isPlainObject(plugin.manifestProvider)) {
+    if (!isDeclared(plugin)) {
       throw new Error(
-        `Plugin "${plugin.name}" (${from}) has no "manifestProvider" - a plugin is one technology, ` +
-          `and that is where its packages keep their identity. A plugin whose only job was to ` +
-          `register commands is an rman 1.x plugin: commands, publish targets and other plugins ` +
-          `are "${COMMANDS_KEY}", "publishTargets" and "${PLUGINS_KEY}" keys of a config now, so ` +
-          `such a plugin has nothing left to do and should be deleted.`,
+        `Plugin "${plugin.name}" (${from}) was not declared with definePlatform() or ` +
+          `definePlugin(). A plain object is how an rman 1.x plugin looks, and a 1.x plugin has ` +
+          `nothing left to do: commands, publish targets and other plugins are "${COMMANDS_KEY}", ` +
+          `"publishTargets" and "${PLUGINS_KEY}" keys of a config now. Wrap a technology in ` +
+          `definePlatform({ name, manifestProvider, ... }), anything else in definePlugin({ ... }).`,
       );
     }
     /** One registration per name. Twice would define the same commands twice, which yargs does not
@@ -76,18 +74,7 @@ export async function loadPlugins(app: RmanApplication, rootConfig: RmanConfig):
     if (seen.has(plugin.name)) continue;
     seen.add(plugin.name);
 
-    app.plugins.add(plugin);
-    /**
-     * **The orchestrator, and only that.** A plan is computed for the whole repository at once -
-     * groups span packages, the ripple crosses them - so one planner drives the traversal and the
-     * last registration wins it.
-     *
-     * The two decisions that belong to a *technology* are not taken from here: `detectBoundary`
-     * and `cascade` are asked of `pkg.plugin.versionPlanner` per package, which is why a plugin
-     * still declares one even when it is not the last to register.
-     */
-    if (plugin.versionPlanner) app.versionPlanner = plugin.versionPlanner;
-    await plugin.init?.({ app });
+    await registerPlugin(app, plugin).init?.({ app });
   }
 
   for (const { value, from } of await resolveEntries(rootConfig.publishTargets, 'publishTargets')) {
@@ -100,6 +87,43 @@ export async function loadPlugins(app: RmanApplication, rootConfig: RmanConfig):
     }
     app.publishTargets.add(target);
   }
+}
+
+/**
+ * **Puts one plugin onto an application** - what `plugins` does with an entry once it has been
+ * found and vetted, and the only place that knows how.
+ *
+ * **A bare `Platform` is sugar**, which is what almost every entry is - a plugin that provides one
+ * technology and nothing else. Normalized here, so nothing downstream deals in two shapes.
+ *
+ * **Exported because a spec must not reimplement it.** The registration is two registries plus a
+ * planner assignment, and a fixture writing that out by hand is a second implementation that
+ * drifts - which is exactly how a fixture ends up proving the core works when it does not. A spec
+ * brings its own technology through this, the same door a config's does.
+ *
+ * **`init` is not called here, and that is why this returns the normalized plugin.** An `init` runs
+ * once, when a *config* brought the plugin in, and it may be asynchronous - so it belongs to the
+ * loader above rather than to a function a fixture calls synchronously while building an
+ * application.
+ */
+export function registerPlugin(app: RmanApplication, entry: Plugin | Platform): Plugin {
+  const declared: Plugin = isPlatform(entry) ? { name: entry.name, platforms: [entry] } : entry;
+
+  app.plugins.add(declared);
+  for (const platform of declared.platforms ?? []) {
+    app.platforms.add(platform);
+    /**
+     * **The orchestrator, and only that.** A plan is computed for the whole repository at once -
+     * groups span packages, the ripple crosses them - so one planner drives the traversal and the
+     * last registration wins it.
+     *
+     * The two decisions that belong to a *technology* are not taken from here: `detectBoundary`
+     * and `cascade` are asked of `pkg.platform.versionPlanner` per package, which is why a platform
+     * still declares one even when it is not the last to register.
+     */
+    if (platform.versionPlanner) app.versionPlanner = platform.versionPlanner;
+  }
+  return declared;
 }
 
 /** One resolved contribution, with where it came from - a file path for a glob match, or the key

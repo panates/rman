@@ -1375,10 +1375,11 @@ describe('core/Repository', () => {
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       fs.writeFileSync(
         path.join(dir, '.rmanrc.cjs'),
-        `module.exports = { plugins: [{ name: 'p',
-           manifestProvider: { name: 'p', fileName: 'p.json', read: () => undefined, write: () => {} },
+        `module.exports = { plugins: [globalThis.__rmanDefinePlugin({ name: 'p',
+           platforms: [globalThis.__rmanDefinePlatform({ name: 'p',
+             manifestProvider: { name: 'p', fileName: 'p.json', read: () => undefined, write: () => {} } })],
            init(ctx) { void ctx.app; },
-         }], commands: [{ command: 'x', describe: 'a command', builder: cmd => cmd.option('y'), handler() {} }] };\n`,
+         })], commands: [{ command: 'x', describe: 'a command', builder: cmd => cmd.option('y'), handler() {} }] };\n`,
       );
       writeJson(dir, 'packages/pkg-a/package.json', { name: 'pkg-a', version: '1.0.0' });
 

@@ -1,4 +1,4 @@
-import type { Plugin } from '../core/plugin.js';
+import type { Platform } from '../core/plugin.js';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { nodeBuiltin, nodePlatform } from './node/index.js';
 
@@ -24,7 +24,7 @@ import { nodeBuiltin, nodePlatform } from './node/index.js';
  * statements and a built-in name is neither of them - it is the plugin itself, called by name.
  */
 export const BUILTIN_PLUGINS: Record<string, Builtin> = {
-  node: { plugin: () => nodePlatform, contribute: nodeBuiltin },
+  node: { platform: () => nodePlatform, contribute: nodeBuiltin },
 };
 
 /**
@@ -39,7 +39,7 @@ export const BUILTIN_PLUGINS: Record<string, Builtin> = {
  */
 export interface Builtin {
   /** The platform itself, for asking - constructed, registered nowhere, with no side effect. */
-  plugin: () => Plugin;
+  platform: () => Platform;
   /** Everything this built-in adds to a repository that asked for it. */
   contribute: () => RmanConfig;
 }

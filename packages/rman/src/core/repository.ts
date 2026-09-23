@@ -461,10 +461,15 @@ export class Repository extends Package {
      * condition: ten specs changed answer, seven of them about config cascading and three about
      * `publish`'s flags.
      *
+     * **`platforms`, not `plugins`, and the difference is what detection produces.** What would be
+     * added here is a *platform*, so what must not already be there is a platform - a plugin that
+     * only registers a command says nothing about which directories hold packages, and letting it
+     * suppress the guess would leave a Node repository undetected for having added a command.
+     *
      * Decided **once**, here, and handed to every read that has to agree - `readDirConfig` has no
      * business knowing about an application.
      */
-    const detected = declared.plugins === undefined && app.plugins.size === 0 ? detectBuiltin(rootDir) : undefined;
+    const detected = declared.plugins === undefined && app.platforms.size === 0 ? detectBuiltin(rootDir) : undefined;
     const rootConfig = detected ? await readDirConfig(rootDir, { inject: detected }) : declared;
     /**
      * **Said out loud, because a guess the reader cannot see is one they cannot correct.**
