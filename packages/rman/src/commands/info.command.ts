@@ -88,8 +88,9 @@ function printRepositoryInfo(info: SystemInfo.RepositoryInfo): void {
  * `rman info` - environment and repository, and back in the core because most of what it reports
  * (OS, CPU, shell, git, the repository's own shape) is true of any repository.
  *
- * The Node half is not here at all: installing `rman-node` augments `SystemInfo` and the package
- * manager, `npmPackages` and this plugin's own version start appearing. Without it nothing
- * npm-shaped is asked for or printed, which is the right answer for a repository in any other
- * language.
+ * The Node half is not written here: registering the `node` built-in augments `SystemInfo` in
+ * place, and the package manager and `npmPackages` start appearing. A repository that never names
+ * it - or that detection reads as something else - asks for and prints nothing npm-shaped, which is
+ * the right answer in any other language. **Bundled is not the same as on**: the built-in ships
+ * inside rman, and this is one of the places that difference is visible.
  */

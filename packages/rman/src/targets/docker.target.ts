@@ -7,7 +7,7 @@ import { DOCKER_TARGET, type DockerPublishService } from '../services/docker-pub
  * **`publish.docker.*`** - this target's own config block, declared here rather than centrally.
  *
  * Reaches `RmanConfig` through the `PublishTargetConfigs` slot `publish.command.ts` exports, which
- * is the same slot `rman-node` declares `publish.npm.*` in. Whoever reads a key declares it: the
+ * is the same slot the `node` built-in declares `publish.npm.*` in. Whoever reads a key declares it: the
  * only thing that reads these is `DockerPublishService`, two files away.
  *
  * Required once `"docker"` is one of a package's `publish.target`s - `publish --target docker`

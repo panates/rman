@@ -13,8 +13,7 @@
      */
     "paths": {
       "rman": ["./packages/rman/src/index.js"],
-      "rman/cli": ["./packages/rman/src/cli.js"],
-      "rman-node": ["./packages/node/src/index.js"]
+      "rman/cli": ["./packages/rman/src/cli.js"]
     }
   }
 }

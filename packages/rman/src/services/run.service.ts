@@ -375,7 +375,7 @@ export namespace RunService {
    *
    * The core knows one source: the config. **`package.json#scripts` is not a source the core has**,
    * because "a script lives in package.json" is true of a Node repository and of nothing else -
-   * `rman-node` contributes that one (with npm's `pre<script>`/`post<script>` convention and its
+   * the `node` built-in contributes that one (with npm's `pre<script>`/`post<script>` convention and its
    * `&&` splitting), and a plugin for another ecosystem would contribute its own.
    *
    * Returns `undefined` for "this package declares nothing", not empty slots - the difference

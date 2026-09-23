@@ -94,7 +94,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string; app?: Rm
          * - but it still has to **throw**, not exit.
          *
          * This branch called `process.exit(1)`, and `runCli` is a library entry point: rman's own
-         * bin calls it, so do `rman-node`'s fixtures and every spec. Exiting from in here took the
+         * bin calls it, so do the fixtures and every spec. Exiting from in here took the
          * whole process down before any caller could see the rejection - which in mocha meant the
          * first command that failed killed the run and the suite could not report a single result.
          * The exit belongs to the bin entry alone (see `isMain()` at the bottom), which already does
@@ -131,7 +131,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string; app?: Rm
      * value is `.rman/*.{js,mjs,cjs}`.
      *
      * An entry is a command or a glob naming modules that export one, so a package contributing
-     * commands (`rman-node`) and a repository writing its own reach yargs by the same path - there
+     * commands (a built-in's, a plugin's) and a repository writing its own reach yargs by the same path - there
      * is one source of non-built-in commands and one precedence slot. A plugin used to hand them
      * over separately through `addCommand`, which is the step this replaces.
      *

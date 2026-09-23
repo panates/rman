@@ -32,7 +32,7 @@ import type { Workspace } from './workspace.js';
 export interface Plugin {
   /**
    * **The ecosystem this speaks for**, surfaced on every package it reads as `Package.provider` -
-   * `'node'` for `rman-node`. Short and about the technology, not about the file:
+   * `'node'` for the built-in of that name. Short and about the technology, not about the file:
    * `manifestProvider.fileName` already says `package.json`, and a name repeating it would tell a
    * caller nothing it did not have.
    *

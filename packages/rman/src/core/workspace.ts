@@ -34,7 +34,7 @@ export namespace Workspace {
    *
    * **The core has no provider**, and that is the point: "packages are the `workspaces` globs in
    * the root `package.json`, and a package is a directory with a `package.json` in it" is true of
-   * npm and of nothing else. `rman-node` contributes that one; a plugin for another ecosystem
+   * npm and of nothing else. The `node` built-in contributes that one; a plugin for another ecosystem
    * contributes its own (a Cargo workspace, a `go.work`, a `pyproject.toml`).
    *
    * Returns `undefined` for "this is not a repository I recognize", so the next provider gets a

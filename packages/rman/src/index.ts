@@ -6,9 +6,8 @@
  * per domain - CLI-only concerns (argv parsing, `--help` text, and all console/file presentation)
  * stay in `cli.ts` and the individual `commands/*.command.ts` modules, which are not exported here.
  *
- * **This is also the plugin contract.** A plugin (`rman-node`, say) is an ordinary package that
- * imports from here, so everything a command needs in order to live outside rman has to be
- * exported - the progress panel, the package filter, the branch guard, the git helper. What is
+ * **This is also the plugin contract.** A third-party plugin is an ordinary package that imports
+ * from here, so everything a command needs in order to live outside rman has to be exported - the progress panel, the package filter, the branch guard, the git helper. What is
  * *not* exported is deliberately private: config resolution internals, the expression evaluator,
  * the command registry.
  */
@@ -41,12 +40,12 @@ export { defineCommand } from './core/custom-command.js';
 export { RmanApplication } from './core/application.js';
 /** The manifest seam, grouped on a plugin as `Plugin.manifestProvider`: where a package's name and
  *  version are written, what it declares, and how it is numbered and stamped. The core has none -
- *  `package.json` is npm's answer, and lives in `rman-node`. */
+ *  `package.json` is npm's answer, and belongs to the `node` built-in. */
 export type { ManifestProvider } from './core/manifest.js';
 export { Manifest } from './core/manifest.js';
 export { Package } from './core/package.js';
 /** The publish seam: where a package's artifact ships. The core brings `docker` (nobody's
- *  ecosystem); npm's target lives in `rman-node`, and any other technology's in its own plugin. */
+ *  ecosystem); npm's target is the `node` built-in's, and any other technology's is its own plugin's. */
 export { declaredTargets, type PublishTarget, shipsTo, targetsOf, unknownTargets } from './core/publish-target.js';
 export { Registry } from './core/registry.js';
 export { Repository } from './core/repository.js';
@@ -62,8 +61,8 @@ export type { ChangeKind } from './core/version-scheme.js';
  *  overrides any of the three. `SemverScheme` is exported to subclass rather than restate. */
 export { assertOneScheme, SemverScheme, semverScheme, VersionScheme } from './core/version-scheme.js';
 /** The workspace seam: how a repository's packages are found. A plugin contributes a provider
- *  (see `Plugin.workspace`); the core has none, so `workspaces` is npm's idea and lives in
- *  `rman-node`. */
+ *  (see `Plugin.workspace`); the core has none, so `workspaces` is npm's idea and belongs to the
+ *  `node` built-in. */
 /** `Workspace.Layout`, `Workspace.Provider`, `Workspace.addProvider`, `Workspace.resolve`,
  *  `Workspace.findRoot` - one namespace, so a plugin can augment it. */
 export { Workspace } from './core/workspace.js';
@@ -151,3 +150,17 @@ export { isCalendarVersion } from './utils/release-version.js';
 export type { RunBinOptions, RunBinResult } from './utils/run-bin.js';
 export { runBin } from './utils/run-bin.js';
 export { OCI_VERSION_LABEL, stampVersionConstant, stampVersionLabel } from './utils/version-stamp.js';
+
+/**
+ * **The `node` built-in's own surface.** It ships inside rman rather than as `rman-node`, so its
+ * services and target are named from here - a repository asks for the technology with
+ * `plugins: ['node']` (or lets detection find it) and never constructs any of this by hand.
+ */
+export { BUILTIN_PLUGINS, builtinPluginNames, isBuiltinPlugin } from './plugins/builtins.js';
+export type { NodeConfigKeys, RmanNodeConfig } from './plugins/node/node-config.interface.js';
+export { NPM_TARGET, NpmPublishTarget } from './plugins/node/npm-publish-target.js';
+export { CiService } from './plugins/node/services/ci.service.js';
+export { CleanService } from './plugins/node/services/clean.service.js';
+export { PublishService } from './plugins/node/services/publish.service.js';
+export { NodeVersionPlanService } from './plugins/node/services/version-plan.service.js';
+export type { ParsedWorkspaceRange } from './plugins/node/utils/workspace-range.js';

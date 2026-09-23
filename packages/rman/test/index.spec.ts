@@ -39,10 +39,22 @@ describe('public API (src/index.ts)', () => {
     expect(typeof api.definePlugin).toBe('function');
   });
 
-  /** What the core deliberately does **not** export any more - each one left with the plugin that
-   *  owns it, and a stray re-export here would quietly make the core npm-shaped again. */
-  it('does not export what moved into rman-node', () => {
-    for (const name of ['CleanService', 'PublishService', 'CiService', 'parseWorkspaceRange', 'DEPENDENCY_KEYS']) {
+  /**
+   * **The npm-shaped services are exported again, and that is not a relapse.** They left with
+   * `rman-node` when the plugin was its own package, and came back when it was folded in - a
+   * repository installs rman alone now, so naming `CleanService` from anywhere else is impossible.
+   *
+   * What has *not* come back is the core assuming any of it: they belong to the `node` built-in,
+   * which registers only when a repository names it or detection finds one. The pin that matters is
+   * therefore about behaviour, not about the export list - `rman clean` in a repository that is not
+   * a Node one is still `Unknown argument`, which `plugin.spec.ts` holds.
+   */
+  it("exports the node built-in's services, which now ship inside rman", () => {
+    for (const name of ['CleanService', 'PublishService', 'CiService']) {
+      expect((api as Record<string, unknown>)[name]).toBeDefined();
+    }
+    /** Still private, though: a helper the plugin uses internally is not part of rman's surface. */
+    for (const name of ['parseWorkspaceRange', 'DEPENDENCY_KEYS']) {
       expect((api as Record<string, unknown>)[name]).toBeUndefined();
     }
   });

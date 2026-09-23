@@ -92,7 +92,49 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
    *  one of them sits on, and the directory chain then layers on top as it always did. Each form
    *  was checked for a misplaced `extends` as it was read, so that error can name the file holding
    *  it rather than whichever form happened to declare the real one. */
-  return resolveExtends(result, extendsFrom);
+  return await expandBuiltinPlugins(await resolveExtends(result, extendsFrom));
+}
+
+/**
+ * Turns a built-in **name** in `plugins` into what that built-in contributes - `['node']` into the
+ * node plugin, its two commands and its publish target.
+ *
+ * **Here, beside `extends`, because it is the same operation**: something named brings a config,
+ * and that config sits *underneath* the one naming it. Doing it anywhere later would not reach far
+ * enough - `commands` is read off the resolved root package by `cli.ts`, not off the raw config
+ * `Repository.create` hands to `loadPlugins`, so a built-in expanded only there would register its
+ * technology and silently lose its commands.
+ *
+ * **The name is consumed.** `plugins` always appends, so leaving the string beside the instance it
+ * expanded into would hand `loadPlugins` a glob that matches no file - the built-in would load and
+ * then the run would fail saying it did not.
+ *
+ * Runs per directory, like `extends`, but only the root's `plugins` is ever read (`loadPlugins`
+ * needs the technologies before any package exists). The cost of walking a key that is almost
+ * always absent is one `Array.isArray`.
+ */
+async function expandBuiltinPlugins(config: RmanConfig): Promise<RmanConfig> {
+  const declared = config.plugins;
+  const entries = Array.isArray(declared) ? declared : declared === undefined ? [] : [declared];
+  if (!entries.some(e => typeof e === 'string')) return config;
+
+  /**
+   * **Imported here rather than at the top, and that is a cycle rather than a style.** A built-in
+   * pulls in its commands and services, which read config - so a static import would have
+   * `config.ts` and the plugin subtree initialising each other, which in ESM half-works and fails
+   * silently. Node caches the module, so the cost is one resolution on a config that names one.
+   */
+  const { BUILTIN_PLUGINS, isBuiltinPlugin } = await import('../plugins/builtins.js');
+  const named = entries.filter((e): e is string => typeof e === 'string' && isBuiltinPlugin(e));
+  if (!named.length) return config;
+
+  const base: RmanConfig = {};
+  /** De-duplicated first: two layers naming the same built-in is ordinary (a shared config and the
+   *  repository that inherits it), and registering a plugin twice defines its commands twice. */
+  for (const name of [...new Set(named)]) mergeConfig(base, BUILTIN_PLUGINS[name]!());
+  const own = { ...(config as Record<string, unknown>) };
+  own.plugins = entries.filter(e => !(typeof e === 'string' && isBuiltinPlugin(e)));
+  return mergeConfig(base, own) as RmanConfig;
 }
 
 /**
@@ -349,7 +391,7 @@ export interface PackageScope {
    *  addressing another package from the root usually needs. Empty string for the root itself. */
   relativeDir: string;
   /**
-   * Which ecosystem this package belongs to - `'node'` for one read by `rman-node`, empty when no
+   * Which ecosystem this package belongs to - `'node'` for one the `node` built-in read, empty when no
    * plugin claimed it. The same `Package.provider`, so one declaration can address a single
    * ecosystem in a polyglot repository (`if: "${{ pkg.provider === 'node' }}"`).
    */

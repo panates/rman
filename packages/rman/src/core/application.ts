@@ -36,7 +36,7 @@ export class RmanApplication {
    *
    * A registry rather than a field because the answer is a *sum*: a package may ship to npm and
    * Docker Hub at once, and `publish` runs every target a package declares. The core contributes
-   * `docker` (nobody's ecosystem), `rman-node` contributes `npm`, and a plugin for any other
+   * `docker` (nobody's ecosystem), the `node` built-in contributes `npm`, and a plugin for any other
    * technology adds its own without either of them changing - see `PublishTarget`.
    */
   readonly publishTargets = new Registry<PublishTarget>();

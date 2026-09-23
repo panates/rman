@@ -17,7 +17,7 @@ export interface Manifest {
   /** Excluded from publishing by the package's own declaration (`package.json#private`). Not the
    *  same as `.rmanrc "publish.skip"`, which is the *repository's* declaration about it. */
   private?: boolean;
-  /** The document as the ecosystem wrote it. `rman-node`'s own commands read `package.json` fields
+  /** The document as the ecosystem wrote it. The `node` built-in's own commands read `package.json` fields
    *  the core has no opinion about (`scripts`, `publishConfig`, `engines`) off this. */
   raw: any;
 }
@@ -28,7 +28,7 @@ export interface Manifest {
  * **The core has no provider.** "The name and version live in a `package.json`" is true of npm and
  * of nothing else - a `Cargo.toml`, a `pyproject.toml` and a `go.mod` each say the same thing
  * differently, and the version is not even in the same *kind* of place in all of them.
- * `rman-node` contributes the `package.json` one.
+ * The `node` built-in contributes the `package.json` one.
  *
  * Paired with `VersionScheme` on purpose: the ecosystem that decides *where* a version is written
  * is the one that decides *how* it is numbered, so a provider supplies both and a package gets a
@@ -37,7 +37,7 @@ export interface Manifest {
 export interface ManifestProvider {
   /**
    * **The ecosystem this provider speaks for**, surfaced on every package it reads as
-   * `Package.provider` - `'node'` for `rman-node`. Short and about the technology, not about the
+   * `Package.provider` - `'node'` for the built-in of that name. Short and about the technology, not about the
    * file: `fileName` already says `package.json`, and a name repeating it would tell a caller
    * nothing it did not have.
    *
@@ -148,7 +148,7 @@ export interface ManifestProvider {
  *
  * A namespace rather than loose `addManifestProvider`/`readManifest` functions because a namespace
  * is what a plugin can *augment*: `declare module 'rman' { namespace Manifest { ... } }` is how
- * `rman-node` already adds to `SystemInfo`, and anything this seam grows later can arrive the
+ * the `node` built-in already adds to `SystemInfo`, and anything this seam grows later can arrive the
  * same way instead of as another top-level export.
  */
 export namespace Manifest {
@@ -207,7 +207,7 @@ export namespace Manifest {
     }
     throw new Error(
       `No manifest provider recognizes "${dir}", so there is nowhere to write its version.\n` +
-        `  A repository's ".rmanrc" names its providers - see "plugins" (e.g. ['rman-node']).`,
+        `  A repository's ".rmanrc" names its technologies - see "plugins" (e.g. ['node']).`,
     );
   }
 

@@ -35,10 +35,10 @@ export default [
         'error',
         {
           /** The repository root (dev tooling) *and* each package (its own deps and peers, which is
-           *  how `rman-node` declares `rman`). `packageDir` replaces the default nearest-package
+           *  how a third-party plugin declares `rman`). `packageDir` replaces the default nearest-package
            *  lookup rather than adding to it, so every root a test may legitimately import from has
            *  to be listed - a new package gets a line here. */
-          packageDir: [import.meta.dirname, 'packages/rman', 'packages/node'],
+          packageDir: [import.meta.dirname, 'packages/rman'],
           devDependencies: true,
           peerDependencies: true,
         },

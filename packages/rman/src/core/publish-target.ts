@@ -14,7 +14,7 @@ import type { Repository } from './repository.js';
  * the size of this interface. Docker publishing was in the core all along and could only be reached
  * through a Node plugin's command; a Cargo repository could reach neither.
  *
- * So: the core ships `publish` and the `docker` target, `rman-node` contributes `npm`, and a
+ * So: the core ships `publish` and the `docker` target, the `node` built-in contributes `npm`, and a
  * repository in any other ecosystem contributes its own without either package knowing about it.
  *
  * A target owns three things and no more:
