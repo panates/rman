@@ -1,4 +1,5 @@
 import './augmentation/rman.augmentation.js';
+import type { Plugin } from '../../core/plugin.js';
 import type { RmanConfig } from '../../interfaces/rman-config.interface.js';
 import { augmentSystemInfo } from './augmentation/system-info.augmentation.js';
 import ciCommand from './commands/ci.command.js';
@@ -20,10 +21,18 @@ import { NpmPublishTarget } from './npm-publish-target.js';
  * "bundled" quietly becoming "always on". The type-only augmentation above is imported eagerly
  * because a type costs nothing at runtime and a config author's editor wants it either way.
  */
+/**
+ * **The platform itself, for asking.** Detection puts a directory to every built-in's platform -
+ * `manifestProvider.read(dir)` is already "is this one of mine?" - and that question must be
+ * answerable without turning anything on. Constructed once: a `NodePlugin` holds no state and two
+ * of them answering differently is not a thing worth allowing.
+ */
+export const nodePlatform: Plugin = new NodePlugin();
+
 export function nodeBuiltin(): RmanConfig {
   augmentSystemInfo();
   return {
-    plugins: [new NodePlugin()],
+    plugins: [nodePlatform],
     commands: [ciCommand, cleanCommand],
     publishTargets: [new NpmPublishTarget()],
   };

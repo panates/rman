@@ -157,7 +157,7 @@ async function expandBuiltinPlugins(config: RmanConfig): Promise<RmanConfig> {
   const base: RmanConfig = {};
   /** De-duplicated first: two layers naming the same built-in is ordinary (a shared config and the
    *  repository that inherits it), and registering a plugin twice defines its commands twice. */
-  for (const name of [...new Set(named)]) mergeConfig(base, BUILTIN_PLUGINS[name]!());
+  for (const name of [...new Set(named)]) mergeConfig(base, BUILTIN_PLUGINS[name]!.contribute());
   const own = { ...(config as Record<string, unknown>) };
   own.plugins = entries.filter(e => !(typeof e === 'string' && isBuiltinPlugin(e)));
   return mergeConfig(base, own) as RmanConfig;

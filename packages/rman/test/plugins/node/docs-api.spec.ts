@@ -63,7 +63,7 @@ describe('docs/node.md: the documented API surface', () => {
    * exported.
    */
   it('contributes a plugin, commands and a publish target, as one config', () => {
-    const config = BUILTIN_PLUGINS.node!();
+    const config = BUILTIN_PLUGINS.node!.contribute();
     expect(Object.keys(config).sort()).toEqual(['commands', 'plugins', 'publishTargets']);
     expect(config.plugins).toHaveLength(1);
     expect(config.publishTargets).toHaveLength(1);
@@ -77,9 +77,13 @@ describe('docs/node.md: the documented API surface', () => {
    * **A function, not a value, and that is the line between bundled and always on.** Registering
    * the built-in augments the core's `SystemInfo` in place; were that to happen at import, `rman
    * info` would report npm's tooling in a repository that never named the built-in.
+   *
+   * `plugin` is the other half: detection asks a platform whether a directory is its own, and that
+   * question has to be answerable without turning anything on - so asking and contributing are two
+   * calls, not one.
    */
   it('does nothing until it is asked for', () => {
-    expect(typeof BUILTIN_PLUGINS.node).toBe('function');
+    expect(typeof BUILTIN_PLUGINS.node!.contribute).toBe('function');
     expect(isBuiltinPlugin('node')).toBe(true);
     /** A published package name is not a built-in - it reaches a repository through `extends`. */
     expect(isBuiltinPlugin('rman-node')).toBe(false);

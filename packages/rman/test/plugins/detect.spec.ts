@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { readDirConfig } from '../../src/core/config.js';
+import type { Plugin } from '../../src/core/plugin.js';
+import { BUILTIN_PLUGINS } from '../../src/plugins/builtins.js';
 import { clearDetectionCache, detectBuiltin, detectedBuiltinOf } from '../../src/plugins/detect.js';
 import { createRepository, useTestEcosystem } from '../_fixture.js';
 
@@ -44,6 +46,38 @@ describe('plugins/detect', () => {
     it('answers nothing for a directory it cannot place, rather than guessing a default', () => {
       const dir = tmp({ 'Cargo.toml': '[package]\nname = "x"\n' });
       expect(detectBuiltin(dir)).toBeUndefined();
+    });
+
+    /**
+     * **The control for the whole file: the core knows no filenames.**
+     *
+     * This listed `package.json` for one commit, which is the same mistake as the hardcoded
+     * `['npm']` publish default - true of npm, written where it speaks for every ecosystem, and
+     * invisible while only one platform ships. Registering a second one and finding *its* directory
+     * is what demonstrates the knowledge lives in the platform: the case above says the core does
+     * not recognize a `Cargo.toml`, and this one says a platform that does is all it takes.
+     */
+    it('finds whatever a platform claims, with no filename of its own', () => {
+      const dir = tmp({ 'Cargo.toml': '[package]\nname = "x"\n' });
+      const cargo: Plugin = {
+        name: 'cargo',
+        manifestProvider: {
+          name: 'cargo',
+          fileName: 'Cargo.toml',
+          read: d => (fs.existsSync(path.join(d, 'Cargo.toml')) ? { name: 'x', version: '0.0.0', raw: {} } : undefined),
+          write: () => undefined,
+        },
+      };
+      const restore = BUILTIN_PLUGINS.cargo;
+      BUILTIN_PLUGINS.cargo = { plugin: () => cargo, contribute: () => ({ plugins: [cargo] }) };
+      try {
+        clearDetectionCache();
+        expect(detectBuiltin(dir)).toEqual({ name: 'cargo', because: 'Cargo.toml' });
+      } finally {
+        if (restore) BUILTIN_PLUGINS.cargo = restore;
+        else delete BUILTIN_PLUGINS.cargo;
+        clearDetectionCache();
+      }
     });
   });
 
