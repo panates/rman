@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process';
+import colors from 'ansi-colors';
 import path from 'path';
 import semver from 'semver';
+import { detectBuiltin, type DetectedBuiltin } from '../plugins/detect.js';
 import { GitHelper } from '../utils/git.js';
 import { RmanApplication } from './application.js';
 import {
@@ -23,6 +25,8 @@ import { Workspace } from './workspace.js';
 
 export class Repository extends Package {
   readonly rootPackage: Package;
+  /** See the `defineProperty` in the constructor - what detection supplied, when it did. */
+  readonly detectedBuiltin?: DetectedBuiltin;
   /** Commands the repository's plugins contributed, loaded during `create` because the workspace
    *  providers they bring are needed before any package can be found. `cli.ts` registers them. */
   /**
@@ -72,6 +76,15 @@ export class Repository extends Package {
   ) {
     super(dirname, app);
     Object.defineProperty(this, 'app', { value: app, enumerable: false, writable: false });
+    /**
+     * What detection decided for this repository, or `undefined` when it declared its own
+     * technology (or when there was nothing to detect). Carried here because `_resolveConfigs` runs
+     * later and every read of the root's config has to agree with the one decision `create` made.
+     *
+     * Non-enumerable, like `app` and for the same reason: `{...repository}` and `toEqual` both walk
+     * a repository, and bookkeeping that shows up there turns spec failures into diffs about it.
+     */
+    Object.defineProperty(this, 'detectedBuiltin', { value: undefined, enumerable: false, writable: true });
     this.rootPackage = new Package(dirname, app);
     if (!monorepo) this.packages = [this.rootPackage];
     // Config resolution can load a `.rmanrc.cjs`/`.mjs`/`.js` module (dynamic `import()`, always
@@ -236,10 +249,10 @@ export class Repository extends Package {
      * `resolveConfig` needs a name to run `matchingSelectors` at all, and `"[/]"` is a selector.
      * Passing none would silently drop the root's own block.
      */
-    const rootRaw = await resolveConfig(this.dirname, this.dirname, cache, this.rootPackage.name);
+    const rootRaw = await resolveConfig(this.dirname, this.dirname, cache, this.rootPackage.name, this.detectedBuiltin);
     this.config = interpolateConfig(rootRaw, this.configScope(this.rootPackage), { skip: DEFERRED_PATHS });
     for (const pkg of this.packages) {
-      const raw = await resolveConfig(this.dirname, pkg.dirname, cache, pkg.name);
+      const raw = await resolveConfig(this.dirname, pkg.dirname, cache, pkg.name, this.detectedBuiltin);
       pkg.config = interpolateConfig(raw, this.configScope(pkg), { skip: DEFERRED_PATHS });
     }
     if (this.monorepo) this.rootPackage.config = this.config;
@@ -435,7 +448,38 @@ export class Repository extends Package {
 
     /** The root's own config, raw: `plugins` is a list of package names, so it needs neither the
      *  package list (which does not exist yet) nor expression interpolation. */
-    const rootConfig = await readDirConfig(rootDir);
+    const declared = await readDirConfig(rootDir);
+    /**
+     * **What this repository looks like, when nothing said** - the other half of shipping the
+     * built-ins in the box. See `detectBuiltin`.
+     *
+     * **Two conditions, and the second is the one that is easy to miss.** The config declaring no
+     * `plugins` is not the same as the *repository* having no technology: a programmatic caller -
+     * and every spec in this suite - registers one straight onto the application without writing a
+     * config at all. Guessing on top of that registers a second technology, and the first provider
+     * that recognizes a directory decides whether it holds a package. Measured with only the config
+     * condition: ten specs changed answer, seven of them about config cascading and three about
+     * `publish`'s flags.
+     *
+     * Decided **once**, here, and handed to every read that has to agree - `readDirConfig` has no
+     * business knowing about an application.
+     */
+    const detected = declared.plugins === undefined && app.plugins.size === 0 ? detectBuiltin(rootDir) : undefined;
+    const rootConfig = detected ? await readDirConfig(rootDir, { inject: detected }) : declared;
+    /**
+     * **Said out loud, because a guess the reader cannot see is one they cannot correct.**
+     *
+     * To **stderr**, not through `app.logger`: that writes with `console.log`, and `rman list
+     * --json` has to stay a parseable document on stdout - measured, its output is pure JSON, and
+     * one line of prose in front of it breaks every `| jq`. The same reason `--help`'s degradation
+     * notice goes to stderr. Not at `silent`, where the caller asked for no narration.
+     */
+    if (detected && app.logger.level !== 'silent') {
+      const line =
+        `${detected.name} repository detected (${detected.because}) - ` +
+        `write \`plugins: ['${detected.name}']\` in .rmanrc to state it, or \`plugins: []\` for none.`;
+      console.error(process.stderr.isTTY ? colors.gray(line) : line);
+    }
     await loadPlugins(app, rootConfig);
 
     const layout = Workspace.resolve(app, rootDir);
@@ -444,6 +488,7 @@ export class Repository extends Package {
     repo._linkPackages();
     /** The application is what the plugins registered into a moment ago; from here on it can hand
      *  out services, which need the repository to work on. */
+    (repo as { detectedBuiltin?: DetectedBuiltin }).detectedBuiltin = detected;
     app.attachRepository(repo);
     return Repository._init(repo);
   }

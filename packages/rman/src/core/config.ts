@@ -6,6 +6,7 @@ import path from 'path';
 import semver from 'semver';
 import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
+import { DETECTED_BUILTIN, type DetectedBuiltin } from '../plugins/detect.js';
 import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
 import { loadConfigModule } from './load-config-module.js';
 import { mergeConfig, ORIGINS, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
@@ -39,8 +40,14 @@ const JS_CONFIG_FILES = ['.rmanrc.cjs', '.rmanrc.mjs', '.rmanrc.js'];
  * Reads the rman configuration defined at a single directory level, merging
  * (in increasing precedence): `package.json#rman`, `.rmanrc.yml`, `.rmanrc`,
  * then `.rmanrc.cjs`/`.rmanrc.mjs`/`.rmanrc.js` (whichever exist, in that order).
+ *
+ * `options.inject` supplies a built-in for a repository that declared no technology - **already
+ * decided**, rather than a "please detect" flag. The decision needs the application (a programmatic
+ * caller or a spec may have registered a technology without writing it in a config), which this
+ * function has no business knowing about; `Repository.create` makes it once and hands the answer
+ * to every read that has to agree with it. See `detectBuiltin`.
  */
-export async function readDirConfig(dirname: string): Promise<RmanConfig> {
+export async function readDirConfig(dirname: string, options?: { inject?: DetectedBuiltin }): Promise<RmanConfig> {
   const result: RmanConfig = {};
   /** The file an `extends` in this directory resolves relative to. The last form that actually
    *  declared one wins, which matters only for the unusual directory holding several. */
@@ -92,7 +99,26 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
    *  one of them sits on, and the directory chain then layers on top as it always did. Each form
    *  was checked for a misplaced `extends` as it was read, so that error can name the file holding
    *  it rather than whichever form happened to declare the real one. */
-  return await expandBuiltinPlugins(await resolveExtends(result, extendsFrom));
+  const resolved = await resolveExtends(result, extendsFrom);
+  /**
+   * **After `extends`, because a base may be what declares the technology** - a shared config
+   * naming `plugins` is a statement, and detecting on top of it would be guessing over an answer.
+   * `plugins` being *present* is what counts, so `plugins: []` is a repository saying "none".
+   */
+  const detected = options?.inject && resolved.plugins === undefined ? options.inject : undefined;
+  if (detected) resolved.plugins = [detected.name];
+  const expanded = await expandBuiltinPlugins(resolved);
+  /**
+   * **Marked after the expansion, not before, because the expansion rebuilds the object.**
+   * `expandBuiltinPlugins` merges the built-in's config underneath and returns a *new* config, so a
+   * symbol set on the way in is simply gone on the way out - measured: detection worked and the
+   * "detected" line never printed. The same trap `PREVIOUS_VALUES` and `ORIGINS` document from the
+   * other side, where `mergeConfig` has to copy them across by hand.
+   */
+  if (detected) {
+    Object.defineProperty(expanded, DETECTED_BUILTIN, { value: detected, enumerable: false, configurable: true });
+  }
+  return expanded;
 }
 
 /**
@@ -172,6 +198,10 @@ export async function resolveConfig(
   targetDir: string,
   cache: Map<string, RmanConfig> = new Map(),
   packageName?: string,
+  /** The built-in `Repository.create` decided on, for a repository that declared no technology.
+   *  Applied at the **root level only** - `plugins` is read nowhere else, and this is the read whose
+   *  result becomes `pkg.config`, which is where `cli.ts` finds a built-in's `commands`. */
+  inject?: DetectedBuiltin,
 ): Promise<RmanConfig> {
   const result: RmanConfig = {};
   const target = path.resolve(targetDir);
@@ -182,7 +212,9 @@ export async function resolveConfig(
   for (const dir of dirChain(rootDir, targetDir)) {
     let local = cache.get(dir);
     if (!local) {
-      local = await readDirConfig(dir);
+      local = await readDirConfig(dir, {
+        inject: path.resolve(dir) === path.resolve(rootDir) ? inject : undefined,
+      });
       cache.set(dir, local);
     }
     /**
