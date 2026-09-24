@@ -43,6 +43,7 @@
   },
   "scripts": {
     "build": "npm run build -w packages/rman",
+    "smoke": "node support/smoke.cjs",
     "typecheck": "tsc --noEmit -p packages/rman/test",
     "test": "mocha",
     "precitest": "rimraf coverage",

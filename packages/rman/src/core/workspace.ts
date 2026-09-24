@@ -55,14 +55,33 @@ export namespace Workspace {
   }
 
   /**
+   * What a directory's `.rmanrc "platform"` resolves to, when it declares one - `undefined` when
+   * it says nothing, so the walk falls back to the guess.
+   *
+   * **A callback rather than config knowledge in here**, which keeps this namespace answering one
+   * question. Reading a directory's cascaded config, deciding that a declared name has to be
+   * loaded, and refusing one that cannot be, are all the repository's business; where the packages
+   * are is this one's. `Repository.create` supplies it - and it is also the seam a spec uses to
+   * drive the declaration path without writing a config file.
+   */
+  export type DeclaredPlatform = (dir: string) => Promise<Platform | undefined>;
+
+  /**
    * **The walk**: descend from `rootDir`, asking each directory's own technology where its children
    * are, and repeating for each answer.
    *
    * One step, applied recursively:
    *
-   * 1. find the platform that claims the directory (`app.platformFor`, `basePlatform` if none);
+   * 1. take the directory's **declared** platform if it has one, and otherwise the first registered
+   *    platform whose manifest provider recognizes it (`app.platformFor`, `basePlatform` if none);
    * 2. ask **that** platform's `getWorkspace` for the directories below it holding packages;
    * 3. do the same for each of them.
+   *
+   * **A declaration wins, and is then held to it.** A platform named for a directory it does not
+   * recognize is a statement that is simply untrue, and the failure it would otherwise become is
+   * invisible: the manifest reads as nothing, so the package is named after its directory at
+   * `0.0.0` and the repository looks like it works. The error names the directory, the platform and
+   * the file that platform looked for.
    *
    * The root node always exists - a repository is a package whatever its technology - so this never
    * returns `undefined`. A repository nobody recognizes is a root with no children, which is the
@@ -76,12 +95,24 @@ export namespace Workspace {
    * paths rather than reading them can produce a chain that never ends, and a guessed depth is
    * better than a hang with nothing printed.
    */
-  export function walk(app: RmanApplication, rootDir: string, deep = 10): Node {
+  export async function walk(
+    app: RmanApplication,
+    rootDir: string,
+    options?: { deep?: number; declared?: DeclaredPlatform },
+  ): Promise<Node> {
     const visited = new Set<string>();
-    const descend = (dir: string, remaining: number): Node => {
+    const descend = async (dir: string, remaining: number): Promise<Node> => {
       const resolved = path.resolve(dir);
       visited.add(resolved);
-      const platform = app.platformFor(resolved);
+      const declared = await options?.declared?.(resolved);
+      if (declared && !declared.manifestProvider.read(resolved)) {
+        throw new Error(
+          `"${resolved}" declares \`platform: '${declared.name}'\`, and that platform does not ` +
+            `recognize it - it looks for "${declared.manifestProvider.fileName}". Either the ` +
+            `directory is not a ${declared.name} package, or the declaration belongs one level down.`,
+        );
+      }
+      const platform = declared ?? app.platformFor(resolved);
       const node: Node = { dirname: resolved, platform, children: [] };
       if (remaining <= 0) return node;
       /**
@@ -93,11 +124,11 @@ export namespace Workspace {
       for (const child of platform.getWorkspace?.(resolved) ?? []) {
         const childDir = path.resolve(child);
         if (visited.has(childDir)) continue;
-        node.children.push(descend(childDir, remaining - 1));
+        node.children.push(await descend(childDir, remaining - 1));
       }
       return node;
     };
-    return descend(rootDir, deep);
+    return descend(rootDir, options?.deep ?? 10);
   }
 
   /** Every node below `node`, depth-first, excluding `node` itself - the flat list `Repository`

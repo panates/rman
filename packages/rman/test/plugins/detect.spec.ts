@@ -38,14 +38,14 @@ describe('plugins/detect', () => {
   }
 
   describe('detectBuiltin()', () => {
-    it('reads a package.json as the node built-in, and says which file gave it away', () => {
+    it('reads a package.json as the node built-in, and says which file gave it away', async () => {
       const dir = tmp({ 'package.json': '{"name":"x"}' });
-      expect(detectBuiltin(dir)).toEqual({ name: 'node', because: 'package.json' });
+      expect(await detectBuiltin(dir)).toEqual({ name: 'node', because: 'package.json' });
     });
 
-    it('answers nothing for a directory it cannot place, rather than guessing a default', () => {
+    it('answers nothing for a directory it cannot place, rather than guessing a default', async () => {
       const dir = tmp({ 'Cargo.toml': '[package]\nname = "x"\n' });
-      expect(detectBuiltin(dir)).toBeUndefined();
+      expect(await detectBuiltin(dir)).toBeUndefined();
     });
 
     /**
@@ -57,7 +57,7 @@ describe('plugins/detect', () => {
      * is what demonstrates the knowledge lives in the platform: the case above says the core does
      * not recognize a `Cargo.toml`, and this one says a platform that does is all it takes.
      */
-    it('finds whatever a platform claims, with no filename of its own', () => {
+    it('finds whatever a platform claims, with no filename of its own', async () => {
       const dir = tmp({ 'Cargo.toml': '[package]\nname = "x"\n' });
       const cargo: Platform = definePlatform({
         name: 'cargo',
@@ -72,7 +72,7 @@ describe('plugins/detect', () => {
       BUILTIN_PLUGINS.cargo = { platform: () => cargo, contribute: () => ({ plugins: [cargo] }) };
       try {
         clearDetectionCache();
-        expect(detectBuiltin(dir)).toEqual({ name: 'cargo', because: 'Cargo.toml' });
+        expect(await detectBuiltin(dir)).toEqual({ name: 'cargo', because: 'Cargo.toml' });
       } finally {
         if (restore) BUILTIN_PLUGINS.cargo = restore;
         else delete BUILTIN_PLUGINS.cargo;
@@ -84,7 +84,7 @@ describe('plugins/detect', () => {
   describe('readDirConfig({ inject })', () => {
     it('gives an undeclared repository the built-in its files imply', async () => {
       const dir = tmp({ 'package.json': '{"name":"x"}' });
-      const config = await readDirConfig(dir, { inject: detectBuiltin(dir) });
+      const config = await readDirConfig(dir, { inject: await detectBuiltin(dir) });
       /** Expanded, not left as the name: what a built-in contributes is a whole config. */
       expect(config.commands).toBeDefined();
       expect(config.publishTargets).toBeDefined();
@@ -98,7 +98,7 @@ describe('plugins/detect', () => {
      */
     it('leaves a repository that declared its technology alone', async () => {
       const dir = tmp({ 'package.json': '{"name":"x"}', '.rmanrc': '{"plugins":["node"]}' });
-      const config = await readDirConfig(dir, { inject: detectBuiltin(dir) });
+      const config = await readDirConfig(dir, { inject: await detectBuiltin(dir) });
       expect(detectedBuiltinOf(config)).toBeUndefined();
     });
 
@@ -106,7 +106,7 @@ describe('plugins/detect', () => {
      *  way to opt out of a guess that is wrong. */
     it('treats an empty plugins list as a statement, not as silence', async () => {
       const dir = tmp({ 'package.json': '{"name":"x"}', '.rmanrc': '{"plugins":[]}' });
-      const config = await readDirConfig(dir, { inject: detectBuiltin(dir) });
+      const config = await readDirConfig(dir, { inject: await detectBuiltin(dir) });
       expect(detectedBuiltinOf(config)).toBeUndefined();
       expect(config.commands).toBeUndefined();
     });
@@ -128,14 +128,14 @@ describe('plugins/detect', () => {
      */
     it('carries the mark through the expansion that rebuilds the config', async () => {
       const dir = tmp({ 'package.json': '{"name":"x"}' });
-      const config = await readDirConfig(dir, { inject: detectBuiltin(dir) });
+      const config = await readDirConfig(dir, { inject: await detectBuiltin(dir) });
       expect(detectedBuiltinOf(config)).toEqual({ name: 'node', because: 'package.json' });
     });
 
     /** Invisible to everything that walks a config - the reason it is a symbol rather than a key. */
     it('marks with a symbol, so no reader of the config can see it', async () => {
       const dir = tmp({ 'package.json': '{"name":"x"}' });
-      const config = await readDirConfig(dir, { inject: detectBuiltin(dir) });
+      const config = await readDirConfig(dir, { inject: await detectBuiltin(dir) });
       expect(Object.keys(config)).not.toContain('detected');
       expect(JSON.parse(JSON.stringify({ ...config, plugins: [], commands: [], publishTargets: [] }))).toEqual({
         plugins: [],

@@ -2,8 +2,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
+import { RmanApplication } from '../../src/core/application.js';
 import type { ManifestProvider } from '../../src/core/manifest.js';
 import { definePlatform, type Platform } from '../../src/core/plugin.js';
+import { Repository } from '../../src/core/repository.js';
 import { Workspace } from '../../src/core/workspace.js';
 import { createApp, createRepository, usePlugin, useTestEcosystem } from '../_fixture.js';
 
@@ -86,9 +88,9 @@ describe('core/Workspace', () => {
   }
 
   describe('walk()', () => {
-    it('answers with the root alone when nothing recognizes it, rather than undefined', () => {
+    it('answers with the root alone when nothing recognizes it, rather than undefined', async () => {
       const dir = tmp();
-      const tree = Workspace.walk(createApp(), dir);
+      const tree = await Workspace.walk(createApp(), dir);
       expect(tree.dirname).toBe(path.resolve(dir));
       expect(tree.children).toEqual([]);
       /** A repository is a package whatever its technology, so there is always a root node - the
@@ -96,13 +98,13 @@ describe('core/Workspace', () => {
       expect(Workspace.flatten(tree)).toEqual([]);
     });
 
-    it('descends one level for an ordinary flat workspace', () => {
+    it('descends one level for an ordinary flat workspace', async () => {
       const dir = tmp();
       write(dir, 'package.json', { name: 'root', workspaces: ['packages/*'] });
       write(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       write(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
 
-      const tree = Workspace.walk(createApp(), dir);
+      const tree = await Workspace.walk(createApp(), dir);
       expect(tree.children.map(c => path.basename(c.dirname))).toEqual(['a', 'b']);
       expect(tree.children.every(c => c.children.length === 0)).toBe(true);
     });
@@ -115,13 +117,13 @@ describe('core/Workspace', () => {
      * With the old seam this was unreachable: the provider was asked once, at the top, and
      * `deep: 0` on the globs meant `packages/a/inner` was simply not in the answer.
      */
-    it('finds a workspace nested inside a package, which is what asking per directory buys', () => {
+    it('finds a workspace nested inside a package, which is what asking per directory buys', async () => {
       const dir = tmp();
       write(dir, 'package.json', { name: 'root', workspaces: ['packages/*'] });
       write(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0', workspaces: ['inner/*'] });
       write(dir, 'packages/a/inner/deep/package.json', { name: 'pkg-deep', version: '1.0.0' });
 
-      const tree = Workspace.walk(createApp(), dir);
+      const tree = await Workspace.walk(createApp(), dir);
       const a = tree.children.find(c => path.basename(c.dirname) === 'a')!;
       expect(a.children.map(c => path.basename(c.dirname))).toEqual(['deep']);
       expect(
@@ -143,7 +145,7 @@ describe('core/Workspace', () => {
     describe('a nested package of another technology', () => {
       usePlugin(otherPlatform);
 
-      it('is claimed by its own platform, and says where its own children are', () => {
+      it('is claimed by its own platform, and says where its own children are', async () => {
         const dir = tmp();
         write(dir, 'package.json', { name: 'root', workspaces: ['packages/*'] });
         write(dir, 'packages/sub/other.json', { name: 'sub', members: ['leaf'] });
@@ -151,7 +153,7 @@ describe('core/Workspace', () => {
         write(dir, 'packages/sub/leaf/other.json', { name: 'leaf' });
 
         const app = createApp();
-        const tree = Workspace.walk(app, dir);
+        const tree = await Workspace.walk(app, dir);
         const sub = tree.children.find(c => path.basename(c.dirname) === 'sub')!;
         /** `other` is registered first (a spec's own platforms go on first), so it claims the
          *  directory that has both files - which is what makes its `getWorkspace` the one asked. */
@@ -169,12 +171,12 @@ describe('core/Workspace', () => {
     describe('a provider that names a directory already visited', () => {
       usePlugin(selfNamingPlatform);
 
-      it('is not followed twice, so the walk terminates', () => {
+      it('is not followed twice, so the walk terminates', async () => {
         const dir = tmp();
         write(dir, 'loop.json', { name: 'loop' });
         write(dir, 'child/loop.json', { name: 'child' });
 
-        const tree = Workspace.walk(createApp(), dir);
+        const tree = await Workspace.walk(createApp(), dir);
         expect(tree.platform.name).toBe('loop');
         /** `child` names the root back; the root has been visited, so it is dropped. */
         expect(Workspace.flatten(tree).map(n => path.basename(n.dirname))).toEqual(['child']);
@@ -183,17 +185,165 @@ describe('core/Workspace', () => {
 
     /** The same reason `findRoot` bounds its climb: a provider whose paths are computed can produce
      *  a chain with no end, and a bound is better than a hang with nothing printed. */
-    it('stops descending at the given depth', () => {
+    it('stops descending at the given depth', async () => {
       const dir = tmp();
       write(dir, 'package.json', { name: 'root', workspaces: ['a'] });
       write(dir, 'a/package.json', { name: 'a', version: '1.0.0', workspaces: ['b'] });
       write(dir, 'a/b/package.json', { name: 'b', version: '1.0.0' });
 
-      expect(Workspace.flatten(Workspace.walk(createApp(), dir, 2)).map(n => path.basename(n.dirname))).toEqual([
-        'a',
-        'b',
-      ]);
-      expect(Workspace.flatten(Workspace.walk(createApp(), dir, 1)).map(n => path.basename(n.dirname))).toEqual(['a']);
+      expect(
+        Workspace.flatten(await Workspace.walk(createApp(), dir, { deep: 2 })).map(n => path.basename(n.dirname)),
+      ).toEqual(['a', 'b']);
+      expect(
+        Workspace.flatten(await Workspace.walk(createApp(), dir, { deep: 1 })).map(n => path.basename(n.dirname)),
+      ).toEqual(['a']);
+    });
+  });
+
+  /**
+   * **`plugins` loads; `platform` selects.**
+   *
+   * Which technologies a repository has available is a fact about the repository, read once at its
+   * root. Which one a given directory's package belongs to is a fact about the package, and a
+   * repository may hold several - so it is an ordinary cascading key. Without it the answer is
+   * registration order, which is load order deciding a question about someone's code.
+   */
+  describe('the "platform" key', () => {
+    describe('with a second technology registered', () => {
+      usePlugin(otherPlatform);
+
+      /**
+       * **The declaration wins over the guess, and the guess would have been the other answer** -
+       * which is what makes this a test rather than a restatement. Both files are present, and a
+       * spec's own platforms register first, so `other` claims the directory unasked.
+       */
+      it('overrides which platform claims a directory', async () => {
+        const dir = tmp();
+        write(dir, '.rmanrc', {});
+        write(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+        write(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+        write(dir, 'packages/a/other.json', { name: 'pkg-a' });
+
+        expect((await createRepository(dir)).getPackage('pkg-a')!.provider).toBe('other');
+
+        write(dir, 'packages/a/.rmanrc', { platform: 'test' });
+        const declared = await createRepository(dir);
+        expect(declared.getPackage('pkg-a')!.provider).toBe('test');
+      });
+
+      /**
+       * It cascades like any unmarked key, so one line at the root covers a whole subtree - and a
+       * package's own `.rmanrc` still overrides it for itself.
+       *
+       * **The root declaration also decides whose `getWorkspace` is asked there**, which is not a
+       * side effect but the same statement: a directory's platform is the one that says what is
+       * under it. Written the first time with only `package.json#workspaces` naming the members,
+       * this fixture found *no* packages - `other` was asked, and `other` reads `members`.
+       */
+      it('cascades, and a closer declaration wins', async () => {
+        const dir = tmp();
+        write(dir, '.rmanrc', { platform: 'other' });
+        write(dir, 'other.json', { name: 'root', members: ['packages/a', 'packages/b'] });
+        write(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+        write(dir, 'packages/a/other.json', { name: 'pkg-a' });
+        write(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+        write(dir, 'packages/b/other.json', { name: 'pkg-b' });
+        write(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+        write(dir, 'packages/b/.rmanrc', { platform: 'test' });
+
+        const repository = await createRepository(dir);
+        expect(repository.getPackage('pkg-a')!.provider).toBe('other');
+        expect(repository.getPackage('pkg-b')!.provider).toBe('test');
+      });
+
+      /**
+       * **A platform named for a directory it does not recognize is simply untrue**, and the
+       * failure it would otherwise become is invisible: the manifest reads as nothing, so the
+       * package is named after its directory at `0.0.0` and the repository looks like it works.
+       */
+      it('is an error when the named platform does not recognize the directory', async () => {
+        const dir = tmp();
+        write(dir, '.rmanrc', {});
+        write(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+        write(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+        write(dir, 'packages/a/.rmanrc', { platform: 'other' });
+
+        await expect(createRepository(dir)).rejects.toThrow(/does not recognize it - it looks for "other\.json"/);
+      });
+    });
+
+    it('is an error when the name is not a platform this repository has', async () => {
+      const dir = tmp();
+      write(dir, '.rmanrc', { platform: 'cargo' });
+      write(dir, 'package.json', { name: 'root', private: true, version: '1.0.0' });
+
+      const error = await createRepository(dir).then(
+        () => undefined,
+        (e: Error) => e,
+      );
+      expect(error?.message).toContain('which is not a platform this repository has');
+      /** The message has to say what the repository *does* have, or it only reports that something
+       *  is wrong. */
+      expect(error?.message).toContain('Registered: test');
+      expect(error?.message).toContain('rman ships node');
+    });
+
+    /**
+     * **Naming a built-in loads it**, which is the whole of what a Node package sitting inside
+     * another repository has to write. Three claims in one repository, because they are one
+     * decision:
+     *
+     * - the platform arrives although no `plugins` entry named it;
+     * - **the commands do not** - `platform()` and not `contribute()`, so what is loaded is the
+     *   technology. Repo-wide commands come from root `plugins`, because an `rman clean` reaching
+     *   a whole Cargo repository is not what "one of my packages is Node" asked for;
+     * - detection does not run, because the repository *said* something. Guessing anyway would put
+     *   a second platform beside the declared one, competing for every directory the declaration
+     *   did not cover.
+     *
+     * On a bare application, not the fixture's: with `test` registered, `node` would be a second
+     * technology and detection would already be suppressed by `platforms.size`, so the spec would
+     * pass without the condition it is about. The control is the case below it.
+     */
+    it('loads a built-in it names, the technology alone, and stands in for detection', async () => {
+      const dir = tmp();
+      write(dir, '.rmanrc', { platform: 'node' });
+      write(dir, 'package.json', { name: 'root', private: true, version: '1.0.0' });
+
+      const repository = await Repository.create(dir, { app: new RmanApplication() });
+      expect(repository.rootPackage.provider).toBe('node');
+      expect(repository.detectedBuiltin).toBeUndefined();
+      /** The boundary, stated as an assertion: `clean` and `ci` are not here. */
+      expect(repository.config.commands).toBeUndefined();
+      expect(repository.config.publishTargets).toBeUndefined();
+    });
+
+    /** The control for the one above: the identical repository with the key removed *is* detected,
+     *  and detection brings the whole built-in - commands included. */
+    it('and without it the same repository is detected instead, contributions and all', async () => {
+      const dir = tmp();
+      write(dir, '.rmanrc', {});
+      write(dir, 'package.json', { name: 'root', private: true, version: '1.0.0' });
+
+      const app = new RmanApplication();
+      app.logger.level = 'silent';
+      const repository = await Repository.create(dir, { app });
+      expect(repository.detectedBuiltin?.name).toBe('node');
+      expect(repository.config.commands).toBeDefined();
+    });
+
+    /**
+     * **Read while the packages are still being found**, so there is no `pkg` for an expression to
+     * be about - this key is what decides what a package *is*. Passed through, a `${{ }}` reached
+     * the lookup as raw text and failed as an unknown platform name, which sends the reader to
+     * check their `plugins`.
+     */
+    it('refuses an expression, rather than reading it as a literal name', async () => {
+      const dir = tmp();
+      write(dir, '.rmanrc', { platform: '${{ pkg.provider }}' });
+      write(dir, 'package.json', { name: 'root', private: true, version: '1.0.0' });
+
+      await expect(createRepository(dir)).rejects.toThrow(/"platform" cannot be an expression/);
     });
   });
 

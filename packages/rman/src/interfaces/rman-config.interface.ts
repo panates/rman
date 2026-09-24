@@ -133,6 +133,51 @@ export interface RmanConfigKeys {
   plugins?: string | Plugin | (string | Plugin)[];
 
   /**
+   * **Which technology a package belongs to**, by `Platform.name`.
+   *
+   * ```yaml
+   * plugins: ['node']
+   * "[/]":
+   *   platform: node
+   * ```
+   *
+   * **`plugins` loads; this selects.** They were one key for a while and that conflated two
+   * statements: `plugins` says which technologies this repository has available, which is a fact
+   * about the *repository* and is read once at its root. Which technology a given directory's
+   * package belongs to is a fact about the *package*, and a repository may hold more than one - so
+   * it is an ordinary cascading key, declared wherever the answer changes.
+   *
+   * - **A declaration wins over the guess.** Without it, a directory belongs to the first
+   *   registered platform whose manifest provider recognizes it (`app.platformFor`) - which is a
+   *   reasonable default and is registration order deciding a question about someone's code. Naming
+   *   it takes the answer away from load order.
+   * - **The named platform validates it, and a mismatch is an error.** If it does not recognize the
+   *   directory the declaration is simply untrue, and the alternative is a package reading as
+   *   nameless at `0.0.0` - which looks like a working repository. The message names the file the
+   *   platform looked for.
+   * - **It cascades like any unmarked key**, so one line at the root covers a single-technology
+   *   repository and a package's own `.rmanrc` overrides it for that subtree. `"[/]"` keeps it on
+   *   the root package alone.
+   * - **At the root it also means the repository said something**, so detection does not run - the
+   *   same rule `plugins: []` follows. A repository that states its technology is not a repository
+   *   that stated nothing.
+   *
+   * **Naming a platform that is not registered loads it, if it is one rman ships** - `'node'` is
+   * enough, from any level. What arrives is the **technology alone**: the manifest reader, the
+   * workspace layout, the bin paths, the version planner. Commands and publish targets come from
+   * root `plugins` and from nowhere else, and that boundary is deliberate rather than a shortfall -
+   * a Node package sitting inside a Cargo repository wants npm's manifest read, not a repo-wide
+   * `rman clean` sweeping the whole tree. Naming a platform rman does not ship, and no `plugins`
+   * entry registered, is an error listing what the repository does have.
+   *
+   * **A plain string, never a `${{ }}` expression.** This is read while the packages are still
+   * being found, so there is no `pkg` for an expression to be about - it is what decides what a
+   * package *is*. An expression here is refused rather than passed through as a literal, which is
+   * what silently happened until it was.
+   */
+  platform?: string;
+
+  /**
    * Where this repository keeps command modules of its own - a glob, or a list of them.
    *
    * ```yaml

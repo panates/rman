@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { BUILTIN_PLUGINS } from './builtins.js';
 
 /**
  * **Which platform a repository looks like, when it has not said.**
@@ -63,10 +62,28 @@ export function detectedBuiltinOf(config: object): DetectedBuiltin | undefined {
  *
  * Memoized per directory: this is asked once per directory per package and each ask reads the disk.
  * Nothing here writes, so the answer cannot change under a run in any way that matters.
+ *
+ * **Async only because `builtins.js` is imported dynamically, and that is a cycle rather than a
+ * style** - the same one `expandBuiltinPlugins` in `config.ts` already documents, reached from the
+ * other side. A built-in pulls in its commands and services; one of those services extends a core
+ * service, and the core's own module graph comes back through here:
+ *
+ * ```
+ * services/version-plan.service -> core/application -> core/core-services
+ *   -> services/github-release.service -> core/repository -> plugins/detect
+ *   -> plugins/builtins -> plugins/node/index -> plugins/node/node.platform
+ *   -> plugins/node/services/version-plan.service  (extends the first, still initialising)
+ * ```
+ *
+ * **Measured, and the suite could not see it**: the *built* CLI died on every command with
+ * `ReferenceError: Cannot access 'VersionPlanService' before initialization`, while `npm test`
+ * passed - mocha resolves `src` through `tsconfig-test.json`'s `paths`, which is a different module
+ * graph and happens to reach the two in the other order. `npm run smoke` is what looks now.
  */
-export function detectBuiltin(dir: string): DetectedBuiltin | undefined {
+export async function detectBuiltin(dir: string): Promise<DetectedBuiltin | undefined> {
   const resolved = path.resolve(dir);
   if (cache.has(resolved)) return cache.get(resolved);
+  const { BUILTIN_PLUGINS } = await import('./builtins.js');
   let found: DetectedBuiltin | undefined;
   for (const [name, builtin] of Object.entries(BUILTIN_PLUGINS)) {
     const platform = builtin.platform();

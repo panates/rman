@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import colors from 'ansi-colors';
 import path from 'path';
 import semver from 'semver';
+import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { detectBuiltin, type DetectedBuiltin } from '../plugins/detect.js';
 import { GitHelper } from '../utils/git.js';
 import { RmanApplication } from './application.js';
@@ -19,9 +20,10 @@ import {
   resolveConfig,
 } from './config.js';
 import { Manifest } from './manifest.js';
+import { ORIGINS } from './merge-config.js';
 import { Package } from './package.js';
 import type { Platform } from './plugin.js';
-import { loadPlugins } from './plugin-loader.js';
+import { loadPlugins, registerPlugin } from './plugin-loader.js';
 import { Workspace } from './workspace.js';
 
 export class Repository extends Package {
@@ -491,10 +493,17 @@ export class Repository extends Package {
      * only registers a command says nothing about which directories hold packages, and letting it
      * suppress the guess would leave a Node repository undetected for having added a command.
      *
+     * **A root `platform` counts as having said something**, like `plugins: []` does. Detection
+     * exists for a repository that stated nothing; one naming its technology has stated the very
+     * thing detection would be guessing at, and guessing anyway would register a *second* platform
+     * beside the declared one - which then competes for every directory the declaration did not
+     * cover.
+     *
      * Decided **once**, here, and handed to every read that has to agree - `readDirConfig` has no
      * business knowing about an application.
      */
-    const detected = declared.plugins === undefined && app.platforms.size === 0 ? detectBuiltin(rootDir) : undefined;
+    const saidSomething = declared.plugins !== undefined || declared.platform !== undefined;
+    const detected = !saidSomething && app.platforms.size === 0 ? await detectBuiltin(rootDir) : undefined;
     const rootConfig = detected ? await readDirConfig(rootDir, { inject: detected }) : declared;
     /**
      * **Said out loud, because a guess the reader cannot see is one they cannot correct.**
@@ -513,12 +522,29 @@ export class Repository extends Package {
     await loadPlugins(app, rootConfig);
 
     /**
+     * **Its own cache, deliberately not shared with `_resolveConfigs`'.**
+     *
+     * Both cache `readDirConfig` per directory, and the two reads of the *root* are not the same
+     * read: `_resolveConfigs` passes `detectedBuiltin` as `inject` and this one passes nothing,
+     * since a built-in's contribution has no bearing on which platform a directory declares. The
+     * cache is keyed by directory alone, so one shared map would hand whichever ran first to the
+     * other - and for the root that is a config with or without the whole node built-in merged in.
+     *
+     * The cost is one extra read per directory in the chain, on a repository that is about to read
+     * every one of them again per package anyway.
+     */
+    const platformCache = new Map<string, RmanConfig>();
+
+    /**
      * **The walk**, which is where the package list comes from now - descending from the root,
      * asking each directory's own technology where its children are. `Workspace.resolve` asked the
      * root once, through whichever platform recognized it first; the tree is the shape discovery
      * actually has, and it is what makes a nested package of another technology findable at all.
      */
-    const tree = Workspace.walk(app, rootDir, options?.deep);
+    const tree = await Workspace.walk(app, rootDir, {
+      deep: options?.deep,
+      declared: dir => declaredPlatformAt(app, rootDir, dir, platformCache),
+    });
     const nodes = Workspace.flatten(tree);
     const packages = nodes.map(node => new Package(node.dirname, app, node.platform));
     const repo = new Repository(app, tree.dirname, packages.length > 0, packages, from, tree.platform);
@@ -542,4 +568,77 @@ export class Repository extends Package {
 
 export namespace Repository {
   export type PackageStatus = 'dirty' | 'committed' | 'changed' | 'clean';
+}
+
+/**
+ * The platform `dir` declares in its cascaded `.rmanrc "platform"`, loaded if it has to be -
+ * `undefined` when the directory declares none, so the walk falls back to its guess.
+ *
+ * **The unmarked cascade only**, which is what `resolveConfig` gives with no package name: a
+ * selector matches a package *name*, and this runs while the packages are still being found - the
+ * name is not known yet, and it is read *from* a manifest whose reader this key decides. So
+ * `"[/]"` reaches the root (its directory is the repository root, which needs no name) and a glob
+ * block contributes nothing here, which is the honest answer rather than a half-applied one.
+ */
+async function declaredPlatformAt(
+  app: RmanApplication,
+  rootDir: string,
+  dir: string,
+  cache: Map<string, RmanConfig>,
+): Promise<Platform | undefined> {
+  const config = await resolveConfig(rootDir, dir, cache);
+  const declared = config.platform;
+  if (declared === undefined) return undefined;
+  if (typeof declared !== 'string' || !declared.trim()) {
+    throw new Error(`"platform" takes a platform's name - ${originOf(config)} gave ${typeof declared}.`);
+  }
+  /**
+   * **An expression is refused rather than read as a literal.** `platform` is consulted before any
+   * package exists - it is what decides what a package *is* - so there is no `pkg` for an
+   * expression to be about, and `interpolateConfig` runs long afterwards. Passed through, a
+   * `${{ }}` here reached the lookup below as the raw text and failed as an unknown platform name,
+   * which sends the reader to check their `plugins`.
+   */
+  if (declared.includes('${{')) {
+    throw new Error(
+      `"platform" cannot be an expression (${originOf(config)}) - it is read while ` +
+        `the packages are still being found, so there is no package for one to be about. Write the ` +
+        `name, and use a package's own ".rmanrc" where the answer differs.`,
+    );
+  }
+
+  const registered = [...app.platforms].find(p => p.name === declared);
+  if (registered) return registered;
+
+  /**
+   * **A built-in is loaded on the strength of being named**, from any level - `platform: 'node'` is
+   * enough, and it is what a repository holding one Node package among others writes.
+   *
+   * `platform()` and not `contribute()`, and that split is why the two halves exist: what arrives
+   * is the technology alone. Commands and publish targets come from root `plugins`, because they
+   * are repository-wide - a Node package inside a Cargo repository wants npm's manifest read, not
+   * an `rman clean` that would sweep the whole tree.
+   */
+  const { BUILTIN_PLUGINS, builtinPluginNames } = await import('../plugins/builtins.js');
+  const builtin = BUILTIN_PLUGINS[declared];
+  if (builtin) {
+    const platform = builtin.platform();
+    registerPlugin(app, platform);
+    return platform;
+  }
+
+  const have = [...app.platforms].map(p => p.name).filter(Boolean);
+  throw new Error(
+    `"platform" names "${declared}" (${originOf(config)}), which is not a platform ` +
+      `this repository has. ${have.length ? `Registered: ${have.join(', ')}. ` : 'None is registered. '}` +
+      `rman ships ${builtinPluginNames().join(', ')}; anything else arrives through "plugins".`,
+  );
+}
+
+/** Which file the `platform` key came from, for an error that can be acted on - `mergeConfig`
+ *  records one per key under `ORIGINS`, and a config is merged from a directory's own four forms,
+ *  an `extends` base and one layer per directory before anything reads it. */
+function originOf(config: RmanConfig): string {
+  const origins = (config as Record<symbol, unknown>)[ORIGINS] as Record<string, string> | undefined;
+  return origins?.platform ? `in "${origins.platform}"` : 'the "platform" key';
 }

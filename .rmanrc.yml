@@ -1,17 +1,17 @@
-# `publish`, `ci` and `info` are no longer built in - they come from the Node plugin.
+# This repository is a Node one, and says so by name.
 #
-# `extends`, not `plugins`: the two are different statements. `extends` brings another rmanrc in
-# underneath this one, and that package's config is where its plugin, commands and publish targets
-# are declared; `plugins` adds a plugin *instance* to this config and takes no package name at all.
+# It used to be `extends: './packages/node/build/index.js'` - a path into a second published
+# package, which is exactly the cost the 2.0 split was charging every Node repository and which
+# folding the built-ins into `rman` removed. That package is gone, and the line pointing at it
+# outlived it: measured, every command in this checkout exited 1 with
+# `"extends" target "./packages/node/build/index.js" was not found`.
 #
-# Named by path rather than as `rman-node`, and only because this repository is the plugin's own:
-# the package's `exports` points at `./index.js`, which is the *published* layout (the build
-# directory becomes the package root), so resolving it by name inside this checkout finds nothing.
-# A consuming repository installs it normally and writes `extends: 'rman-node'`.
+# `plugins`, not `platform`: this is the repository saying which technologies it has available, and
+# it is the key that brings `clean` and `ci` with it. `platform` selects which one a given package
+# belongs to, which here there is only one answer to - so the cascade from `plugins` is enough.
 #
-# It follows that `rman-node` has to be built before `rman publish` exists here - self-hosting a
-# plugin costs exactly one bootstrap step.
-extends: './packages/node/build/index.js'
+# It also no longer needs a bootstrap step: there is nothing to build before `rman clean` exists.
+plugins: ['node']
 
 # One version line for the whole repository (rman's default) - `rman` and `rman-node` release
 # together, so a config written for one can never name a version of the other that does not exist.

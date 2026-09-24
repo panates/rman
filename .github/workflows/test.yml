@@ -57,6 +57,16 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # The suite cannot see this. Mocha resolves `rman` through `tsconfig-test.json`'s `paths` to
+      # `src`, which is a different module graph from the compiled one - so an ESM cycle can be
+      # fatal in `build/` with every spec green. Measured: every command in the published layout
+      # died with `Cannot access 'VersionPlanService' before initialization` and nothing reported it.
+      - name: Build
+        run: npm run build
+
+      - name: Smoke-test the built CLI
+        run: npm run smoke
+
   # ***********************************
   # Job: Test
   # ***********************************
