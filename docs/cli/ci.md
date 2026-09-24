@@ -2,7 +2,7 @@
 
 # `rman ci`
 
-> Comes from **[`rman-node`](../cli-node.md)**, not from rman's core - name it in `.rmanrc`
+> Comes from the **[`node` built-in](../rman.md#the-node-built-in)**, not from rman's core - name it in `.rmanrc`
 > `plugins` (directly, or inherited through `extends`) or this command does not exist.
 
 ```
@@ -52,5 +52,5 @@ ci completed (4.2s)
 
 - [`rman clean`](clean.md) - removes *build output*, never touches `node_modules` (the opposite
   concern from `ci`).
-- [`CiService`](../node.md#ciservice) - the underlying service, including the standalone `wipe()`
+- [`CiService`](../rman.md#the-node-built-in) - the underlying service, including the standalone `wipe()`
   primitive for wiping one directory yourself.

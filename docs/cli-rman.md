@@ -1,15 +1,16 @@
 <!--
 docs-baseline
-git-commit: 7d0e2cb
+git-commit: f43a447
 package-version: 2.0.0-beta.2
-date: 2026-09-22
+date: 2026-09-24
 
-Verified against `packages/rman/src/cli.ts` and every `packages/rman/src/commands/*.command.ts` as
-of the commit above (and the matching specs for behavior examples). `rman-node`'s three commands
-have their own index, [cli-node.md](cli-node.md). Before trusting/updating this file (or any page
-under `docs/cli/`) in a later session, run:
+Verified against `packages/rman/src/cli.ts`, every `packages/rman/src/commands/*.command.ts` and
+the `node` built-in's own commands as of the commit above (and the matching specs for behavior
+examples). There is no second index: `rman-node` was folded into rman, so every command a
+repository can run is listed here. Before trusting/updating this file (or any page under
+`docs/cli/`) in a later session, run:
 
-  git diff 7d0e2cb..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/
+  git diff f43a447..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/ packages/rman/src/plugins/node/commands/
 
 and update only the pages touched by what that diff actually shows - don't regenerate everything
 unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -51,12 +52,17 @@ rman <command> --help   # full option list for that one command
 | `github-release` | [`docs/cli/github-release.md`](cli/github-release.md) | Creates the repository's GitHub Release for the version that just shipped. |
 | `import <path>` | [`docs/cli/import.md`](cli/import.md) | Imports an external git repository as a new package, with history. |
 
-**`ci` and `clean` are not in that list** - they come from [`rman-node`](cli-node.md), because each
-is about npm or TypeScript rather than about repositories.
+**`ci` and `clean` are not in that list** - they come from the
+[`node` built-in](rman.md#the-node-built-in), because each is about npm or TypeScript rather
+than about repositories. It ships *inside* rman, so no second package is installed, but nothing it
+contributes exists until a repository asks for it:
+
+| `ci` | [`docs/cli/ci.md`](cli/ci.md) | Wipes `node_modules` and lockfiles, then reinstalls from scratch. |
+| `clean` | [`docs/cli/clean.md`](cli/clean.md) | Removes compiled TypeScript output and whatever `.rmanrc "clean"` lists. |
 
 **`publish` is, and its flags still are not fixed.** The command is rman's; *where a package ships*
 is a **publish target**, which a plugin contributes. rman itself brings `docker` - any language's
-project can push an image - and `rman-node` brings `npm`. Each target adds its own flags to
+project can push an image - and the `node` built-in brings `npm`. Each target adds its own flags to
 `rman publish`, so `rman publish --help` lists exactly the ones the targets this repository
 installed actually understand. See [Publish targets](cli/publish.md#publish-targets).
 
@@ -69,7 +75,7 @@ a command "doesn't exist":
 | Source | Declared by | Scope |
 | --- | --- | --- |
 | **Built in** | nothing - always there | every repository |
-| **A plugin** | `.rmanrc "plugins"` | every repository naming that package |
+| **A platform** | `.rmanrc "plugins"` or `"platform"` | every repository naming that technology |
 | **The repository's own** | a module matching `.rmanrc "commands"`, which defaults to `.rman/*.mjs` | this repository only |
 
 `commands` takes a glob or a list of them, always appends, and anchors a relative glob to the file
@@ -78,20 +84,29 @@ that declared it - so a shared config can ship commands without wrapping them in
 
 ### A plugin
 
-A plugin is an ordinary package that contributes commands (and more - see
-[docs/node.md](node.md) for what else). Inherit its config and its commands appear:
+A plugin is an ordinary package that contributes commands - and more: a technology, its publish
+targets, its config keys. A **published** one exports an rman *config*, so the repository inherits
+it:
 
 ```yaml
 # .rmanrc.yml
-extends: rman-node
+extends: 'rman-cargo'
 ```
 
-`extends`, not `plugins` - a plugin package exports an rman *config*, and `plugins` takes the
-technologies themselves. Writing the package name there is refused, naming this as the fix.
+`extends`, not `plugins` - `plugins` takes the technologies themselves, not a package name, and
+writing one there is refused naming this as the fix.
 
-Without it, `rman clean` is `Unknown argument: clean`. A plugin that cannot be *loaded* is an error
-rather than a skip: silently losing a command the repository is built around is worse than not
-starting.
+**A built-in needs neither**, because rman already has it:
+
+```yaml
+plugins: ['node']   # by name
+platform: node      # the same statement at a repository root, plus which technology its packages are
+```
+
+Without one of those, `rman clean` is `Unknown argument: clean` - unless the repository declared no
+technology at all, in which case detection finds the one its files imply and says so on stderr. A
+plugin that cannot be *loaded* is an error rather than a skip: silently losing a command the
+repository is built around is worse than not starting.
 
 **A package declares a command the way a built-in does** - `declareCommand(app => ({ ... }))`, with
 its options as data rather than a hand-written `builder`, and puts it in its config's `commands`:
@@ -308,8 +323,9 @@ package is dropped **before** `--deps`/`--dependents`, so a dependency edge cann
 
 | Option | Description |
 | --- | --- |
-| `--scope <glob>` | Only include packages whose name matches this glob, or **`/`** for the repository's own root package (repeatable). |
+| `--scope <glob>` | Only include packages whose **selector** matches this glob, or **`/`** for the repository's own root package (repeatable). |
 | `--ignore <glob>` | Exclude packages matching this glob (or `/`) - applied after `--scope`. |
+| `--platform <names>` | Only include packages of these platforms - `--platform=node,cargo`, or repeated. |
 | `--deps` | Also include every package the matched set depends on (transitively). |
 | `--dependents` | Also include every package that depends on the matched set (transitively). |
 
@@ -318,7 +334,19 @@ rman run build --scope '@myorg/*' --ignore '*-internal'
 rman test --scope core-lib --dependents   # core-lib plus everything that could be affected by it
 rman changelog --scope /                  # the root package's own entry, and nothing else
 rman clean --ignore /                     # every member, skipping the root's own sweep
+rman run build --platform node            # in a polyglot repository, the npm half of it
 ```
+
+**`--scope` matches the *selector*, not the package name**, and they coincide wherever the
+technology names its packages - which is every Node repository. A package having a name at all is an
+ecosystem's promise rather than rman's, so a repository whose technology offers none assigns one
+with `.rmanrc "name"`. See [`Package`](rman.md#package).
+
+**`--platform` takes names, not globs**, and that is why a name no package here belongs to is an
+**error** listing the ones that are - the value set is known, so a typo is something rman can see
+rather than a silently empty result. Comma-separated values are split (a platform name is a short
+identifier and cannot be ambiguous, where a scope glob is arbitrary text), and the comparison is
+case-insensitive.
 
 **`--scope /` is the root package, and it is not a glob.** The same `/` `.rmanrc`'s `"[/]"` block
 uses, for the reason stated there: *the root is never selected by name.* So a glob is never offered
@@ -332,7 +360,7 @@ repository's package list holds the workspace members only, so `list`, `run` and
 row to select, while `clean` and `changelog` put it in their candidate list on purpose.
 
 Full semantics (glob syntax, how `--deps`/`--dependents` combine): see
-[docs/rman.md#package-filtering-scopeignoredepsdependents](rman.md#package-filtering-scopeignoredepsdependents).
+[docs/rman.md#package-filtering-scopeignoreplatformdepsdependents](rman.md#package-filtering-scopeignoreplatformdepsdependents).
 
 ### Branch guard
 

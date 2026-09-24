@@ -14,8 +14,8 @@ table by default, or one of several other formats. Purely a *view* over
 
 ## Options
 
-Accepts [package filtering](../cli-rman.md#package-filtering) (`--scope`, `--ignore`, `--deps`,
-`--dependents`) in addition to:
+Accepts [package filtering](../cli-rman.md#package-filtering) (`--scope`, `--ignore`, `--platform`,
+`--deps`, `--dependents`) in addition to:
 
 | Option | Alias | Type | Description |
 | --- | --- | --- | --- |
@@ -38,13 +38,28 @@ rman list
 ```
 
 ```
-Package    Version  Private  Changed  Path
----------  -------  -------  -------  -----------------
-pkg-a      1.2.0             dirty    packages/pkg-a
-pkg-b      1.0.4    yes               packages/pkg-b
+Package     Version  Platform  Private  Changed  Path
+----------  -------  --------  -------  -------  -----------------
+my-repo     1.2.0    node      yes      dirty    .
+  pkg-a     1.2.0    node               dirty    packages/pkg-a
+  pkg-b     1.0.4    node      yes               packages/pkg-b
 
 2 Package(s) found
 ```
+
+**The table is a tree**: the root package first, then each package indented by how far below it it
+sits - a package nested inside another indents twice. Discovery descends now, so a repository *is* a
+tree, and the root is the row the rest hangs from. Indentation rather than box-drawing, so a name
+stays copy-pasteable into `--scope`. The nesting is `Item.depth`, a fact about the package, so
+`--toposort` reorders the rows and each one's indentation still tells the truth.
+
+**The count is the workspace members**, root excluded - which is what `repository.packages` means,
+and what every other form of this command reports.
+
+**`Platform` is which technology claimed the package**, blank when none did. It matters most in a
+polyglot repository, which is exactly what the walk finding nested packages of another platform made
+possible - and until this column existed `rman list` was the one place that showed every package and
+could not say which each belonged to.
 
 ```bash
 rman ls --short
@@ -52,8 +67,9 @@ rman ls --short
 # pkg-b
 
 rman list --json
-# [{ "name": "pkg-a", "version": "1.2.0", "location": "packages/pkg-a", "private": false,
-#    "status": "dirty", "dependencies": [] }, ...]
+# [{ "name": "pkg-a", "selector": "pkg-a", "version": "1.2.0", "platform": "node", "depth": 1,
+#    "isRoot": false, "location": "packages/pkg-a", "private": false, "status": "dirty",
+#    "dependencies": [] }, ...]
 
 rman list --parseable
 # packages/pkg-a::pkg-a::1.2.0::::DIRTY
@@ -64,7 +80,12 @@ rman list --graph                 # { "pkg-a": [], "pkg-b": ["pkg-a"] }
 rman list --changed               # only packages with unpublished changes
 rman list --changed-since v1.2.0  # only packages that differ from that tag
 rman list --scope '@myorg/*' --ignore '*-internal'
+rman list --platform=node,cargo   # a polyglot repository, two of its technologies
 ```
+
+**The root row belongs to the table alone.** `--json`, `--parseable`, `--short` and `--graph` report
+the workspace members exactly as before, so anything parsing them is unaffected; the tree still
+reaches them as data, through `depth` and `isRoot`.
 
 ## See also
 

@@ -94,17 +94,22 @@ worked examples of every single command, see **[docs/cli-rman.md](https://github
 | [`github-release`](#rman-github-release) | Creates the repository's GitHub Release for its release tag. |
 | [`import <path>`](#rman-import-path) | Imports an external git repository as a new package, with history. |
 
-**`ci` and `clean` come from [`rman-node`](https://www.npmjs.com/package/rman-node)**, not from
-this package - each is about npm or TypeScript rather than about repositories. Name the plugin in
-`.rmanrc` to get them:
+**`ci` and `clean` come from the `node` built-in**, which ships inside this package - each is about
+npm or TypeScript rather than about repositories, so nothing it contributes exists until a
+repository asks for it:
 
 ```yaml
-extends: rman-node
+plugins: ['node']   # by name
+platform: node      # the same statement at a repository root, plus which technology its packages are
 ```
+
+Or say nothing: a repository that declares no technology gets the one its own files imply, announced
+on stderr rather than guessed silently. It used to take a second package (`rman-node`) and a
+`.rmanrc` before anything worked at all.
 
 **`publish` is here, but *where* a package ships is a plugin's to say.** A **publish target** is
 one answer to "is this version on the registry, and how do I push it" - rman ships `docker`
-(any language's project can push an image), and `rman-node` contributes `npm` along with the flags
+(any language's project can push an image), and the `node` built-in contributes `npm` with the flags
 that only mean something there (`--access`, `--tag`, `--otp`, `--registry`, ...). So
 `rman publish --help` lists what this repository's targets actually understand.
 
@@ -143,9 +148,10 @@ rman list --scope '@myorg/*' --ignore '*-internal'
 
 ### `rman info`
 
-Prints local environment (OS/CPU/memory, Node, git) and repository information. A plugin adds its
-own ecosystem's part - `rman-node` reports whichever package manager `.rmanrc "packageManager"`
-names, plus the installed `rman` packages.
+Prints local environment (OS/CPU/memory, Node, git) and repository information. A platform adds its
+own ecosystem's part - the `node` built-in reports whichever package manager
+`.rmanrc "packageManager"` names, plus the installed `rman` packages, and only in a repository that
+asked for it.
 
 ```bash
 rman info
@@ -289,7 +295,7 @@ rman publish --target docker    # only the packages configured for that target
 ```
 
 **Where a package ships is a publish target, and a target is a contribution.** rman ships `docker`;
-`rman-node` contributes `npm`. A package says where it goes with `.rmanrc "publish.target"`, or says
+the `node` built-in contributes `npm`. A package says where it goes with `.rmanrc "publish.target"`, or says
 nothing and goes wherever the installed targets claim it - so a Cargo package is never assumed to be
 an npm one. Each target adds its own flags, so `rman publish --help` is worth reading in your own
 repository. See
@@ -445,8 +451,9 @@ import { defineConfig } from 'rman';
 export default defineConfig({ allowBranch: ['main'] });
 ```
 
-With a plugin, import `defineConfig` from the plugin instead (`rman-node`'s carries its own keys
-into the type). The `.rmanrc`/`.rmanrc.yml` forms get no checking - see
+A plugin's keys arrive by declaration merging, so annotating with `RmanConfig` types them too;
+`RmanNodeConfig` is the alias that says out loud which set a config is using. The
+`.rmanrc`/`.rmanrc.yml` forms get no checking - see
 [docs/rman.md#editor-support-types](https://github.com/panates/rman/blob/main/docs/rman.md#editor-support-types) for why the JSON Schema that
 used to cover them was removed.
 

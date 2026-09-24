@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: 7d0e2cb
+git-commit: f43a447
 package-version: 2.0.0-beta.2
-date: 2026-09-22
+date: 2026-09-24
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff 7d0e2cb..HEAD -- packages/rman/src/
+  git diff f43a447..HEAD -- packages/rman/src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -43,7 +43,8 @@ utilities (`ChangeHashService`, `Logger`). For the CLI itself (commands, flags,
 - [Installation](#installation)
 - [Core concepts](#core-concepts)
   - [`RmanApplication`](#rmanapplication)
-  - [`Plugin`](#plugin)
+  - [`Platform` and `Plugin`](#platform-and-plugin)
+  - [`Workspace`: finding the packages](#workspace-finding-the-packages)
   - [Declaring a command](#declaring-a-command)
   - [`Repository`](#repository)
   - [`Package`](#package)
@@ -69,8 +70,11 @@ utilities (`ChangeHashService`, `Logger`). For the CLI itself (commands, flags,
 - [Shared utilities](#shared-utilities)
   - [`ChangeHashService`](#changehashservice)
   - [`Logger` / `LogLevel` / `resolveRootLogLevel`](#logger--loglevel--resolverootloglevel)
+- [The `node` built-in](#the-node-built-in)
+  - [What it contributes](#what-it-contributes)
+  - [`"workspace:"` ranges](#workspace-ranges)
 - [The `logged` error convention](#the-logged-error-convention)
-- [Package filtering (`scope`/`ignore`/`deps`/`dependents`)](#package-filtering-scopeignoredepsdependents)
+- [Package filtering (`scope`/`ignore`/`platform`/`deps`/`dependents`)](#package-filtering-scopeignoreplatformdepsdependents)
 
 ## Installation
 
@@ -89,9 +93,10 @@ import {
   Registry,
   Service,
   defineConfig,
+  definePlatform,
   definePlugin,
   declareCommand,
-  basePlugin,
+  basePlatform,
   targetsOf,
   shipsTo,
   VersionService,
@@ -132,7 +137,7 @@ classes are exported so you can name their types, not so you can construct one.
 
 **Everything npm-specific lives in `rman-node`** - `PublishService`, `CiService`, `CleanService`,
 the `package.json` manifest reader, the version planner, `node_modules/.bin` on PATH, and the
-`publish`/`ci`/`clean` commands. See [node.md](node.md). The package documented here knows nothing
+`ci`/`clean` commands. See [The `node` built-in](#the-node-built-in). The core documented here knows nothing
 about npm: a repository naming no plugin has no manifest reader at all, so a polyglot or non-Node
 repository declares its own through the same seams the plugin uses. `info` is a **core** command
 whose npm half the plugin augments in place.
@@ -149,13 +154,14 @@ starts empty and is thrown away whole, so two repositories in one process share 
 class RmanApplication {
   constructor(options?: { logLevel?: LogLevel });
 
-  readonly plugins: Registry<Plugin>;             // the technologies this run knows about
+  readonly platforms: Registry<Platform>;         // the technologies this run knows about
+  readonly plugins: Registry<Plugin>;              // who contributed them - see Platform and Plugin
   readonly publishTargets: Registry<PublishTarget>; // where a package's artifact can ship
   readonly logger: Logger;
   versionPlanner?: VersionPlanService;            // the plan orchestrator - see VersionPlanService
 
   get repository(): Repository;                   // throws before one is attached
-  pluginFor(dir: string): Plugin;                 // the first plugin whose manifest reader claims it
+  platformFor(dir: string): Platform;             // the first platform whose manifest reader claims it
 
   getService<K extends keyof ServiceMap>(name: K): ServiceMap[K];
   setService<K extends keyof ServiceMap>(name: K, factory: (app: RmanApplication) => ServiceMap[K]): void;
@@ -182,20 +188,26 @@ await Repository.create(undefined, { app: own });
   question whose answer is the *sum* of what was contributed; a question with exactly one answer is
   a service instead.
 
-### `Plugin`
+### `Platform` and `Plugin`
 
-**A technology, as one unit.** What a package *is*, where packages are, where its scripts come
-from, which directories hold its binaries, and how its releases are planned - answers that only
-make sense together, which is why they are not separate seams.
+**A platform is one technology, whole; a plugin is whatever a package contributes.** What a package
+*is*, where packages are, where its scripts come from, which directories hold its binaries and how
+its releases are planned are answers that only make sense together - so they are one type, and
+`manifestProvider` is what makes it a platform at all.
 
 ```ts
-interface Plugin {
+interface Platform {
   name: string;                        // what Package.provider reports
   manifestProvider: ManifestProvider;  // required - everything below is optional
   getWorkspace?: Workspace.Provider;
   getBinPaths?: BinPath.Provider;
   getRunSteps?: RunService.StepSource;
   versionPlanner?: VersionPlanService;
+}
+
+interface Plugin {
+  name: string;
+  platforms?: Platform[];
   init?(ctx: PluginContext): void | Promise<void>;
 }
 
@@ -204,42 +216,65 @@ interface PluginContext {
 }
 ```
 
-**`RmanPlugin` and `TechStack` were two types until 2.0, and are now one.** The plugin existed only
-to *register* the stack - its whole `init` was `ctx.addTechStack(...)` plus a command or two - and
-once a config carries commands and publish targets itself, that registration step has nothing left
-to do. What remains of a plugin is the technology.
+**This narrow type was called `Plugin`, and the name was a lie.** `manifestProvider` is required,
+which makes it a *platform* by definition - a package shipping only commands never touches it,
+because commands are a config key. So the narrow thing took the narrow name, and `Plugin` became
+the broad one that may carry platforms. A plugin *provides* platforms and may provide more than one:
+a package shipping both `maven` and `gradle` is one plugin, two platforms.
 
+```ts
+import { definePlatform, definePlugin } from 'rman';
+
+// almost every entry is this: one technology and nothing else
+const cargo = definePlatform({ name: 'cargo', manifestProvider: cargoManifest });
+
+// the umbrella, when a package contributes more than a single technology
+const jvm = definePlugin({ name: 'jvm-tools', platforms: [maven, gradle] });
+```
+
+- **A bare `Platform` is accepted wherever a `Plugin` is**, as sugar for the plugin that provides
+  only it. `plugins: [cargo]` needs no wrapper.
+- **Both must be declared through their factory**, and `loadPlugins` checks for the mark. There is
+  no structural check that could replace it: an rman **1.x plugin was `{ name, init }`**, and under
+  this split a 2.x plugin contributing nothing but an `init` is *also* `{ name, init }`. A plain
+  object literal is refused with a message naming the fix.
 - **Everything optional is answered by its absence**, never by a default rman invented. The core
-  ships `basePlugin`, whose reader recognizes nothing: a repository naming no plugin falls back to
-  it and gets a package named after its directory at `0.0.0`. No `getWorkspace` means no packages
-  beyond the root; no `versionPlanner` means `version`/`changed` fail naming the key rather than
+  ships `basePlatform`, whose reader recognizes nothing: a directory no technology claimed falls
+  back to it and gets a package named after its directory at `0.0.0`. No `getWorkspace` means no
+  packages below it; no `versionPlanner` means `version`/`changed` fail naming the key rather than
   releasing a plausible but untrue set.
-- **`manifestProvider` is checked when the plugin loads**, and is the one member that is not
-  optional - it is what makes a plugin a technology at all. An rman 1.x plugin (`{ name, init }`)
-  is exactly the object that reaches that check, and it is refused with a message saying so.
 - **`getRunSteps`, not `onBuildRunSteps`**: it is a *query*, and not build-specific - `version`
   reads the same seam for `preversion`/`version`/`postversion`.
 - **`init` is the escape hatch, not the front door.** Commands and publish targets are `.rmanrc`
   keys, so a plugin contributing only those needs no `init`. It runs during `Repository.create`,
   before any package is known, so `ctx.app.repository` throws there; anything wanting the
   repository belongs in a command's factory instead.
+- `isPlatform(value)` tells the two apart, which is what the sugar above is normalized by.
 
-A published plugin is not usually named in `plugins` at all. Its package exports a config carrying
-it, and the repository writes `extends`:
+**Which platform claims a directory** is `RmanApplication.platformFor(dir)` - the first registered
+platform whose manifest provider recognizes it, `basePlatform` when none does. A package is handed
+its platform when it is constructed, by the walk that found it (see
+[`Workspace`](#workspace-finding-the-packages)), so nothing re-derives the answer later.
+
+**A published plugin is not usually named in `plugins` at all.** Its package exports a config
+carrying it, and the repository writes `extends`:
 
 ```ts
 // the package's entry point
 export default defineConfig({
-  plugins: [new NodePlugin()],
-  commands: [ciCommand, cleanCommand],
-  publishTargets: [new NpmPublishTarget()],
+  plugins: [cargoPlatform],
+  commands: [buildCommand],
+  publishTargets: [new CratesPublishTarget()],
 });
 ```
 
 ```yaml
 # the repository
-extends: 'rman-node'
+extends: 'rman-cargo'
 ```
+
+**The `node` platform ships inside rman**, so a Node repository names no package at all - see
+[The `node` built-in](#the-node-built-in).
 
 ### Declaring a command
 
@@ -366,7 +401,7 @@ repository.currentPackage?.name; // 'pkg-a'
 **`repository.getPackages(options?)`** returns the resolved package list, optionally narrowed by
 exact name (`scope`) and/or topologically sorted (`toposort: true` - dependencies before
 dependents). This is a lower-level primitive than the glob-based
-[`filterPackages`](#package-filtering-scopeignoredepsdependents) most services use internally.
+[`filterPackages`](#package-filtering-scopeignoreplatformdepsdependents) most services use internally.
 
 **`repository.listStatus(options?)`** reports every package's git change status in one pass:
 
@@ -392,16 +427,18 @@ class Package {
   manifestFileName: string; // absolute path to the file it was read from ('' if none)
   dependencies: Package[]; // in-repo packages this one depends on (full transitive closure)
   config: ResolvedConfig; // its own effective, cascaded .rmanrc - value functions already called
-  repository: Repository; // the repository it belongs to (a repository's own is itself)
-  parent?: Package; // the package whose directory contains this one; undefined for the root
-  plugin: Plugin; // the technology whose manifest provider claimed this directory
+  repository: Repository; // the repository it belongs to - non-enumerable; a repository's own is itself
+  children: Package[]; // the packages directly inside this one - the tree edge
+  parent?: Package; // the one containing it - non-enumerable; undefined for the root
+  platform: Platform; // the technology whose manifest provider claimed this directory
+  selector: string; // what "[glob]" and --scope match it by
   versionScheme: VersionScheme; // how its versions are numbered (semver by default)
 
   get basename(): string; // path.basename(dirname)
   get name(): string; // from the manifest
   get version(): string; // from the manifest
   get isPrivate(): boolean; // !!manifest.private
-  get provider(): string; // which ecosystem read it - 'node', ''; see Plugin
+  get provider(): string; // which ecosystem read it - 'node', ''; see Platform
   get isRoot(): boolean; // whether this is the repository's own root package
 
   reloadManifest(): Manifest; // re-reads from disk through its own technology's provider
@@ -425,14 +462,78 @@ provider at all has a graph.
 
 **`pkg.isRoot`** is decided by *directory* - the root package is the one whose directory is the
 repository root, because a name can be anything. It is what `--scope /` selects (see
-[package filtering](#package-filtering-scopeignoredepsdependents)) and what distinguishes the
+[package filtering](#package-filtering-scopeignoreplatformdepsdependents)) and what distinguishes the
 repo-wide reading of a config key from a package's own.
+
+**`children` / `parent` are one edge with two directions, and only one is walkable.**
+`children` is an ordinary field; `parent` and `repository` are **non-enumerable**, so a tree
+serialized from the root goes downwards and does not cycle. Both are still readable - non-enumerable
+is not private. They come from the walk that found the packages rather than from comparing path
+prefixes afterwards, which is what makes a package nested inside another expressible at all.
+
+```ts
+const tree = JSON.stringify(repository.rootPackage.children); // no cycle
+for (const child of repository.getPackage('pkg-a')!.children) console.log(child.selector);
+```
+
+**`selector` is what addresses a package; `name` is what it calls itself.** They coincide wherever
+the technology names its packages - which is every Node repository - and they are not the same
+question: a package having a name at all is an *ecosystem's* promise, not rman's. The selector comes
+from the first of three that answers:
+
+1. the package's own `.rmanrc "name"` - the repository assigning one;
+2. its platform's `ManifestProvider.selector`;
+3. the manifest's own name, which is what that seam falls back to.
+
+So `"[glob]"` blocks and `--scope`/`--ignore` match `selector`, while tags, changelogs and the
+registry read `name`. A selector must be **unique** within a repository, and a duplicate is an error
+naming both directories - `"[that]"` and `--scope that` cannot mean two packages.
 
 ```ts
 const pkgA = repository.getPackage('pkg-a')!;
 pkgA.manifest.raw.description = 'Updated via script';
 pkgA.writeManifest();
 ```
+
+### `Workspace`: finding the packages
+
+**Discovery descends, asking each directory its own technology where its children are.**
+
+```ts
+namespace Workspace {
+  type Provider = (dir: string) => string[] | undefined; // child package dirs, or "not mine"
+
+  interface Node {
+    dirname: string;
+    platform: Platform;
+    children: Node[];
+  }
+
+  function walk(app: RmanApplication, rootDir: string, options?: { deep?: number; declared?: DeclaredPlatform }): Promise<Node>;
+  function flatten(node: Node): Node[]; // every node below it, depth-first, excluding itself
+  function findRoot(from: string, deep?: number): string;
+}
+```
+
+One step, applied recursively: take the directory's **declared** platform if its `.rmanrc` names one
+and otherwise the first that recognizes it, ask **that** platform where its children are, and repeat
+for each answer.
+
+**A provider used to answer for the whole repository** - `(root) => { root, packageDirs }`, asked
+once, at the top, by the first platform that recognized it. Two consequences followed, and both were
+documented as limitations rather than fixed: a polyglot repository's package set was decided by
+whichever technology was listed first in `plugins`, and a package nested inside another was only
+recoverable afterwards by comparing path prefixes. Asked per directory, a platform only ever speaks
+about its own packages - which is all a platform knows.
+
+- **The root node always exists**, so this never returns `undefined`. A repository nobody recognizes
+  is a root with no children, which is the single-package answer arrived at rather than guessed.
+- **A directory is visited once.** Two globs may legitimately overlap, and a provider naming an
+  ancestor would otherwise never terminate.
+- `deep` bounds the descent for the same reason `findRoot` bounds its climb.
+- `Repository.packages` is this tree flattened; `Package.children`/`parent` are its edges.
+
+**`Workspace.Layout` and `Workspace.resolve` are gone** with the seam they belonged to.
 
 ## Configuration (`.rmanrc` / `.rmanrc.yml`)
 
@@ -1140,6 +1241,9 @@ step there is mistaken for a value.
 
 | Key | Type | Default | Scope / notes |
 | --- | --- | --- | --- |
+| `plugins` | a plugin, or a glob naming modules that export one | none | Root-level only - it is read before any package exists. Always **appends** across layers. A built-in's *name* (`'node'`) is also accepted; a package name never is, and is refused telling you to write `extends`. |
+| `platform` | `string` | the first registered platform that recognizes the directory | Per-package cascaded. Which technology this package belongs to, by `Platform.name`. A declaration wins over the guess and the named platform validates it - a mismatch is an error. At the **root** it also brings the built-in it names, exactly as `plugins` would; below the root it loads the technology alone. Never an expression, and refused inside a `"[glob]"` block. |
+| `name` | `string` | the platform's answer, else the manifest's name | Per-package cascaded. The selector this package answers to - what `"[glob]"` and `--scope` match. Does **not** rename the package: `pkg.name` stays what the manifest says. Must be unique; refused inside a `"[glob]"` block. |
 | `packageManager` | `'npm'\|'yarn'\|'pnpm'\|'bun'` | `'npm'` | Root-level only. Used by `ci`/`publish`. CLI flag wins when given. |
 | `logLevel` | `'silent'\|'error'\|'info'\|'verbose'` | `'info'` | Root-level only. Invalid values fall back to `'info'`. CLI `--log-level` wins when given. |
 | `allowBranch` | `string \| string[]` | none (no restriction) | Root-level only. A CLI `--allow-branch` **replaces** it entirely (never merges). |
@@ -1531,7 +1635,7 @@ A pnpm/yarn `"workspace:"` range is handled specially:
 
 - A **bare** selector (`"workspace:*"`, `"workspace:^"`, `"workspace:~"`) is left **untouched** -
   it already tracks the dependency's current version dynamically, and gets resolved to a real
-  range only at publish time (see [`PublishService`](node.md#publishservice), in `rman-node`).
+  range only at publish time - see [`"workspace:"` ranges](#workspace-ranges).
 - An **explicit** `"workspace:<range>"` (e.g. `"workspace:^1.0.0"`) *is* bumped, the same way a
   plain range would be: `"workspace:^1.0.0"` → `"workspace:^2.0.0"`.
 
@@ -1539,7 +1643,7 @@ A pnpm/yarn `"workspace:"` range is handled specially:
 
 `applyPlan` also rewrites a bumped package's `org.opencontainers.image.version` Dockerfile label to
 the new version and folds that file into the same commit as the bump (`stampVersionLabel`, in
-[`src/utils/version-stamp.ts`](../src/utils/version-stamp.ts)). The label is by specification *the
+[`src/utils/version-stamp.ts`](../packages/rman/src/utils/version-stamp.ts)). The label is by specification *the
 version of the packaged software*, so there is exactly one correct value for it and this is what
 knows it; doing it from a build script instead leaves the edit uncommitted and records a stale label
 in the commit that was tagged.
@@ -1581,7 +1685,7 @@ Two roles, and they resolve differently:
 | | |
 | --- | --- |
 | **Orchestrator** | `app.versionPlanner` - one slot, last registration wins. Drives groups, the commit→size reading, the cross-group ripple and the root's release identity: none of it belongs to a technology, and all of it is computed for the whole repository at once. |
-| **Per package** | `detectBoundary` and `cascade`, asked of `pkg.plugin.versionPlanner` (falling back to the orchestrator). |
+| **Per package** | `detectBoundary` and `cascade`, asked of `pkg.platform.versionPlanner` (falling back to the orchestrator). |
 
 That split is not cosmetic. Both used to come off the single slot, so in a polyglot repository a
 Cargo package's boundary fell back to `npm view` and its cascade assumed npm's caret ranges -
@@ -2203,9 +2307,15 @@ here, and that is the point rather than a gap: the core has no opinion about npm
 repository cannot end up reporting `npm: Not Found`, which is a wrong answer rather than a missing
 one. A plugin adds its ecosystem's half by augmenting `Options` and wrapping `getSystemInfo` -
 `Options.repository` exists for exactly that, giving an augmentation somewhere to read a setting
-from (`rman-node` takes `.rmanrc "packageManager"` off it). `envinfo` merges *over* the defaults, so
-an augmentation can replace `Binaries` rather than only append to it. See
-[node.md](node.md#systeminfo-the-npm-half).
+from. `envinfo` merges *over* the defaults, so an augmentation can replace `Binaries` rather than
+only append to it.
+
+**The `node` built-in is the worked example**, and it is bundled rather than separate: its
+`augmentSystemInfo()` adds `Options.packageManager`, wraps `getSystemInfo` so the report carries the
+configured package manager's version under `Binaries` plus the `npmPackages` sections, and defaults
+the value from `.rmanrc "packageManager"` read off `Options.repository`. It is applied when the
+built-in is *contributed*, not at import time - so `rman info` in a Cargo repository that never
+named `node` reports no npm tooling.
 
 ## Shared utilities
 
@@ -2274,6 +2384,70 @@ logger.info('Starting...'); // suppressed if logLevel is 'silent' or 'error'
 logger.error('Something failed'); // shown unless logLevel is 'silent'
 ```
 
+## The `node` built-in
+
+**The `node` platform ships inside rman.** It was `rman-node`, a second package every Node
+repository had to install before anything worked - which is the cost this removed. Nothing it
+contributes exists until a repository asks for it, so the core still assumes no ecosystem and
+`rman clean` is still `Unknown argument` in a repository that is not a Node one.
+
+Three ways to ask, and the first two are the same statement:
+
+```yaml
+plugins: ['node']   # the repository has this technology
+platform: node      # ...and its packages belong to it. At the root, brings the built-in too.
+```
+
+```yaml
+# or say nothing at all: a repository that declares no technology gets the one its files imply,
+# and the guess is announced on stderr rather than made silently.
+```
+
+Detection runs only when the config declares neither `plugins` nor `platform` **and** the
+application carries no platform already - a programmatic caller registers one without writing a
+config, and guessing on top of that would register a second technology competing for every
+directory. `plugins: []` is a repository saying "none", and is heard as one.
+
+### What it contributes
+
+| | |
+| --- | --- |
+| **Platform** | `manifestProvider` (`package.json`, `npm view` for `publishedVersion`, `stampVersion`), `getWorkspace` (the `workspaces` globs, asked of every directory the walk reaches), `getRunSteps` (`package.json#scripts`, including `pre`/`post` - which is also how npm's `preversion`/`version`/`postversion` reach `version`, with no second seam), `getBinPaths` (`node_modules/.bin`, walked up), `versionPlanner`. |
+| **Commands** | [`ci`](cli/ci.md) and [`clean`](cli/clean.md). |
+| **Publish target** | `npm` - see [`PublishTarget`](#publishtarget). |
+| **Config keys** | `packageManager`, `clean.*`, `publish.npm.*`. |
+| **`SystemInfo`** | the npm half - see [`SystemInfo`](#systeminfo). |
+
+Its services are exported from `rman` itself: `PublishService`, `CiService`, `CleanService`,
+`NodeVersionPlanService`, `NpmPublishTarget`, `NPM_TARGET`. A repository never constructs any of
+them - it names the technology and they arrive.
+
+**`RmanNodeConfig` is the authoring alias**, still exported, for a config package that wants the
+name to say which keys it is using. It is `RmanConfig` with the same augmentation applied, so either
+annotation types `clean` and `publish.npm` - the augmentation is part of rman's own program now
+rather than something an import has to carry.
+
+### `"workspace:"` ranges
+
+The `"workspace:"` protocol is a statement about a `package.json` dependency field, so it belongs to
+this built-in rather than to the core - which never read it:
+
+```ts
+interface ParsedWorkspaceRange {
+  selector: '*' | '^' | '~' | 'explicit';
+  range?: string; // only when selector === 'explicit'
+}
+```
+
+| Declared | `selector` | Published as |
+| --- | --- | --- |
+| `workspace:*` | `'*'` | the dependency's exact current version, no operator |
+| `workspace:^` / `workspace:~` | `'^'` / `'~'` | that operator + the version |
+| `workspace:^1.0.0`, `workspace:1.0.0` | `'explicit'` | the range verbatim, prefix stripped |
+
+The same substitution pnpm and yarn perform in their own `publish`, applied to the manifest
+`publish` generates in the build directory.
+
 ## The `logged` error convention
 
 Every service that can fail outright (a version bump with dirty packages, a failed `run`/`ci`/
@@ -2296,14 +2470,15 @@ try {
 }
 ```
 
-## Package filtering (`scope`/`ignore`/`deps`/`dependents`)
+## Package filtering (`scope`/`ignore`/`platform`/`deps`/`dependents`)
 
 Every service above that takes `PackageFilterOptions` narrows its target package set the same way:
 
 ```ts
 interface PackageFilterOptions {
-  scope?: string | string[]; // only packages whose name matches this glob, or "/" for the root
+  scope?: string | string[]; // only packages whose selector matches this glob, or "/" for the root
   ignore?: string | string[]; // exclude packages matching this glob (or "/"), applied after `scope`
+  platform?: string | string[]; // only packages of these platforms - 'node', or 'node,cargo'
   deps?: boolean; // also include everything the matched set depends on
   dependents?: boolean; // also include everything that depends on the matched set
 }
@@ -2322,7 +2497,14 @@ await app.getService('run').runScript('test', { scope: 'core-lib', dependents: t
 ```
 
 `scope`/`ignore` accept [`micromatch`](https://github.com/micromatch/micromatch) glob syntax
-(`*`, `**`, `{a,b}`, ...) matched against each package's bare name.
+(`*`, `**`, `{a,b}`, ...) matched against each package's [`selector`](#package) - which is its name
+wherever the technology names its packages, and whatever `.rmanrc "name"` assigned where it does
+not.
+
+**`platform` takes names rather than globs**, so the set of valid values is known - and a name no
+package in the repository belongs to is an **error** listing the ones that are, the same call
+`publish --target` makes against its registry. A glob would put a typo back to a silently empty
+result. Comma-separated values are split and the comparison is case-insensitive.
 
 **`"/"` (`ROOT_SELECTOR`) is the repository's own root package, and it is not a glob** - the same
 `/` `.rmanrc`'s `"[/]"` block uses, for the reason stated there: *the root is never selected by

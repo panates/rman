@@ -4,7 +4,7 @@
 
 > **The command is rman's own.** *Where* a package ships is a [publish target](#publish-targets),
 > which a plugin contributes - so the flags below are not a fixed list. rman brings `docker`;
-> `npm` comes from [`rman-node`](../cli-node.md).
+> `npm` comes from the [`node` built-in](../rman.md#the-node-built-in).
 
 ```
 rman publish [options...]
@@ -36,7 +36,7 @@ Two ship today, and a repository can install more:
 
 | Target | From | "Already published?" | Claims by default |
 | --- | --- | --- | --- |
-| `npm` | [`rman-node`](../cli-node.md) | the local `package.json` version is among the registry's published `versions` | every package whose manifest that plugin read |
+| `npm` | the [`node` built-in](../rman.md#the-node-built-in) | the local `package.json` version is among the registry's published `versions` | every package whose manifest that plugin read |
 | `docker` | rman itself | `docker manifest inspect <image>:<version>` succeeds | nothing - opt-in, via `publish.target` |
 
 Two consequences worth knowing:
@@ -199,7 +199,7 @@ dependency's exact current version; `workspace:^`/`workspace:~` → `^`/`~` + th
 explicit `workspace:<range>` → the range verbatim, prefix stripped) - the same substitution
 pnpm/yarn's own `publish` performs. The original file is restored immediately afterward, success or
 failure, since `rman` publishes directly from the working tree rather than a staged tarball. See
-[`PublishService`](../node.md#publishservice) for the full mechanics and test-verified examples.
+[`PublishService`](../rman.md#the-node-built-in) for the full mechanics.
 
 ## Docker publishing (`publish.docker`)
 
@@ -256,7 +256,7 @@ to **GitHub Packages** (`npm.pkg.github.com`). That works today through npm's ow
 ## Publishing from a build directory (`publish.npm.directory`)
 
 > The `npm` target's, in every detail below - a build directory, a generated manifest and
-> `"workspace:"` ranges are npm's ideas. Requires [`rman-node`](../cli-node.md).
+> `"workspace:"` ranges are npm's ideas - see [`"workspace:"` ranges](../rman.md#workspace-ranges).
 
 When the publishable output is a subdirectory, say so once:
 
@@ -305,4 +305,4 @@ actually reached the registry. Unrelated packages elsewhere in the plan are unaf
 
 - [`rman version`](version.md) - typically run right before `publish`.
 - [`rman github-release`](github-release.md) - the repository's own release record, cut separately.
-- [`PublishService`](../node.md#publishservice) / [`DockerPublishService`](../rman.md#dockerpublishservice) - the underlying services.
+- [`PublishService`](../rman.md#the-node-built-in) / [`DockerPublishService`](../rman.md#dockerpublishservice) - the underlying services.

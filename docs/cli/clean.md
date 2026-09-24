@@ -2,7 +2,7 @@
 
 # `rman clean`
 
-> Comes from **[`rman-node`](../cli-node.md)**, not from rman's core - name it in `.rmanrc`
+> Comes from the **[`node` built-in](../rman.md#the-node-built-in)**, not from rman's core - name it in `.rmanrc`
 > `plugins` (directly, or inherited through `extends`) or this command does not exist.
 
 ```
@@ -78,4 +78,4 @@ the matching files *inside* an otherwise-deleted directory, leaving the rest of 
 ## See also
 
 - [`rman ci`](ci.md) - removes `node_modules`/lockfiles instead (the complementary concern).
-- [`CleanService`](../node.md#cleanservice) - the underlying service.
+- [`CleanService`](../rman.md#the-node-built-in) - the underlying service.

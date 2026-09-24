@@ -23,19 +23,23 @@ Reference docs follow the same split as the code:
 
 | | |
 | --- | --- |
-| [`docs/cli-rman.md`](docs/cli-rman.md) | the CLI rman itself ships - plus global options, the shared option groups, and where a command can come from |
-| [`docs/cli-node.md`](docs/cli-node.md) | the commands the `node` built-in adds |
-| [`docs/cli/`](docs/cli) | one page per command, whichever package ships it |
-| [`docs/rman.md`](docs/rman.md) | the core's programmatic API |
-| [`docs/node.md`](docs/node.md) | the `node` built-in's - its config keys, services and the seams it fills |
+| [`docs/cli-rman.md`](docs/cli-rman.md) | every command, plus global options, the shared option groups, and where a command can come from |
+| [`docs/cli/`](docs/cli) | one page per command |
+| [`docs/rman.md`](docs/rman.md) | the programmatic API, the config reference, and the `node` built-in |
+
+**There were four files, two per package, and there is one package now.** `rman-node` was folded
+into rman, so `docs/node.md` and `docs/cli-node.md` are gone rather than stale - what was true of
+them lives in the two above.
 
 ## Working on it
 
 ```bash
 npm install
-npm run build     # rman build - every package, in dependency order
+npm run build     # plain npm, in dependency order - never `rman build`, which is a bootstrap loop
 npm test          # mocha, across packages/*/test
+npm run typecheck # what mocha cannot see: the specs' own types
 npm run lint
+npm run smoke     # the built CLI actually starts, and a consumer's compiler sees what it should
 ```
 
 ## Licence
