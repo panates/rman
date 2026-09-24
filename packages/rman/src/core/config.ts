@@ -141,8 +141,9 @@ export async function readDirConfig(dirname: string, options?: { inject?: Detect
  */
 async function expandBuiltinPlugins(config: RmanConfig): Promise<RmanConfig> {
   const declared = config.plugins;
-  const entries = Array.isArray(declared) ? declared : declared === undefined ? [] : [declared];
-  if (!entries.some(e => typeof e === 'string')) return config;
+  const own = Array.isArray(declared) ? declared : declared === undefined ? [] : [declared];
+  const platform = declaredPlatform(config);
+  if (!own.some(e => typeof e === 'string') && platform === undefined) return config;
 
   /**
    * **Imported here rather than at the top, and that is a cycle rather than a style.** A built-in
@@ -151,6 +152,30 @@ async function expandBuiltinPlugins(config: RmanConfig): Promise<RmanConfig> {
    * silently. Node caches the module, so the cost is one resolution on a config that names one.
    */
   const { BUILTIN_PLUGINS, isBuiltinPlugin } = await import('../plugins/builtins.js');
+
+  /**
+   * **A `platform` naming a built-in puts it at the front of `plugins`.**
+   *
+   * Saying which technology this repository is *is* saying it has it, so making the author write
+   * both was a distinction only rman could see. Measured on the repository this was noticed in:
+   * `platform: 'node'` alone gave a working `rman list` with a `node` column and
+   * `Unknown arguments: clean`, because the technology had loaded and its commands had not.
+   *
+   * **At the front, not the back**, and that is what makes it a statement rather than an addition:
+   * `platformFor` takes the first registered platform that recognizes a directory, so the one this
+   * repository says it *is* should win over anything a shared config brought along.
+   *
+   * **Only a built-in**, checked after the import above for exactly this reason: a `platform` naming
+   * a third-party technology is answered by the `plugins` entry that loads it, and pushing the bare
+   * name in here would hand `loadPlugins` a glob matching no file - the failure would read as the
+   * plugin being missing when it is registered perfectly well.
+   *
+   * Already named, and nothing happens: `plugins` de-duplicates, and this keeps the author's own
+   * ordering rather than promoting an entry they placed deliberately.
+   */
+  const entries =
+    platform !== undefined && isBuiltinPlugin(platform) && !own.includes(platform) ? [platform, ...own] : own;
+
   const named = entries.filter((e): e is string => typeof e === 'string' && isBuiltinPlugin(e));
   if (!named.length) return config;
 
@@ -158,9 +183,26 @@ async function expandBuiltinPlugins(config: RmanConfig): Promise<RmanConfig> {
   /** De-duplicated first: two layers naming the same built-in is ordinary (a shared config and the
    *  repository that inherits it), and registering a plugin twice defines its commands twice. */
   for (const name of [...new Set(named)]) mergeConfig(base, BUILTIN_PLUGINS[name]!.contribute());
-  const own = { ...(config as Record<string, unknown>) };
-  own.plugins = entries.filter(e => !(typeof e === 'string' && isBuiltinPlugin(e)));
-  return mergeConfig(base, own) as RmanConfig;
+  const result = { ...(config as Record<string, unknown>) };
+  result.plugins = entries.filter(e => !(typeof e === 'string' && isBuiltinPlugin(e)));
+  return mergeConfig(base, result) as RmanConfig;
+}
+
+/**
+ * The **root's** declared platform, however it was spelled - unmarked, or inside a `"[/]"` block.
+ *
+ * Both, because both are the root saying what it is and a reader would not expect one to bring the
+ * built-in and the other not. `"[/]"` is the precise spelling (it speaks for the root package
+ * alone, where an unmarked key also cascades to every package below), so leaving it out would have
+ * punished the more careful author.
+ *
+ * A glob block is not consulted and cannot be: `assertSelectorBlocks` refuses `platform` there,
+ * since the glob matches a selector the key is upstream of.
+ */
+function declaredPlatform(config: RmanConfig): string | undefined {
+  const root = (config as Record<string, any>)[`[${ROOT_SELECTOR_INNER}]`];
+  const declared = config.platform ?? (root && typeof root === 'object' ? root.platform : undefined);
+  return typeof declared === 'string' && declared.trim() ? declared.trim() : undefined;
 }
 
 /**

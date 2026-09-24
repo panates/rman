@@ -162,13 +162,23 @@ export interface RmanConfigKeys {
    *   same rule `plugins: []` follows. A repository that states its technology is not a repository
    *   that stated nothing.
    *
-   * **Naming a platform that is not registered loads it, if it is one rman ships** - `'node'` is
-   * enough, from any level. What arrives is the **technology alone**: the manifest reader, the
-   * workspace layout, the bin paths, the version planner. Commands and publish targets come from
-   * root `plugins` and from nowhere else, and that boundary is deliberate rather than a shortfall -
-   * a Node package sitting inside a Cargo repository wants npm's manifest read, not a repo-wide
-   * `rman clean` sweeping the whole tree. Naming a platform rman does not ship, and no `plugins`
-   * entry registered, is an error listing what the repository does have.
+   * **At the root, naming a built-in is the same statement as `plugins: ['node']`** - it is put at
+   * the *front* of `plugins`, so the whole built-in arrives: the technology, its commands and its
+   * publish targets. Saying which technology this repository is *is* saying it has it, and making
+   * an author write both was a distinction only rman could see. At the front rather than appended,
+   * because `platformFor` takes the first registered platform that recognizes a directory - the one
+   * the repository says it *is* should win over whatever a shared config brought along. Read from
+   * the unmarked key or from `"[/]"`, since both are the root speaking.
+   *
+   * **Below the root it loads the technology alone**, and that is structural rather than chosen:
+   * `plugins` is read once, at the root, before any package exists, so a nested declaration cannot
+   * contribute commands even in principle. It is also what you want there - a Node package inside a
+   * Cargo repository wants npm's manifest read, not a repo-wide `rman clean` sweeping the tree.
+   *
+   * Only a built-in is promoted. A platform rman does not ship is loaded by the `plugins` entry
+   * that brings it, and naming one with no such entry is an error listing what the repository has -
+   * putting the bare name into `plugins` would hand the loader a glob matching no file, so the
+   * failure would read as the plugin being missing while it is registered perfectly well.
    *
    * **A plain string, never a `${{ }}` expression.** This is read while the packages are still
    * being found, so there is no `pkg` for an expression to be about - it is what decides what a

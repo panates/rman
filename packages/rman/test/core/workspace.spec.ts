@@ -5,8 +5,10 @@ import { expect } from 'expect';
 import { RmanApplication } from '../../src/core/application.js';
 import type { ManifestProvider } from '../../src/core/manifest.js';
 import { definePlatform, type Platform } from '../../src/core/plugin.js';
+import { registerPlugin } from '../../src/core/plugin-loader.js';
 import { Repository } from '../../src/core/repository.js';
 import { Workspace } from '../../src/core/workspace.js';
+import { BUILTIN_PLUGINS } from '../../src/plugins/builtins.js';
 import { filterPackages } from '../../src/utils/package-filter.js';
 import { createApp, createRepository, usePlugin, useTestEcosystem } from '../_fixture.js';
 
@@ -532,14 +534,15 @@ describe('core/Workspace', () => {
     });
 
     /**
-     * **Naming a built-in loads it**, which is the whole of what a Node package sitting inside
-     * another repository has to write. Three claims in one repository, because they are one
-     * decision:
+     * **The root naming a built-in puts it at the front of `plugins`** - saying which technology
+     * this repository *is* is saying it has it, and making the author write both was a distinction
+     * only rman could see. Three claims in one repository, because they are one decision:
      *
      * - the platform arrives although no `plugins` entry named it;
-     * - **the commands do not** - `platform()` and not `contribute()`, so what is loaded is the
-     *   technology. Repo-wide commands come from root `plugins`, because an `rman clean` reaching
-     *   a whole Cargo repository is not what "one of my packages is Node" asked for;
+     * - **so do its contributions** - `clean`, `ci` and the npm target, exactly as
+     *   `plugins: ['node']` brings them. This asserted the opposite for one commit, and the
+     *   repository it was noticed in is what settled it: `platform: 'node'` gave a working
+     *   `rman list` with a `node` column and `Unknown arguments: clean`;
      * - detection does not run, because the repository *said* something. Guessing anyway would put
      *   a second platform beside the declared one, competing for every directory the declaration
      *   did not cover.
@@ -548,7 +551,7 @@ describe('core/Workspace', () => {
      * technology and detection would already be suppressed by `platforms.size`, so the spec would
      * pass without the condition it is about. The control is the case below it.
      */
-    it('loads a built-in it names, the technology alone, and stands in for detection', async () => {
+    it('loads a built-in it names, contributions and all, and stands in for detection', async () => {
       const dir = tmp();
       write(dir, '.rmanrc', { platform: 'node' });
       write(dir, 'package.json', { name: 'root', private: true, version: '1.0.0' });
@@ -556,9 +559,103 @@ describe('core/Workspace', () => {
       const repository = await Repository.create(dir, { app: new RmanApplication() });
       expect(repository.rootPackage.provider).toBe('node');
       expect(repository.detectedBuiltin).toBeUndefined();
-      /** The boundary, stated as an assertion: `clean` and `ci` are not here. */
+      expect(repository.config.commands).toBeDefined();
+      expect(repository.config.publishTargets).toBeDefined();
+    });
+
+    /**
+     * **At the front of `plugins`, not the back**, which is what makes it a statement rather than
+     * an addition: `platformFor` takes the first registered platform that recognizes a directory,
+     * so the one this repository says it *is* wins over anything a shared config brought along.
+     *
+     * **Two built-ins are needed to see it at all.** rman ships one, so with only `node` the order
+     * is unobservable and a control that swaps the ends passes - measured. A second is stubbed into
+     * `BUILTIN_PLUGINS` the way `detect.spec.ts` does, and `second` claims the root's directory,
+     * so the answer is a fact about resolution rather than about the array.
+     */
+    it('puts the declared platform ahead of the ones plugins already named', async () => {
+      const dir = tmp();
+      write(dir, '.rmanrc', { platform: 'second', plugins: ['node'] });
+      write(dir, 'second.json', {});
+      write(dir, 'package.json', { name: 'root', version: '1.0.0' });
+
+      const second = definePlatform({
+        name: 'second',
+        manifestProvider: {
+          name: 'second',
+          fileName: 'second.json',
+          read: d =>
+            fs.existsSync(path.join(d, 'second.json')) ? { name: 'x', version: '0.0.0', raw: {} } : undefined,
+          write: () => undefined,
+        },
+      });
+      BUILTIN_PLUGINS.second = { platform: () => second, contribute: () => ({ plugins: [second] }) };
+      try {
+        const repository = await Repository.create(dir, { app: new RmanApplication() });
+        expect([...repository.app.platforms].map(p => p.name)).toEqual(['second', 'node']);
+        /** The consequence, rather than a restatement of the order: the root holds both manifests,
+         *  and the declared platform is the one that claims it. */
+        expect(repository.rootPackage.provider).toBe('second');
+      } finally {
+        delete BUILTIN_PLUGINS.second;
+      }
+    });
+
+    /** `"[/]"` is the *precise* spelling of "the root is node" - it speaks for the root package
+     *  alone, where an unmarked key also cascades below - so leaving it out would have punished the
+     *  more careful author. Both bring the built-in. */
+    it('reads the same declaration from a "[/]" block', async () => {
+      const dir = tmp();
+      write(dir, '.rmanrc', { '[/]': { platform: 'node' } });
+      write(dir, 'package.json', { name: 'root', private: true, version: '1.0.0' });
+
+      const repository = await Repository.create(dir, { app: new RmanApplication() });
+      expect(repository.rootPackage.provider).toBe('node');
+      expect(repository.config.commands).toBeDefined();
+    });
+
+    /**
+     * **Only a built-in is promoted**, and a third-party name must not be - `plugins` would then
+     * hold a bare string, which `loadPlugins` reads as a glob matching no file. The failure would
+     * say the plugin is missing while it is registered perfectly well.
+     *
+     * Here `other` is registered on the application directly, the way a programmatic caller does,
+     * so the declaration resolves and nothing is added to `plugins`.
+     */
+    it('promotes only a built-in, leaving a third-party platform to its own plugins entry', async () => {
+      const dir = tmp();
+      write(dir, '.rmanrc', { platform: 'other' });
+      write(dir, 'other.json', { name: 'root' });
+
+      const app = new RmanApplication();
+      registerPlugin(app, otherPlatform);
+      const repository = await Repository.create(dir, { app });
+      expect(repository.rootPackage.provider).toBe('other');
+      /** Nothing was invented for it: `plugins` is still what the author wrote, which is nothing. */
+      expect(repository.config.plugins).toBeUndefined();
+    });
+
+    /**
+     * **The boundary that remains, and it is structural rather than chosen**: `plugins` is read
+     * once, at the root, before any package exists - so a *nested* declaration cannot contribute
+     * commands even in principle. It still loads the technology, through `declaredPlatformAt`,
+     * which is what a Node package sitting inside a Cargo repository needs.
+     */
+    it('loads the technology alone for a declaration below the root', async () => {
+      const dir = tmp();
+      write(dir, '.rmanrc', { platform: 'other' });
+      write(dir, 'other.json', { name: 'root', members: ['packages/web'] });
+      write(dir, 'packages/web/other.json', { name: 'web' });
+      write(dir, 'packages/web/package.json', { name: 'web', version: '1.0.0' });
+      write(dir, 'packages/web/.rmanrc', { platform: 'node' });
+
+      const app = new RmanApplication();
+      registerPlugin(app, otherPlatform);
+      const repository = await Repository.create(dir, { app });
+      expect(repository.getPackages().map(p => p.provider)).toEqual(['node']);
+      /** `clean` is not here, and could not be: the key that brings it was read before this
+       *  directory was known to exist. */
       expect(repository.config.commands).toBeUndefined();
-      expect(repository.config.publishTargets).toBeUndefined();
     });
 
     /** The control for the one above: the identical repository with the key removed *is* detected,

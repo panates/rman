@@ -6,12 +6,13 @@
 # outlived it: measured, every command in this checkout exited 1 with
 # `"extends" target "./packages/node/build/index.js" was not found`.
 #
-# `plugins`, not `platform`: this is the repository saying which technologies it has available, and
-# it is the key that brings `clean` and `ci` with it. `platform` selects which one a given package
-# belongs to, which here there is only one answer to - so the cascade from `plugins` is enough.
+# `platform`, and it is now the same statement as `plugins: ['node']` - a root declaration naming a
+# built-in puts it at the front of `plugins`, so `clean` and `ci` arrive with the technology. It was
+# not, for one commit, and this file is where that showed: `rman list` worked with a `node` column
+# and `rman clean` answered `Unknown arguments`.
 #
 # It also no longer needs a bootstrap step: there is nothing to build before `rman clean` exists.
-plugins: ['node']
+platform: 'node'
 
 # One version line for the whole repository (rman's default) - `rman` and `rman-node` release
 # together, so a config written for one can never name a version of the other that does not exist.
