@@ -3,8 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import * as yaml from 'js-yaml';
-import { runCli } from '../../src/cli.js';
-import { useTestEcosystem } from '../_fixture.js';
+import { runCli, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-config-cmd-test-'));
@@ -74,7 +73,7 @@ describe('commands/config', () => {
       path.join(dir, 'packages/a/.rmanrc'),
       JSON.stringify({
         group: 'a-line',
-        run: { build: { exec: 'tsc -b tsconfig-build.json', '+before': 'echo mine' } },
+        run: { build: { exec: 'tsc -b tsconfig-build.json', before: "${{ [...value, 'echo mine'] }}" } },
       }),
     );
     return dir;
@@ -99,7 +98,7 @@ describe('commands/config', () => {
     expect(lines[0]).toContain(path.join('packages', 'a'));
 
     const config = parsed(lines);
-    /** The package's own statement wins over `"[*]"`, and `+before` *appends* to it rather than
+    /** The package's own statement wins over `"[*]"`, and `[...value]` *adds* to it rather than
      *  replacing - the two rules this command exists to make visible. */
     expect(config.run.build.exec).toBe('tsc -b tsconfig-build.json');
     expect(config.run.build.before).toEqual(['echo shared', 'echo mine']);
@@ -121,9 +120,11 @@ describe('commands/config', () => {
     expect(config.group).toBeUndefined();
   });
 
-  it("--root prints the root package's config instead, from inside a package", async () => {
+  it("--from-root prints the root package's config instead, from inside a package", async () => {
     const dir = fixture();
-    const lines = await captureLogs(() => runCli({ argv: ['config', '--root'], cwd: path.join(dir, 'packages/a') }));
+    const lines = await captureLogs(() =>
+      runCli({ argv: ['config', '--from-root'], cwd: path.join(dir, 'packages/a') }),
+    );
 
     expect(lines[0]).toContain('root');
     const config = parsed(lines);

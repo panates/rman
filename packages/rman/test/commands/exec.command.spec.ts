@@ -3,8 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { runCli } from '../../src/cli.js';
-import { useTestEcosystem } from '../_fixture.js';
+import { runCli, useTestEcosystem } from '../_fixture.js';
 
 /** A run refused by --allow-branch/--ignore-branch hits cli.ts's `.fail()` handler on an
  *  already-logged error, which calls the real `process.exit(1)` - fatal to the test runner itself,

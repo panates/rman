@@ -2,6 +2,7 @@ import colors from 'ansi-colors';
 import micromatch from 'micromatch';
 import type { Argv } from 'yargs';
 import type { Repository } from '../core/repository.js';
+import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { GitHelper } from './git.js';
 
 /** Same idea as GitHub Actions' own `branches`/`branches-ignore` workflow filters - restricts a
@@ -10,6 +11,40 @@ export interface BranchGuardOptions {
   allowBranch?: string | string[];
   ignoreBranch?: string | string[];
 }
+
+/**
+ * `--allow-branch`/`--ignore-branch` as a declaration, to spread into a command's `config` block.
+ * See `packageFilterOptions` for why this is `satisfies` rather than an annotation.
+ *
+ * **The key is the camelCase one and `cliName` carries the flag's spelling.** `allowBranch` is what
+ * a `.rmanrc` writes and what `assertAllowedBranch` reads off the config; `--allow-branch` is what
+ * the shell sees. The `Argv` version relied on yargs converting one into the other silently, which
+ * is why `applyBranchGuardOptions` declares `'allow-branch'` and `readBranchGuardOptions` reads
+ * `args.allowBranch`.
+ *
+ * **`target: 'cli'`, even though `allowBranch` *is* a config key.** It is a repo-wide core key read
+ * off the root, not any command's - so it belongs on `RmanConfig` directly, and a command that
+ * reads it names it in `configKeys`. Declaring it `'both'` here would contribute `version.allowBranch`,
+ * which nothing reads.
+ */
+export const branchGuardOptions = {
+  allowBranch: {
+    target: 'cli',
+    cliName: 'allow-branch',
+    describe:
+      'Refuse to run unless the current branch matches this glob (repeatable) - default: .rmanrc ' +
+      '"allowBranch", or no restriction at all',
+    type: 'string',
+  },
+  ignoreBranch: {
+    target: 'cli',
+    cliName: 'ignore-branch',
+    describe:
+      'Refuse to run if the current branch matches this glob (repeatable) - default: .rmanrc ' +
+      '"ignoreBranch", or no restriction at all',
+    type: 'string',
+  },
+} satisfies Record<string, RmanConfig.CommandOption>;
 
 /** `--allow-branch`/`--ignore-branch`, the same shape and describe text in every command that
  *  supports them - mirrors `package-filter.ts`'s own `applyPackageFilterOptions`. */

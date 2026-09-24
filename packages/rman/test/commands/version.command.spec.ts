@@ -4,8 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'expect';
-import { runCli } from '../../src/cli.js';
-import { useTestEcosystem } from '../_fixture.js';
+import { runCli, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-version-cmd-test-'));
@@ -276,17 +275,19 @@ describe('commands/version', () => {
       /** Resolved from *this file*, never from `process.cwd()`: with mocha run at the repository
        *  root the old form pointed at `<root>/src/cli.js`, which stopped existing the moment the
        *  sources moved under `packages/rman` (measured - these three tests failed). */
-      const cli = path.resolve(fileURLToPath(import.meta.url), '../../../src/cli.js');
-      /** The child has no mocha, so it registers the fixture ecosystem itself: the repository it
-       *  runs in names no plugin, and without a manifest provider and a planner `version` has
-       *  nothing to plan with. */
+      /**
+       * The child runs the **fixture's** `runCli`, not the CLI's - it is what builds an application
+       * carrying the test technology.
+       *
+       * There is nothing else that could: the child has no mocha and no `beforeEach`, and the
+       * repository it runs in names no plugin, so without one it has no manifest provider and no
+       * planner. It used to call a `registerTestEcosystem()` that wrote into module-global
+       * registries; those are gone, and an application is handed over instead.
+       */
       const fixtureModule = path.resolve(fileURLToPath(import.meta.url), '../../_fixture.js');
       const script = `
-        Promise.all([import('${fixtureModule.replace(/\\\\/g, '/')}'), import('${cli.replace(/\\\\/g, '/')}')]).then(
-          ([f, m]) => {
-            f.registerTestEcosystem();
-            return m.runCli({ cwd: ${JSON.stringify(dir)}, argv: ${JSON.stringify(argv)} });
-          },
+        import('${fixtureModule.replace(/\\\\/g, '/')}').then(f =>
+          f.runCli({ cwd: ${JSON.stringify(dir)}, argv: ${JSON.stringify(argv)} }),
         );
       `;
       return execFileSync('node', ['--import', '@swc-node/register/esm-register', '-e', script], {

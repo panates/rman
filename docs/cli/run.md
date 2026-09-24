@@ -24,7 +24,7 @@ options, in addition to:
 | `--progress` | - | boolean | `true` | Show the live progress panel (auto-disabled when stdout isn't a TTY). Overridable via `.rmanrc run.<script>.progress`. |
 | `--changed` | `-c` | boolean | `false` | Only run in packages that have changed since the last publish. |
 | `--changed-since <hash>` | - | string | - | Only run in packages that have changed since the given git commit/hash. Falls back to `.rmanrc run.<script>.changedSince` (root-level) when omitted. |
-| `--root` | `-r` | boolean | `false` | Run across the whole repository even when standing inside one package's own directory (which otherwise scopes the run to just that package, dropping the root pre/post hooks). No effect elsewhere. |
+| `--from-root` | `-r` | boolean | `false` | Run across the whole repository even when standing inside one package's own directory (which otherwise scopes the run to just that package, dropping the root pre/post hooks). No effect elsewhere. |
 
 `--changed` and `--changed-since` conflict (pick one).
 
@@ -39,7 +39,7 @@ rman run build --parallel 4           # at most 4 packages at once
 rman run build --parallel false       # serially, one at a time
 rman run build --bail=false           # keep going even if one package's build fails
 rman run build --scope pkg-a --deps   # pkg-a plus everything it depends on
-rman run build --root                 # whole repo, even run from inside one package's directory
+rman run build --from-root            # whole repo, even from inside one package's directory
 rman run build --log-level verbose    # also print each step's "executing" line before it runs
 ```
 
@@ -64,29 +64,53 @@ package of the directory declaring them, and a `"[selector]"` block configures t
 names - so at the repository root, package-facing script config goes under `"[*]"`:
 
 ```yaml
-"[*]":
+"[/]": # how the batch is scheduled - one answer for the whole run, so it is read here
+  run:
+    build:
+      concurrency: 2
+    lint:
+      topo: false # sort alphabetically instead of in dependency order
+
+"[*]": # what each package does
   run:
     test: mocha # a bare string is shorthand for { exec: mocha }
     build:
-      concurrency: 2
       before: [node ./generate.js, node ./validate.js] # array -> run in sequence
       exec: tsc -b # used only if the package's own package.json has no "build" script at all
       after: node ./copy-assets.js
       override: true # use these even if the package DOES already define build/prebuild/postbuild
     lint:
-      topo: false # independent packages - alphabetical order, no dependency waiting
+      topo: false # this package does not wait for its dependencies
       bail: false # one package's lint failure doesn't stop the others
     coverage:
       skip: true # these packages opt out of "coverage" entirely
       if: changed # only actually runs when the package has changed since the last publish
 ```
 
+**Which level a key is read at is not uniform**, and a key written at the wrong one is silently
+ignored - there is no schema to catch it in a JSON or YAML config:
+
+| Key | Read from | Belongs under |
+| --- | --- | --- |
+| `concurrency`, `progress`, `changed`, `changedSince` | the **root package only** - one scheduler, one answer for the whole batch | `"[/]"` |
+| `topo` | **both**, meaning different things: the root's picks the sort (dependency order vs alphabetical), a package's own decides whether *it* waits for its dependencies | either, or both |
+| `bail` | **both**: the root's is the default, a package's own is its own rule | either, or both |
+| `logLevel`, `skip`, `if`, `override`, `exec`/`before`/`after` | the package it is about | `"[*]"` |
+
+Measured, because this is the kind of mistake nothing reports: with two packages of 1.5s each,
+`concurrency: 1` written under `"[*]"` still ran them at once (1.8s), while the same line under
+`"[/]"` serialized them (3.3s). `topo: false` works from either place, for the two different
+reasons above.
+
+A JS config catches a key that does not exist at all (`parallel` is the *CLI flag*; the key it
+feeds is `concurrency`), but nothing catches a real key at the wrong level.
+
 Values may embed [`${{ ... }}` expressions](../rman.md#expressions---), evaluated per package - so one
 declaration can still say something package-specific (`../../coverage/${{ pkg.basename }}`,
 `app:${{ git.shortSha ?? 'local' }}`).
 
-**Precedence** for `topo`/`progress`/`concurrency`/`logLevel`: explicit CLI flag > package's own
-resolved `.rmanrc` > built-in fallback. **`bail` is the one exception:** a package's own `.rmanrc
+**Precedence** for `topo`/`progress`/`concurrency`/`logLevel`: explicit CLI flag > the resolved
+`.rmanrc` at whichever level the table above says the key is read from > built-in fallback. **`bail` is the one exception:** a package's own `.rmanrc
 bail` outranks even an explicit CLI `--bail`/`--no-bail` - "this package's failure must always stop
 the batch" is a more specific, intentional statement than a broad flag meant for the whole run, and
 shouldn't be silently overridden by it.
@@ -118,8 +142,8 @@ If the repository root defines a `prebuild`/`postbuild` (matching `pre<script>`/
 npm script, or an **unmarked** `.rmanrc run.<script>.before`/`.after`, it runs once each -
 exclusively, before/after every package's own script - unless the root opts out via
 `run.<script>.skip`, fails its own `run.<script>.if`, or the run is scoped to a single package
-(`--root` not given while standing inside one package's own directory - a repo-wide bookend has no
-place there).
+(`--from-root` not given while standing inside one package's own directory - a repo-wide bookend
+has no place there).
 
 Unmarked is the operative word: a bookend command is run at the repository root, so a
 package-relative one (`node ../../support/postbuild.cjs`) belongs under `"[*]"`, not here. There is

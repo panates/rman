@@ -1,6 +1,7 @@
 import micromatch from 'micromatch';
 import type { Argv } from 'yargs';
 import type { Package } from '../core/package.js';
+import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 
 /** Shared by every command that iterates packages (`run`/`build`/`test`/`exec`, `list`, `ci`,
  *  `clean`, `version`, `publish`, `changelog`) - narrows *which* packages a command applies to,
@@ -8,10 +9,29 @@ import type { Package } from '../core/package.js';
  *  `.rmanrc "skip"`, is applied by `filterPackages` itself rather than being an option here: it is
  *  the repository's statement, not the caller's. */
 export interface PackageFilterOptions {
-  /** Only include packages whose name matches at least one of these globs (e.g. `@scope/*`). */
+  /** Only include packages whose name matches at least one of these globs (e.g. `@scope/*`), or
+   *  **`"/"`** for the repository's own root package - see `ROOT_SELECTOR`. */
   scope?: string | string[];
-  /** Exclude packages whose name matches at least one of these globs - applied after `scope`. */
+  /** Exclude packages whose name matches at least one of these globs (or `"/"`) - applied after
+   *  `scope`. */
   ignore?: string | string[];
+  /**
+   * Only include packages belonging to one of these **platforms** (`Package.provider`) - `['node']`,
+   * or `'node,cargo'` as one comma-separated value.
+   *
+   * **Which technology a package belongs to only became a per-package question when the walk
+   * started finding nested packages of another platform**, and this is the filter that question
+   * needs: in a polyglot repository `rman run build --platform node` is the whole npm half of it,
+   * and there was no way to say that. Where every package is one technology it selects everything
+   * or nothing, which is the honest answer rather than a flag that does nothing.
+   *
+   * **Names, not globs.** A platform's name is a short identifier a plugin chose (`'node'`), so the
+   * set of valid values is known and finite - which is also why a name that no package in the
+   * repository belongs to is an **error** listing the ones that are there, the same call
+   * `publish --target` makes. A glob would put this back to guessing, and a typo back to a silent
+   * empty result.
+   */
+  platform?: string | string[];
   /** Also include every package the matched set depends on (transitively) - e.g. to build
    *  everything a scoped app actually needs. */
   deps?: boolean;
@@ -20,19 +40,126 @@ export interface PackageFilterOptions {
   dependents?: boolean;
 }
 
+/**
+ * **`--scope /` is the repository's own root package**, the one selector that is not a glob.
+ *
+ * The same `/` `.rmanrc`'s `"[/]"` block uses, and for the same reason stated there: *the root is
+ * never selected by name.* A glob matches package names, and a name can be anything - so
+ * `--scope rman-repo` happened to work (measured) while being exactly the name-based addressing the
+ * config selectors were redesigned to remove. `/` is structural, cannot collide with a package
+ * (nothing can be named it), and gives "the root" one spelling across config and CLI.
+ *
+ * Accepted by `--ignore` too. The asymmetry would be the thing to remember, and `--ignore /` -
+ * every package but the root - is a real thing to want of `clean`.
+ *
+ * **It selects nothing on a command whose candidates exclude the root**, which is most of them:
+ * `repository.packages` holds the workspace members only, so `rman list --scope /` and
+ * `rman run build --scope /` match nothing and say so. That is the honest answer rather than a
+ * special case - the root has no `list` row and contributes only `pre`/`post` bookends to `run`.
+ * `clean` and `changelog`, which put the root in their candidate list on purpose, are where it bites.
+ */
+export const ROOT_SELECTOR = '/';
+
+/**
+ * `--scope`/`--ignore`/`--deps`/`--dependents` as a **declaration** rather than a builder call -
+ * spread into a command's `config` block:
+ *
+ * ```ts
+ * config: { ...packageFilterOptions, ...branchGuardOptions, changelog: { ... } }
+ * ```
+ *
+ * **`satisfies`, never a `: Record<...>` annotation.** An annotation widens `type: 'string'` back to
+ * `string`, and every type derived from the declaration - the config contribution, the option's own
+ * value type - collapses with it. `satisfies` checks the shape and keeps the literals, and it also
+ * catches a misspelled key *here*, at the group's own line, rather than in the ten commands that
+ * spread it. The `Argv` chaining this replaces could not: a typo there was simply a new option.
+ *
+ * **Every option is `target: 'cli'`, including the ones that have a config twin.** A shared group
+ * belongs to no command, so declaring one `'both'` would contribute `version.scope` - a key nothing
+ * reads. Where a `.rmanrc` equivalent exists it is a core key in its own right (`allowBranch`), and
+ * a command that reads it names it in `configKeys`.
+ */
+export const packageFilterOptions = {
+  scope: {
+    target: 'cli',
+    describe: 'Only include packages whose name matches this glob, or "/" for the root package (repeatable)',
+    // Deliberately 'string', not 'array': an array-typed option greedily swallows every
+    // following bare word as its own value, which would eat "exec"'s [command..] positional
+    // whole. yargs still collects repeated "--scope a --scope b" into an array either way.
+    type: 'string',
+  },
+  ignore: {
+    target: 'cli',
+    describe: 'Exclude packages matching this glob (or "/" for the root) - applied after --scope',
+    type: 'string',
+  },
+  platform: {
+    target: 'cli',
+    describe: 'Only include packages of these platforms, e.g. --platform=node,cargo (repeatable)',
+    type: 'string',
+  },
+  deps: {
+    target: 'cli',
+    describe: 'Also include every package the matched set depends on',
+    type: 'boolean',
+  },
+  dependents: {
+    target: 'cli',
+    describe: 'Also include every package that depends on the matched set',
+    type: 'boolean',
+  },
+} satisfies Record<string, RmanConfig.CommandOption>;
+
+/**
+ * `--from-root`/`-r` - a group of one, and a function because its text is the command's own word
+ * for what it does. Spread it like the others: `...fromRootOption('Build')`.
+ *
+ * Only where a command scopes by the current directory; see `applyFromRootOption` for why adding it
+ * elsewhere is worse than leaving it out.
+ *
+ * **It was `--root` through 1.x, and the name said the opposite of what it does.** Every reader
+ * spells it the same single line - `options.fromRoot ? undefined : repository.currentPackage` - so
+ * the flag means *ignore where I am standing*, i.e. the **whole repository**. `--root` reads as "the
+ * root alone", which is the narrowest possible set rather than the widest, and the confusion was
+ * about to become a contradiction: a `--root-only` beside a `--root` that meant "everything" is
+ * unreadable.
+ *
+ * **`-r` is kept, and a two-letter `-fr` is not possible.** yargs' `short-option-groups` is on by
+ * default, so `-fr` parses as `-f -r` and `.strict()` answers `Unknown arguments: f, r` (measured).
+ * Turning that off makes `-fr` work and breaks every grouped short - `rman list -sj` works today.
+ * So the long name carries the meaning and the incumbent short stays.
+ */
+export function fromRootOption(verb: string) {
+  return {
+    fromRoot: {
+      target: 'cli',
+      cliName: 'from-root',
+      alias: 'r',
+      describe:
+        `${verb} across the whole repository even when the current directory is inside a single ` +
+        'package (which otherwise scopes it to just that package). No effect elsewhere.',
+      type: 'boolean',
+    },
+  } satisfies Record<string, RmanConfig.CommandOption>;
+}
+
 /** `--scope`/`--ignore`/`--deps`/`--dependents`, the same shape and describe text in every command
  *  that supports them - mirrors `run.command.ts`'s own `applyRunOptions`. */
 export function applyPackageFilterOptions<T>(cmd: Argv<T>): Argv<T> {
   return cmd
     .option('scope', {
-      describe: 'Only include packages whose name matches this glob (repeatable)',
+      describe: 'Only include packages whose name matches this glob, or "/" for the root package (repeatable)',
       // Deliberately 'string', not 'array': an array-typed option greedily swallows every
       // following bare word as its own value, which would eat "exec"'s [command..] positional
       // whole. yargs still collects repeated "--scope a --scope b" into an array either way.
       type: 'string',
     })
     .option('ignore', {
-      describe: 'Exclude packages whose name matches this glob (repeatable) - applied after --scope',
+      describe: 'Exclude packages matching this glob (or "/" for the root) - applied after --scope',
+      type: 'string',
+    })
+    .option('platform', {
+      describe: 'Only include packages of these platforms, e.g. --platform=node,cargo (repeatable)',
       type: 'string',
     })
     .option('deps', {
@@ -49,6 +176,7 @@ export function readPackageFilterOptions(args: any): PackageFilterOptions {
   return {
     scope: args.scope as string[] | undefined,
     ignore: args.ignore as string[] | undefined,
+    platform: args.platform as string[] | undefined,
     deps: args.deps as boolean | undefined,
     dependents: args.dependents as boolean | undefined,
   };
@@ -57,7 +185,8 @@ export function readPackageFilterOptions(args: any): PackageFilterOptions {
 /**
  * Narrows `packages` (the full, already-resolved list - toposort order, if any, is preserved)
  * down to what `options` selects. `scope`/`ignore` match against each package's bare name (glob
- * syntax via `micromatch` - `*`, `**`, `{a,b}`, ...); `ignore` is applied after `scope`, on
+ * syntax via `micromatch` - `*`, `**`, `{a,b}`, ...), plus `ROOT_SELECTOR` (`"/"`) for the root
+ * package, which is matched structurally rather than by name; `ignore` is applied after `scope`, on
  * whatever it left. `deps`/`dependents` then each independently expand *that* matched set along
  * `Package.dependencies` (already the full transitive closure - see
  * `Repository`'s own `_updateDependencies`) and their results are unioned in - so `--deps
@@ -83,12 +212,16 @@ export function filterPackages(
 ): Package[] {
   let matched = applySkip ? packages.filter(p => p.config?.skip !== true) : packages;
   if (options.scope) {
-    const patterns = toArray(options.scope);
-    matched = matched.filter(p => micromatch.isMatch(p.name, patterns));
+    const selects = selector(options.scope);
+    matched = matched.filter(p => selects(p));
   }
   if (options.ignore) {
-    const patterns = toArray(options.ignore);
-    matched = matched.filter(p => !micromatch.isMatch(p.name, patterns));
+    const selects = selector(options.ignore);
+    matched = matched.filter(p => !selects(p));
+  }
+  if (options.platform !== undefined) {
+    const wanted = platformNames(options.platform, packages);
+    matched = matched.filter(p => wanted.has(p.provider.toLowerCase()));
   }
   if (!options.deps && !options.dependents) return matched;
 
@@ -107,12 +240,8 @@ export function filterPackages(
   return packages.filter(p => included.has(p));
 }
 
-function toArray(value: string | string[]): string[] {
-  return Array.isArray(value) ? value : [value];
-}
-
 /**
- * `--root`/`-r`, with one describe text instead of four near-identical ones.
+ * `--from-root`/`-r`, with one describe text instead of four near-identical ones.
  *
  * **It only means anything where a command scopes by the current directory** - `run`/`build`/`test`,
  * `exec`, `clean`, `changelog` and `diff` narrow to `Repository.currentPackage` when you stand
@@ -120,11 +249,18 @@ function toArray(value: string | string[]): string[] {
  * repository (`version`, `publish`, `list`, `changed`) it would be a flag that does nothing, which
  * is worse than not offering it: a no-op flag reads as a promise.
  *
+ * That same rule is why there is no `--root-only` beside it, however naturally the pair reads: it
+ * would be a no-op on `run`/`build`/`test` (the root is not in `repository.packages` at all and
+ * contributes only `pre`/`post` bookends), identical to this flag on `diff`, already what this flag
+ * does on `config`, and on `clean` actively misleading - the root's own sweep recurses through
+ * `packages/*`, so a `--root-only` there deletes *more* than a package-scoped run, not less
+ * (measured). Where the root genuinely is a candidate, `--scope /` says so - see `ROOT_SELECTOR`.
+ *
  * `verb` is the command's own word for what it does, so the text stays the sentence each command was
  * already saying.
  */
-export function applyRootOption<T>(cmd: Argv<T>, verb: string): Argv<T> {
-  return cmd.option('root', {
+export function applyFromRootOption<T>(cmd: Argv<T>, verb: string): Argv<T> {
+  return cmd.option('from-root', {
     alias: 'r',
     describe:
       `${verb} across the whole repository even when the current directory is inside a single ` +
@@ -133,8 +269,80 @@ export function applyRootOption<T>(cmd: Argv<T>, verb: string): Argv<T> {
   });
 }
 
-/** The `--root` flag as the services read it - beside `readPackageFilterOptions`, so a command
+/** The `--from-root` flag as the services read it - beside `readPackageFilterOptions`, so a command
  *  reads both the same way. */
-export function readRootOption(args: any): boolean | undefined {
-  return args.root as boolean | undefined;
+export function readFromRootOption(args: any): boolean | undefined {
+  return args.fromRoot as boolean | undefined;
+}
+
+function toArray(value: string | string[]): string[] {
+  return Array.isArray(value) ? value : [value];
+}
+
+/**
+ * One `--scope`/`--ignore` value list as a predicate, with `ROOT_SELECTOR` lifted out of the globs.
+ *
+ * Split once rather than per package. The root is answered by `wantsRoot` alone and everything else
+ * by the globs, so the two never consult each other - and `micromatch` is asked only when a glob is
+ * left, since an empty pattern list must match no member rather than all of them, which is what
+ * makes a bare `--scope /` select the root **and nothing else**.
+ *
+ * **A glob is never offered the root**, which is the other half of `ROOT_SELECTOR` and the reason it
+ * is not merely a second spelling. `.rmanrc`'s selectors state the same rule - `"[my-*]"` cannot
+ * pick up a repository whose root package is called `my-repo`, and `"[*]"` means the members - and
+ * the CLI disagreed with it: measured, `rman clean --scope 'rman*'` selected this repository's root.
+ * For `clean` that is destructive rather than merely surprising, since the root's own sweep recurses
+ * through `packages/*`. Globs are the members, `/` is the root, in both vocabularies.
+ */
+/**
+ * `--platform` as a set of lower-cased names, refusing one no package in the repository belongs to.
+ *
+ * **Comma-split, unlike `--scope`, and the asymmetry is the values' own.** A platform's name is a
+ * short identifier a plugin chose, so `--platform=node,cargo` cannot be ambiguous; a scope glob is
+ * arbitrary text, where splitting would take a character away from the pattern language. Repeating
+ * the flag works for both.
+ *
+ * **An unknown name is an error, where an unmatched `--scope` glob is not**, and the difference is
+ * whether rman knows the answer set. It does here: the platforms are the ones its packages belong
+ * to, so `--platform crago` is a typo rman can see, and left alone it is the silent empty result
+ * this whole codebase keeps ruling out. The message lists what the repository has - the same call
+ * `publish --target` makes against its registry.
+ *
+ * **Compared case-insensitively.** `Platform.name` is the authority on spelling and `--platform Node`
+ * is not a different request; refusing it would be pedantry with an empty result attached.
+ *
+ * Asked of the packages rather than of `app.platforms`, which `filterPackages` does not have and
+ * which would be the wrong set anyway: a registered platform that claimed no directory is not an
+ * answer to "what is in this repository".
+ */
+function platformNames(value: string | string[], packages: Package[]): Set<string> {
+  const wanted = toArray(value)
+    .flatMap(entry => entry.split(','))
+    .map(name => name.trim().toLowerCase())
+    .filter(Boolean);
+  /** An empty `provider` is a package no technology claimed, and there is no spelling for it - a
+   *  flag selecting "none" would be `--platform ''`, which no shell makes pleasant. Left out of the
+   *  known set, so naming it is refused like any other unknown. */
+  const present = new Set(packages.map(p => p.provider.toLowerCase()).filter(Boolean));
+  for (const name of wanted) {
+    if (present.has(name)) continue;
+    throw new Error(
+      `--platform "${name}" matches no package in this repository. ` +
+        (present.size
+          ? `It holds: ${[...present].sort().join(', ')}.`
+          : 'No package here belongs to a platform - its ".rmanrc" names no "plugins".'),
+    );
+  }
+  return new Set(wanted);
+}
+
+function selector(value: string | string[]): (pkg: Package) => boolean {
+  const patterns = toArray(value);
+  const wantsRoot = patterns.includes(ROOT_SELECTOR);
+  const globs = patterns.filter(p => p !== ROOT_SELECTOR);
+  /** Against `pkg.selector`, which is what `.rmanrc`'s `"[glob]"` matches - one vocabulary, as the
+   *  `/` above already is. It was `pkg.name`, and the two coincide for every Node repository; a
+   *  package having a name at all is an ecosystem's promise, and a repository can assign a selector
+   *  where its own does not offer one. */
+  return pkg => (pkg.isRoot ? wantsRoot : globs.length > 0 && micromatch.isMatch(pkg.selector, globs));
 }

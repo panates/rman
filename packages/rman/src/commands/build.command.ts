@@ -1,18 +1,29 @@
-import type { Argv } from 'yargs';
-import type { Repository } from '../core/repository.js';
-import { RunService } from '../services/run.service.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
-import { applyRunOptions, readRunOptions } from './run.command.js';
+import { readRunOptions, runOptions } from '../utils/run-options.js';
 
-export function initCli(repository: Repository, program: Argv) {
-  program.command({
-    command: 'build',
-    configKeys: ['run.build'],
+const COMMAND = 'build' as const;
+const config = runOptions;
+type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
+
+const buildCommand = registerCommand(app => {
+  const repository = app.repository;
+  return {
+    command: COMMAND,
     describe: 'Alias for "run build"',
-    builder: cmd => applyRunOptions(cmd).example('$0 build', '# Builds packages'),
-    handler: async args => {
+    /**
+     * Read, not owned - and it owns nothing at all. `build` is `run build` under another name, so its
+     * settings live in `run.build`, which belongs to `run`. Two commands cannot contribute under one
+     * top-level key (interface merging is not a deep merge), and this is why they never needed to.
+     */
+    configKeys: ['run.build'],
+    config,
+    examples: [{ command: '$0 build', description: '# Builds packages' }],
+    handler: async (args: Args) => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));
-      await RunService.runScript(repository, 'build', { ...readRunOptions(args), commandName: 'build' });
+      await app.getService('run').runScript('build', { ...readRunOptions(args), commandName: 'build' });
     },
-  });
-}
+  };
+});
+
+export default buildCommand;

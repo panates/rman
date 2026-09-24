@@ -1,5 +1,8 @@
 import path from 'node:path';
 import { expect } from 'expect';
+import { RmanApplication } from '../../src/core/application.js';
+import { basePlatform, definePlatform } from '../../src/core/plugin.js';
+import type { BinPath as BinPathTypes } from '../../src/utils/bin-path.js';
 import { BinPath } from '../../src/utils/bin-path.js';
 
 /**
@@ -8,46 +11,58 @@ import { BinPath } from '../../src/utils/bin-path.js';
  * looks like. `rman-node`'s own directories are covered by its `npm-run-path.spec.ts`.
  */
 describe('utils/BinPath', () => {
+  let app: RmanApplication;
+  beforeEach(() => {
+    app = new RmanApplication();
+  });
+
+  /** A technology that contributes nothing but directories - a real shape, since a PATH
+   *  contributor recognizes no package, and how one reaches an application now that a technology
+   *  is declared as a whole. */
+  function addBinPaths(provider: BinPathTypes.Provider, name = 'test'): void {
+    app.platforms.add(definePlatform({ ...basePlatform, name, getBinPaths: provider }));
+  }
+
   it('has no provider of its own, so the inherited PATH is left exactly as it was', () => {
-    const env = BinPath.env({ cwd: '/anywhere', env: { PATH: '/usr/bin', FOO: 'bar' } });
+    const env = BinPath.env({ app, cwd: '/anywhere', env: { PATH: '/usr/bin', FOO: 'bar' } });
     expect(env.PATH).toBe('/usr/bin');
     expect(env.FOO).toBe('bar');
   });
 
   it("prepends a provider's directories, keeping the inherited PATH at the end", () => {
-    BinPath.addProvider(cwd => [path.join(cwd, 'vendor/bin')]);
-    const env = BinPath.env({ cwd: '/repo', env: { PATH: '/usr/bin', FOO: 'bar' } });
+    addBinPaths(cwd => [path.join(cwd, 'vendor/bin')]);
+    const env = BinPath.env({ app, cwd: '/repo', env: { PATH: '/usr/bin', FOO: 'bar' } });
     expect(env.PATH).toBe(['/repo/vendor/bin', '/usr/bin'].join(path.delimiter));
     /** Everything else is carried through untouched - `exec` hands this straight to a child. */
     expect(env.FOO).toBe('bar');
   });
 
   it('uses every provider, in registration order', () => {
-    BinPath.addProvider(() => ['/first']);
-    BinPath.addProvider(() => ['/second']);
-    expect(BinPath.resolve('/repo')).toEqual(['/first', '/second']);
+    addBinPaths(() => ['/first'], 'first');
+    addBinPaths(() => ['/second'], 'second');
+    expect(BinPath.resolve(app, '/repo')).toEqual(['/first', '/second']);
   });
 
-  it('ignores a repeated registration of the same provider', () => {
-    const provider = () => ['/once'];
-    BinPath.addProvider(provider);
-    BinPath.addProvider(provider);
-    expect(BinPath.resolve('/repo')).toEqual(['/once']);
+  it('ignores a repeated registration of the same technology', () => {
+    const platform = definePlatform({ ...basePlatform, name: 'twice', getBinPaths: () => ['/once'] });
+    app.platforms.add(platform);
+    app.platforms.add(platform);
+    expect(BinPath.resolve(app, '/repo')).toEqual(['/once']);
   });
 
   it('resolves cwd to an absolute path before asking a provider', () => {
     let seen = '';
-    BinPath.addProvider(cwd => {
+    addBinPaths(cwd => {
       seen = cwd;
       return [];
     });
-    BinPath.resolve('.');
+    BinPath.resolve(app, '.');
     expect(path.isAbsolute(seen)).toBe(true);
   });
 
   it('omits PATH entirely when nothing inherited one', () => {
-    BinPath.addProvider(() => ['/only']);
-    const env = BinPath.env({ cwd: '/repo', env: {} });
+    addBinPaths(() => ['/only']);
+    const env = BinPath.env({ app, cwd: '/repo', env: {} });
     expect(env.PATH).toBe('/only');
   });
 

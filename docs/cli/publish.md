@@ -2,40 +2,51 @@
 
 # `rman publish`
 
-> Comes from **[`rman-node`](../cli-node.md)**, not from rman's core - name it in `.rmanrc`
-> `plugins` (directly, or inherited through `extends`) or this command does not exist.
+> **The command is rman's own.** *Where* a package ships is a [publish target](#publish-targets),
+> which a plugin contributes - so the flags below are not a fixed list. rman brings `docker`;
+> `npm` comes from the [`node` built-in](../rman.md#the-node-built-in).
 
 ```
 rman publish [options...]
 ```
 
-Publishes every package to its configured **registry** - `npm` by default, or whatever each
-package's own (cascaded) `.rmanrc "publish.target"` says (`"npm"`, `"docker"`, or both). Shows the
-plan first, then asks for confirmation (unless `--yes` or `--dry-run`), then publishes sequentially,
-in topological order (dependencies before dependents).
-
-The npm side is opt-out (every non-private package is a candidate, unless it explicitly narrows its
-own `publish.target` to exclude `"npm"`); the docker side is opt-in (only a package explicitly
-listing it in `publish.target` is a candidate at all) - see
-[Docker publishing](#docker-publishing-publishdocker) below.
+Publishes every package to its configured **registry** - whatever each package's own (cascaded)
+`.rmanrc "publish.target"` says, or, when it says nothing, whichever installed targets claim it.
+Shows the plan first, then asks for confirmation (unless `--yes` or `--dry-run`), then publishes
+sequentially, in topological order (dependencies before dependents).
 
 `publish.target` is strictly about **where a package's artifact goes**. The repository's GitHub
 Release is not one of these - it isn't a place anything ships to, it's the repository's record that
 a version shipped - and it is not opt-in either: see [`rman github-release`](github-release.md).
-
-Every target answers the same question against its own registry - *is this exact version already out
-there?* - so no package is ever left without an answer:
-
-| Target | "Already published?" | Opt-in? |
-| --- | --- | --- |
-| `npm` | `npm view <name> version` == the local `package.json` version | No (opt-out via `private`/`target`) |
-| `docker` | `docker manifest inspect <image>:<version>` succeeds | Yes |
 
 This is deliberately **not** the same question [`rman changed`](changed.md)/[`version`](version.md)
 answer ("what commits landed since the last release, and how big a bump do they imply") - that one is
 commit-driven, because a registry can only say *older/newer*, never *how much* or *why*. The two
 are independent on purpose: a failed publish leaves the registry behind with no new commits to show
 for it, and `publish` still has to notice.
+
+## Publish targets
+
+A target is one answer to *"is this exact version already out there, and how do I push it"*, and
+that is the only part of publishing an ecosystem owns. Everything else the command does - the
+candidates, the order, the plan, the confirmation, the JSON - is about a repository, so it lives in
+rman.
+
+Two ship today, and a repository can install more:
+
+| Target | From | "Already published?" | Claims by default |
+| --- | --- | --- | --- |
+| `npm` | the [`node` built-in](../rman.md#the-node-built-in) | the local `package.json` version is among the registry's published `versions` | every package whose manifest that plugin read |
+| `docker` | rman itself | `docker manifest inspect <image>:<version>` succeeds | nothing - opt-in, via `publish.target` |
+
+Two consequences worth knowing:
+
+- **`rman publish --help` differs per repository.** Each target adds its own flags, so the ones
+  listed under "the `npm` target" below exist only where `rman-node` is installed. A flag belonging
+  to a target nobody installed is not a flag that does nothing - it is `Unknown argument`.
+- **A `publish.target` naming a target nothing implements is an error**, and it names the ones the
+  repository *does* have. There is no fixed list of valid names any more, so this replaces what used
+  to be a type and a `choices` list.
 
 ## Options
 
@@ -46,17 +57,27 @@ options, in addition to:
 | --- | --- | --- | --- | --- |
 | `--yes` | `-y` | boolean | - | Skip the confirmation prompt and publish immediately. |
 | `--dry-run` | - | boolean | - | Only show the plan - never publishes, regardless of `--yes`. |
-| `--json` | `-j` | boolean | - | Print the plan as JSON (one row per package **and** target: `name`, `target`, `status`, `version`, `reason`) instead of text. |
-| `--target <name>` | - | array | `npm`, `docker` | Restrict this run to just these target(s) (repeatable). Default: whatever each package is configured for. `--target docker` on a package that opts in without a `publish.docker` config errors clearly instead of being silently skipped. |
+| `--json` | `-j` | boolean | - | Print the plan as JSON (one row per package **and** target: `name`, `target`, `status`, `version`, `detail`, `reason`) instead of text. |
+| `--target <name>` | - | array | *the installed targets* | Restrict this run to just these target(s) (repeatable). Default: whatever each package is configured for. A target named here that matches no package is an error rather than an empty run. |
 | `--ignore-dirty` | - | boolean | - | Exclude a package with uncommitted local changes instead of aborting the whole run. |
-| `--package-manager <name>` | - | string | `npm`, `yarn`, `pnpm`, `bun` | Package manager to publish with. Default: `npm`, or `.rmanrc "packageManager"`. |
-| `--access <level>` | - | string | `public`, `restricted` | `npm publish --access <level>` - required by the registry for a *new* scoped package. |
-| `--tag <name>` | - | string | - | `npm publish --tag <name>` - the dist-tag this version is published under (default `latest`). |
-| `--otp <code>` | - | string | - | `npm publish --otp <code>` - a 2FA one-time password, for registries that require it. |
-| `--registry <url>` | - | string | - | Registry to check against **and** publish to (default: whatever `.npmrc` already configures). |
-| `--userconfig <path>` | - | string | - | Path to a custom `.npmrc` for both the registry check and the actual publish. |
-| `--contents <dir>` | - | string | - | Subdirectory to publish from, relative to each package's own directory - the lowest-precedence way to say it, after `publishConfig.directory` and `.rmanrc "publish.directory"`. |
-| `--docker-namespace <ns>` | - | string | - | Prefixed onto a bare (no `/`) `publish.docker.image`. Default: the `DOCKERHUB_NAMESPACE` environment variable. |
+
+### From the `docker` target (rman's own)
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `--docker-namespace <ns>` | string | Prefixed onto a bare (no `/`) `publish.docker.image`. Default: the `DOCKERHUB_NAMESPACE` environment variable. |
+
+### From the `npm` target (`rman-node`)
+
+| Option | Type | Choices | Description |
+| --- | --- | --- | --- |
+| `--package-manager <name>` | string | `npm`, `yarn`, `pnpm`, `bun` | Package manager to publish with. Default: `npm`, or `.rmanrc "packageManager"`. |
+| `--access <level>` | string | `public`, `restricted` | `npm publish --access <level>` - required by the registry for a *new* scoped package. |
+| `--tag <name>` | string | - | `npm publish --tag <name>` - the dist-tag this version is published under (default `latest`). |
+| `--otp <code>` | string | - | `npm publish --otp <code>` - a 2FA one-time password, for registries that require it. |
+| `--registry <url>` | string | - | Registry to check against **and** publish to (default: whatever `.npmrc` already configures). |
+| `--userconfig <path>` | string | - | Path to a custom `.npmrc` for both the registry check and the actual publish. |
+| `--contents <dir>` | string | - | Subdirectory to publish from, relative to each package's own directory - the lowest-precedence way to say it, after `publishConfig.directory` and `.rmanrc "publish.npm.directory"`. |
 
 ## Examples
 
@@ -74,7 +95,7 @@ Publish these packages? (y/N)
 rman publish --yes                        # publish immediately, no confirmation
 rman publish --dry-run                    # only show the plan, never publish
 rman publish --access public              # required for a brand-new scoped package
-rman publish --tag next
+rman publish --tag beta                   # a prerelease goes under its own dist-tag, never latest
 rman publish --otp 123456
 rman publish --registry https://registry.example.com --userconfig ./ci.npmrc
 rman publish --package-manager pnpm
@@ -86,9 +107,76 @@ prompt. Pass --yes to publish non-interactively.` (important for CI - always pas
 Any dirty package aborts the whole plan (`N package(s) have uncommitted local changes...`) unless
 `--ignore-dirty` is given. With nothing to publish, prints `Nothing to publish.`.
 
-`getPlan` is decoupled from [`version`](version.md) - it only ever compares the current
-`package.json` version against the registry (via `npm view`, queried concurrently), so it works
-equally well right after a version bump or standing alone days later.
+A target's `getPlan` is decoupled from [`version`](version.md) - it only ever compares what is on
+disk against what is on its own registry, so it works equally well right after a version bump or
+standing alone days later.
+
+### Prereleases go under their own dist-tag, without being asked
+
+A version that names a prerelease line publishes to that line:
+
+```
+publish [npm] rman 2.0.0-beta.1 -> dist-tag "beta"  never published
+publish [npm] rman-node 2.0.0-beta.1 -> dist-tag "beta"  never published
+```
+
+`2.0.0-beta.1` → `beta`; the identifier is written in the version, so this is a reading rather
+than a guess. An ordinary release carries no tag at all, which is how npm is told `latest`.
+
+**Why it is not left to you to remember:** `npm publish` with no `--tag` writes **`latest`**, so a
+beta published that way is what every plain `npm install <name>` resolves to from then on. npm is
+content to point `latest` at a prerelease, and `npm dist-tag` can move it back only after everyone
+who installed in between already has the beta. One forgotten flag, no clean undo.
+
+**Derived is not silent.** The tag is decided in the *plan*, printed beside the package, and
+carried in `--dry-run --json` as each entry's `detail`, so where a version is going is something
+you confirm rather than infer. `applyPlan` then publishes under the tag the plan showed, instead of
+working it out again.
+
+`--tag` still overrides it - for a project that puts every preview on `next`, or to send a release
+somewhere other than `latest`:
+
+```bash
+rman publish --tag next
+```
+
+Two cases have no honest answer to derive, and are errors rather than guesses:
+
+| | |
+| --- | --- |
+| `--tag latest` on a prerelease | the one thing deriving must never reach. Someone who typed it is likelier to have confused themselves than to mean it; a bare `npm publish --tag latest` is the escape hatch for genuinely meaning it. |
+| a prerelease with no identifier (`2.0.0-1`) | its prerelease part is the number `1`, so a dist-tag called `1` would be invented rather than read. Pass `--tag <name>`. |
+
+A **calendar version** (`2026.9.15-1430`) is not a preview, however semver reads its time part -
+that is just how the time is spelled - so it publishes to `latest` like any other release.
+
+A whole prerelease cycle, then:
+
+```bash
+rman version --preid beta     # 1.3.0 -> 2.0.0-beta.0, committed and tagged
+```
+
+```bash
+rman publish                  # -> dist-tag "beta"; "latest" does not move
+```
+
+Repeat the pair for `beta.1`, `beta.2`, … Any bump graduates a prerelease to the release it was
+previewing (`2.0.0-beta.3` → `2.0.0` for `major`, `minor` *or* `patch`), after which the same
+`rman publish` puts it on `latest`, because the version no longer names a prerelease line:
+
+```bash
+rman version major && rman publish
+```
+
+**The plan stays correct across the cycle**, because the npm target asks whether *this version* is
+among the registry's published `versions` - not what `latest` points at, which by design does not
+move while betas are going out. Asking `latest` would have kept proposing an already-published beta
+until npm answered `403`.
+
+One thing the tooling cannot check for you: a **consumer's** dependency range. `>=2.0.0` does not
+match `2.0.0-beta.0` - semver excludes prereleases from a range that names none - so a package
+meant to be installed alongside the beta needs `>=2.0.0-0`. Ranges *inside* the repository are
+rewritten by [`version`](version.md) itself and need no attention.
 
 ### Asking "is there anything to release?" in CI
 
@@ -111,7 +199,7 @@ dependency's exact current version; `workspace:^`/`workspace:~` → `^`/`~` + th
 explicit `workspace:<range>` → the range verbatim, prefix stripped) - the same substitution
 pnpm/yarn's own `publish` performs. The original file is restored immediately afterward, success or
 failure, since `rman` publishes directly from the working tree rather than a staged tarball. See
-[`PublishService`](../node.md#publishservice) for the full mechanics and test-verified examples.
+[`PublishService`](../rman.md#the-node-built-in) for the full mechanics.
 
 ## Docker publishing (`publish.docker`)
 
@@ -151,6 +239,10 @@ rman publish --docker-namespace myorg
 
 See [`DockerPublishService`](../rman.md#dockerpublishservice) for the full mechanics.
 
+**None of this needs a plugin.** The `docker` target is rman's own, which is the point of the
+target seam: any language's project can push an image, so a Cargo or Go repository reaches all of
+the above by naming `"docker"` in `publish.target` and nothing else.
+
 ## The GitHub Release is not a target
 
 A repository's GitHub Release used to be a third `publish.target`, and that was wrong twice over:
@@ -161,7 +253,10 @@ needs no configuration and no opt-in - see [`rman github-release`](github-releas
 to **GitHub Packages** (`npm.pkg.github.com`). That works today through npm's own
 `publishConfig.registry`, or `--registry`, rather than a target of its own.
 
-## Publishing from a build directory (`publish.directory`)
+## Publishing from a build directory (`publish.npm.directory`)
+
+> The `npm` target's, in every detail below - a build directory, a generated manifest and
+> `"workspace:"` ranges are npm's ideas - see [`"workspace:"` ranges](../rman.md#workspace-ranges).
 
 When the publishable output is a subdirectory, say so once:
 
@@ -210,4 +305,4 @@ actually reached the registry. Unrelated packages elsewhere in the plan are unaf
 
 - [`rman version`](version.md) - typically run right before `publish`.
 - [`rman github-release`](github-release.md) - the repository's own release record, cut separately.
-- [`PublishService`](../node.md#publishservice) / [`DockerPublishService`](../rman.md#dockerpublishservice) - the underlying services.
+- [`PublishService`](../rman.md#the-node-built-in) / [`DockerPublishService`](../rman.md#dockerpublishservice) - the underlying services.

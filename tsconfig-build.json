@@ -2,13 +2,13 @@
   "extends": "@panates/tsconfig/build.json",
   "compilerOptions": {
     /**
-     * A build compiles against the **built** core, so only `"rman"` belongs here - `rman-node` is
-     * the one package that imports it, and nothing imports `rman-node` back. (`tsconfig-test.json`
-     * is the opposite case and maps every specifier, source-side: see the note there.)
+     * One package now, so this maps the one specifier its own sources could reach it by.
+     * (`tsconfig-test.json` is the opposite case and maps every specifier, source-side: see the
+     * note there.)
      *
-     * The `"@rman/*"` entry this replaces was left over from the scoped names the plugin never
-     * shipped under. It resolved nothing after the rename to `rman-node` and would have quietly
-     * kept doing so.
+     * It listed `rman-node` while that was a second workspace package, and a `"@rman/*"` entry
+     * before that - left over from scoped names nothing ever shipped under, resolving to nothing
+     * and quietly continuing to.
      */
     "paths": {
       "rman": ["./packages/rman/build/index.d.ts"]

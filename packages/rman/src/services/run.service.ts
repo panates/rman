@@ -6,353 +6,33 @@ import { Task } from 'power-tasks';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from '../core/run-step.js';
+import { Service } from '../core/service.js';
 import { exec } from '../utils/exec.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { type ProgressItem, ProgressPanel } from '../utils/progress-panel.js';
 import { runBin } from '../utils/run-bin.js';
 
-export namespace RunService {
-  export interface Options extends PackageFilterOptions {
-    /** Max packages built at once: `true`/omitted = CPU count, a number = that many, `false` = serial (1). */
-    parallel?: boolean | number;
-    /** Respect the package dependency graph: a package waits for its dependencies and is skipped
-     *  if one fails. Default true (right for `build`). Set false for scripts like `lint`/`test`
-     *  where packages are independent - order becomes alphabetical and one package's failure
-     *  (or its dependency's) never skips another. */
-    topo?: boolean;
-    bail?: boolean;
-    changed?: boolean;
-    changedSince?: string;
-    /** Show the live progress panel. Default true; auto-disabled when stdout isn't a TTY. */
-    progress?: boolean;
-    /** Verbosity of the classic per-step log (only applies when the live panel is off). Falls back to
-     *  the root's `.rmanrc logLevel`, then 'info' - see `resolveRootLogLevel`. */
-    logLevel?: LogLevel;
-    /** Run across the whole repository even when the current directory is inside a single package
-     *  (which otherwise scopes the run to just that package, and skips the root's own pre/post
-     *  bookend - see `Repository.currentPackage`). Has no effect when already at the repository
-     *  root, or outside any known package. */
-    root?: boolean;
-  }
-
-  /**
-   * A package's `.rmanrc` (cascaded) can configure `run.<script>.*` - e.g.
-   *   run:
-   *     build:
-   *       concurrency: 2
-   *     lint:
-   *       topo: false
-   *       bail: false
-   * and a package can opt itself out of a script entirely:
-   *   run:
-   *     build:
-   *       skip: true
-   * or supply the command(s) to run when its own package.json doesn't define this script (or its
-   * pre/post hooks) at all - a single string, or an array to run several in sequence - see
-   * `getScriptSteps`:
-   *   run:
-   *     build:
-   *       before: [node ./generate.js, node ./validate.js]
-   *       exec: tsc -b
-   *       after: node ./copy-assets.js
-   *       override: true   # use these even if the package *does* define its own
-   *
-   * A bare string is shorthand for `exec`, which is by far the common case - a script that is just
-   * a command, with nothing to configure about how it runs:
-   *   run:
-   *     test: mocha          # same as   test: { exec: mocha }
-   */
-  /**
-   * One step of a script - a shell command, or a function ([`RunStepFn`](../core/run-step.ts)).
-   *
-   * A union rather than one shape with two optional fields, so every consumer is made to say which
-   * it is handling: the executor that forgets is the one that silently runs nothing, which is
-   * exactly the bug this type replaces (a function in `after` used to be dropped by
-   * `normalizeScriptValue` and reported as a step that succeeded).
-   */
-  export type ScriptStep = CommandStep | FunctionStep;
-
-  interface StepBase {
-    /** The slot it came from - `before`/`exec`/`after`, which is what the log line shows. */
-    name: string;
-    /** What the progress panel and the per-step log print: the command itself, or the function's
-     *  own name. */
-    label: string;
-  }
-
-  export interface CommandStep extends StepBase {
-    command: string;
-    run?: undefined;
-  }
-
-  export interface FunctionStep extends StepBase {
-    run: RunStepFn;
-    command?: undefined;
-  }
-
-  /** The three slots a script is made of, each one step or several run in sequence. The same three
-   *  names a `.rmanrc "run.<script>"` block uses, because they are the same three things. */
-  export interface ScriptSlots {
-    before?: RunStepValue[];
-    exec?: RunStepValue[];
-    after?: RunStepValue[];
-  }
-
-  /**
-   * Where a package's steps can come from besides its `.rmanrc`.
-   *
-   * The core knows one source: the config. **`package.json#scripts` is not a source the core has**,
-   * because "a script lives in package.json" is true of a Node repository and of nothing else -
-   * `rman-node` contributes that one (with npm's `pre<script>`/`post<script>` convention and its
-   * `&&` splitting), and a plugin for another ecosystem would contribute its own.
-   *
-   * Returns `undefined` for "this package declares nothing", not empty slots - the difference
-   * decides whether the config's value applies.
-   */
-  export type StepSource = (pkg: Package, script: string) => ScriptSlots | undefined;
-
-  /**
-   * Registers a source. Called by `loadPlugins` for each plugin's `runSteps`, in `plugins`
-   * declaration order - never as an import side effect, so what is registered is exactly what the
-   * repository's `.rmanrc` asked for.
-   */
-  export function addStepSource(source: StepSource): void {
-    /** Idempotent per source: a plugin both declares `runSteps` (registered by `loadPlugins`) and
-     *  may call its own `augmentRun()` for programmatic callers, so the same function arrives
-     *  twice. Pushing twice is harmless - the first match wins - but it makes the registry lie
-     *  about what is in it. */
-    if (stepSources.includes(source)) return;
-    stepSources.push(source);
-  }
-
-  /** For tests, which would otherwise leak a source into every later case in the process. */
-  export function clearStepSources(): void {
-    stepSources.length = 0;
-  }
-
-  /**
-   * What the *package itself* declares for the lifecycle `script`, from the contributed sources
-   * alone - no `.rmanrc` involved. `undefined` when it declares nothing.
-   *
-   * Exported because `run` is not the only lifecycle rman wraps: `version` runs hooks around the
-   * version write, and npm spells those `preversion`/`version`/`postversion` in `package.json` -
-   * which is the same `pre<script>`/`<script>`/`post<script>` shape a step source already answers.
-   * So `VersionService` asks here for `'version'` instead of reading `manifest.raw.scripts` itself,
-   * and npm's version lifecycle keeps working with no second seam and no extra line in any plugin.
-   * A plugin for another ecosystem gets its own lifecycle hooks the moment it contributes steps.
-   */
-  export function contributedSlots(pkg: Package, script: string): ScriptSlots | undefined {
-    return firstContributed(pkg, script);
-  }
-
-  /**
-   * Runs one slot of a lifecycle belonging to some operation other than `run` itself - `version`'s
-   * hooks around the version write are the only one so far.
-   *
-   * **Here rather than in `VersionService`, because the rule it applies is this service's**: the
-   * package's own declaration for `script` wins over the caller's `fallback`, slot by slot, exactly
-   * as `getScriptSteps` decides it for `run`. Kept in two places that rule would drift, and one of
-   * the copies would sit in the file that writes versions - which now runs no command of its own at
-   * all.
-   *
-   * `fallback` is the caller's own configured step(s), **already evaluated**: `version`'s three
-   * paths are in `DEFERRED_PATHS` precisely because only the caller can bind
-   * `${{ pkg.targetVersion }}`, so interpolating here would either be too early or need a scope this
-   * service has no business holding.
-   *
-   * **A list, not one joined string.** `VersionService` used to `join(' && ')` an array into a
-   * single shell line, which a function step cannot be part of - and which quietly changed the
-   * semantics of the shell case too, since `cd x && y` in one process is not the same as two.
-   */
-  export async function runLifecycleSlot(
-    pkg: Package,
-    script: string,
-    slot: keyof ScriptSlots,
-    fallback?: RunStepValue[],
-  ): Promise<void> {
-    const own = contributedSlots(pkg, script)?.[slot] ?? [];
-    const values = own.length ? own : (fallback ?? []);
-    for (const value of values) {
-      if (typeof value === 'function') {
-        await value(createStepContext(pkg, pkg.dirname));
-        continue;
-      }
-      await exec(value, { cwd: pkg.dirname, stdio: 'inherit' });
-    }
-  }
-
-  export function getConfig(pkg: Package, script: string): Record<string, unknown> {
-    const runCfg = pkg.config?.run;
-    const cfg = runCfg && typeof runCfg === 'object' ? (runCfg as Record<string, unknown>)[script] : undefined;
-    /** The bare-value shorthand. A function is `typeof 'function'`, not `'object'`, so without
-     *  naming it here `run: { build: myFn }` fell through to the `{}` below - the long form would
-     *  have worked and the short one silently done nothing, an arbitrary difference. */
-    if (typeof cfg === 'string' || typeof cfg === 'function' || Array.isArray(cfg)) return { exec: cfg };
-    return cfg && typeof cfg === 'object' ? (cfg as Record<string, unknown>) : {};
-  }
-
-  /**
-   * The context a function step or `if` is handed - see [`RunStepContext`](../core/run-step.ts).
-   *
-   * `runBin` and `logger` are bound to *this run* rather than left to be imported, which is the
-   * whole reason they are handed over: an imported `runBin` knows neither the cwd nor the resolved
-   * log level.
-   */
-  /**
-   * A `run.<script>.before`/`.exec`/`.after` (or `version.<slot>`) value: one step, or several to
-   * run in sequence. A shell command or a function, and a list may mix them.
-   *
-   * **Anything else throws, naming the path.** It used to `return []`, which meant a value rman did
-   * not recognize was dropped with no trace: writing a function here - the obvious guess, and now
-   * the supported form - produced `1 succeeded, 0 failed` with the step never run (measured). A
-   * configuration mistake has to be loud; silence here reads as success.
-   *
-   * Exported, and the only implementation: `VersionService` used to carry a second one that behaved
-   * differently, which is how `version.<slot>` came to join its array with `' && '`.
-   */
-  export function normalizeScriptValue(value: unknown, at: string): RunStepValue[] {
-    const items = Array.isArray(value) ? value : [value];
-    const steps: RunStepValue[] = [];
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      /** An empty string and an absent value are both "nothing here", which is how a `"[*]"` block
-       *  declaring a slot some packages don't use has always behaved. */
-      if (item === undefined || item === null || item === '') continue;
-      if (typeof item === 'string' || typeof item === 'function') {
-        steps.push(item as RunStepValue);
-        continue;
-      }
-      const where = Array.isArray(value) ? `${at}[${i}]` : at;
-      throw new Error(
-        `"${where}" must be a shell command or a function, but it is ${describeValue(item)}.\n` +
-          `  A list of either (or both) runs them in sequence.`,
-      );
-    }
-    return steps;
-  }
-
-  export function createStepContext(pkg: Package, cwd: string): RunStepContext {
-    const logLevel = resolveRootLogLevel(pkg.repository);
-    return {
-      pkg,
-      repository: pkg.repository,
-      cwd,
-      runBin: (bin, argv, opts) => runBin(bin, argv, { cwd, logLevel, ...opts }),
-      logger: new Logger(logLevel),
-    };
-  }
-
-  /**
-   * `.rmanrc` conditional execution, GitHub Actions-`if`-flavored but a small closed grammar
-   * instead of a full expression language (less to get wrong, still covers what's asked for) -
-   * atoms combined with `and`/`or` (`and` binds tighter, same as most languages) and `(...)`:
-   *
-   *   run:
-   *     build:
-   *       if: changed                                    # changed since the last publish
-   *     test:
-   *       if: changed = a1b2c3d                           # changed since a specific commit
-   *       if: changed = {CHANGE_HASH}                     # {NAME} -> process.env.NAME first
-   *       if: (changed or dirty) and not committed
-   */
-  export type IfNode =
-    | { kind: 'atom'; name: string; value?: string }
-    | { kind: 'not'; node: IfNode }
-    | { kind: 'and'; left: IfNode; right: IfNode }
-    | { kind: 'or'; left: IfNode; right: IfNode };
-
-  function resolveEnvPlaceholders(value: string): string {
-    return value.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => process.env[name] ?? '');
-  }
-
-  /** Recursive-descent parser over `tokenizeIf`'s output: expr := or ; or := and ('or' and)* ;
-   *  and := unary ('and' unary)* ; unary := 'not' unary | GROUP | NAME ['=' VALUE] */
-  export function parseIfExpr(raw: unknown): IfNode | undefined {
-    if (typeof raw !== 'string' || !raw.trim()) return undefined;
-    const tokens = tokenizeIf(raw);
-    if (!tokens.length) return undefined;
-    let i = 0;
-    const peek = () => tokens[i];
-    const next = () => tokens[i++];
-
-    function parseUnary(): IfNode {
-      if (peek()?.toLowerCase() === 'not') {
-        next();
-        return { kind: 'not', node: parseUnary() };
-      }
-      const tok = next() ?? '';
-      /** A token containing whitespace can only be a collapsed `(...)` group - plain
-       *  atom/operator tokens never do, since they're themselves split on whitespace. */
-      if (/\s/.test(tok)) {
-        const inner = parseIfExpr(tok);
-        if (!inner) throw new Error(`Empty group in "if" expression: "${raw}"`);
-        return inner;
-      }
-      let value: string | undefined;
-      if (peek() === '=') {
-        next();
-        value = resolveEnvPlaceholders(next() ?? '');
-      }
-      return { kind: 'atom', name: tok, value };
-    }
-
-    function parseAnd(): IfNode {
-      let node = parseUnary();
-      while (peek()?.toLowerCase() === 'and') {
-        next();
-        node = { kind: 'and', left: node, right: parseUnary() };
-      }
-      return node;
-    }
-
-    function parseOr(): IfNode {
-      let node = parseAnd();
-      while (peek()?.toLowerCase() === 'or') {
-        next();
-        node = { kind: 'or', left: node, right: parseAnd() };
-      }
-      return node;
-    }
-
-    return parseOr();
-  }
-
-  /** Evaluates a parsed `if` expression for one package. `statusCache` avoids repeat `git` calls
-   *  for the same reference hash across packages/scripts in a single run. */
-  export async function evaluateIf(
-    repository: Repository,
-    pkg: Package,
-    node: IfNode,
-    statusCache: Map<string, Record<string, Repository.PackageStatus>>,
-  ): Promise<boolean> {
-    if (node.kind === 'and') {
-      if (!(await evaluateIf(repository, pkg, node.left, statusCache))) return false;
-      return evaluateIf(repository, pkg, node.right, statusCache);
-    }
-    if (node.kind === 'or') {
-      if (await evaluateIf(repository, pkg, node.left, statusCache)) return true;
-      return evaluateIf(repository, pkg, node.right, statusCache);
-    }
-    if (node.kind === 'not') {
-      return !(await evaluateIf(repository, pkg, node.node, statusCache));
-    }
-    return evaluateIfAtom(repository, pkg, node.name, node.value, statusCache);
-  }
-
-  export async function runScript(
-    repository: Repository,
-    script: string,
-    options: Options & { commandName?: string } = {},
-  ): Promise<void> {
+/**
+ * A service class - see `ListService` for the shape and `Service` for the three measured
+ * consequences a namespace had.
+ *
+ * **Only `runScript` became a method**, because only it takes a repository. `getConfig`,
+ * `parseIfExpr`, `normalizeScriptValue` and the rest take a `Package` or a raw value and stay
+ * functions on the namespace below - the same rule that leaves `ChangeHashService` a namespace
+ * entirely. Declared before the namespace, which TypeScript requires for the merge.
+ */
+export class RunService extends Service {
+  async runScript(script: string, options: RunService.Options & { commandName?: string } = {}): Promise<void> {
+    const repository = this.repository;
     const commandName = options.commandName || 'run';
-    const rootCfg = getConfig(repository.rootPackage, script);
+    const rootCfg = RunService.getConfig(repository.rootPackage, script);
     const logLevelDefault = resolveRootLogLevel(repository);
 
     /** Standing inside a single package's own directory scopes the run to just that package
-     *  (and drops the root bookend below) unless `--root` asks for the whole repository anyway -
+     *  (and drops the root bookend below) unless `--from-root` asks for the whole repository anyway -
      *  a no-op when already at the root, or outside any known package. */
-    const cwdScope = options.root ? undefined : repository.currentPackage;
+    const cwdScope = options.fromRoot ? undefined : repository.currentPackage;
 
     /** Global fallback for topo - individual packages can still override their own linking below,
      *  but the initial sort (topological vs alphabetical) has to be decided for the whole list at once. */
@@ -408,20 +88,33 @@ export namespace RunService {
               ctx.lastLine = line;
             };
             if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine);
-            else await exec(step.command, { cwd, stdio: 'pipe', onLine });
+            else await exec(step.command, { cwd, stdio: 'pipe', onLine, app: pkg.repository.app });
           } else {
             /** Match the classic rman output: raw command output streams straight through
              *  (unbuffered, unprefixed), followed by our own one-line-per-step summary. */
             printLegacyExecutingLine(commandName, pkgLabel, step, pkgLogLevel);
             const stepStart = Date.now();
-            let stepError: any;
+            let stepError: Error | undefined;
             try {
               /** No capture with the panel off: the step owns the terminal, exactly as a shell
                *  step's `stdio: 'inherit'` does. */
               if (step.run) await runFunctionStep(step.run, pkg, cwd);
-              else await exec(step.command, { cwd, stdio: 'inherit' });
+              else await exec(step.command, { cwd, stdio: 'inherit', app: pkg.repository.app });
             } catch (e) {
-              stepError = e;
+              /**
+               * **Normalized to an `Error`, because a *falsy* throw was indistinguishable from no
+               * failure at all.** This was `let stepError: any` with `if (stepError) throw
+               * stepError` below, so a step doing `throw undefined` - legal JavaScript, and what a
+               * rejected promise carrying nothing gives you - left `stepError` falsy: the step
+               * line printed **success**, nothing was rethrown, and the run exited 0. Found by the
+               * spec written for the message-reporting fix above, which is the only reason it is
+               * not still there. A step that fails while reporting success is the one outcome this
+               * slot exists to rule out.
+               *
+               * Only the panel-off path had it: with the panel on there is no local catch, and the
+               * outer one runs whatever was thrown.
+               */
+              stepError = e instanceof Error ? e : new Error(messageOf(e));
             }
             printLegacyStepLine(commandName, pkgLabel, step, Date.now() - stepStart, pkgLogLevel, stepError);
             if (stepError) throw stepError;
@@ -482,7 +175,7 @@ export namespace RunService {
 
     const stepsByPackage = new Map<string, RunService.ScriptStep[]>();
     for (const pkg of packages) {
-      const pkgCfg = getConfig(pkg, script);
+      const pkgCfg = RunService.getConfig(pkg, script);
       if (pkgCfg.skip === true) continue;
       if (!(await passesIf(repository, pkg, pkgCfg.if, pkg.dirname, ifStatusCache))) continue;
       const steps = getScriptSteps(pkg, script);
@@ -590,6 +283,316 @@ export namespace RunService {
   }
 }
 
+export namespace RunService {
+  export interface Options extends PackageFilterOptions {
+    /** Max packages built at once: `true`/omitted = CPU count, a number = that many, `false` = serial (1). */
+    parallel?: boolean | number;
+    /** Respect the package dependency graph: a package waits for its dependencies and is skipped
+     *  if one fails. Default true (right for `build`). Set false for scripts like `lint`/`test`
+     *  where packages are independent - order becomes alphabetical and one package's failure
+     *  (or its dependency's) never skips another. */
+    topo?: boolean;
+    bail?: boolean;
+    changed?: boolean;
+    changedSince?: string;
+    /** Show the live progress panel. Default true; auto-disabled when stdout isn't a TTY. */
+    progress?: boolean;
+    /** Verbosity of the classic per-step log (only applies when the live panel is off). Falls back to
+     *  the root's `.rmanrc logLevel`, then 'info' - see `resolveRootLogLevel`. */
+    logLevel?: LogLevel;
+    /** Run across the whole repository even when the current directory is inside a single package
+     *  (which otherwise scopes the run to just that package, and skips the root's own pre/post
+     *  bookend - see `Repository.currentPackage`). Has no effect when already at the repository
+     *  root, or outside any known package. */
+    fromRoot?: boolean;
+  }
+
+  /**
+   * A package's `.rmanrc` (cascaded) can configure `run.<script>.*` - e.g.
+   *   run:
+   *     build:
+   *       concurrency: 2
+   *     lint:
+   *       topo: false
+   *       bail: false
+   * and a package can opt itself out of a script entirely:
+   *   run:
+   *     build:
+   *       skip: true
+   * or supply the command(s) to run when its own package.json doesn't define this script (or its
+   * pre/post hooks) at all - a single string, or an array to run several in sequence - see
+   * `getScriptSteps`:
+   *   run:
+   *     build:
+   *       before: [node ./generate.js, node ./validate.js]
+   *       exec: tsc -b
+   *       after: node ./copy-assets.js
+   *       override: true   # use these even if the package *does* define its own
+   *
+   * A bare string is shorthand for `exec`, which is by far the common case - a script that is just
+   * a command, with nothing to configure about how it runs:
+   *   run:
+   *     test: mocha          # same as   test: { exec: mocha }
+   */
+  /**
+   * One step of a script - a shell command, or a function ([`RunStepFn`](../core/run-step.ts)).
+   *
+   * A union rather than one shape with two optional fields, so every consumer is made to say which
+   * it is handling: the executor that forgets is the one that silently runs nothing, which is
+   * exactly the bug this type replaces (a function in `after` used to be dropped by
+   * `normalizeScriptValue` and reported as a step that succeeded).
+   */
+  export type ScriptStep = CommandStep | FunctionStep;
+
+  interface StepBase {
+    /** The slot it came from - `before`/`exec`/`after`, which is what the log line shows. */
+    name: string;
+    /** What the progress panel and the per-step log print: the command itself, or the function's
+     *  own name. */
+    label: string;
+  }
+
+  export interface CommandStep extends StepBase {
+    command: string;
+    run?: undefined;
+  }
+
+  export interface FunctionStep extends StepBase {
+    run: RunStepFn;
+    command?: undefined;
+  }
+
+  /** The three slots a script is made of, each one step or several run in sequence. The same three
+   *  names a `.rmanrc "run.<script>"` block uses, because they are the same three things. */
+  export interface ScriptSlots {
+    before?: RunStepValue[];
+    exec?: RunStepValue[];
+    after?: RunStepValue[];
+  }
+
+  /**
+   * Where a package's steps can come from besides its `.rmanrc`.
+   *
+   * The core knows one source: the config. **`package.json#scripts` is not a source the core has**,
+   * because "a script lives in package.json" is true of a Node repository and of nothing else -
+   * the `node` built-in contributes that one (with npm's `pre<script>`/`post<script>` convention and its
+   * `&&` splitting), and a plugin for another ecosystem would contribute its own.
+   *
+   * Returns `undefined` for "this package declares nothing", not empty slots - the difference
+   * decides whether the config's value applies.
+   */
+  export type StepSource = (pkg: Package, script: string) => ScriptSlots | undefined;
+
+  /**
+   * What the *package itself* declares for the lifecycle `script`, from the contributed sources
+   * alone - no `.rmanrc` involved. `undefined` when it declares nothing.
+   *
+   * Exported because `run` is not the only lifecycle rman wraps: `version` runs hooks around the
+   * version write, and npm spells those `preversion`/`version`/`postversion` in `package.json` -
+   * which is the same `pre<script>`/`<script>`/`post<script>` shape a step source already answers.
+   * So `VersionService` asks here for `'version'` instead of reading `manifest.raw.scripts` itself,
+   * and npm's version lifecycle keeps working with no second seam and no extra line in any plugin.
+   * A plugin for another ecosystem gets its own lifecycle hooks the moment it contributes steps.
+   */
+  export function contributedSlots(pkg: Package, script: string): ScriptSlots | undefined {
+    return contributedSlotsFor(pkg, script);
+  }
+
+  /**
+   * Runs one slot of a lifecycle belonging to some operation other than `run` itself - `version`'s
+   * hooks around the version write are the only one so far.
+   *
+   * **Here rather than in `VersionService`, because the rule it applies is this service's**: the
+   * package's own declaration for `script` wins over the caller's `fallback`, slot by slot, exactly
+   * as `getScriptSteps` decides it for `run`. Kept in two places that rule would drift, and one of
+   * the copies would sit in the file that writes versions - which now runs no command of its own at
+   * all.
+   *
+   * `fallback` is the caller's own configured step(s), **already evaluated**: `version`'s three
+   * paths are in `DEFERRED_PATHS` precisely because only the caller can bind
+   * `${{ pkg.targetVersion }}`, so interpolating here would either be too early or need a scope this
+   * service has no business holding.
+   *
+   * **A list, not one joined string.** `VersionService` used to `join(' && ')` an array into a
+   * single shell line, which a function step cannot be part of - and which quietly changed the
+   * semantics of the shell case too, since `cd x && y` in one process is not the same as two.
+   */
+  export async function runLifecycleSlot(
+    pkg: Package,
+    script: string,
+    slot: keyof ScriptSlots,
+    fallback?: RunStepValue[],
+  ): Promise<void> {
+    const own = contributedSlots(pkg, script)?.[slot] ?? [];
+    const values = own.length ? own : (fallback ?? []);
+    for (const value of values) {
+      if (typeof value === 'function') {
+        await value(createStepContext(pkg, pkg.dirname));
+        continue;
+      }
+      await exec(value, { cwd: pkg.dirname, stdio: 'inherit', app: pkg.repository.app });
+    }
+  }
+
+  export function getConfig(pkg: Package, script: string): Record<string, unknown> {
+    const runCfg = pkg.config?.run;
+    const cfg = runCfg && typeof runCfg === 'object' ? (runCfg as Record<string, unknown>)[script] : undefined;
+    /** The bare-value shorthand. A function is `typeof 'function'`, not `'object'`, so without
+     *  naming it here `run: { build: myFn }` fell through to the `{}` below - the long form would
+     *  have worked and the short one silently done nothing, an arbitrary difference. */
+    if (typeof cfg === 'string' || typeof cfg === 'function' || Array.isArray(cfg)) return { exec: cfg };
+    return cfg && typeof cfg === 'object' ? (cfg as Record<string, unknown>) : {};
+  }
+
+  /**
+   * The context a function step or `if` is handed - see [`RunStepContext`](../core/run-step.ts).
+   *
+   * `runBin` and `logger` are bound to *this run* rather than left to be imported, which is the
+   * whole reason they are handed over: an imported `runBin` knows neither the cwd nor the resolved
+   * log level.
+   */
+  /**
+   * A `run.<script>.before`/`.exec`/`.after` (or `version.<slot>`) value: one step, or several to
+   * run in sequence. A shell command or a function, and a list may mix them.
+   *
+   * **Anything else throws, naming the path.** It used to `return []`, which meant a value rman did
+   * not recognize was dropped with no trace: writing a function here - the obvious guess, and now
+   * the supported form - produced `1 succeeded, 0 failed` with the step never run (measured). A
+   * configuration mistake has to be loud; silence here reads as success.
+   *
+   * Exported, and the only implementation: `VersionService` used to carry a second one that behaved
+   * differently, which is how `version.<slot>` came to join its array with `' && '`.
+   */
+  export function normalizeScriptValue(value: unknown, at: string): RunStepValue[] {
+    const items = Array.isArray(value) ? value : [value];
+    const steps: RunStepValue[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      /** An empty string and an absent value are both "nothing here", which is how a `"[*]"` block
+       *  declaring a slot some packages don't use has always behaved. */
+      if (item === undefined || item === null || item === '') continue;
+      if (typeof item === 'string' || typeof item === 'function') {
+        steps.push(item as RunStepValue);
+        continue;
+      }
+      const where = Array.isArray(value) ? `${at}[${i}]` : at;
+      throw new Error(
+        `"${where}" must be a shell command or a function, but it is ${describeValue(item)}.\n` +
+          `  A list of either (or both) runs them in sequence.`,
+      );
+    }
+    return steps;
+  }
+
+  export function createStepContext(pkg: Package, cwd: string): RunStepContext {
+    const logLevel = resolveRootLogLevel(pkg.repository);
+    return {
+      pkg,
+      repository: pkg.repository,
+      cwd,
+      runBin: (bin, argv, opts) => runBin(bin, argv, { cwd, logLevel, app: pkg.repository.app, ...opts }),
+      logger: new Logger(logLevel),
+    };
+  }
+
+  /**
+   * `.rmanrc` conditional execution, GitHub Actions-`if`-flavored but a small closed grammar
+   * instead of a full expression language (less to get wrong, still covers what's asked for) -
+   * atoms combined with `and`/`or` (`and` binds tighter, same as most languages) and `(...)`:
+   *
+   *   run:
+   *     build:
+   *       if: changed                                    # changed since the last publish
+   *     test:
+   *       if: changed = a1b2c3d                           # changed since a specific commit
+   *       if: changed = {CHANGE_HASH}                     # {NAME} -> process.env.NAME first
+   *       if: (changed or dirty) and not committed
+   */
+  export type IfNode =
+    | { kind: 'atom'; name: string; value?: string }
+    | { kind: 'not'; node: IfNode }
+    | { kind: 'and'; left: IfNode; right: IfNode }
+    | { kind: 'or'; left: IfNode; right: IfNode };
+
+  function resolveEnvPlaceholders(value: string): string {
+    return value.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => process.env[name] ?? '');
+  }
+
+  /** Recursive-descent parser over `tokenizeIf`'s output: expr := or ; or := and ('or' and)* ;
+   *  and := unary ('and' unary)* ; unary := 'not' unary | GROUP | NAME ['=' VALUE] */
+  export function parseIfExpr(raw: unknown): IfNode | undefined {
+    if (typeof raw !== 'string' || !raw.trim()) return undefined;
+    const tokens = tokenizeIf(raw);
+    if (!tokens.length) return undefined;
+    let i = 0;
+    const peek = () => tokens[i];
+    const next = () => tokens[i++];
+
+    function parseUnary(): IfNode {
+      if (peek()?.toLowerCase() === 'not') {
+        next();
+        return { kind: 'not', node: parseUnary() };
+      }
+      const tok = next() ?? '';
+      /** A token containing whitespace can only be a collapsed `(...)` group - plain
+       *  atom/operator tokens never do, since they're themselves split on whitespace. */
+      if (/\s/.test(tok)) {
+        const inner = parseIfExpr(tok);
+        if (!inner) throw new Error(`Empty group in "if" expression: "${raw}"`);
+        return inner;
+      }
+      let value: string | undefined;
+      if (peek() === '=') {
+        next();
+        value = resolveEnvPlaceholders(next() ?? '');
+      }
+      return { kind: 'atom', name: tok, value };
+    }
+
+    function parseAnd(): IfNode {
+      let node = parseUnary();
+      while (peek()?.toLowerCase() === 'and') {
+        next();
+        node = { kind: 'and', left: node, right: parseUnary() };
+      }
+      return node;
+    }
+
+    function parseOr(): IfNode {
+      let node = parseAnd();
+      while (peek()?.toLowerCase() === 'or') {
+        next();
+        node = { kind: 'or', left: node, right: parseAnd() };
+      }
+      return node;
+    }
+
+    return parseOr();
+  }
+
+  /** Evaluates a parsed `if` expression for one package. `statusCache` avoids repeat `git` calls
+   *  for the same reference hash across packages/scripts in a single run. */
+  export async function evaluateIf(
+    repository: Repository,
+    pkg: Package,
+    node: IfNode,
+    statusCache: Map<string, Record<string, Repository.PackageStatus>>,
+  ): Promise<boolean> {
+    if (node.kind === 'and') {
+      if (!(await evaluateIf(repository, pkg, node.left, statusCache))) return false;
+      return evaluateIf(repository, pkg, node.right, statusCache);
+    }
+    if (node.kind === 'or') {
+      if (await evaluateIf(repository, pkg, node.left, statusCache)) return true;
+      return evaluateIf(repository, pkg, node.right, statusCache);
+    }
+    if (node.kind === 'not') {
+      return !(await evaluateIf(repository, pkg, node.node, statusCache));
+    }
+    return evaluateIfAtom(repository, pkg, node.name, node.value, statusCache);
+  }
+}
+
 /**
  * Classic one-line-per-step log ("info build pkg ┆ step success ┆ command  (123 ms)"),
  * matching rman's original npmlog-based output. Used when the live panel is off.
@@ -664,6 +667,19 @@ function toStep(slot: string, value: RunStepValue): RunService.ScriptStep {
  *
  * Restored in a `finally`, because a step that throws must not leave the rest of the run writing
  * into a log nobody reads.
+ *
+ * **Its failure message is reported here, because nothing else does it.** A shell step's reason
+ * reaches the user on its own - the output streams through `onLine` or straight to the terminal,
+ * and `exec` names the command and its exit code. A function step has neither: it fails by
+ * throwing, and the throw goes to the outer `catch` that marks the package failed and rethrows an
+ * error the CLI treats as already-logged. Measured on a real config whose build step threw a
+ * carefully worded message about a missing `tsconfig.json`: the run printed
+ * `error build pkg-forgot ┆ exec failed ┆ buildWithTsc` and exited 1, and the message appeared
+ * nowhere at all - so the one thing that said what to do was the one thing dropped.
+ *
+ * Written where a shell step's output goes, so it needs no second channel: through `onLine` with
+ * the panel on (the step's own log, which is what the panel shows for a failed item), and to
+ * stderr with it off, ahead of the `failed` line - the order a shell step already produces.
  */
 async function runFunctionStep(
   run: RunStepFn,
@@ -673,7 +689,12 @@ async function runFunctionStep(
 ): Promise<void> {
   const context = RunService.createStepContext(pkg, cwd);
   if (!onLine) {
-    await run(context);
+    try {
+      await run(context);
+    } catch (e: any) {
+      console.error(colors.red(messageOf(e)));
+      throw e;
+    }
     return;
   }
   const console_ = globalThis.console as unknown as Record<string, (...args: any[]) => void>;
@@ -688,9 +709,21 @@ async function runFunctionStep(
   }
   try {
     await run(context);
+  } catch (e: any) {
+    /** Through the patched `console` deliberately - `onLine` is still installed at this point, so
+     *  the message lands in this step's log rather than over the panel it is drawn inside. */
+    for (const line of messageOf(e).split('\n')) onLine(line);
+    throw e;
   } finally {
     for (const method of CAPTURED_CONSOLE) console_[method] = original[method];
   }
+}
+
+/** What a thrown value has to say for itself. A step may throw anything, and `String(undefined)`
+ *  reading as `undefined` in a run log is worse than saying nothing was said. */
+function messageOf(error: unknown): string {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return message.trim() || `the step threw ${inspect(error)}`;
 }
 
 const CAPTURED_CONSOLE = ['log', 'info', 'warn', 'error', 'debug'] as const;
@@ -742,7 +775,7 @@ async function passesIf(
 function getScriptSteps(pkg: Package, script: string): RunService.ScriptStep[] {
   const cfg = RunService.getConfig(pkg, script);
   const override = cfg.override === true;
-  const contributed = firstContributed(pkg, script);
+  const contributed = contributedSlotsFor(pkg, script);
 
   const fromConfig: RunService.ScriptSlots = {
     before: RunService.normalizeScriptValue(cfg.before, `run.${script}.before`),
@@ -760,20 +793,23 @@ function getScriptSteps(pkg: Package, script: string): RunService.ScriptStep[] {
   return steps;
 }
 
-/** The first source that says this package declares the script at all. Declaration order, so a
- *  repository listing two plugins gets a predictable answer rather than a merged one. */
-function firstContributed(pkg: Package, script: string): RunService.ScriptSlots | undefined {
-  for (const source of stepSources) {
-    const slots = source(pkg, script);
-    if (slots && (slots.before?.length || slots.exec?.length || slots.after?.length)) return slots;
-  }
-  return undefined;
+/**
+ * What this package's own technology says it declares for `script`.
+ *
+ * **Its own, not every registered one.** This walked all the contributed sources and took the first
+ * that answered, which in a polyglot repository meant npm's `package.json#scripts` reader was handed
+ * a Cargo package and asked whether it declared `build` - its first line is
+ * `pkg.manifest.raw?.scripts`, so it was reading a manifest another technology produced. The package
+ * already knows which technology claimed it; asking anyone else was only ever a way of finding that
+ * out again.
+ */
+function contributedSlotsFor(pkg: Package, script: string): RunService.ScriptSlots | undefined {
+  const slots = pkg.platform.getRunSteps?.(pkg, script);
+  return slots && (slots.before?.length || slots.exec?.length || slots.after?.length) ? slots : undefined;
 }
 
 /** In execution order - `before`, the script itself, then `after`. */
 const SCRIPT_SLOTS = ['before', 'exec', 'after'] as const;
-
-const stepSources: RunService.StepSource[] = [];
 
 /**
  * Splits on whitespace, but a `(...)` group collapses to a single token holding its inner text
@@ -876,4 +912,10 @@ export function resolveLogLevel(
   if (cliValue !== undefined) return cliValue;
   const v = RunService.getConfig(pkg, script).logLevel;
   return typeof v === 'string' && (LOG_LEVELS as string[]).includes(v) ? (v as LogLevel) : fallback;
+}
+
+declare module '../core/service.js' {
+  interface ServiceMap {
+    run: RunService;
+  }
 }

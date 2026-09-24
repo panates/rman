@@ -2,76 +2,26 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
+import { Service } from '../core/service.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { ChangeHashService } from './change-hash.service.js';
 import { ConventionalCommitsService } from './conventional-commits.service.js';
 
-export namespace ChangelogService {
-  export interface Options extends PackageFilterOptions {
-    /** Generate the changelog since this commit/hash - applied the same way to every package.
-     *  Default (also `"auto"` explicitly): auto-detect it per package instead, from that package's
-     *  own most recent release tag first - the same lookup `VersionService`/`changed` use, so this
-     *  never disagrees with them - falling back to whatever its own ecosystem's registry reports
-     *  only when it has no tag yet (`ManifestProvider.publishedVersion`, and only ever to guess a
-     *  tag name - see `detectChangeHash`); a package this can't be resolved for either way (never
-     *  tagged, unpublished, no plugin) has never been released at all, so its whole history counts
-     *  as unreleased - the same view `version` takes. */
-    from?: string;
-    /** Generate for the whole repository even when the current directory is inside a single
-     *  package (which otherwise scopes it to just that package) - see `Repository.currentPackage`. */
-    root?: boolean;
-    /** Where a package's changelog file lives, relative to *that package's own* directory -
-     *  default `'CHANGELOG.md'`. Applies the same way to every package; for a package that wants
-     *  its own filename instead, use `.rmanrc changelog.filePath` (cascaded, per-package
-     *  overridable) rather than this option - see `resolveFilePath`. Consulted even without
-     *  `write`: when auto-detecting, if this file already exists its own last-modifying commit
-     *  also lower-bounds the boundary, so a stale file (last updated for an older version than
-     *  what's actually published) doesn't get changes silently skipped over - see
-     *  `detectChangeHash`'s `catchUpFile`. */
-    filePath?: string;
-    /** A package with `.rmanrc "publish.skip"` is excluded by default - little point changelogging
-     *  something that's never actually released. Set true to generate for it anyway. */
-    includeSkipped?: boolean;
-    /** The version these entries are being generated *for* - what `{{version}}` renders as.
-     *  Without it the version is read back from git tags (see `resolveVersion`), which is only
-     *  correct once the release being described has actually been tagged. A caller generating
-     *  notes for a release that doesn't exist yet - `version --changelog` writing the entry before
-     *  it commits and tags, or a CI step producing release notes ahead of the bump - already knows
-     *  the number and has to say so, otherwise every entry ends up labelled with the *previous*
-     *  release's version. */
-    version?: string;
-  }
-
-  /** One package's (root included) generated changelog entry - what `getEntries`/`generate`
-   *  return. */
-  export interface Entry {
-    package: Package;
-    /** Display name for this entry's heading - `"<repo dir name> repository"` for the root
-     *  package, its own name otherwise (see `getEntries`'s doc comment on `{{package}}`). */
-    label: string;
-    /** `options.version` when the caller gave one, otherwise resolved from git tags rather than
-     *  package.json - see `resolveVersion`. */
-    version: string;
-    features: string[];
-    fixes: string[];
-    other: string[];
-    /** The fully rendered entry, via `.rmanrc changelog.template` (or the built-in default). */
-    content: string;
-    /** Where this entry would be (or, with `options.write`, was) written, relative to the
-     *  package's own directory - see `GetOptions.filePath`. */
-    filePath: string;
-  }
-
+/**
+ * A service class - see `ListService` for the shape and `Service` for the three measured
+ * consequences a namespace had. `repository` left the signature because the application carries it.
+ */
+export class ChangelogService extends Service {
   /**
    * Same as `getEntries`, and additionally - for every returned entry, when `options.write` is
-   * set - prepends `entry.content` into that package's own changelog file (see `Entry.filePath`).
+   * set - prepends `entry.content` into that package's own changelog file (see `ChangelogService.Entry.filePath`).
    * Still pure with respect to console output: writing a file is a real, callable-for-its-own-
    * sake side effect (a "save this" request), not presentation, so it stays here rather than in
    * the CLI command - printing what happened is the command's job.
    */
-  export async function generateToFile(repository: Repository, options: Options = {}): Promise<Entry[]> {
-    const entries = await getEntries(repository, options);
+  async generateToFile(options: ChangelogService.Options = {}): Promise<ChangelogService.Entry[]> {
+    const entries = await this.getEntries(options);
     for (const entry of entries) prependToChangelogFile(entry.package, entry.filePath, entry.content);
     return entries;
   }
@@ -113,10 +63,11 @@ export namespace ChangelogService {
    * changelog.tagPattern`.
    *
    * Run from inside a single package's own directory, it only covers that package unless
-   * `options.root` says otherwise (see `Repository.currentPackage`).
+   * `options.fromRoot` says otherwise (see `Repository.currentPackage`).
    */
-  export async function getEntries(repository: Repository, options: Options = {}): Promise<Entry[]> {
-    const cwdScope = options.root ? undefined : repository.currentPackage;
+  async getEntries(options: ChangelogService.Options = {}): Promise<ChangelogService.Entry[]> {
+    const repository = this.repository;
+    const cwdScope = options.fromRoot ? undefined : repository.currentPackage;
     const packages = repository.getPackages().filter(p => p !== repository.rootPackage);
     const targets = (cwdScope ? [cwdScope] : filterPackages([repository.rootPackage, ...packages], options)).filter(
       pkg => options.includeSkipped || !pkg.config.publish?.skip,
@@ -157,7 +108,7 @@ export namespace ChangelogService {
       }),
     );
 
-    const entries: Entry[] = [];
+    const entries: ChangelogService.Entry[] = [];
     for (let i = 0; i < targets.length; i++) {
       const pkg = targets[i];
       const ownCommits = commitsByTarget[i].filter(c => ownersOf(repository, c).has(pkg));
@@ -358,4 +309,67 @@ function prependToChangelogFile(pkg: Package, relFilePath: string, content: stri
   const rest = headerMatch ? existing.slice(headerMatch[0].length) : existing;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, header + content.trimEnd() + '\n\n' + rest);
+}
+
+export namespace ChangelogService {
+  export interface Options extends PackageFilterOptions {
+    /** Generate the changelog since this commit/hash - applied the same way to every package.
+     *  Default (also `"auto"` explicitly): auto-detect it per package instead, from that package's
+     *  own most recent release tag first - the same lookup `VersionService`/`changed` use, so this
+     *  never disagrees with them - falling back to whatever its own ecosystem's registry reports
+     *  only when it has no tag yet (`Plugin.publishedVersion`, and only ever to guess a
+     *  tag name - see `detectChangeHash`); a package this can't be resolved for either way (never
+     *  tagged, unpublished, no plugin) has never been released at all, so its whole history counts
+     *  as unreleased - the same view `version` takes. */
+    from?: string;
+    /** Generate for the whole repository even when the current directory is inside a single
+     *  package (which otherwise scopes it to just that package) - see `Repository.currentPackage`. */
+    fromRoot?: boolean;
+    /** Where a package's changelog file lives, relative to *that package's own* directory -
+     *  default `'CHANGELOG.md'`. Applies the same way to every package; for a package that wants
+     *  its own filename instead, use `.rmanrc changelog.filePath` (cascaded, per-package
+     *  overridable) rather than this option - see `resolveFilePath`. Consulted even without
+     *  `write`: when auto-detecting, if this file already exists its own last-modifying commit
+     *  also lower-bounds the boundary, so a stale file (last updated for an older version than
+     *  what's actually published) doesn't get changes silently skipped over - see
+     *  `detectChangeHash`'s `catchUpFile`. */
+    filePath?: string;
+    /** A package with `.rmanrc "publish.skip"` is excluded by default - little point changelogging
+     *  something that's never actually released. Set true to generate for it anyway. */
+    includeSkipped?: boolean;
+    /** The version these entries are being generated *for* - what `{{version}}` renders as.
+     *  Without it the version is read back from git tags (see `resolveVersion`), which is only
+     *  correct once the release being described has actually been tagged. A caller generating
+     *  notes for a release that doesn't exist yet - `version --changelog` writing the entry before
+     *  it commits and tags, or a CI step producing release notes ahead of the bump - already knows
+     *  the number and has to say so, otherwise every entry ends up labelled with the *previous*
+     *  release's version. */
+    version?: string;
+  }
+
+  /** One package's (root included) generated changelog entry - what `getEntries`/`generate`
+   *  return. */
+  export interface Entry {
+    package: Package;
+    /** Display name for this entry's heading - `"<repo dir name> repository"` for the root
+     *  package, its own name otherwise (see `getEntries`'s doc comment on `{{package}}`). */
+    label: string;
+    /** `options.version` when the caller gave one, otherwise resolved from git tags rather than
+     *  package.json - see `resolveVersion`. */
+    version: string;
+    features: string[];
+    fixes: string[];
+    other: string[];
+    /** The fully rendered entry, via `.rmanrc changelog.template` (or the built-in default). */
+    content: string;
+    /** Where this entry would be (or, with `options.write`, was) written, relative to the
+     *  package's own directory - see `GetOptions.filePath`. */
+    filePath: string;
+  }
+}
+
+declare module '../core/service.js' {
+  interface ServiceMap {
+    changelog: ChangelogService;
+  }
 }

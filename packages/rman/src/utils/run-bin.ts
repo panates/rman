@@ -1,10 +1,20 @@
 import { spawn } from 'node:child_process';
 import colors from 'ansi-colors';
+import type { RmanApplication } from '../core/application.js';
 import { BinPath } from './bin-path.js';
 import { trackChild } from './child-tracker.js';
 import { LOG_LEVELS, type LogLevel } from './logger.js';
 
 export interface RunBinOptions {
+  /**
+   * The application whose technologies put a repository's locally installed binaries on PATH -
+   * `node_modules/.bin` for a Node repository, whatever another technology uses.
+   *
+   * Passed rather than looked up, so a command run against one repository can never pick up the
+   * binaries of another in the same process. Omitted (a caller outside any repository) leaves the
+   * inherited PATH exactly as it was, which is also what a repository naming no plugin gets.
+   */
+  app?: RmanApplication;
   /** Where to run it, and the directory `node_modules/.bin` is resolved from. Default `process.cwd()`. */
   cwd?: string;
   /** 'inherit' streams the child's output straight to the terminal; 'pipe' captures it and resolves
@@ -61,7 +71,7 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
   const child = spawn(process.platform === 'win32' ? `${bin}.cmd` : bin, argv, {
     cwd,
     stdio: stdio === 'inherit' ? 'inherit' : 'pipe',
-    env: BinPath.env({ cwd, env: options.env }) as NodeJS.ProcessEnv,
+    env: BinPath.env({ cwd, env: options.env, app: options.app }) as NodeJS.ProcessEnv,
     windowsHide: true,
   });
   /** So an interrupted rman does not leave this running - `exec` always did this and this did not,

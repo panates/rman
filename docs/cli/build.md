@@ -14,8 +14,8 @@ almost every project has).
 ## Options
 
 Identical to [`rman run <script>`](run.md#options) (package filtering, branch guard, `--parallel`,
-`--bail`, `--topo`, `--progress`, `--changed`/`--changed-since`, `--root`) - see that page for the
-full table.
+`--bail`, `--topo`, `--progress`, `--changed`/`--changed-since`, `--from-root`) - see that page
+for the full table.
 
 ## Examples
 

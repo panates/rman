@@ -5,7 +5,7 @@ import path from 'node:path';
 import { expect } from 'expect';
 import { Repository } from '../../src/core/repository.js';
 import { assertAllowedBranch } from '../../src/utils/branch-guard.js';
-import { useTestEcosystem } from '../_fixture.js';
+import { createRepository, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-branch-guard-test-'));
@@ -56,7 +56,7 @@ describe('utils/branch-guard', () => {
     git(dir, 'add', '-A');
     git(dir, 'commit', '-q', '-m', 'init');
     git(dir, 'checkout', '-q', '-b', branch);
-    return Repository.create(dir);
+    return createRepository(dir);
   }
 
   describe('with neither allowBranch nor ignoreBranch set anywhere', () => {

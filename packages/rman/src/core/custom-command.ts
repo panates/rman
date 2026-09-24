@@ -1,7 +1,8 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import fastGlob from 'fast-glob';
 import type { ArgumentsCamelCase, Argv } from 'yargs';
+import type { RmanConfig as CommandDeclaration } from '../interfaces/rman-config.interface.js';
 import type { Logger } from '../utils/logger.js';
 import type { RunBinOptions, RunBinResult } from '../utils/run-bin.js';
 import type { Package } from './package.js';
@@ -121,10 +122,23 @@ export function defineCommand(command: CustomCommand): CustomCommand {
   return command;
 }
 
-export interface LoadedCommand extends CustomCommand {
+/**
+ * One command module that loaded, in whichever form it exported.
+ *
+ * Both forms are accepted, and the same pair is accepted for a command written straight into
+ * `.rmanrc "commands"` - one key, one set of rules. The declarative factory is what rman asks a
+ * command author to write; a repository's own command should not be stuck on the older object
+ * shape just because it lives in a file rather than in a config.
+ */
+export interface LoadedCommand {
   /** The command's name - its file's basename, or the first word of an explicit `command`. */
   name: string;
   file: string;
+  /** The declarative form (`app => ({ ... })`). `cli.ts` runs it where a plugin's and a built-in's
+   *  own factories run, because it wants `app.repository` and loading happens before one exists. */
+  register?: CommandDeclaration.CommandRegisterFunction;
+  /** The `defineCommand({ ... })` object form, already checked and named. */
+  custom?: CustomCommand & { command: string };
 }
 
 /** A module that couldn't be loaded or doesn't look like a command. Reported, never thrown: one
@@ -135,41 +149,76 @@ export interface CommandLoadError {
 }
 
 /**
- * Loads every command module in `<root>/.rman`. A repository without that directory pays nothing -
- * no scan, no imports - which matters because this runs on *every* rman invocation, `info`
- * included.
+ * The globs a repository's own commands are loaded from when it names none: `.rman/*.{js,mjs,cjs}`
+ * under the repository root.
+ *
+ * **`.rman/` is this default, not a second mechanism.** It used to be a hardcoded directory scan
+ * beside which `commands` would have been a third source of repository-level commands - and a
+ * third precedence question. Making it the default value instead leaves one source, one slot, and
+ * a zero-config path that behaves exactly as it did.
+ */
+export function defaultCommandGlobs(rootDir: string): string[] {
+  return [path.join(rootDir, CUSTOM_COMMAND_DIR, `*{${EXTENSIONS.join(',')}}`)];
+}
+
+/**
+ * Loads every command module matching `patterns` - absolute globs, already anchored to whichever
+ * config file declared them (see `anchorContributions`).
+ *
+ * A repository matching nothing pays for one glob and no imports, which matters because this runs
+ * on *every* rman invocation, `info` included.
+ *
+ * **Deduplicated by resolved path**, because `commands` appends at every level and cascades: the
+ * root's glob reaches each package's resolved config too, so the same file is named more than once
+ * as a matter of course rather than as a mistake. Loading it twice would register the command
+ * twice, which yargs does not survive.
  *
  * Each failure is collected rather than thrown, so the rest of the CLI keeps working; the caller
  * warns about them. What is *not* tolerated is a module that would shadow a built-in - see
  * `assertNoBuiltinShadowing`.
  */
 export async function loadCustomCommands(
-  rootDir: string,
+  patterns: string[],
 ): Promise<{ commands: LoadedCommand[]; errors: CommandLoadError[] }> {
-  const dir = path.join(rootDir, CUSTOM_COMMAND_DIR);
   const commands: LoadedCommand[] = [];
   const errors: CommandLoadError[] = [];
-  if (!fs.existsSync(dir)) return { commands, errors };
+  if (!patterns.length) return { commands, errors };
 
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    if (!entry.isFile() || !EXTENSIONS.includes(path.extname(entry.name))) continue;
-    const file = path.join(dir, entry.name);
+  /** Sorted so the order a command is registered in does not depend on the filesystem, and
+   *  `absolute` because a pattern may name a directory outside the repository entirely - which is
+   *  exactly what a shared config shipping its own commands does. */
+  const files = await fastGlob(
+    patterns.map(p => p.split(path.sep).join('/')),
+    { absolute: true, onlyFiles: true },
+  );
+  for (const file of [...new Set(files.map(f => path.resolve(f)))].sort()) {
     try {
       const mod: any = await import(pathToFileURL(file).href);
-      const command: CustomCommand | undefined = mod?.default ?? mod?.command;
-      if (!command || typeof command !== 'object') {
-        throw new Error('no default export - end the module with `export default defineCommand({ ... })`');
+      const exported = mod?.default ?? mod?.command;
+      const basename = path.basename(file, path.extname(file));
+
+      /** The declarative form. Nothing to check here beyond its shape - the factory has not run,
+       *  so there is no metadata to validate yet; `cli.ts` checks what it returns. */
+      if (typeof exported === 'function') {
+        commands.push({ name: basename, file, register: exported });
+        continue;
       }
+      if (!exported || typeof exported !== 'object') {
+        throw new Error(
+          'no command exported - end the module with `export default defineCommand({ ... })`, or with ' +
+            'the declarative `export default app => ({ ... })`',
+        );
+      }
+      const command = exported as CustomCommand;
       if (typeof command.handler !== 'function') throw new Error('"handler" is missing, or is not a function');
       if (typeof command.describe !== 'string' || !command.describe) {
         throw new Error('"describe" is missing - `rman --help` has nothing to list the command by without it');
       }
       const declared = command.command?.trim();
       commands.push({
-        ...command,
-        command: declared || path.basename(entry.name, path.extname(entry.name)),
-        name: (declared || path.basename(entry.name, path.extname(entry.name))).split(/\s+/)[0],
+        name: (declared || basename).split(/\s+/)[0],
         file,
+        custom: { ...command, command: declared || basename },
       });
     } catch (e: any) {
       errors.push({ file, reason: e?.message ?? String(e) });
@@ -184,7 +233,10 @@ export async function loadCustomCommands(
  * `rman publish` that is safe to guess at. Silently preferring either one would leave whoever typed
  * it unable to tell which ran.
  */
-export function assertNoBuiltinShadowing(commands: LoadedCommand[], builtins: readonly string[]): void {
+export function assertNoBuiltinShadowing(
+  commands: readonly { name: string; file: string }[],
+  builtins: readonly string[],
+): void {
   const clash = commands.find(c => builtins.includes(c.name));
   if (!clash) return;
   throw new Error(

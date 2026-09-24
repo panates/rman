@@ -3,8 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { ImportService, Repository } from '../../src/index.js';
-import { useTestEcosystem } from '../_fixture.js';
+import { createRepository, service, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-import-test-'));
@@ -70,9 +69,9 @@ describe('services/import', () => {
   it('places the source repo\'s files under packages/<name>, defaulting the dest to "packages"', async () => {
     const src = sourceRepoFixture();
     const dir = targetRepoFixture();
-    const repo = await Repository.create(dir);
+    await createRepository(dir);
 
-    const result = await ImportService.importRepo(repo, src);
+    const result = await service('import').importRepo(src);
 
     expect(result.name).toBe('my-lib');
     expect(result.commitCount).toBe(3);
@@ -84,9 +83,9 @@ describe('services/import', () => {
   it('preserves the full commit history - every original commit is now reachable in the target repo', async () => {
     const src = sourceRepoFixture();
     const dir = targetRepoFixture();
-    const repo = await Repository.create(dir);
+    await createRepository(dir);
 
-    await ImportService.importRepo(repo, src);
+    await service('import').importRepo(src);
 
     const log = git(dir, 'log', '--format=%s');
     expect(log).toContain('chore: init');
@@ -97,9 +96,9 @@ describe('services/import', () => {
   it('--dest places it under a different subdirectory', async () => {
     const src = sourceRepoFixture();
     const dir = targetRepoFixture();
-    const repo = await Repository.create(dir);
+    await createRepository(dir);
 
-    const result = await ImportService.importRepo(repo, src, { dest: 'libs' });
+    const result = await service('import').importRepo(src, { dest: 'libs' });
 
     expect(fs.existsSync(path.join(dir, 'libs/my-lib/package.json'))).toBe(true);
     expect(result.targetDir).toBe(path.join(dir, 'libs/my-lib'));
@@ -112,18 +111,18 @@ describe('services/import', () => {
     git(src, 'add', '-A');
     git(src, 'commit', '-q', '-m', 'init');
     const dir = targetRepoFixture();
-    const repo = await Repository.create(dir);
+    await createRepository(dir);
 
-    const result = await ImportService.importRepo(repo, src);
+    const result = await service('import').importRepo(src);
     expect(result.name).toBe(path.basename(src));
   });
 
   it('strips the scope for the directory name (e.g. "@scope/name" -> "name")', async () => {
     const src = sourceRepoFixture('@myorg/my-lib');
     const dir = targetRepoFixture();
-    const repo = await Repository.create(dir);
+    await createRepository(dir);
 
-    const result = await ImportService.importRepo(repo, src);
+    const result = await service('import').importRepo(src);
     expect(result.name).toBe('@myorg/my-lib');
     expect(fs.existsSync(path.join(dir, 'packages/my-lib/package.json'))).toBe(true);
   });
@@ -131,17 +130,17 @@ describe('services/import', () => {
   it('rejects a source path that is not a git repository', async () => {
     const src = tmp();
     const dir = targetRepoFixture();
-    const repo = await Repository.create(dir);
+    await createRepository(dir);
 
-    await expect(ImportService.importRepo(repo, src)).rejects.toThrow(/not a git repository/);
+    await expect(service('import').importRepo(src)).rejects.toThrow(/not a git repository/);
   });
 
   it('rejects when the target directory already exists', async () => {
     const src = sourceRepoFixture();
     const dir = targetRepoFixture();
     fs.mkdirSync(path.join(dir, 'packages/my-lib'), { recursive: true });
-    const repo = await Repository.create(dir);
+    await createRepository(dir);
 
-    await expect(ImportService.importRepo(repo, src)).rejects.toThrow(/already exists/);
+    await expect(service('import').importRepo(src)).rejects.toThrow(/already exists/);
   });
 });

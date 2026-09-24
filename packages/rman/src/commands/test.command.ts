@@ -1,18 +1,25 @@
-import type { Argv } from 'yargs';
-import type { Repository } from '../core/repository.js';
-import { RunService } from '../services/run.service.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertAllowedBranch, readBranchGuardOptions } from '../utils/branch-guard.js';
-import { applyRunOptions, readRunOptions } from './run.command.js';
+import { readRunOptions, runOptions } from '../utils/run-options.js';
 
-export function initCli(repository: Repository, program: Argv) {
-  program.command({
-    command: 'test',
-    configKeys: ['run.test'],
+const COMMAND = 'test' as const;
+const config = runOptions;
+type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
+
+const testCommand = registerCommand(app => {
+  const repository = app.repository;
+  return {
+    command: COMMAND,
     describe: 'Alias for "run test"',
-    builder: cmd => applyRunOptions(cmd).example('$0 test', '# Tests packages'),
-    handler: async args => {
+    /** Owns nothing, for the same reason `build` does not - see there. */
+    configKeys: ['run.test'],
+    config,
+    examples: [{ command: '$0 test', description: '# Tests packages' }],
+    handler: async (args: Args) => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));
-      await RunService.runScript(repository, 'test', { ...readRunOptions(args), commandName: 'test' });
+      await app.getService('run').runScript('test', { ...readRunOptions(args), commandName: 'test' });
     },
-  });
-}
+  };
+});
+
+export default testCommand;

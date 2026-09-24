@@ -1,19 +1,23 @@
 <!--
 docs-baseline
-git-commit: b6924c69810870582f615a81c97b587e4057910d
-package-version: 1.0.3
-date: 2026-09-13
+git-commit: f43a447
+package-version: 2.0.0-beta.2
+date: 2026-09-24
 
-Verified against `packages/rman/src/cli.ts` and every `packages/rman/src/commands/*.command.ts` as
-of the commit above (and the matching specs for behavior examples). `rman-node`'s three commands
-have their own index, [cli-node.md](cli-node.md). Before trusting/updating this file (or any page
-under `docs/cli/`) in a later session, run:
+Verified against `packages/rman/src/cli.ts`, every `packages/rman/src/commands/*.command.ts` and
+the `node` built-in's own commands as of the commit above (and the matching specs for behavior
+examples). There is no second index: `rman-node` was folded into rman, so every command a
+repository can run is listed here. Before trusting/updating this file (or any page under
+`docs/cli/`) in a later session, run:
 
-  git diff b6924c69810870582f615a81c97b587e4057910d..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/
+  git diff f43a447..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/ packages/rman/src/plugins/node/commands/
 
 and update only the pages touched by what that diff actually shows - don't regenerate everything
 unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
-`package-version`/`date` here and in every `docs/cli/*.md` page's own baseline comment.
+`package-version`/`date` above.
+
+The `docs/cli/*.md` pages carry no baseline of their own - this block covers them, since they are
+verified from the same diff. (It used to say to bump theirs too; none has ever had one.)
 -->
 
 # rman CLI Reference
@@ -44,12 +48,23 @@ rman <command> --help   # full option list for that one command
 | `diff [package]` | [`docs/cli/diff.md`](cli/diff.md) | Shows the git diff since a package's (or the repo's) last release tag. |
 | `changelog` | [`docs/cli/changelog.md`](cli/changelog.md) | Generates a changelog per package from unreleased commits. |
 | `version [bump]` | [`docs/cli/version.md`](cli/version.md) | Bumps versions of changed packages (and their dependents). |
+| `publish` | [`docs/cli/publish.md`](cli/publish.md) | Publishes every package whose version isn't on its registry yet. |
 | `github-release` | [`docs/cli/github-release.md`](cli/github-release.md) | Creates the repository's GitHub Release for the version that just shipped. |
 | `import <path>` | [`docs/cli/import.md`](cli/import.md) | Imports an external git repository as a new package, with history. |
 
-**`publish`, `ci` and `clean` are not in that list** - they come from
-[`rman-node`](cli-node.md), because each is about npm or TypeScript rather than about
-repositories.
+**`ci` and `clean` are not in that list** - they come from the
+[`node` built-in](rman.md#the-node-built-in), because each is about npm or TypeScript rather
+than about repositories. It ships *inside* rman, so no second package is installed, but nothing it
+contributes exists until a repository asks for it:
+
+| `ci` | [`docs/cli/ci.md`](cli/ci.md) | Wipes `node_modules` and lockfiles, then reinstalls from scratch. |
+| `clean` | [`docs/cli/clean.md`](cli/clean.md) | Removes compiled TypeScript output and whatever `.rmanrc "clean"` lists. |
+
+**`publish` is, and its flags still are not fixed.** The command is rman's; *where a package ships*
+is a **publish target**, which a plugin contributes. rman itself brings `docker` - any language's
+project can push an image - and the `node` built-in brings `npm`. Each target adds its own flags to
+`rman publish`, so `rman publish --help` lists exactly the ones the targets this repository
+installed actually understand. See [Publish targets](cli/publish.md#publish-targets).
 
 ## Where a command comes from
 
@@ -60,46 +75,95 @@ a command "doesn't exist":
 | Source | Declared by | Scope |
 | --- | --- | --- |
 | **Built in** | nothing - always there | every repository |
-| **A plugin** | `.rmanrc "plugins"` | every repository naming that package |
-| **The repository's own** | a module in `.rman/*.mjs` | this repository only |
+| **A platform** | `.rmanrc "plugins"` or `"platform"` | every repository naming that technology |
+| **The repository's own** | a module matching `.rmanrc "commands"`, which defaults to `.rman/*.mjs` | this repository only |
+
+`commands` takes a glob or a list of them, always appends, and anchors a relative glob to the file
+that declared it - so a shared config can ship commands without wrapping them in a plugin. See
+[custom-commands.md](cli/custom-commands.md#where-rman-looks-rmanrc-commands).
 
 ### A plugin
 
-A plugin is an ordinary package that contributes commands (and more - see
-[docs/node.md](node.md) for what else). Name it and its commands appear:
+A plugin is an ordinary package that contributes commands - and more: a technology, its publish
+targets, its config keys. A **published** one exports an rman *config*, so the repository inherits
+it:
 
 ```yaml
 # .rmanrc.yml
-plugins: ['rman-node']
+extends: 'rman-cargo'
 ```
 
-Without it, `rman clean` is `Unknown argument: clean`. A plugin that cannot be *loaded* is an error
-rather than a skip: silently losing `rman publish` is worse than not starting.
+`extends`, not `plugins` - `plugins` takes the technologies themselves, not a package name, and
+writing one there is refused naming this as the fix.
 
-**A plugin package exports an `.rmanrc` config, not a single plugin** - its entry point ends with
-`export default defineConfig({ plugins: [ ... ] })`, and rman reads that config's own `plugins`.
-That is what keeps a package free to carry a second plugin later without changing what every
-repository importing it receives. Only `plugins` is read out of it; a config's other keys reach a
-repository through `extends`, the key that means "merge this underneath mine". A module exporting
-the plugin object itself is refused, with a message saying where to put it - accepting both shapes
-would mean telling them apart at runtime, and `name` is a key either may have.
+**A built-in needs neither**, because rman already has it:
 
-**An entry may also be the plugin object itself**, which is how a JS config declares one without a
-package:
+```yaml
+plugins: ['node']   # by name
+platform: node      # the same statement at a repository root, plus which technology its packages are
+```
+
+Without one of those, `rman clean` is `Unknown argument: clean` - unless the repository declared no
+technology at all, in which case detection finds the one its files imply and says so on stderr. A
+plugin that cannot be *loaded* is an error rather than a skip: silently losing a command the
+repository is built around is worse than not starting.
+
+**A package declares a command the way a built-in does** - `declareCommand(app => ({ ... }))`, with
+its options as data rather than a hand-written `builder`, and puts it in its config's `commands`:
+
+```js
+import { declareCommand, defineConfig, packageFilterOptions } from 'rman';
+
+const deploy = declareCommand(app => ({
+  command: 'deploy [stage]',
+  describe: 'Ships the current versions',
+  config: { ...packageFilterOptions, wait: { target: 'cli', describe: 'block until healthy', type: 'boolean' } },
+  configKeys: ['publish'],
+  handler: async args => { /* app.repository is available here */ },
+}));
+
+export default defineConfig({ commands: [deploy] });
+```
+
+**No plugin is involved, and that is the change 2.0 made.** A plugin is one *technology* - a
+manifest reader, a workspace provider, a version planner - and a command is not one, so a package
+that only ships commands declares them and needs nothing else. The registration step this replaces
+(`ctx.addCommand`, on a `PluginContext`) is gone.
+
+`declareCommand`, not the `registerCommand` rman's own commands use: that one pushes onto a registry
+every run walks, so a package using it would give its commands to repositories that never named it.
+The factory is called once the repository exists - `app.repository` throws while the config is being
+read, since plugins are what find the packages.
+
+**A package's entry point exports an `.rmanrc` config**, and a repository inherits it with
+`extends`:
+
+```yaml
+extends: 'rman-node' # its plugins, commands and publish targets all arrive
+```
+
+`plugins: ['rman-node']` is **refused**, naming the fix: that key takes a plugin or a glob naming
+modules that export one, never a package name. The two are different statements - `extends` inherits
+everything the package declares, while `plugins` names the technologies themselves.
+
+**An entry may be the plugin object itself**, which is how a JS config declares one without
+publishing a package:
 
 ```js
 // .rmanrc.mjs
 import { defineConfig, definePlugin } from 'rman';
 
 export default defineConfig({
-  plugins: [
-    'rman-node',
-    definePlugin({ name: 'mine', commands: [/* ... */] }),
-  ],
+  extends: 'rman-node',
+  plugins: [definePlugin({ name: 'cargo', manifestProvider: cargoManifest })],
 });
 ```
 
-**`plugins` always appends - there is no `+plugins` to write.** Every other key lets a closer layer
+**or a glob**, which is what a YAML config has instead: `plugins: './plugins/*.js'`, anchored to the
+file that declared it, each match exporting one as its default. A glob matching nothing is an error -
+a plugin that does not load is not a plugin.
+
+**`plugins` always appends.** Every other key lets a closer layer
 overrule the value; a plugin *adds* commands and seams, and a repository naming one never means
 "and drop the ones my shared config brought". That used to be a replacement, and the way you found
 out was `Unknown argument: publish`. An entry already in the list is not repeated, and a plugin
@@ -220,12 +284,24 @@ Several commands (`run`/`build`/`test`, `exec`, `changelog`, `diff`, `config`, a
 `clean`)
 automatically scope themselves to *just the package you're standing in* when your shell's current
 directory is inside one package's own directory (rather than the repository root) - pass
-`--root`/`-r` to force the whole repository anyway. This has no effect when you're already at the
-repository root, or your current directory isn't inside any known package (e.g. a plain
+`--from-root`/`-r` to force the whole repository anyway. This has no effect when you're already
+at the repository root, or your current directory isn't inside any known package (e.g. a plain
 single-package repo).
 
 `version`, `publish`, `list` and `changed` already work across the whole repository, so they
-deliberately have **no** `--root`: a flag that does nothing reads as a promise.
+deliberately have **no** `--from-root`: a flag that does nothing reads as a promise.
+
+> **It was `--root`/`-r` through 1.x.** The name said the opposite of what the flag does - every
+> reader spells it *ignore where I am standing*, i.e. the whole repository, while `--root` reads as
+> "the root alone". `-r` is unchanged; the old long spelling is gone rather than aliased, so
+> `rman run build --root` now fails with `Unknown argument: root`.
+>
+> There is deliberately no `--root-only` beside it. It would do nothing on `run`/`build`/`test` (the
+> repository's package list holds the members only, and the root contributes just its `pre`/`post`
+> bookends), mean the same thing as `--from-root` on `diff`, already be what `--from-root` does on
+> `config`, and on `clean` it would be actively misleading - the root's own sweep recurses through
+> every package directory, so a "root only" clean deletes *more* than a package-scoped one. Where
+> the root genuinely is a candidate, [`--scope /`](#package-filtering) says so.
 
 ## Shared option groups
 
@@ -247,18 +323,44 @@ package is dropped **before** `--deps`/`--dependents`, so a dependency edge cann
 
 | Option | Description |
 | --- | --- |
-| `--scope <glob>` | Only include packages whose name matches this glob (repeatable). |
-| `--ignore <glob>` | Exclude packages whose name matches this glob (repeatable) - applied after `--scope`. |
+| `--scope <glob>` | Only include packages whose **selector** matches this glob, or **`/`** for the repository's own root package (repeatable). |
+| `--ignore <glob>` | Exclude packages matching this glob (or `/`) - applied after `--scope`. |
+| `--platform <names>` | Only include packages of these platforms - `--platform=node,cargo`, or repeated. |
 | `--deps` | Also include every package the matched set depends on (transitively). |
 | `--dependents` | Also include every package that depends on the matched set (transitively). |
 
 ```bash
 rman run build --scope '@myorg/*' --ignore '*-internal'
 rman test --scope core-lib --dependents   # core-lib plus everything that could be affected by it
+rman changelog --scope /                  # the root package's own entry, and nothing else
+rman clean --ignore /                     # every member, skipping the root's own sweep
+rman run build --platform node            # in a polyglot repository, the npm half of it
 ```
 
+**`--scope` matches the *selector*, not the package name**, and they coincide wherever the
+technology names its packages - which is every Node repository. A package having a name at all is an
+ecosystem's promise rather than rman's, so a repository whose technology offers none assigns one
+with `.rmanrc "name"`. See [`Package`](rman.md#package).
+
+**`--platform` takes names, not globs**, and that is why a name no package here belongs to is an
+**error** listing the ones that are - the value set is known, so a typo is something rman can see
+rather than a silently empty result. Comma-separated values are split (a platform name is a short
+identifier and cannot be ambiguous, where a scope glob is arbitrary text), and the comparison is
+case-insensitive.
+
+**`--scope /` is the root package, and it is not a glob.** The same `/` `.rmanrc`'s `"[/]"` block
+uses, for the reason stated there: *the root is never selected by name.* So a glob is never offered
+the root - `--scope '*'` means the members, `--scope /` means the root - which is what stops
+`--scope '@myorg/*'` from quietly picking up a repository whose root package is called
+`@myorg/monorepo`. That mattered most for `clean`, where the root's own sweep recurses through every
+package directory.
+
+It selects nothing where the root is not a candidate to begin with, which is most commands: the
+repository's package list holds the workspace members only, so `list`, `run` and `exec` have no root
+row to select, while `clean` and `changelog` put it in their candidate list on purpose.
+
 Full semantics (glob syntax, how `--deps`/`--dependents` combine): see
-[docs/rman.md#package-filtering-scopeignoredepsdependents](rman.md#package-filtering-scopeignoredepsdependents).
+[docs/rman.md#package-filtering-scopeignoreplatformdepsdependents](rman.md#package-filtering-scopeignoreplatformdepsdependents).
 
 ### Branch guard
 

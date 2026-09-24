@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { runCli } from '../src/cli.js';
 import { version } from '../src/constants.js';
-import { useTestEcosystem } from './_fixture.js';
+import type { ArgsOf, CommandOption } from '../src/index.js';
+import { runCli, useTestEcosystem } from './_fixture.js';
 
 /** Runs `fn` with console.log captured (plain, unmodified) instead of printed - proves what the
  *  CLI actually logged without spamming test output. */
@@ -160,6 +160,183 @@ describe('cli: global --config', () => {
     const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['deploy', '--config'] }))).join('\n');
     expect(out).toContain('command: deploy');
     expect(out).toContain('the keys deploy reads: vars');
+  });
+
+  /**
+   * **`.rmanrc "commands"` is the same path, with the directory named instead of assumed** -
+   * `.rman/*.mjs` is only this key's default value.
+   */
+  it('loads a command from a directory the config names, not just .rman', async () => {
+    const dir = fixture();
+    fs.mkdirSync(path.join(dir, 'tools'));
+    fs.writeFileSync(
+      path.join(dir, 'tools', 'ship.mjs'),
+      `export default { describe: 'would ship', handler: () => console.log('shipped') };`,
+    );
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ commands: 'tools/*.mjs' }));
+    const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['ship'] }))).join('\n');
+    expect(out).toContain('shipped');
+  });
+
+  /**
+   * **A relative glob means the directory of the file that declared it**, which is what lets a
+   * shared config ship commands of its own. Anchored when the config is read (`anchorCommands`),
+   * because `commands` appends and `ORIGINS` records one file per key rather than per element -
+   * after the merge there is nothing left to attribute an entry by.
+   *
+   * The negative control is built in: the glob is `./cmds/*.mjs` and there is no `cmds` directory
+   * at the repository root, so resolving it against the root - which is what `plugins` does with a
+   * relative path - finds nothing and the command never registers.
+   */
+  it("anchors a shared config's own glob to that config, not to the repository root", async () => {
+    const dir = fixture();
+    const shared = path.join(dir, 'node_modules', 'shared-cfg');
+    fs.mkdirSync(path.join(shared, 'cmds'), { recursive: true });
+    fs.writeFileSync(
+      path.join(shared, 'package.json'),
+      JSON.stringify({ name: 'shared-cfg', version: '1.0.0', type: 'module', exports: './index.js' }),
+    );
+    fs.writeFileSync(path.join(shared, 'index.js'), `export default { commands: './cmds/*.mjs' };\n`);
+    fs.writeFileSync(
+      path.join(shared, 'cmds', 'audit.mjs'),
+      `export default app => ({ describe: 'would audit', handler: () => console.log('audited ' + app.repository.getPackages().length) });`,
+    );
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ extends: 'shared-cfg' }));
+
+    const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['audit'] }))).join('\n');
+    expect(out).toContain('audited');
+  });
+
+  /**
+   * **A repository's own command overriding a contributed one registers once, not twice.**
+   *
+   * The override itself is the intended escape hatch and deliberately not an error - the same
+   * precedence a package's own `.rmanrc` has over an `extends` base - and it was already clean:
+   * measured, `rman deploy --help` showed the winner's options alone and the loser's flag was
+   * rejected. What was wrong was the *listing*: both got registered, so `rman --help` printed
+   * `deploy` twice, once with each description, with nothing to say which of the two would run.
+   *
+   * Both halves are asserted, because keeping only the second would pass while silently changing
+   * which command wins: the survivor must be the repository's own, since `loaded` follows
+   * `direct` and yargs took the last.
+   */
+  it("registers one command per name when a repository's own overrides a contributed one", async () => {
+    const dir = fixture();
+    const shared = path.join(dir, 'node_modules', 'shared-dup');
+    fs.mkdirSync(shared, { recursive: true });
+    fs.writeFileSync(
+      path.join(shared, 'package.json'),
+      JSON.stringify({ name: 'shared-dup', version: '1.0.0', type: 'module', exports: './index.js' }),
+    );
+    fs.writeFileSync(
+      path.join(shared, 'index.js'),
+      `export default { commands: [() => ({ command: 'deploy', describe: 'SHARED deploy',
+         handler: () => console.log('ran shared') })] };\n`,
+    );
+    fs.mkdirSync(path.join(dir, '.rman'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.rman', 'deploy.mjs'),
+      `export default { command: 'deploy', describe: 'REPO deploy', handler: () => console.log('ran repo') };`,
+    );
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ extends: 'shared-dup' }));
+
+    /**
+     * **The override note is what pins the deduplication**, and deliberately so: `rman --help` is
+     * the visible symptom but unusable from a spec, because yargs answers it with `process.exit`
+     * and that kills the mocha process. The note is printed from the same branch that drops the
+     * duplicate - `commands.length < localModules.length` - so it cannot be true unless exactly
+     * one survived. Without the fix both register, the branch never runs, and this is silent.
+     *
+     * At `verbose` because an override is a correct thing to do; the default output stays clean,
+     * which the second half asserts.
+     */
+    const verbose = (await captureLogs(() => runCli({ cwd: dir, argv: ['deploy', '--log-level', 'verbose'] }))).join(
+      '\n',
+    );
+    expect(verbose).toContain('"deploy" from "commands" is overridden by');
+    expect(verbose).toContain('deploy.mjs');
+
+    const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['deploy'] }))).join('\n');
+    expect(out).toContain('ran repo');
+    expect(out).not.toContain('ran shared');
+    /** Silent at the default level - the note is a diagnostic, not a warning. */
+    expect(out).not.toContain('overridden by');
+  });
+});
+
+/**
+ * **`ArgsOf` types a `<required>` positional as present, and this is the half that makes that
+ * honest.** The type is a claim about argv, and only yargs can keep it - so the claim and the
+ * parsing are pinned together, in one place, rather than the type asserting something no test ever
+ * exercises. `run <script>` and `import <path>` are the only two commands that declare one.
+ *
+ * Before this, both handlers stated it themselves (`args.script as string`, `args.path!`) because
+ * `CommandMetadata.handler` took `yargs.Arguments`, whose index signature makes every required key
+ * unassignable - so `ArgsOf` had to mark everything optional. The `as` is gone from both; if it
+ * comes back, this suite is where to look first.
+ */
+describe('cli: a required positional', () => {
+  useTestEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  it('is refused by yargs before the handler runs, so the handler never sees it absent', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-cli-test-'));
+    dirs.push(dir);
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', version: '1.0.0' }));
+    fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+
+    /** yargs' `.fail()` prints to stdout and `runCli` rethrows to stderr - both silenced, so the
+     *  assertion reads the rejection rather than the report. */
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      await captureLogs(async () => {
+        await expect(runCli({ cwd: dir, argv: ['run'] })).rejects.toThrow(/Not enough non-option arguments/);
+      });
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  /**
+   * **A type-level check, run by `tsc` over the test tree rather than by mocha.** Each
+   * `@ts-expect-error` is its own negative control: revert the narrowing and the error it expects
+   * stops happening, so the directive itself becomes the failure.
+   */
+  describe('ArgsOf', () => {
+    const someOptions = {
+      json: { target: 'cli', describe: 'x', type: 'boolean', default: false },
+      wait: { target: 'cli', describe: 'y', type: 'boolean' },
+    } satisfies Record<string, CommandOption>;
+
+    it('makes `<required>` present, and leaves everything else optional', () => {
+      type RunArgs = ArgsOf<typeof someOptions, 'run <script>'>;
+      type ExecArgs = ArgsOf<typeof someOptions, 'exec [command..]'>;
+
+      /** No `!` and no `??`: `<script>` is a `string`, not a `string | undefined`. */
+      const script: string = ({} as RunArgs).script;
+      expect(typeof script).toBe('undefined');
+
+      /** `[command..]` is optional, and variadic, which the command string is the only place to say. */
+      const command: string[] | undefined = ({} as ExecArgs).command;
+      expect(command).toBe(undefined);
+
+      /** A `default:` does **not** make an option present - narrowing on it would need a second
+       *  condition (`target !== 'config'`), since `toYargsCommand` never registers a config-only
+       *  option and yargs therefore never applies its default. See `ArgsOf`'s own comment. */
+      const noDefaults: Pick<RunArgs, 'json' | 'wait'> = {};
+      expect(noDefaults).toEqual({});
+      /** And the premise of that: `json` really does declare one. */
+      expect(someOptions.json.default).toBe(false);
+
+      // @ts-expect-error `<script>` is required by the command string, so it cannot be left out
+      const missing: Pick<RunArgs, 'script'> = {};
+      expect(missing).toEqual({});
+    });
   });
 });
 

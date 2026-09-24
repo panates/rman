@@ -1,0 +1,43 @@
+import './augmentation/rman.augmentation.js';
+import { definePlatform, type Platform } from '../../core/plugin.js';
+import type { RmanConfig } from '../../interfaces/rman-config.interface.js';
+import { augmentSystemInfo } from './augmentation/system-info.augmentation.js';
+import ciCommand from './commands/ci.command.js';
+import cleanCommand from './commands/clean.command.js';
+import { NodePlatform } from './node.platform.js';
+import { NpmPublishTarget } from './npm-publish-target.js';
+
+/**
+ * **The `node` built-in, as the config it contributes** - its technology, its two commands and its
+ * publish target, which is exactly what `extends: 'rman-node'` used to deliver.
+ *
+ * A *config* rather than a bare `Plugin`, and that distinction is the whole reason `plugins: ['node']`
+ * can replace an `extends`: a technology alone would bring the manifest reader and leave `rman clean`
+ * an unknown argument.
+ *
+ * **A function, so nothing here happens until a repository asks for it.** `augmentSystemInfo()`
+ * mutates the core's own `SystemInfo` in place, so calling it at import time would have `rman info`
+ * report npm's tooling in a Cargo repository that never named this built-in - which is the shape of
+ * "bundled" quietly becoming "always on". The type-only augmentation above is imported eagerly
+ * because a type costs nothing at runtime and a config author's editor wants it either way.
+ */
+/**
+ * **The platform itself, for asking.** Detection puts a directory to every built-in's platform -
+ * `manifestProvider.read(dir)` is already "is this one of mine?" - and that question must be
+ * answerable without turning anything on. Constructed once: a `NodePlatform` holds no state and two
+ * of them answering differently is not a thing worth allowing.
+ *
+ * **Declared, like any other platform.** `loadPlugins` refuses anything that did not come through
+ * `definePlatform`/`definePlugin`, and a built-in is registered by the same loader as everything
+ * else - the mark is not something being inside rman excuses.
+ */
+export const nodePlatform: Platform = definePlatform(new NodePlatform());
+
+export function nodeBuiltin(): RmanConfig {
+  augmentSystemInfo();
+  return {
+    plugins: [nodePlatform],
+    commands: [ciCommand, cleanCommand],
+    publishTargets: [new NpmPublishTarget()],
+  };
+}

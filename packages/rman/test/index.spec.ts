@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import * as api from '../src/index.js';
-import { useTestEcosystem } from './_fixture.js';
+import { testPlatform, useTestEcosystem } from './_fixture.js';
 
 /**
  * A smoke test for the public programmatic API (`src/index.ts`) - it locks in the exported
@@ -18,40 +18,74 @@ describe('public API (src/index.ts)', () => {
   it("exports Repository, Package, and each domain's namespace (Changelog, List, Run, Version)", () => {
     expect(typeof api.Repository).toBe('function');
     expect(typeof api.Package).toBe('function');
-    expect(typeof api.ChangelogService.getEntries).toBe('function');
-    expect(typeof api.ChangelogService.generateToFile).toBe('function');
+    expect(typeof api.ChangelogService.prototype.getEntries).toBe('function');
+    expect(typeof api.ChangelogService.prototype.generateToFile).toBe('function');
     expect(typeof api.ChangeHashService.detect).toBe('function');
     expect(typeof api.ConventionalCommitsService.parseSubject).toBe('function');
     /** The plan and the writes are separate services: `changed` needs only the first, and used to
      *  have to reach through the writer to get it. */
     expect(typeof api.VersionPlanService.getPlanner).toBe('function');
-    expect(typeof api.VersionService.applyPlan).toBe('function');
+    expect(typeof api.VersionService.prototype.applyPlan).toBe('function');
     // Docker publishing is core: any language's project can publish an image, so it does not
     // belong to the Node plugin even though `publish` is what drives it today.
-    expect(typeof api.DockerPublishService.getPlan).toBe('function');
-    expect(typeof api.ListService.getPackages).toBe('function');
-    expect(typeof api.RunService.runScript).toBe('function');
+    expect(typeof api.DockerPublishService.prototype.getPlan).toBe('function');
+    /** A class now, reached through the application - `api.ListService` is the constructor, and
+     *  `app.getService('list')` is how a command gets the one instance. */
+    expect(typeof api.ListService).toBe('function');
+    expect(typeof api.ListService.prototype.getPackages).toBe('function');
+    expect(typeof api.RunService.prototype.runScript).toBe('function');
     expect(api.LOG_LEVELS).toEqual(['silent', 'error', 'info', 'verbose']);
     expect(typeof api.defineConfig).toBe('function');
     expect(typeof api.definePlugin).toBe('function');
   });
 
-  /** What the core deliberately does **not** export any more - each one left with the plugin that
-   *  owns it, and a stray re-export here would quietly make the core npm-shaped again. */
-  it('does not export what moved into rman-node', () => {
-    for (const name of ['CleanService', 'PublishService', 'CiService', 'parseWorkspaceRange', 'DEPENDENCY_KEYS']) {
+  /**
+   * **The npm-shaped services are exported again, and that is not a relapse.** They left with
+   * `rman-node` when the plugin was its own package, and came back when it was folded in - a
+   * repository installs rman alone now, so naming `CleanService` from anywhere else is impossible.
+   *
+   * What has *not* come back is the core assuming any of it: they belong to the `node` built-in,
+   * which registers only when a repository names it or detection finds one. The pin that matters is
+   * therefore about behaviour, not about the export list - `rman clean` in a repository that is not
+   * a Node one is still `Unknown argument`, which `plugin.spec.ts` holds.
+   */
+  it("exports the node built-in's services, which now ship inside rman", () => {
+    for (const name of ['CleanService', 'PublishService', 'CiService']) {
+      expect((api as Record<string, unknown>)[name]).toBeDefined();
+    }
+    /** Still private, though: a helper the plugin uses internally is not part of rman's surface. */
+    for (const name of ['parseWorkspaceRange', 'DEPENDENCY_KEYS']) {
       expect((api as Record<string, unknown>)[name]).toBeUndefined();
     }
   });
 
-  /** The seams a plugin contributes through. `VersionScheme` is abstract, so a class rather than a
-   *  factory, and `SemverScheme` is exported to subclass rather than restate. */
+  /**
+   * The seams a plugin contributes through.
+   *
+   * **There are no longer five `addProvider`-shaped ones.** A plugin declares a `Plugin` - the
+   * manifest reader, the workspace layout, the step source, the bin directories and the version
+   * planner as one thing - because declaring any of them apart from the others was never meaningful:
+   * npm's step source reads `pkg.manifest.raw?.scripts`, so without npm's manifest reader it parses
+   * whatever another technology produced.
+   *
+   * `VersionScheme` is abstract, so a class rather than a factory, and `SemverScheme` is exported to
+   * subclass rather than restate.
+   */
   it('exports every plugin seam', () => {
-    expect(typeof api.Manifest.addProvider).toBe('function');
-    expect(typeof api.Workspace.addProvider).toBe('function');
-    expect(typeof api.BinPath.addProvider).toBe('function');
-    expect(typeof api.RunService.addStepSource).toBe('function');
-    expect(typeof api.VersionPlanService.setPlanner).toBe('function');
+    expect(typeof api.RmanApplication).toBe('function');
+    expect(typeof api.Registry).toBe('function');
+    expect(typeof api.Service).toBe('function');
+    expect(api.basePlatform.name).toBe('');
+    expect(typeof api.definePlatform).toBe('function');
+    expect(typeof api.definePlugin).toBe('function');
+    expect(typeof api.isPlatform).toBe('function');
+    expect(typeof api.Manifest.read).toBe('function');
+    /** `walk`, not `resolve`: discovery descends now, asking each directory's own technology where
+     *  its children are. `flatten` is the other half - the list `Repository.packages` reports. */
+    expect(typeof api.Workspace.walk).toBe('function');
+    expect(typeof api.Workspace.flatten).toBe('function');
+    expect(typeof api.Workspace.findRoot).toBe('function');
+    expect(typeof api.BinPath.env).toBe('function');
     expect(typeof api.VersionScheme).toBe('function');
     expect(typeof api.SemverScheme).toBe('function');
     expect(api.semverScheme.bumpNames).toEqual(['patch', 'minor', 'major']);
@@ -75,7 +109,7 @@ describe('public API (src/index.ts)', () => {
     expect(typeof api.resolveRootLogLevel).toBe('function');
   });
 
-  it('Repository.create() + List.getPackages() work when imported from the public entry point, returning data with no console output', async () => {
+  it('createRepository() + List.getPackages() work when imported from the public entry point, returning data with no console output', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-api-test-'));
     try {
       fs.writeFileSync(
@@ -90,13 +124,19 @@ describe('public API (src/index.ts)', () => {
         cwd: dir,
       });
 
-      const repo = await api.Repository.create(dir);
+      /** Still created, and still the thing under test: `Repository.create` is what attaches the
+       *  repository to the application the service then works on. */
+      /** The public entry point, used the way a consumer would: one application, one repository,
+       *  and the service reached through it. */
+      const app = new api.RmanApplication();
+      app.platforms.add(testPlatform);
+      await api.Repository.create(dir, { app });
       const originalLog = console.log;
       const logged: unknown[] = [];
       console.log = (...args: unknown[]) => logged.push(args);
       let packages: api.ListService.Item[];
       try {
-        packages = await api.ListService.getPackages(repo);
+        packages = await app.getService('list').getPackages();
       } finally {
         console.log = originalLog;
       }

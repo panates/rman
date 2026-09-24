@@ -5,7 +5,7 @@ import path from 'node:path';
 import { expect } from 'expect';
 import { Repository } from '../../src/core/repository.js';
 import { RunService } from '../../src/services/run.service.js';
-import { useTestEcosystem } from '../_fixture.js';
+import { createRepository, useTestEcosystem } from '../_fixture.js';
 
 function atom(name: string, value?: string): RunService.IfNode {
   return { kind: 'atom', name, value };
@@ -140,7 +140,7 @@ describe('run: "if" expression', () => {
       // uncommitted local edit -> "dirty" status (takes priority over "committed").
       fs.writeFileSync(path.join(dir, 'packages/pkg-dirty/file.txt'), 'uncommitted');
 
-      repository = await Repository.create(dir);
+      repository = await createRepository(dir);
     });
 
     after(() => {

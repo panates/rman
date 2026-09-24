@@ -41,7 +41,7 @@ export function resolveConfigTarget(target: string, from: string, label: string)
  * repository cannot resolve it.
  *
  * A globally installed rman's siblings *are* the globally installed packages, so this is what makes
- * `rman ci` work on a fresh clone - the command comes from `rman-node`, and `ci` exists to create
+ * `rman ci` work on a fresh clone - the command came from `rman-node` then, and `ci` exists to create
  * the very `node_modules` the plugin would otherwise have to be found in. Measured: with both
  * installed globally, a clone answered `"plugins" target "rman-node" could not be resolved ... is
  * it installed in this repository?`, which was true and useless.

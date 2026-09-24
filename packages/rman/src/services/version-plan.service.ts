@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import { assertOneScheme, type ChangeKind, semverScheme, VersionScheme } from '../core/version-scheme.js';
@@ -128,7 +129,7 @@ export abstract class VersionPlanService {
           changeByPackage.set(pkg.name, { bump: undefined, reason: `explicit version ${explicitVersion}` });
           return;
         }
-        const since = await this.detectBoundary(git, pkg, options);
+        const since = await this.plannerFor(pkg).detectBoundary(git, pkg, options);
         const commits = since ? await git.listCommits({ hash: since }) : await git.listAllCommits();
         const belongsToPkg = (c: CommitInfo) => c.files.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
         const real = commits.filter(
@@ -202,6 +203,39 @@ export abstract class VersionPlanService {
    * wrong one here is invisible - it produces a plan that simply releases too little.
    */
   protected abstract cascade(bump: string): VersionPlanService.Cascade;
+
+  /**
+   * **Which planner answers for one package: its own technology's.**
+   *
+   * The two abstract members above are the ecosystem's, and a repository can hold more than one.
+   * `app.versionPlanner` is a single slot - last registration wins - so in a polyglot repository
+   * both of them used to be answered by whichever plugin happened to register last: a Cargo
+   * package's boundary fell back to `npm view`, and its cascade assumed npm's caret ranges. That is
+   * the same shape of bug the hardcoded `['npm']` publish default was, and the same fix - ask the
+   * technology that read the manifest.
+   *
+   * Falls back to `this`, which is what a single-technology repository always gets and what a
+   * `Plugin` contributing no planner of its own means.
+   */
+  protected plannerFor(pkg: Package): VersionPlanService {
+    return pkg.platform.versionPlanner ?? this;
+  }
+
+  /**
+   * `cascade` for a whole group, which is the unit it is asked about - one answer applies to every
+   * member, because the group releases as one version line.
+   *
+   * **Members disagreeing take the widest answer**, and the direction is deliberate: a cascade that
+   * is too narrow produces a plan that silently *releases too little* (the failure `cascade`'s own
+   * doc calls invisible), while one that is too wide releases a package that did not strictly need
+   * it - visible, and harmless. A mixed-technology group is unusual; a mixed group quietly skipping
+   * a dependent that pins exact versions is a broken install.
+   */
+  protected cascadeFor(members: Package[], bump: string): VersionPlanService.Cascade {
+    const answers = new Set(members.map(m => this.plannerFor(m).cascade(bump)));
+    for (const widest of CASCADE_WIDEST_FIRST) if (answers.has(widest)) return widest;
+    return 'changed';
+  }
 
   /**
    * The largest bump `commits` ask for, in `scheme`'s own names.
@@ -307,7 +341,7 @@ export abstract class VersionPlanService {
     }
 
     const bumping = new Set<Package>(changed);
-    const cascade = bump ? this.cascade(bump) : 'changed';
+    const cascade = bump ? this.cascadeFor(members, bump) : 'changed';
     if (cascade === 'group') {
       for (const m of members) bumping.add(m);
     } else if (cascade === 'dependents') {
@@ -504,14 +538,6 @@ export namespace VersionPlanService {
    * repository layering its own policy plugin after `rman-node` could never take effect - which is
    * the only reason to name two in the first place.
    */
-  export function setPlanner(planner: VersionPlanService): void {
-    current = planner;
-  }
-
-  /** For tests, which would otherwise leak a planner into every later case in the process. */
-  export function clearPlanner(): void {
-    current = undefined;
-  }
 
   /**
    * The registered planner. **Throws** when there is none, rather than falling back to some
@@ -520,18 +546,20 @@ export namespace VersionPlanService {
    * merely a diminished one - a wrong cascade or a wrong boundary reports a release that is
    * plausible and untrue.
    */
-  export function getPlanner(): VersionPlanService {
-    if (!current) {
+  export function getPlanner(app: RmanApplication): VersionPlanService {
+    const planner = app.versionPlanner;
+    if (!planner) {
       throw new Error(
         'No version planner is registered, so no version plan can be computed. Name a plugin that ' +
           'contributes one in .rmanrc "plugins" - "rman-node" for a Node repository.',
       );
     }
-    return current;
+    return planner;
   }
-
-  let current: VersionPlanService | undefined;
 }
+
+/** Widest reach first - what `cascadeFor` walks when a group's members answer differently. */
+const CASCADE_WIDEST_FIRST = ['group', 'dependents', 'changed'] as const satisfies VersionPlanService.Cascade[];
 
 /** What one commit says happened, with no reference to any version format - `VersionScheme.bumpFor`
  *  turns it into a number's movement. Everything unrecognized is a `'fix'`: something changed, so

@@ -3,8 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { runCli } from '../../src/cli.js';
-import { useTestEcosystem } from '../_fixture.js';
+import { runCli, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-import-cmd-test-'));

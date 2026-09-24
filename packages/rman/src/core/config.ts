@@ -2,14 +2,15 @@ import { DOMParser } from '@xmldom/xmldom';
 import fs from 'fs';
 import ini from 'ini';
 import * as yaml from 'js-yaml';
-import { createRequire } from 'module';
 import path from 'path';
 import semver from 'semver';
-import { pathToFileURL } from 'url';
 import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
-import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
-import { finalizeConfig, mergeConfig, ORIGINS, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
+import { DETECTED_BUILTIN, type DetectedBuiltin } from '../plugins/detect.js';
+import { assertSelectorBlocks, EXTENDS_KEY, resolveExtends } from './extends-config.js';
+import { loadConfigModule } from './load-config-module.js';
+import { mergeConfig, ORIGINS, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
+import type { RunConditionFn, RunStepFn } from './run-step.js';
 
 /**
  * Identity helper for authoring a `.rmanrc.cjs`/`.mjs`/`.js` config with full type-checking and
@@ -35,35 +36,18 @@ export function defineConfig(config: RmanConfig): RmanConfig {
  *  `"type": "module"`) are supported - the reason `readDirConfig`/`resolveConfig` are async at all. */
 const JS_CONFIG_FILES = ['.rmanrc.cjs', '.rmanrc.mjs', '.rmanrc.js'];
 
-const requireJsConfig = createRequire(import.meta.url);
-
-/**
- * Loads `file`'s config object. Tries `require()` first - not just an optimization: a CommonJS
- * module's `module.exports` is more reliably observed this way than through dynamic `import()`'s
- * CJS-interop synthesis, which some ESM loader hooks (e.g. ts-node/swc-node-style transpilers
- * registered via `--import`) can end up short-circuiting into an empty object. `require()` throws
- * `ERR_REQUIRE_ESM` for a genuinely-ESM file (`.mjs`, or `.js` under `"type": "module"`) - only
- * then does this fall back to `import()`, the one case that actually needs it. Either path can
- * hand back an ES module namespace instead of a plain object (Node's `require(esm)` support does
- * this too, not just `import()`), so `.default` is preferred whenever present.
- */
-async function loadJsConfig(file: string): Promise<any> {
-  let mod: any;
-  try {
-    mod = requireJsConfig(file);
-  } catch (e: any) {
-    if (e?.code !== 'ERR_REQUIRE_ESM') throw e;
-    mod = await import(pathToFileURL(file).href);
-  }
-  return mod?.default ?? mod;
-}
-
 /**
  * Reads the rman configuration defined at a single directory level, merging
  * (in increasing precedence): `package.json#rman`, `.rmanrc.yml`, `.rmanrc`,
  * then `.rmanrc.cjs`/`.rmanrc.mjs`/`.rmanrc.js` (whichever exist, in that order).
+ *
+ * `options.inject` supplies a built-in for a repository that declared no technology - **already
+ * decided**, rather than a "please detect" flag. The decision needs the application (a programmatic
+ * caller or a spec may have registered a technology without writing it in a config), which this
+ * function has no business knowing about; `Repository.create` makes it once and hands the answer
+ * to every read that has to agree with it. See `detectBuiltin`.
  */
-export async function readDirConfig(dirname: string): Promise<RmanConfig> {
+export async function readDirConfig(dirname: string, options?: { inject?: DetectedBuiltin }): Promise<RmanConfig> {
   const result: RmanConfig = {};
   /** The file an `extends` in this directory resolves relative to. The last form that actually
    *  declared one wins, which matters only for the unusual directory holding several. */
@@ -73,7 +57,7 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
   if (fs.existsSync(pkgJsonFile)) {
     const pkgJson = JSON.parse(fs.readFileSync(pkgJsonFile, 'utf-8'));
     if (pkgJson && typeof pkgJson.rman === 'object') {
-      assertNoSelectorExtends(pkgJson.rman, pkgJsonFile);
+      assertSelectorBlocks(pkgJson.rman, pkgJsonFile);
       if (EXTENDS_KEY in pkgJson.rman) extendsFrom = pkgJsonFile;
       mergeConfig(result, pkgJson.rman, pkgJsonFile);
     }
@@ -83,7 +67,7 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
   if (fs.existsSync(ymlFile)) {
     const obj = yaml.load(fs.readFileSync(ymlFile, 'utf-8'));
     if (obj && typeof obj === 'object') {
-      assertNoSelectorExtends(obj as RmanConfig, ymlFile);
+      assertSelectorBlocks(obj as RmanConfig, ymlFile);
       if (EXTENDS_KEY in obj) extendsFrom = ymlFile;
       mergeConfig(result, obj as Record<string, any>, ymlFile);
     }
@@ -93,7 +77,7 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
   if (fs.existsSync(rcFile)) {
     const obj = JSON.parse(fs.readFileSync(rcFile, 'utf-8'));
     if (obj && typeof obj === 'object') {
-      assertNoSelectorExtends(obj, rcFile);
+      assertSelectorBlocks(obj, rcFile);
       if (EXTENDS_KEY in obj) extendsFrom = rcFile;
       mergeConfig(result, obj, rcFile);
     }
@@ -102,9 +86,9 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
   for (const jsFileName of JS_CONFIG_FILES) {
     const jsFile = path.join(dirname, jsFileName);
     if (fs.existsSync(jsFile)) {
-      const obj = await loadJsConfig(jsFile);
+      const obj = await loadConfigModule(jsFile);
       if (obj && typeof obj === 'object') {
-        assertNoSelectorExtends(obj, jsFile);
+        assertSelectorBlocks(obj, jsFile);
         if (EXTENDS_KEY in obj) extendsFrom = jsFile;
         mergeConfig(result, obj, jsFile);
       }
@@ -115,7 +99,110 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
    *  one of them sits on, and the directory chain then layers on top as it always did. Each form
    *  was checked for a misplaced `extends` as it was read, so that error can name the file holding
    *  it rather than whichever form happened to declare the real one. */
-  return resolveExtends(result, extendsFrom);
+  const resolved = await resolveExtends(result, extendsFrom);
+  /**
+   * **After `extends`, because a base may be what declares the technology** - a shared config
+   * naming `plugins` is a statement, and detecting on top of it would be guessing over an answer.
+   * `plugins` being *present* is what counts, so `plugins: []` is a repository saying "none".
+   */
+  const detected = options?.inject && resolved.plugins === undefined ? options.inject : undefined;
+  if (detected) resolved.plugins = [detected.name];
+  const expanded = await expandBuiltinPlugins(resolved);
+  /**
+   * **Marked after the expansion, not before, because the expansion rebuilds the object.**
+   * `expandBuiltinPlugins` merges the built-in's config underneath and returns a *new* config, so a
+   * symbol set on the way in is simply gone on the way out - measured: detection worked and the
+   * "detected" line never printed. The same trap `PREVIOUS_VALUES` and `ORIGINS` document from the
+   * other side, where `mergeConfig` has to copy them across by hand.
+   */
+  if (detected) {
+    Object.defineProperty(expanded, DETECTED_BUILTIN, { value: detected, enumerable: false, configurable: true });
+  }
+  return expanded;
+}
+
+/**
+ * Turns a built-in **name** in `plugins` into what that built-in contributes - `['node']` into the
+ * node plugin, its two commands and its publish target.
+ *
+ * **Here, beside `extends`, because it is the same operation**: something named brings a config,
+ * and that config sits *underneath* the one naming it. Doing it anywhere later would not reach far
+ * enough - `commands` is read off the resolved root package by `cli.ts`, not off the raw config
+ * `Repository.create` hands to `loadPlugins`, so a built-in expanded only there would register its
+ * technology and silently lose its commands.
+ *
+ * **The name is consumed.** `plugins` always appends, so leaving the string beside the instance it
+ * expanded into would hand `loadPlugins` a glob that matches no file - the built-in would load and
+ * then the run would fail saying it did not.
+ *
+ * Runs per directory, like `extends`, but only the root's `plugins` is ever read (`loadPlugins`
+ * needs the technologies before any package exists). The cost of walking a key that is almost
+ * always absent is one `Array.isArray`.
+ */
+async function expandBuiltinPlugins(config: RmanConfig): Promise<RmanConfig> {
+  const declared = config.plugins;
+  const own = Array.isArray(declared) ? declared : declared === undefined ? [] : [declared];
+  const platform = declaredPlatform(config);
+  if (!own.some(e => typeof e === 'string') && platform === undefined) return config;
+
+  /**
+   * **Imported here rather than at the top, and that is a cycle rather than a style.** A built-in
+   * pulls in its commands and services, which read config - so a static import would have
+   * `config.ts` and the plugin subtree initialising each other, which in ESM half-works and fails
+   * silently. Node caches the module, so the cost is one resolution on a config that names one.
+   */
+  const { BUILTIN_PLUGINS, isBuiltinPlugin } = await import('../plugins/builtins.js');
+
+  /**
+   * **A `platform` naming a built-in puts it at the front of `plugins`.**
+   *
+   * Saying which technology this repository is *is* saying it has it, so making the author write
+   * both was a distinction only rman could see. Measured on the repository this was noticed in:
+   * `platform: 'node'` alone gave a working `rman list` with a `node` column and
+   * `Unknown arguments: clean`, because the technology had loaded and its commands had not.
+   *
+   * **At the front, not the back**, and that is what makes it a statement rather than an addition:
+   * `platformFor` takes the first registered platform that recognizes a directory, so the one this
+   * repository says it *is* should win over anything a shared config brought along.
+   *
+   * **Only a built-in**, checked after the import above for exactly this reason: a `platform` naming
+   * a third-party technology is answered by the `plugins` entry that loads it, and pushing the bare
+   * name in here would hand `loadPlugins` a glob matching no file - the failure would read as the
+   * plugin being missing when it is registered perfectly well.
+   *
+   * Already named, and nothing happens: `plugins` de-duplicates, and this keeps the author's own
+   * ordering rather than promoting an entry they placed deliberately.
+   */
+  const entries =
+    platform !== undefined && isBuiltinPlugin(platform) && !own.includes(platform) ? [platform, ...own] : own;
+
+  const named = entries.filter((e): e is string => typeof e === 'string' && isBuiltinPlugin(e));
+  if (!named.length) return config;
+
+  const base: RmanConfig = {};
+  /** De-duplicated first: two layers naming the same built-in is ordinary (a shared config and the
+   *  repository that inherits it), and registering a plugin twice defines its commands twice. */
+  for (const name of [...new Set(named)]) mergeConfig(base, BUILTIN_PLUGINS[name]!.contribute());
+  const result = { ...(config as Record<string, unknown>) };
+  result.plugins = entries.filter(e => !(typeof e === 'string' && isBuiltinPlugin(e)));
+  return mergeConfig(base, result) as RmanConfig;
+}
+
+/**
+ * The **root's** declared platform, however it was spelled - unmarked, or inside a `"[/]"` block.
+ *
+ * Both, because both are the root saying what it is and a reader would not expect one to bring the
+ * built-in and the other not. `"[/]"` is the precise spelling (it speaks for the root package
+ * alone, where an unmarked key also cascades to every package below), so leaving it out would have
+ * punished the more careful author.
+ *
+ * A glob block is not consulted and cannot be: `assertSelectorBlocks` refuses `platform` there,
+ * since the glob matches a selector the key is upstream of.
+ */
+function declaredPlatform(config: RmanConfig): string | undefined {
+  const root = (config as Record<string, any>)[`[${ROOT_SELECTOR_INNER}]`];
+  const declared = config.platform ?? (root && typeof root === 'object' ? root.platform : undefined);
+  return typeof declared === 'string' && declared.trim() ? declared.trim() : undefined;
 }
 
 /**
@@ -145,14 +232,31 @@ export async function readDirConfig(dirname: string): Promise<RmanConfig> {
  * repo-wide bookend therefore belongs under `"[/]"`, where its audience is visible; that is the
  * migration this change asks for, and the only one that is not mechanical.
  *
- * `packageName` is what selectors match against; without it, selector blocks contribute nothing at
- * all. The root package passes its own, since `"[/]"` speaks to it.
+ * **`selector` is what a `"[glob]"` block matches** - `Package.selector`, which is the package's
+ * `.rmanrc "name"` if it declares one and its platform's answer otherwise. Without it, glob blocks
+ * contribute nothing: the walk resolves config for a directory *before* the package exists, since
+ * that is where `platform` and `name` are read from, and a glob has nothing to match against yet.
+ *
+ * **`"[/]"` needs no selector, and that is the documented rule rather than an exception.** The root
+ * is addressed structurally - its directory *is* the repository root - which is the whole reason it
+ * is `/` and not a name. So a root block applies whenever the target is the root, named or not, and
+ * `platform` under `"[/]"` therefore works during the walk. It did not until this was noticed: the
+ * gate was `if (packageName)`, so the walk skipped every selector block including that one, and the
+ * key documented as "keeps it on the root package alone" silently did nothing.
+ *
+ * It was called `packageName`, which was wrong twice over: a package is not guaranteed to have a
+ * name (that is an ecosystem's promise, not rman's), and what this matches is the selector, which a
+ * repository can assign itself.
  */
 export async function resolveConfig(
   rootDir: string,
   targetDir: string,
   cache: Map<string, RmanConfig> = new Map(),
-  packageName?: string,
+  selector?: string,
+  /** The built-in `Repository.create` decided on, for a repository that declared no technology.
+   *  Applied at the **root level only** - `plugins` is read nowhere else, and this is the read whose
+   *  result becomes `pkg.config`, which is where `cli.ts` finds a built-in's `commands`. */
+  inject?: DetectedBuiltin,
 ): Promise<RmanConfig> {
   const result: RmanConfig = {};
   const target = path.resolve(targetDir);
@@ -163,7 +267,9 @@ export async function resolveConfig(
   for (const dir of dirChain(rootDir, targetDir)) {
     let local = cache.get(dir);
     if (!local) {
-      local = await readDirConfig(dir);
+      local = await readDirConfig(dir, {
+        inject: path.resolve(dir) === path.resolve(rootDir) ? inject : undefined,
+      });
       cache.set(dir, local);
     }
     /**
@@ -178,15 +284,13 @@ export async function resolveConfig(
      * layer that feeds the directories below it.
      */
     mergeConfig(result, stripSelectors(local));
-    /** Then the selector blocks, **in the order they were written** - see `matchingSelectors`. */
-    if (packageName) {
-      for (const block of matchingSelectors(local, packageName, isRoot)) mergeConfig(result, block);
+    /** Then the selector blocks, **in the order they were written** - see `matchingSelectors`.
+     *  Reached for the root even with no selector, since `"[/]"` is structural. */
+    if (selector !== undefined || isRoot) {
+      for (const block of matchingSelectors(local, selector, isRoot)) mergeConfig(result, block);
     }
   }
-  /** Every layer has had its turn, so an append still outstanding has nothing left to attach to
-   *  and becomes the value itself. Done here rather than per layer: until the chain is finished,
-   *  the key it appends to may still be coming. */
-  return finalizeConfig(result);
+  return result;
 }
 
 /** A config key naming packages rather than settings: `"[*]"`, `"[/]"`, `"[pkg-a]"`. The
@@ -249,12 +353,14 @@ export function selectorToRegExp(key: string): RegExp {
  * The cost, which the docs state rather than hide: a catch-all written *below* a narrower block now
  * overrides it. Writing catch-alls first is a convention, not a rule - the file reads top to bottom.
  */
-function matchingSelectors(config: RmanConfig, packageName: string, isRoot: boolean): RmanConfig[] {
+function matchingSelectors(config: RmanConfig, selector: string | undefined, isRoot: boolean): RmanConfig[] {
   const matches: RmanConfig[] = [];
   for (const [key, value] of Object.entries(config)) {
     if (!isSelectorKey(key) || !value || typeof value !== 'object') continue;
     const { scope, test } = parseSelector(key);
-    if (scope === 'root' ? !isRoot : isRoot || !test(packageName)) continue;
+    /** A root block asks only whether this *is* the root - no selector needed, which is what makes
+     *  `/` structural. A glob has to have something to match, and during the walk it does not. */
+    if (scope === 'root' ? !isRoot : isRoot || selector === undefined || !test(selector)) continue;
     matches.push(value as RmanConfig);
   }
   return matches;
@@ -375,7 +481,7 @@ export interface PackageScope {
    *  addressing another package from the root usually needs. Empty string for the root itself. */
   relativeDir: string;
   /**
-   * Which ecosystem this package belongs to - `'node'` for one read by `rman-node`, empty when no
+   * Which ecosystem this package belongs to - `'node'` for one the `node` built-in read, empty when no
    * plugin claimed it. The same `Package.provider`, so one declaration can address a single
    * ecosystem in a polyglot repository (`if: "${{ pkg.provider === 'node' }}"`).
    */
@@ -385,7 +491,7 @@ export interface PackageScope {
    * about (`${{ pkg.manifest.engines.node }}`).
    *
    * Named `manifest`, not `json`: which file a package's identity lives in is the ecosystem's
-   * business now (see `ManifestProvider`), and `json` was that assumption showing through the one
+   * business now (see `Plugin`'s manifest members), and `json` was that assumption showing through the one
    * remaining user-facing name. A config written against `${{ pkg.json... }}` needs the rename.
    */
   manifest: Record<string, unknown>;
@@ -420,11 +526,97 @@ export interface GitScope {
 }
 
 /**
+ * What a **value function** is handed - `clean: { include: ({ value, pkg }) => [...] }`.
+ *
+ * The same scope a `${{ }}` expression sees, plus `value`. There is no asymmetry between the two
+ * spellings and that is an invariant with a spec on it: the argument *is* the expression context
+ * with `value` on it, so a member defined straight onto the argument would split them silently and
+ * a config author would meet a name that works in one spelling and not the other.
+ *
+ * **The config's own top-level keys are bound bare too**, and they cannot be typed here - they come
+ * from the config being interpolated rather than from this object. Reach them through `pkg.config`
+ * when a type matters, or accept `any` from the bare name.
+ *
+ * **Not what a *step* function is handed.** `run.<script>.exec` and `version.<slot>` take a
+ * `RunStepFn`, which gets a `RunStepContext` (`pkg`, `repository`, `cwd`, `runBin`, `logger`) when
+ * its turn comes - a different object at a different time, which is the whole distinction the two
+ * forms exist to draw. Never widen a step key to accept this one.
+ */
+export interface ConfigValueContext extends ConfigScope {
+  /**
+   * What this key resolved to in the layers **below** this one - the list form of it, so
+   * `[...value, 'x']` needs no guard. `any` rather than a generic: the key's own type is what the
+   * function must return, while `value` is whatever the layers underneath happened to produce, and
+   * a scalar underneath arrives as a one-element list. See `previousValue`.
+   */
+  value: any;
+  /** The config's own top-level keys, bound bare - `vars`, `publish`, `clean`, … */
+  [key: string]: any;
+}
+
+/**
+ * A config value that may be **written as a function instead**, computed per package at the moment
+ * the config resolves.
+ *
+ * `T` is what the function has to return, so the same checking applies either way - measured, with
+ * a control: a typo inside a wrapped object is still caught, and so is one inside an object a value
+ * function *returns*.
+ *
+ * **Not for a step key.** `run.<script>.before`/`.exec`/`.after`, `run.<script>.if` and
+ * `version.<slot>` already take a function, and it means something else there - code for `run` to
+ * call in its own time, with its own context. Wrapping one of those would produce a type that
+ * accepts a value function where a step is what actually runs. The key path decides which a
+ * function is (`STEP_PATHS`, `CODE_SUBTREES`), and the type can only follow that split by hand.
+ */
+export type ConfigValue<T> = T | ((ctx: ConfigValueContext) => T);
+
+/**
+ * The same config **after** it resolves: every `ConfigValue<T>` is just `T`, because
+ * `interpolateConfig` has already called it.
+ *
+ * **This is the half that lets `RmanConfig` be the author's type.** One type cannot answer both
+ * "what may I write?" (a function is fine - rman calls it) and "what do I get?" (never a function -
+ * it was already called), so it used to answer only the second, and writing a value function was a
+ * compile error the docs themselves committed. Widening `RmanConfig` alone just moves the problem:
+ * measured, six read sites needed a cast. The author's type widens and the *reader's* is computed
+ * from it - one derived type, applied at `Package.config`, rather than a second one to keep in step
+ * by hand.
+ *
+ * **Two guards, and each was measured by leaving it out.**
+ *
+ * - **Steps are named first.** A value function is recognised by its parameter, and
+ *   `ConfigValueContext` carries an index signature - so `RunStepFn` is assignable to it and a
+ *   `run.build.exec` function collapsed to its *return type*, leaving `RunService` nothing to call.
+ * - **`CODE_SUBTREES` is skipped, at every level.** `plugins`/`commands`/`publishTargets` hold code
+ *   all the way down, and the selector index (`[selector]: RmanConfig`) re-enters the config, so a
+ *   top-level-only guard misses the copy inside a `"[*]"` block. Left out, the walk reached
+ *   `Plugin.manifestProvider.versionScheme` and rewrote its **methods**: `smallestBump(): string`
+ *   became `string`, `bumpFor`/`isValid`/`compare`/`next` became `{}`. A function with *fewer*
+ *   parameters is assignable to one with more, so a zero-argument method matches the value-function
+ *   pattern - which makes this transform unsafe over any object carrying methods, and the guard the
+ *   only thing keeping one out of its way.
+ *
+ * Both lists are the runtime's own (`STEP_PATHS`' function types, `CODE_SUBTREES` itself), so the
+ * type follows the rule rather than restating it - the drift `ScopedVars` already demonstrated is
+ * not available here.
+ */
+export type Resolved<T> = T extends RunStepFn | RunConditionFn
+  ? T
+  : T extends (ctx: ConfigValueContext) => infer R
+    ? R
+    : T extends object
+      ? { [K in keyof T]: K extends CodeSubtree ? T[K] : Resolved<T[K]> }
+      : T;
+
+/** `pkg.config`'s type: what every command reads, with the value functions already called. */
+export type ResolvedConfig = Resolved<RmanConfig>;
+
+/**
  * What a `${{ ... }}` expression can see - the bindings of the fresh global it is evaluated in.
  * Namespaced rather than a flat bag of loose names: one obvious place per fact, and room to add
  * helpers to `pkg`/`repository` later without crowding the global.
  *
- * Alongside these, **the config's own top-level keys are bound bare** (`${{ publish.directory }}`,
+ * Alongside these, **the config's own top-level keys are bound bare** (`${{ changelog.filePath }}`,
  * `${{ clean.include }}`) - see `interpolateConfig`. They are not listed here because they come
  * from the config being interpolated, not from this object; a name here wins over a config key of
  * the same name.
@@ -504,7 +696,7 @@ export interface ConfigScope {
  *   run:
  *     build:
  *       # the config's own keys are in scope, so this is not a second copy of "build"
- *       after: "cp README.md ${{ publish.directory }}/"
+ *       after: "cp README.md ${{ changelog.filePath }}/"
  * ```
  *
  * Every string, with no list of "interpolated keys" to memorize - a rule with exceptions is a rule
@@ -538,7 +730,12 @@ export interface InterpolateOptions {
   at?: string[];
 }
 
-export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: InterpolateOptions): T {
+/**
+ * **Returns `Resolved<T>`, not `T`, because resolving is what it does.** Calling every value
+ * function is half this function's job, so the type it hands back is the one where they are gone -
+ * which is what makes `pkg.config` a `ResolvedConfig` without a cast anywhere between.
+ */
+export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: InterpolateOptions): Resolved<T> {
   const skip = options?.skip ?? [];
   /**
    * Where `config` sits in the whole config, when a caller hands over a fragment rather than the
@@ -564,8 +761,8 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: In
   if (!config || typeof config !== 'object' || Array.isArray(config)) return walk(config, scope, context, base, skip);
 
   /**
-   * The config's own top-level keys, readable bare: `${{ publish.directory }}`. So a value that
-   * restates another - `after: "cp README.md ${{ publish.directory }}/"` - stops being a second
+   * The config's own top-level keys, readable bare: `${{ changelog.filePath }}`. So a value that
+   * restates another - `after: "cp README.md ${{ changelog.filePath }}/"` - stops being a second
    * copy that drifts when the first one changes.
    *
    * Resolved **on demand**, one key at a time, and memoized. Interpolating the config in tree order
@@ -625,7 +822,14 @@ export function interpolateConfig<T>(config: T, scope: ConfigScope, options?: In
    *  expression asked for it first or the result did. */
   const result: Record<string, unknown> = {};
   for (const key of Object.keys(config)) result[key] = resolve(key);
-  return result as T;
+  /**
+   * **The one cast in the whole two-view split, and it is here rather than at every read.** No type
+   * can prove that a runtime walk turned `T` into `Resolved<T>`; this walk is what makes it true.
+   * Putting it at this single return is what keeps `pkg.config` honest without a cast in any of the
+   * commands - which is the arrangement the alternative (widening `RmanConfig` alone) gave up, six
+   * read sites at a time.
+   */
+  return result as Resolved<T>;
 }
 
 /**
@@ -654,7 +858,7 @@ export const DEFERRED_PATHS = ['version.before', 'version.exec', 'version.after'
  * ```
  *
  * **The key decides, and it already did.** `run.build.exec: 'tsc -b'` is a shell command and
- * `publish.directory: 'build'` is a path - not because of anything about the strings, but because of
+ * `publish.npm.directory: 'build'` is a path - not because of anything about the strings, but because of
  * where they sit. A function inherits the same rule, so nothing new has to be learned and no marker
  * has to be remembered. The alternative was inspecting the function (arity, parameter names), which
  * is the kind of guess `loadPlugins` refuses to make about a module's export for the same reason:
@@ -683,16 +887,23 @@ export const STEP_PATHS = [
 
 /**
  * Keys whose **whole subtree** is code rather than config, so no function under them is a value to
- * compute. `plugins` is the only one, and it has to be here: an entry may be the plugin *object*
- * itself, and an `RmanPlugin` is almost entirely functions - `manifest.read`, `workspace.resolve`,
- * `versionPlanner`, `binPaths`, and every command's `builder` and `handler`.
+ * compute.
  *
- * Measured, and it is why this exists: with `plugins` walked like any other key, resolving the
- * config of a repository that named a plugin called that plugin's yargs builder with the config
- * scope - `Config function in "plugins[0].commands[0].builder" failed: cmd.option is not a
- * function`. A `plugins` entry is loaded by `loadPlugins`, never read as a setting.
+ * The three contribution keys, and each has to be here: an entry may be the *instance* itself, and
+ * a `Plugin` is almost entirely functions - `manifestProvider.read`, `getWorkspace`,
+ * `getBinPaths`, `versionPlanner` - while a command is often a bare factory and a publish target
+ * carries `getPlan`/`applyPlan`.
+ *
+ * Measured twice, once per shape. With `plugins` walked like any other key, resolving the config
+ * of a repository that named a plugin called that plugin's yargs builder with the config scope:
+ * `Config function in "plugins[0].commands[0].builder" failed: cmd.option is not a function`. And
+ * with `commands` left out of this list, a declarative command - which *is* a function - was
+ * invoked with the interpolation scope instead of the application, so its handler closed over a
+ * repository that was not one: `repository.getPackages is not a function`, from inside `clean`.
+ *
+ * These entries are loaded by `loadPlugins` and `cli.ts`, never read as settings.
  */
-export const CODE_SUBTREES = ['plugins'];
+export const CODE_SUBTREES = ['plugins', 'commands', 'publishTargets'] as const;
 
 const EXPRESSION = /\$\{\{([\s\S]*?)\}\}/g;
 
@@ -948,7 +1159,8 @@ function shortenOrigin(file: string): string {
  *
  * **Always bound, even with nothing underneath.** Left unbound, an expression naming it fails with
  * V8's `value is not defined`, which reads as "there is no such thing" rather than "nothing below
- * this layer set it" - two different mistakes needing two different fixes.
+ * this layer set it" - two different mistakes needing two different fixes. With nothing underneath
+ * it is `unsetValue()` rather than `undefined` - see there.
  *
  * The chain resolves bottom-up, so a layer deriving from a layer that itself derived from something
  * is handed the finished value rather than a half-resolved expression.
@@ -961,8 +1173,10 @@ function walkWithPrevious(
   at: (string | number)[],
   skip: string[],
 ): unknown {
-  const resolved =
-    previous === undefined ? undefined : walkWithPrevious(previous.value, previous.previous, scope, context, at, skip);
+  const resolved = previousValue(
+    previous === undefined ? undefined : walkWithPrevious(previous.value, previous.previous, scope, context, at, skip),
+    at,
+  );
 
   const outer = Object.getOwnPropertyDescriptor(context, VALUE_KEY);
   /** A getter, so the catch below can tell whether the value **actually read `value`**: the hint is
@@ -981,22 +1195,18 @@ function walkWithPrevious(
     return walk(item, scope, context, at, skip);
   } catch (e: any) {
     /**
-     * **`value` is `undefined` when no layer underneath set this key**, and a value written to
-     * extend an inherited list is also the *first* layer in a repository that inherits nothing.
-     * V8 reports that as `value is not iterable`, naming neither the key nor the reason.
+     * **The hint is only about *reading* `value`**, so it is attached only when the value did -
+     * recorded through the getter above, never matched on V8's wording. Attaching it to any other
+     * failure is the send-the-reader-to-the-wrong-place mistake it exists to prevent.
      *
-     * Here rather than in `callValueFn`, so the expression and the function spelling get the same
-     * sentence from the same place. `rmanValueHint` keeps a rethrow from stacking it twice as the
-     * error passes back up through the enclosing keys.
-     *
-     * Not papered over by defaulting `value` to `[]`: that would be a guess about the key's type,
-     * and wrong for every key that is not a list.
+     * The sentence itself comes from `unsetValue`, which knows the key and throws at the exact
+     * point of misuse; all this adds is the case the sentinel cannot catch, where a value reads
+     * `value` and fails for a reason of its own. `rmanValueHint` keeps a rethrow from stacking it
+     * twice as the error passes back up through the enclosing keys.
      */
-    if (wasRead && resolved === undefined && !e?.rmanValueHint) {
+    if (wasRead && isUnsetValue(resolved) && !e?.rmanValueHint) {
       e.rmanValueHint = true;
-      e.message =
-        `${e.message}\n  \`value\` is undefined here - nothing below this layer sets "${describeAt(at)}.` +
-        `\n  Write \`value ?? []\` (or \`?? ''\`) if it has to work as the first layer too.`;
+      e.message = `${e.message}\n  Note: nothing below this layer sets "${describeAt(at)}, so \`value\` is empty.`;
     }
     throw e;
   } finally {
@@ -1017,7 +1227,7 @@ const VALUE_KEY = 'value';
  */
 function isCodePath(at: (string | number)[]): boolean {
   const segments = at.filter((p): p is string => typeof p === 'string');
-  if (CODE_SUBTREES.includes(segments[0])) return true;
+  if ((CODE_SUBTREES as readonly string[]).includes(segments[0]!)) return true;
   return STEP_PATHS.some(pattern => {
     const parts = pattern.split('.');
     return parts.length === segments.length && parts.every((part, i) => part === '*' || part === segments[i]);
@@ -1237,3 +1447,82 @@ function deepFreeze(value: unknown): void {
   Object.freeze(value);
   for (const item of Object.values(value)) deepFreeze(item);
 }
+
+/**
+ * What a layer is handed as `value`: **the list form of whatever is underneath it.**
+ *
+ * `value` exists for one job - extending what a closer layer inherited, the general form of `+key`,
+ * and `+key` only ever meant append. So the shape a spread wants is the shape to hand over:
+ * `[...value, 'x']` works with no guard whether the layers below said nothing, said `'build'`, or
+ * said `['build']`.
+ *
+ * **Coercing a scalar into a one-element list is not a guess about the key's type.** Every key this
+ * is reached for is declared `X | X[]` - `clean.include`, `clean.exclude`, `version.stamp`,
+ * `version.before`/`.exec`/`.after` - where the list is the type and the scalar is *shorthand*.
+ * `CleanService` and `RunService` already normalize it; doing it here as well decides nothing new.
+ * And spreading a string into its characters, which is what handing the raw value over did, is not
+ * something any key wants.
+ *
+ * It reads as the scalar wherever a scalar is what makes sense, through `Symbol.toPrimitive`:
+ * `` `${value}-x` `` is `'build-x'` and `value + 1` is `6`. A *list* underneath refuses both, since
+ * splicing `a,b` into a sentence is a mistake worth naming; so does nothing-underneath.
+ *
+ * **A boolean is handed over as itself**, the one carve-out, because it is never a list nor a
+ * list's shorthand - and an object cannot be fixed up for it: `!value` and `value ? :` use
+ * ToBoolean, which has no hook and answers `true` for every object, so a wrapped `false` would read
+ * as `true`. Measured. `[...value]` on one then throws, which is right - spreading a boolean means
+ * nothing.
+ *
+ * **The cost, stated rather than hidden: strict equality and string methods on an inherited
+ * scalar.** `value === 'build'` is `false` and `value.includes('bui')` is `false` (an array's
+ * `includes` matches elements, not substrings). `value == 'build'`, `` `${value}` === 'build' `` and
+ * `String(value).includes('bui')` all work, and `value.length` is the number of layers' worth of
+ * entries rather than a string's length. That is the trade for the append case never needing a
+ * guard; `value` was introduced for the append case.
+ */
+function previousValue(raw: unknown, at: (string | number)[]): unknown {
+  /** Never a list, and unfixable as one - see above. */
+  if (typeof raw === 'boolean') return raw;
+  const list = raw === undefined ? [] : Array.isArray(raw) ? [...raw] : [raw];
+  Object.defineProperty(list, UNSET_MARKER, { value: raw === undefined });
+  return Object.defineProperty(list, Symbol.toPrimitive, {
+    value: (hint: string) => {
+      if (raw === undefined) {
+        throw unusable(at, 'nothing below this layer sets it, so it is empty', "`value ?? ''`, `value ?? 0`");
+      }
+      if (typeof raw !== 'string' && typeof raw !== 'number') {
+        throw unusable(
+          at,
+          `the layer below it is ${Array.isArray(raw) ? 'a list' : 'an object'}`,
+          '`value.join(", ")` for a list',
+        );
+      }
+      return hint === 'string' ? String(raw) : raw;
+    },
+  });
+}
+
+/** The one sentence both refusals share: what was asked for, why it cannot be done, what to write
+ *  instead. Marked `rmanValueHint` so `walkWithPrevious`'s catch leaves it alone - that note exists
+ *  to explain an empty `value` to an error that does not mention it, and this error *is* that
+ *  explanation. */
+function unusable(at: (string | number)[], because: string, instead: string): Error {
+  const error: any = new Error(
+    `\`value\` cannot be used as a string or a number here - ${because}, for "${describeAt(at)}. ` +
+      `It spreads as a list (\`[...value, x]\`); to use it as something else, say what it should be - ${instead}.`,
+  );
+  error.rmanValueHint = true;
+  return error;
+}
+
+/** Whether `value` stands for "no layer underneath set this key" - by the marker `previousValue`
+ *  puts on it, never by emptiness, since a layer may legitimately resolve to `[]`. */
+function isUnsetValue(value: unknown): boolean {
+  return Array.isArray(value) && (value as any)[UNSET_MARKER] === true;
+}
+
+const UNSET_MARKER = Symbol('rman.valueUnset');
+
+/** The `CODE_SUBTREES` entries as a type, so the runtime list and `Resolved`'s guard cannot name
+ *  different keys. */
+type CodeSubtree = (typeof CODE_SUBTREES)[number];

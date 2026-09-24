@@ -19,7 +19,7 @@ export type ChangeKind = 'fix' | 'feature' | 'breaking';
  * "is this version on the registry yet", `"workspace:"` range rewriting all assume versions that
  * can be ordered and incremented. This is the seam for an ecosystem that numbers differently (PEP
  * 440, a date-based scheme, a build counter), and it is a *meaning* seam rather than a storage one:
- * `ManifestProvider` answers "where is the version written", this answers "what does the next one
+ * `Plugin`'s manifest members answers "where is the version written", this answers "what does the next one
  * look like".
  *
  * **`bumpNames` and `bumpFor` are the interesting part.** `fix:` -> patch, `feat:` -> minor,
@@ -71,6 +71,24 @@ export abstract class VersionScheme {
 
   /** Is this version a preview rather than a release? `github-release` reads it. */
   abstract isPrerelease(version: string): boolean;
+
+  /**
+   * Which prerelease line this version belongs to - `'beta'` for `2.0.0-beta.1` - or `undefined`
+   * when it is not a preview, or is one with no identifier to name (`2.0.0-1`).
+   *
+   * **The one thing a preview needs beyond "is it one", and it is a *name*, which is why it is
+   * here rather than read out of the version with a regex by whoever wants it.** npm's publish
+   * target derives its dist-tag from this, so a beta lands on `beta` instead of on `latest`; the
+   * identifier is written in the version itself, so that is a reading rather than a guess.
+   *
+   * Implemented, not abstract, and returning `undefined` by default: a scheme whose previews have
+   * no name (or which has no previews at all) is answering honestly, and the caller's job is to
+   * say so rather than invent one. `SemverScheme` overrides it.
+   */
+  prereleaseId(version: string): string | undefined {
+    void version;
+    return undefined;
+  }
 
   /**
    * The highest of `versions` - a group's current version is the highest among its members, and a
@@ -168,6 +186,18 @@ export class SemverScheme extends VersionScheme {
 
   isPrerelease(version: string): boolean {
     return !!semver.prerelease(version);
+  }
+
+  /**
+   * semver's first prerelease identifier, when it is a word: `2.0.0-beta.1` -> `'beta'`.
+   *
+   * **`undefined` for a numeric-only prerelease** (`2.0.0-1`, whose identifiers are `[1]`), because
+   * there is no name there to use - and a caller turning that into a dist-tag called `1` would be
+   * inventing one. Same answer for a release, which has no prerelease at all.
+   */
+  prereleaseId(version: string): string | undefined {
+    const first = semver.prerelease(version)?.[0];
+    return typeof first === 'string' ? first : undefined;
   }
 }
 

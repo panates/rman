@@ -1,29 +1,40 @@
 import path from 'node:path';
 import colors from 'ansi-colors';
 import * as yaml from 'js-yaml';
-import type { Argv } from 'yargs';
 import { DEFERRED_PATHS } from '../core/config.js';
 import type { Package } from '../core/package.js';
-import type { Repository } from '../core/repository.js';
-import { applyRootOption, readRootOption } from '../utils/package-filter.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
+import { fromRootOption, readFromRootOption } from '../utils/package-filter.js';
 import { printableConfig } from '../utils/printable-config.js';
 
-export function initCli(repository: Repository, program: Argv) {
-  program.command({
-    command: 'config',
+const COMMAND = 'config' as const;
+
+const config = {
+  ...fromRootOption('Print the config for'),
+  json: {
+    target: 'cli',
+    describe: 'Print as JSON instead of YAML - nothing else on stdout, so it can be piped.',
+    type: 'boolean',
+    default: false,
+  },
+} satisfies Record<string, RmanConfig.CommandOption>;
+
+type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
+
+/** Prints config; declares none of its own, so it contributes nothing to `RmanConfig`. */
+const configCommand = registerCommand(app => {
+  const repository = app.repository;
+  return {
+    command: COMMAND,
     describe: 'Prints the effective .rmanrc config for the package of the current directory',
-    builder: cmd =>
-      applyRootOption(cmd, 'Print the config for')
-        .example('$0 config', '# The config of the package you are standing in')
-        .example('$0 config --root', "# The repository root's own config instead")
-        .example('$0 config --json | jq .version', '# Machine-readable')
-        .option('json', {
-          describe: 'Print as JSON instead of YAML - nothing else on stdout, so it can be piped.',
-          type: 'boolean',
-          default: false,
-        }),
-    handler: args => {
-      const target = (!readRootOption(args) && repository.currentPackage) || repository.rootPackage;
+    config,
+    examples: [
+      { command: '$0 config', description: '# The config of the package you are standing in' },
+      { command: '$0 config --from-root', description: "# The repository root's own config instead" },
+      { command: '$0 config --json | jq .version', description: '# Machine-readable' },
+    ],
+    handler: (args: Args) => {
+      const target = (!readFromRootOption(args) && repository.currentPackage) || repository.rootPackage;
 
       if (args.json) {
         console.log(JSON.stringify(printableConfig(target.config), undefined, 2));
@@ -47,8 +58,10 @@ export function initCli(repository: Repository, program: Argv) {
        *  as a mistake in something meant to be looked at. */
       console.log(yaml.dump(printableConfig(target.config), { noRefs: true, lineWidth: 100 }).trimEnd());
     },
-  });
-}
+  };
+});
+
+export default configCommand;
 
 /**
  * The one honest caveat about this output: **`version.before`/`.exec`/`.after` are printed raw**,
@@ -63,6 +76,6 @@ function deferredNotes(pkg: Package): string[] {
   return [`${raw.join(', ')}: printed raw - evaluated by "version" itself, once it knows the target version`];
 }
 
-function valueAt(config: unknown, dotted: string): unknown {
-  return dotted.split('.').reduce<any>((node, key) => (node == null ? undefined : node[key]), config);
+function valueAt(node: unknown, dotted: string): unknown {
+  return dotted.split('.').reduce<any>((current, key) => (current == null ? undefined : current[key]), node);
 }

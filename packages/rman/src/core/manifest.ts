@@ -1,5 +1,7 @@
 import path from 'node:path';
+import { RmanApplication } from './application.js';
 import type { Package } from './package.js';
+import type { Platform } from './plugin.js';
 import { semverScheme, type VersionScheme } from './version-scheme.js';
 
 /**
@@ -15,7 +17,7 @@ export interface Manifest {
   /** Excluded from publishing by the package's own declaration (`package.json#private`). Not the
    *  same as `.rmanrc "publish.skip"`, which is the *repository's* declaration about it. */
   private?: boolean;
-  /** The document as the ecosystem wrote it. `rman-node`'s own commands read `package.json` fields
+  /** The document as the ecosystem wrote it. The `node` built-in's own commands read `package.json` fields
    *  the core has no opinion about (`scripts`, `publishConfig`, `engines`) off this. */
   raw: any;
 }
@@ -26,7 +28,7 @@ export interface Manifest {
  * **The core has no provider.** "The name and version live in a `package.json`" is true of npm and
  * of nothing else - a `Cargo.toml`, a `pyproject.toml` and a `go.mod` each say the same thing
  * differently, and the version is not even in the same *kind* of place in all of them.
- * `rman-node` contributes the `package.json` one.
+ * The `node` built-in contributes the `package.json` one.
  *
  * Paired with `VersionScheme` on purpose: the ecosystem that decides *where* a version is written
  * is the one that decides *how* it is numbered, so a provider supplies both and a package gets a
@@ -35,7 +37,7 @@ export interface Manifest {
 export interface ManifestProvider {
   /**
    * **The ecosystem this provider speaks for**, surfaced on every package it reads as
-   * `Package.provider` - `'node'` for `rman-node`. Short and about the technology, not about the
+   * `Package.provider` - `'node'` for the built-in of that name. Short and about the technology, not about the
    * file: `fileName` already says `package.json`, and a name repeating it would tell a caller
    * nothing it did not have.
    *
@@ -123,6 +125,23 @@ export interface ManifestProvider {
    */
   splitName?(name: string): { scope?: string; unscopedName: string };
   /**
+   * **What addresses this package** - what a `"[glob]"` block and `--scope`/`--ignore` match
+   * against, and what has to be unique within a repository.
+   *
+   * **The platform's job, because a name is an ecosystem's promise and not rman's.** npm guarantees
+   * `package.json#name` exists and identifies the package, so the node built-in has nothing to do
+   * here and the default - the manifest's own name - is already its answer. An ecosystem where a
+   * package need not be named, or where the name is not unique, returns `undefined` and the
+   * repository assigns one with `.rmanrc "name"`.
+   *
+   * Separate from `Manifest.name`, which is what the package *calls itself*: those coincide for npm
+   * and need not anywhere else. A Go module's name is an import path, and `--scope github.com/x/y`
+   * is not how anyone would want to address it.
+   *
+   * Omit it and the manifest's name is used, so this seam existing changes nothing.
+   */
+  selector?(manifest: Manifest, dir: string): string | undefined;
+  /**
    * Rewrites this manifest's references to in-repo packages that just got a new version.
    *
    * `bumped` maps a package to the version it is being given. What a "reference" looks like is
@@ -146,75 +165,60 @@ export interface ManifestProvider {
  *
  * A namespace rather than loose `addManifestProvider`/`readManifest` functions because a namespace
  * is what a plugin can *augment*: `declare module 'rman' { namespace Manifest { ... } }` is how
- * `rman-node` already adds to `SystemInfo`, and anything this seam grows later can arrive the
+ * the `node` built-in already adds to `SystemInfo`, and anything this seam grows later can arrive the
  * same way instead of as another top-level export.
  */
 export namespace Manifest {
-  /** Registers a provider. Called by `loadPlugins` for each plugin's `manifest`, in `plugins`
-   *  declaration order - so which one answers is a function of the repository's own config. */
-  export function addProvider(provider: ManifestProvider): void {
-    if (providers.includes(provider)) return;
-    providers.push(provider);
-  }
-
-  /** For tests, which would otherwise leak a provider into every later case in the process. */
-  export function clearProviders(): void {
-    providers.length = 0;
-  }
-
   /**
-   * Reads `dir`'s manifest through the first provider that recognizes it, with the scheme that
-   * provider brings.
+   * Reads `dir`'s manifest through **the platform that already claimed it**, with the scheme that
+   * platform brings.
    *
-   * **With no provider registered, or none recognizing the directory**, the fallback is a package
-   * named after its own directory at version `0.0.0`. That is deliberately the least it can claim:
-   * the directory name is a fact, and `0.0.0` is the version a thing has when nothing says
-   * otherwise. The alternative - refusing to construct a package at all - would make `rman info` and
-   * `rman list` fail in a repository whose `.rmanrc` simply names no plugin yet, which is exactly
-   * when someone needs to run them.
+   * **It takes a platform rather than searching for one**, and that is where the walk changed
+   * things. This used to loop over every registered platform, once per `Package` constructed - so a
+   * package asked "who am I?" and the answer was whoever recognized it first, re-derived at every
+   * construction. The walk decides it once per directory now (`Workspace.walk` ->
+   * `app.platformFor`) and hands it to the package, which is also what lets a nested Cargo package
+   * sit inside a Node monorepo: the platform is a fact about the directory, established by whoever
+   * found it, not re-guessed by whoever reads it.
+   *
+   * **When that platform reads nothing** - `basePlatform`, or a provider that claimed the directory
+   * and then found nothing in it - the fallback is a package named after its own directory at
+   * version `0.0.0`. Deliberately the least it can claim: the directory name is a fact, and `0.0.0`
+   * is the version a thing has when nothing says otherwise. The alternative - refusing to construct
+   * a package at all - would make `rman info` and `rman list` fail in a repository whose `.rmanrc`
+   * simply names no plugin yet, which is exactly when someone needs to run them.
    */
-  export function read(dir: string): {
+  export function read(
+    platform: Platform,
+    dir: string,
+  ): {
     manifest: Manifest;
     versionScheme: VersionScheme;
     fileName: string;
-    provider: string;
   } {
-    for (const provider of providers) {
-      const manifest = provider.read(dir);
-      if (manifest) {
-        return {
-          manifest,
-          versionScheme: provider.versionScheme ?? semverScheme,
-          fileName: provider.fileName,
-          provider: provider.name,
-        };
-      }
-    }
+    const provider = platform.manifestProvider;
+    const manifest = provider.read(dir);
     return {
-      manifest: { name: path.basename(dir), version: '0.0.0', raw: {} },
-      versionScheme: semverScheme,
-      /** Nothing was read, so nothing can be named - a caller listing "the file I changed" has no
-       *  file to list, which is correct rather than a placeholder that does not exist. */
-      fileName: '',
-      /** Same reasoning: no provider claimed this directory, so it belongs to no ecosystem. Empty
-       *  rather than a sentinel like `'unknown'`, which would read as an ecosystem's name and could
-       *  collide with a real provider's. */
-      provider: '',
+      manifest: manifest ?? { name: path.basename(dir), version: '0.0.0', raw: {} },
+      versionScheme: provider.versionScheme ?? semverScheme,
+      /** Nothing read means nothing to name - a caller listing "the file I changed" has no file to
+       *  list, which is correct rather than a placeholder that does not exist. */
+      fileName: manifest ? provider.fileName : '',
     };
   }
 
   /** Writes through whichever provider recognizes `dir`. Throws when none does: a write that lands
    *  nowhere is worse than one that fails, since the caller has already decided the new version. */
-  export function write(dir: string, manifest: Manifest): void {
-    for (const provider of providers) {
-      if (provider.read(dir)) {
-        provider.write(dir, manifest);
+  export function write(app: RmanApplication, dir: string, manifest: Manifest): void {
+    for (const platform of app.platforms) {
+      if (platform.manifestProvider.read(dir)) {
+        platform.manifestProvider.write(dir, manifest);
         return;
       }
     }
     throw new Error(
       `No manifest provider recognizes "${dir}", so there is nowhere to write its version.\n` +
-        `  A repository's ".rmanrc" names its providers - see "plugins" (e.g. ['rman-node']).`,
+        `  A repository's ".rmanrc" names its technologies - see "plugins" (e.g. ['node']).`,
     );
   }
 
@@ -226,15 +230,15 @@ export namespace Manifest {
    * of can still describe its own graph by hand.
    */
   export function dependenciesOf(pkg: Package, candidates: readonly Package[]): Package[] {
-    return providerOf(pkg)?.dependencies?.(pkg.manifest, candidates) ?? [];
+    return platformOf(pkg)?.manifestProvider.dependencies?.(pkg.manifest, candidates) ?? [];
   }
 
   /** `${{ pkg.scope }}`/`${{ pkg.unscopedName }}`, by whichever provider recognizes `dir` - and
    *  "no scope, the name is its own unscoped form" when none has an opinion. */
-  export function splitName(dir: string, name: string): { scope?: string; unscopedName: string } {
-    for (const provider of providers) {
-      if (!provider.read(dir)) continue;
-      return provider.splitName?.(name) ?? { unscopedName: name };
+  export function splitName(app: RmanApplication, dir: string, name: string): { scope?: string; unscopedName: string } {
+    for (const platform of app.platforms) {
+      if (!platform.manifestProvider.read(dir)) continue;
+      return platform.manifestProvider.splitName?.(name) ?? { unscopedName: name };
     }
     return { unscopedName: name };
   }
@@ -246,12 +250,12 @@ export namespace Manifest {
    * reference each other by path has nothing here to go stale.
    */
   export function updateDependencyVersions(pkg: Package, bumped: ReadonlyMap<Package, string>): void {
-    providerOf(pkg)?.updateDependencyVersions?.(pkg.manifest, bumped);
+    platformOf(pkg)?.manifestProvider.updateDependencyVersions?.(pkg.manifest, bumped);
   }
 
   /**
    * Rewrites a hard-coded version in `content` through `pkg`'s own ecosystem - see
-   * `ManifestProvider.stampVersion`.
+   * `Plugin.stampVersion`.
    *
    * `undefined` covers three cases the caller has to tell apart from each other, and cannot: no
    * provider claimed the package, the provider has no opinion about stamping, or it looked and found
@@ -264,7 +268,7 @@ export namespace Manifest {
     version: string,
     options?: { constant?: string },
   ): string | undefined {
-    return providerOf(pkg)?.stampVersion?.(file, content, version, options);
+    return platformOf(pkg)?.manifestProvider.stampVersion?.(file, content, version, options);
   }
 
   /**
@@ -276,26 +280,24 @@ export namespace Manifest {
    * plugin: git tags then answer the boundary question alone.
    */
   export async function publishedVersion(pkg: Package): Promise<string | undefined> {
-    return providerOf(pkg)?.publishedVersion?.(pkg);
+    return platformOf(pkg)?.manifestProvider.publishedVersion?.(pkg);
   }
 
-  /** The file names providers look for, for an error message that can say what was expected. */
-  export function fileNames(): string[] {
-    return providers.map(p => p.fileName);
+  /** The file names the registered technologies look for, for an error message that can say what
+   *  was expected. */
+  export function fileNames(app: RmanApplication): string[] {
+    return [...app.platforms].map(platform => platform.manifestProvider.fileName);
   }
-
-  const providers: ManifestProvider[] = [];
 
   /**
-   * The provider that claimed `pkg`, found by the name it reported as `pkg.provider` - exact, and
-   * without re-reading the manifest off disk to work it out again.
+   * The technology that claimed `pkg`, or `undefined` when none did - with nothing to look up.
    *
-   * The probe is the fallback, not the rule: it covers a package constructed *before* its provider
-   * was registered, which `Repository.create` cannot produce (plugins load first) but a test
-   * arranging providers by hand can.
+   * This used to search a registry by `pkg.provider` and fall back to re-reading the directory,
+   * because a package could be constructed before the provider that would claim it was registered.
+   * It cannot now: a package is handed its `Platform` at construction, by the application that
+   * resolved it. The `name` test is what "none claimed it" looks like - see `basePlatform`.
    */
-  function providerOf(pkg: Package): ManifestProvider | undefined {
-    const byName = pkg.provider ? providers.find(p => p.name === pkg.provider) : undefined;
-    return byName ?? providers.find(p => p.read(pkg.dirname));
+  function platformOf(pkg: Package): Platform | undefined {
+    return pkg.platform.name ? pkg.platform : undefined;
   }
 }

@@ -20,7 +20,7 @@ Accepts [package filtering](../cli-rman.md#package-filtering) options, in additi
 | `--from <hash>` | - | string | Generate the changelog since this commit/hash, applied the same way to every package. Default (also `"npm"` explicitly): auto-detect per package from its own most recent release tag - the same one `version`/`changed` use, so they never disagree; failing that (no tag yet), from its currently-published npm version; failing that too (never released at all), the package's whole history. |
 | `--write` | - | boolean | Prepend the generated entry into each package's own changelog file instead of printing it. |
 | `--file-path <path>` | - | string | With `--write`, the file to prepend into, relative to each package's own directory. Default `"CHANGELOG.md"`, or `.rmanrc "changelog.filePath"`. |
-| `--root` | `-r` | boolean | Generate for the whole repository even when standing inside one package's own directory (which otherwise scopes it to just that package). No effect elsewhere. |
+| `--from-root` | `-r` | boolean | Generate for the whole repository even when standing inside one package's own directory (which otherwise scopes it to just that package). No effect elsewhere. |
 | `--include-skipped` | - | boolean | Also generate for a package with `.rmanrc "publish.skip"` - excluded by default. |
 | `--release-version <v>` | - | string | The version these notes are **for** - what the entry heading shows. Default: read back from each package's own latest release tag, which is only right once that release is tagged. Pass it when generating notes ahead of the bump (e.g. from `changed --json`), otherwise the heading shows the *previous* release. |
 
@@ -47,9 +47,15 @@ Detecting each package's last release...
 rman changelog --from a1b2c3d               # since a specific commit, for every package
 rman changelog --write                      # prepend into each package's own CHANGELOG.md
 rman changelog --write --file-path docs/CHANGELOG.md
-rman changelog --root                       # whole repo, even from inside one package's directory
+rman changelog --from-root                  # whole repo, even from inside one package's directory
 rman changelog --scope pkg-a
+rman changelog --scope /                    # the root package's own entry, and nothing else
 ```
+
+`changelog` is one of the two commands whose candidate list holds the repository's own root package
+(the other is [`clean`](clean.md)), so **`--scope /` means something here** - it selects the root's
+entry, which is where commits under no package, and repo-wide ones, are attributed. See
+[package filtering](../cli-rman.md#package-filtering); an ordinary glob never matches the root.
 
 With `--write`, prints `updated <label> <filePath>` per package that had something to write,
 instead of the entry's raw content. With nothing unreleased at all, prints `No unreleased

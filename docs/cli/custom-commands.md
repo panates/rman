@@ -25,6 +25,46 @@ rman deploy --stage prod
 rman --help            # listed alongside the built-ins, under its own describe
 ```
 
+## Where rman looks (`.rmanrc "commands"`)
+
+`.rman/*.{js,mjs,cjs}` is the **default value** of a config key rather than a directory rman
+knows about, so a repository that keeps its commands elsewhere names them:
+
+```yaml
+commands: ['tools/commands/*.mjs']
+```
+
+- **A relative glob is anchored to the file that declared it**, not to the repository root - which
+  is what lets a shared config ship commands of its own (`commands: './commands/*.js'` inside a
+  published package means that package's directory). Note that `plugins` does *not* behave this
+  way: a relative path there resolves against the repository root whatever file declared it.
+- **It always appends**, like `plugins`: naming a directory of your own never means "and stop
+  loading the ones my shared config ships". A closer layer therefore cannot *un*-say one.
+- **Declared at any level.** A package's own `.rmanrc` may contribute commands; they are still
+  repository-wide, because there is one command list.
+- **Declaring it anywhere replaces the `.rman/` default**, since the key appends across layers
+  rather than onto a built-in fallback. Name `.rman/*.mjs` yourself if you want both.
+- **`.ts` is not loadable.** rman imports these in its own process with no loader registered, so a
+  TypeScript repository compiles them first or writes them as `.mjs`.
+
+## Two forms
+
+A module exports either the `defineCommand({ ... })` object above, or the **declarative** factory
+a plugin would use - options as data rather than a hand-written `builder`, so the flag list cannot
+drift from what the handler reads:
+
+```js
+// tools/commands/deploy.mjs
+export default app => ({
+  describe: 'Ships what was just published to the staging cluster',
+  config: { stage: { target: 'cli', choices: ['dev', 'prod'], demandOption: true } },
+  handler: async args => console.log(`${app.repository.rootPackage.name} -> ${args.stage}`),
+});
+```
+
+The factory is handed the `RmanApplication`, and runs once the repository exists. Either form takes
+its name from the file when its metadata declares no `command`.
+
 ## When this, and when `run.<script>`
 
 They overlap, and the line between them is worth keeping:

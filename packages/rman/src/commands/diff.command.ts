@@ -1,29 +1,36 @@
 import path from 'node:path';
 import colors from 'ansi-colors';
-import type { Argv } from 'yargs';
-import type { Repository } from '../core/repository.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
 import { GitHelper } from '../utils/git.js';
-import { applyRootOption, readRootOption } from '../utils/package-filter.js';
+import { fromRootOption, readFromRootOption } from '../utils/package-filter.js';
 
-export function initCli(repository: Repository, program: Argv) {
-  program.command({
-    command: 'diff [package]',
+const COMMAND = 'diff [package]' as const;
+const config = fromRootOption('Diff');
+type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
+
+const diffCommand = registerCommand(app => {
+  const repository = app.repository;
+  return {
+    command: COMMAND,
     describe: "Shows the git diff since a package's (or the whole repository's) last release tag",
-    builder: cmd =>
-      applyRootOption(cmd, 'Diff')
-        .example('$0 diff', "# Since the repository's own last tag")
-        .example('$0 diff pkg-a', "# Since pkg-a's own last tag, scoped to its directory")
-        .example('$0 diff --root', '# The whole repository, from inside a package')
-        .positional('package', {
-          describe:
-            'Package name - diffs just that package, since its own last tag. Omit to diff the whole ' +
-            "repository since its own last tag (or the current directory's package, if standing inside one).",
-          type: 'string',
-        }),
-    handler: async args => {
+    config,
+    positionals: {
+      package: {
+        describe:
+          'Package name - diffs just that package, since its own last tag. Omit to diff the whole ' +
+          "repository since its own last tag (or the current directory's package, if standing inside one).",
+        type: 'string',
+      },
+    },
+    examples: [
+      { command: '$0 diff', description: "# Since the repository's own last tag" },
+      { command: '$0 diff pkg-a', description: "# Since pkg-a's own last tag, scoped to its directory" },
+      { command: '$0 diff --from-root', description: '# The whole repository, from inside a package' },
+    ],
+    handler: async (args: Args) => {
       const git = new GitHelper({ cwd: repository.dirname });
-      const packageName = args.package as string | undefined;
+      const packageName = args.package;
 
       let target = repository.rootPackage;
       let pathspec: string | undefined;
@@ -38,7 +45,7 @@ export function initCli(repository: Repository, program: Argv) {
         }
         target = pkg;
         pathspec = path.relative(repository.dirname, pkg.dirname);
-      } else if (!readRootOption(args) && repository.currentPackage) {
+      } else if (!readFromRootOption(args) && repository.currentPackage) {
         /** The measured gap this closes: `diff` narrowed to the current package like `run` and
          *  `changelog` do, but offered no way to say "the whole repository" without naming a
          *  package - and no package name means the repository, so there was nothing to type. */
@@ -59,5 +66,7 @@ export function initCli(repository: Repository, program: Argv) {
       }
       console.log(text);
     },
-  });
-}
+  };
+});
+
+export default diffCommand;

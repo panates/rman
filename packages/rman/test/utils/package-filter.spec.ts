@@ -1,16 +1,28 @@
 import { expect } from 'expect';
 import type { Package } from '../../src/core/package.js';
-import { filterPackages } from '../../src/utils/package-filter.js';
+import { filterPackages, ROOT_SELECTOR } from '../../src/utils/package-filter.js';
 
 /**
- * A minimal fake `Package` - only `name` and `dependencies` matter to `filterPackages`.
+ * A minimal fake `Package` - only `selector`, `dependencies` and `isRoot` matter to
+ * `filterPackages`.
+ *
+ * **`selector`, which is what `--scope` matches, and `name` beside it because they are not the same
+ * question.** A package having a name at all is an ecosystem's promise; the selector is what
+ * addresses it inside this repository, and a repository can assign one where its technology offers
+ * none. They coincide here, as they do in every Node repository.
  *
  * `dependencies` holds **packages, not names**: a name identifies a package only where the
  * ecosystem guarantees uniqueness, so the graph is built out of references and `filterPackages`
  * compares by identity. Passing strings here silently matched nothing.
  */
 function pkg(name: string, dependencies: Package[] = []): Package {
-  return { name, dependencies } as Package;
+  return { name, selector: name, dependencies, isRoot: false } as unknown as Package;
+}
+
+/** The repository's own root package - what `--scope /` selects. Given a selector like any other
+ *  package on purpose: the point of `ROOT_SELECTOR` is that it is *not* how the root is found. */
+function rootPkg(name: string): Package {
+  return { name, selector: name, dependencies: [], isRoot: true } as unknown as Package;
 }
 
 /**
@@ -46,6 +58,66 @@ describe('utils/package-filter', () => {
         const packages = [pkg('a'), pkg('b'), pkg('c')];
         const result = filterPackages(packages, { scope: ['a', 'c'] });
         expect(result.map(p => p.name)).toEqual(['a', 'c']);
+      });
+    });
+
+    /**
+     * `--scope /` - the same `/` `.rmanrc`'s `"[/]"` uses, and structural for the same reason: the
+     * root is never selected by name.
+     */
+    describe(`scope ${ROOT_SELECTOR} (the root package)`, () => {
+      it('selects the root package, and nothing else', () => {
+        const packages = [rootPkg('the-repo'), pkg('a'), pkg('b')];
+        const result = filterPackages(packages, { scope: ROOT_SELECTOR });
+        expect(result.map(p => p.name)).toEqual(['the-repo']);
+      });
+
+      it('is not a glob - it matches the root whatever the root is called, and matches no member', () => {
+        // The trap it removed: `--scope the-repo` used to work, which is exactly the name-based
+        // addressing the config selectors dropped. A member named "/" cannot exist, so there is
+        // nothing for the structural reading to shadow.
+        const packages = [rootPkg('anything-at-all'), pkg('/')];
+        const result = filterPackages(packages, { scope: ROOT_SELECTOR });
+        expect(result.map(p => p.name)).toEqual(['anything-at-all']);
+        expect(result[0]!.isRoot).toBe(true);
+      });
+
+      it('combines with globs rather than replacing them', () => {
+        const packages = [rootPkg('the-repo'), pkg('a'), pkg('b')];
+        const result = filterPackages(packages, { scope: [ROOT_SELECTOR, 'a'] });
+        expect(result.map(p => p.name)).toEqual(['the-repo', 'a']);
+      });
+
+      it('selects nothing when the candidate list holds no root - which is most commands', () => {
+        // `repository.packages` is the workspace members only, so `list`/`run` never see the root.
+        // The honest answer there is an empty set, not a special case that invents one.
+        const packages = [pkg('a'), pkg('b')];
+        expect(filterPackages(packages, { scope: ROOT_SELECTOR })).toEqual([]);
+      });
+
+      it('works through ignore too: everything but the root', () => {
+        const packages = [rootPkg('the-repo'), pkg('a'), pkg('b')];
+        const result = filterPackages(packages, { ignore: ROOT_SELECTOR });
+        expect(result.map(p => p.name)).toEqual(['a', 'b']);
+      });
+
+      /**
+       * The other half of the rule, and the reason `/` is not merely a second spelling: a glob is
+       * never offered the root. `.rmanrc` already says this (`"[my-*]"` cannot pick up a root called
+       * `my-repo`; `"[*]"` means the members) and the CLI disagreed - measured, `clean --scope
+       * 'rman*'` selected this repository's own root, whose sweep recurses through `packages/*`.
+       */
+      it("a glob never matches the root, however well the root's name fits it", () => {
+        const packages = [rootPkg('the-repo'), pkg('the-lib')];
+        expect(filterPackages(packages, { scope: 'the-*' }).map(p => p.name)).toEqual(['the-lib']);
+        expect(filterPackages(packages, { scope: 'the-repo' }).map(p => p.name)).toEqual([]);
+        expect(filterPackages(packages, { scope: '*' }).map(p => p.name)).toEqual(['the-lib']);
+      });
+
+      it('and so a glob never ignores it either - the rule is the same in both directions', () => {
+        const packages = [rootPkg('the-repo'), pkg('the-lib')];
+        const result = filterPackages(packages, { ignore: '*' });
+        expect(result.map(p => p.name)).toEqual(['the-repo']);
       });
     });
 

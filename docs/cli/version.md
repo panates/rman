@@ -245,8 +245,11 @@ has no effect here - a package can still be meaningfully versioned even if it's 
 explicit `workspace:<range>` (e.g. `workspace:^1.0.0`) is bumped the same way a plain range would
 be.
 
-See [`VersionService`](../rman.md#versionservice) for the complete algorithm (including the
-`incVersion` prerelease logic and cross-group ripple mechanics) and its full test-verified examples.
+See [`VersionService`](../rman.md#versionservice) for the complete algorithm (including
+[prereleases](../rman.md#prereleases---preid--optionspreid) and cross-group ripple mechanics) and
+its full test-verified examples. How a number actually moves is the **version scheme**'s
+(`VersionScheme.next(current, bump, { preid })`), not this command's - see
+[the bump names](../rman.md#versionplanservice).
 
 ## See also
 

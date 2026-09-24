@@ -1,5 +1,6 @@
 import path from 'node:path';
 import process from 'node:process';
+import { RmanApplication } from '../core/application.js';
 
 /**
  * Where a repository's **locally installed executables** live, so a command an author wrote
@@ -9,7 +10,7 @@ import process from 'node:process';
  *
  * - **Which directories** is the *ecosystem's* answer, and the core has none - `node_modules/.bin`
  *   walked up the directory chain is npm's layout and nothing else's (a Python venv says
- *   `.venv/bin`, a Ruby project `bin`). `rman-node` contributes it; see `RmanPlugin.binPaths`.
+ *   `.venv/bin`, a Ruby project `bin`). `rman-node` contributes it; see `Plugin.getBinPaths`.
  * - **How a PATH is spelled** is the *operating system's*, and that stays here: the variable is
  *   `PATH` everywhere except Windows, where its case is whatever the environment happens to use.
  *   That has nothing to do with any ecosystem, and every provider would otherwise get it wrong
@@ -27,30 +28,21 @@ export namespace BinPath {
   export type Provider = (cwd: string) => string[];
 
   export interface EnvOptions {
+    /** The application whose technologies contribute directories. Omitted where a caller genuinely
+     *  has none - `exec` outside a repository - which leaves the inherited PATH untouched. */
+    readonly app?: RmanApplication;
     /** The directory the command will run in. Default `process.cwd()`. */
     readonly cwd?: string;
     /** The environment to derive from, like `process.env`. Default `process.env`. */
     readonly env?: ProcessEnv;
   }
 
-  /** Registers a provider. Called by `loadPlugins` for each plugin's `binPaths`, in `plugins`
-   *  declaration order - so what is on PATH is a function of the repository's own config. */
-  export function addProvider(provider: Provider): void {
-    if (providers.includes(provider)) return;
-    providers.push(provider);
-  }
-
-  /** For tests, which would otherwise leak a provider into every later case in the process. */
-  export function clearProviders(): void {
-    providers.length = 0;
-  }
-
   /** Every provider's directories for `cwd`, concatenated in declaration order. Empty for a
    *  repository that names no plugin - the inherited PATH then stands on its own, which is the
    *  honest answer rather than a guess at some ecosystem's layout. */
-  export function resolve(cwd: string): string[] {
+  export function resolve(app: RmanApplication, cwd: string): string[] {
     const dir = path.resolve(cwd);
-    return providers.flatMap(provider => provider(dir));
+    return [...app.platforms].flatMap(stack => stack.getBinPaths?.(dir) ?? []);
   }
 
   /**
@@ -64,7 +56,9 @@ export namespace BinPath {
     const cwd = options.cwd || process.cwd();
     const result = { ...(options.env || process.env) };
     const key = pathKey({ env: result });
-    const entries = resolve(cwd);
+    /** No application means no technologies, so nothing is prepended and the inherited PATH stands
+     *  on its own - the same answer a repository naming no plugin has always got. */
+    const entries = options.app ? resolve(options.app, cwd) : [];
     if (!entries.length) return result;
     const inherited = result[key];
     result[key] = [...entries, ...(inherited ? [inherited] : [])].join(path.delimiter);
@@ -89,6 +83,4 @@ export namespace BinPath {
         .find(key => key.toUpperCase() === 'PATH') || 'Path'
     );
   }
-
-  const providers: Provider[] = [];
 }

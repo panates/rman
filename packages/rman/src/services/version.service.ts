@@ -5,11 +5,11 @@ import { Manifest } from '../core/manifest.js';
 import type { Package } from '../core/package.js';
 import type { Repository } from '../core/repository.js';
 import type { RunStepValue } from '../core/run-step.js';
+import { Service } from '../core/service.js';
 import { GitHelper } from '../utils/git.js';
 import { expandReleaseTag, isCalendarVersion } from '../utils/release-version.js';
 import { stampVersionLabel } from '../utils/version-stamp.js';
 import { ChangeHashService } from './change-hash.service.js';
-import { ChangelogService } from './changelog.service.js';
 import { RunService } from './run.service.js';
 import { VersionPlanService } from './version-plan.service.js';
 
@@ -18,11 +18,216 @@ import { VersionPlanService } from './version-plan.service.js';
  * commit and tag lives here; **what** to write is `VersionPlanService`'s answer.
  *
  * Nothing here knows what a `package.json` is, names an npm script, or runs a command: the version
- * goes through `Manifest`/`ManifestProvider`, refreshing a sibling's dependency range goes through
+ * goes through `Manifest`/`Plugin`'s manifest members, refreshing a sibling's dependency range goes through
  * the same provider, and the lifecycle hooks around the write go through
  * `RunService.runLifecycleSlot` - this module only supplies the `.rmanrc version.<slot>` fallback,
  * which is its own config. What is left is git, that config, and the version stamps.
  */
+/**
+ * A service class - see `ListService` for the shape and `Service` for the three measured
+ * consequences a namespace had.
+ *
+ * **Only `applyPlan` became a method**, because only it takes a repository. `buildCommitMessage`,
+ * `stampDockerfile`, `stampSourceFiles` and `normalizeScriptValue` take a `Package` or nothing and
+ * stay functions on the namespace below - the same rule that leaves `ChangeHashService` a namespace
+ * entirely.
+ *
+ * **Declared before the namespace**, which TypeScript requires: the other order is
+ * `A namespace declaration cannot be located prior to a class with which it is merged`.
+ */
+export class VersionService extends Service {
+  /**
+   * Writes every `'bump'` entry's new version into its own manifest (and refreshes any other bumped
+   * package's dependency range on it), runs that package's own version-lifecycle hooks or its
+   * `.rmanrc version.before`/`.exec`/`.after` around the write - see the `hook` closure below -
+   * then commits and tags **once per group** - so independently-versioned groups each get their own clean commit/tag rather than one entangled
+   * commit spanning unrelated version lines. Pushes only when `options.push` is set - same as a
+   * plain `npm version`, this never reaches the network on its own otherwise.
+   */
+  async applyPlan(
+    plan: VersionPlanService.Entry[],
+    options: VersionService.ApplyOptions = {},
+  ): Promise<VersionService.ApplyResult> {
+    const repository = this.repository;
+    const git = new GitHelper({ cwd: repository.dirname });
+    // The root's own entry is only ever a real package to write/commit like any other when this
+    // *isn't* a monorepo (see `getPlan`) - in a monorepo it's the separate, purely informational
+    // entry handled below instead, since it's never published on its own.
+    const isRealEntry = (e: VersionPlanService.Entry) => !(repository.monorepo && e.package === repository.rootPackage);
+    const bumped = plan.filter(e => e.status === 'bump' && isRealEntry(e));
+    /** Keyed by package, not by name: what a manifest calls a sibling is the ecosystem's business,
+     *  and the provider doing the rewrite is the thing that knows. */
+    const bumpedVersions = new Map(bumped.map(e => [e.package, e.to!] as const));
+    /** Repo-relative paths of every file stamped with the new version below (a Dockerfile label, a
+     *  source constant), so each lands in the same commit as the bump that made it stale - keyed by
+     *  package, the way `changelogFileByPackage` is. */
+    const stampedByPackage = new Map<string, string[]>();
+
+    /**
+     * Every `version.stamp` entry is checked **before the first write**.
+     *
+     * "This file names no version I can rewrite" is a *configuration* mistake, knowable without
+     * touching anything - and finding it mid-loop left the tree torn: the manifest already bumped
+     * on disk, no commit, no tag (measured, exit 1 with `package.json` at the new version). A
+     * pre-flight costs one extra read per listed file and turns that into a clean refusal.
+     */
+    for (const entry of bumped) assertStampable(entry.package, entry.to!);
+
+    for (const entry of bumped) {
+      const pkg = entry.package;
+      /** The scope these hooks are evaluated against - the only place `${{ pkg.targetVersion }}`
+       *  can mean anything, and the reason `DEFERRED_PATHS` left them raw until now. */
+      const scope = repository.configScope(pkg, { targetVersion: entry.to! });
+      /**
+       * One slot of the version lifecycle. This module contributes only the *fallback* - its own
+       * `.rmanrc version.<slot>`, evaluated here because these three paths are in `DEFERRED_PATHS`
+       * and `${{ pkg.targetVersion }}` exists nowhere else. Whether the package's own declaration
+       * pre-empts it, and running the thing, are `RunService`'s (`runLifecycleSlot`), so nothing
+       * here names a script, a file, or a shell.
+       */
+      const hook = (slot: 'before' | 'exec' | 'after') =>
+        RunService.runLifecycleSlot(
+          pkg,
+          VERSION_LIFECYCLE,
+          slot,
+          RunService.normalizeScriptValue(
+            /** `at`: the path is what tells a step function from a value one, and this is a fragment -
+             *  without it a function here was called while the hook was being prepared. */
+            interpolateConfig(pkg.config?.version?.[slot], scope, { at: ['version', slot] }),
+            `version.${slot}`,
+          ),
+        );
+      await hook('before');
+      /** Through the manifest, not through a `package.json` field: where a version is written is
+       *  the provider's business (see `Plugin`'s manifest members), and this is the one place rman changes
+       *  it. */
+      pkg.manifest.version = entry.to!;
+      /** Which fields hold a sibling reference, and what a reference even looks like, is the
+       *  ecosystem's - npm's four fields and its `"workspace:"` protocol used to be spelled out
+       *  here. See `Plugin.updateDependencyVersions`. */
+      Manifest.updateDependencyVersions(pkg, bumpedVersions);
+      await hook('exec');
+      pkg.writeManifest();
+      // Before the `after` hook, so a script reacting to the bump sees the whole new state.
+      const stamped = [
+        VersionService.stampDockerfile(pkg, entry.to!),
+        ...VersionService.stampSourceFiles(pkg, entry.to!),
+      ].filter((f): f is string => !!f);
+      if (stamped.length) {
+        stampedByPackage.set(
+          pkg.name,
+          stamped.map(f => path.relative(repository.dirname, f)),
+        );
+      }
+      await hook('after');
+    }
+
+    const rootEntry = repository.monorepo ? plan.find(e => e.package === repository.rootPackage) : undefined;
+    if (rootEntry?.status === 'bump') {
+      repository.rootPackage.manifest.version = rootEntry.to!;
+      repository.rootPackage.writeManifest();
+    }
+
+    /** Written before the per-group commits below so each group's changelog file lands in the
+     *  *same* commit as its version bump, rather than needing a separate `changelog --write` run.
+     *  Bounded by each package's own *pre-bump* tag (the same one `getPlan` measured "changed
+     *  since" from - see `expandTag`) rather than `changelog`'s own default auto-detection (an npm
+     *  registry lookup, falling back to not-yet-pushed commits) - that boundary can drift from the
+     *  one `version` itself just used, and the not-yet-pushed fallback needs a configured remote
+     *  `version` never required at all. Falls back to `changelog`'s own default only when this
+     *  package genuinely has no prior tag (a first-ever release). */
+    const changelogFileByPackage = new Map<string, string>();
+    if (options.changelog) {
+      for (const entry of bumped) {
+        const fromTag = ChangeHashService.expandTag(entry.package, entry.from);
+        const from = (await git.tagExists(fromTag)) ? fromTag : undefined;
+        const changelogEntries = await this.app.getService('changelog').generateToFile({
+          scope: entry.package.name,
+          fromRoot: true,
+          from,
+          // The tag for this release doesn't exist yet (it's created below), so changelog's own
+          // tag-derived version would resolve to the *previous* release and label the entry with it.
+          version: entry.to,
+          // version doesn't consult "publish.skip" at all (a package can still be meaningfully
+          // versioned/changelogged without ever being published) - this entry was already decided
+          // to bump, so its folded-in changelog shouldn't then be silently dropped by that flag.
+          includeSkipped: true,
+        });
+        for (const ce of changelogEntries) {
+          changelogFileByPackage.set(
+            ce.package.name,
+            path.relative(repository.dirname, path.join(ce.package.dirname, ce.filePath)),
+          );
+        }
+      }
+    }
+
+    /** The root's own informational version write isn't part of any group's release, but still
+     *  needs to land in *some* commit rather than being left as an uncommitted local edit. Committed
+     *  *before* the group commits, so the last commit this makes is always a tagged release commit -
+     *  otherwise the tag sits one commit behind HEAD and every `git tag --points-at HEAD` consumer
+     *  (CI capturing the tag it just released, say) comes up empty in a monorepo. */
+    const commits: VersionService.Commit[] = [];
+    const tagged: VersionService.Tag[] = [];
+
+    if (rootEntry?.status === 'bump') {
+      const message = `chore: sync root version to ${rootEntry.to}`;
+      const sha = await git.commit(
+        [path.relative(repository.dirname, repository.rootPackage.manifestFileName)],
+        message,
+      );
+      /** No packages: this commit carries the root's informational version and nothing releasable,
+       *  which is why `updated` does not count it either. */
+      commits.push({ sha, message, packages: [] });
+    }
+
+    const byGroup = new Map<string, VersionPlanService.Entry[]>();
+    for (const entry of bumped) {
+      const list = byGroup.get(entry.groupKey);
+      if (list) list.push(entry);
+      else byGroup.set(entry.groupKey, [entry]);
+    }
+    for (const [, groupEntries] of byGroup) {
+      const files = groupEntries.map(e => path.relative(repository.dirname, e.package.manifestFileName));
+      for (const e of groupEntries) {
+        const changelogFile = changelogFileByPackage.get(e.package.name);
+        if (changelogFile) files.push(changelogFile);
+        files.push(...(stampedByPackage.get(e.package.name) ?? []));
+      }
+      const message = VersionService.buildCommitMessage(repository, groupEntries, options.message);
+      const sha = await git.commit(files, message);
+      commits.push({ sha, message, packages: groupEntries.map(e => e.package.name) });
+      const tags = new Set(groupEntries.map(e => ChangeHashService.expandTag(e.package, e.to!)));
+      for (const tag of tags) {
+        const exists = await git.tagExists(tag);
+        if (!exists) await git.createTag(tag);
+        tagged.push({ name: tag, created: !exists });
+      }
+    }
+
+    /** A repository release tag, on top of the per-group ones - but only once the root is on a
+     *  calendar version. With a single version line the group's own tag already *is* the release
+     *  (same version, same commit), and a second name for it would only add noise to every existing
+     *  repo's tag space. Created last, so it lands on HEAD rather than behind whichever group
+     *  happened to be committed last. */
+    if (rootEntry?.status === 'bump' && isCalendarVersion(rootEntry.to!)) {
+      const releaseTag = expandReleaseTag(repository.rootPackage, rootEntry.to!);
+      if (await git.tagExists(releaseTag)) {
+        throw new Error(
+          `Release tag "${releaseTag}" already exists - a second release within the same minute. ` +
+            'Wait a moment and run again.',
+        );
+      }
+      await git.createTag(releaseTag);
+      tagged.push({ name: releaseTag, created: true, release: true });
+    }
+
+    const pushed = !!options.push && bumped.length > 0;
+    if (pushed) await git.push();
+    return { entries: plan, updated: bumped, commits, tags: tagged, pushed };
+  }
+}
+
 export namespace VersionService {
   export interface ApplyOptions {
     /** Push the resulting commit(s) and tag(s) to the remote once applied. Default false - same
@@ -74,196 +279,6 @@ export namespace VersionService {
     created: boolean;
     /** True for the repository's own release tag, which belongs to no single package. */
     release?: boolean;
-  }
-
-  /**
-   * Writes every `'bump'` entry's new version into its own manifest (and refreshes any other bumped
-   * package's dependency range on it), runs that package's own version-lifecycle hooks or its
-   * `.rmanrc version.before`/`.exec`/`.after` around the write - see the `hook` closure below -
-   * then commits and tags **once per group** - so independently-versioned groups each get their own clean commit/tag rather than one entangled
-   * commit spanning unrelated version lines. Pushes only when `options.push` is set - same as a
-   * plain `npm version`, this never reaches the network on its own otherwise.
-   */
-  export async function applyPlan(
-    repository: Repository,
-    plan: VersionPlanService.Entry[],
-    options: ApplyOptions = {},
-  ): Promise<ApplyResult> {
-    const git = new GitHelper({ cwd: repository.dirname });
-    // The root's own entry is only ever a real package to write/commit like any other when this
-    // *isn't* a monorepo (see `getPlan`) - in a monorepo it's the separate, purely informational
-    // entry handled below instead, since it's never published on its own.
-    const isRealEntry = (e: VersionPlanService.Entry) => !(repository.monorepo && e.package === repository.rootPackage);
-    const bumped = plan.filter(e => e.status === 'bump' && isRealEntry(e));
-    /** Keyed by package, not by name: what a manifest calls a sibling is the ecosystem's business,
-     *  and the provider doing the rewrite is the thing that knows. */
-    const bumpedVersions = new Map(bumped.map(e => [e.package, e.to!] as const));
-    /** Repo-relative paths of every file stamped with the new version below (a Dockerfile label, a
-     *  source constant), so each lands in the same commit as the bump that made it stale - keyed by
-     *  package, the way `changelogFileByPackage` is. */
-    const stampedByPackage = new Map<string, string[]>();
-
-    /**
-     * Every `version.stamp` entry is checked **before the first write**.
-     *
-     * "This file names no version I can rewrite" is a *configuration* mistake, knowable without
-     * touching anything - and finding it mid-loop left the tree torn: the manifest already bumped
-     * on disk, no commit, no tag (measured, exit 1 with `package.json` at the new version). A
-     * pre-flight costs one extra read per listed file and turns that into a clean refusal.
-     */
-    for (const entry of bumped) assertStampable(entry.package, entry.to!);
-
-    for (const entry of bumped) {
-      const pkg = entry.package;
-      /** The scope these hooks are evaluated against - the only place `${{ pkg.targetVersion }}`
-       *  can mean anything, and the reason `DEFERRED_PATHS` left them raw until now. */
-      const scope = repository.configScope(pkg, { targetVersion: entry.to! });
-      /**
-       * One slot of the version lifecycle. This module contributes only the *fallback* - its own
-       * `.rmanrc version.<slot>`, evaluated here because these three paths are in `DEFERRED_PATHS`
-       * and `${{ pkg.targetVersion }}` exists nowhere else. Whether the package's own declaration
-       * pre-empts it, and running the thing, are `RunService`'s (`runLifecycleSlot`), so nothing
-       * here names a script, a file, or a shell.
-       */
-      const hook = (slot: 'before' | 'exec' | 'after') =>
-        RunService.runLifecycleSlot(
-          pkg,
-          VERSION_LIFECYCLE,
-          slot,
-          RunService.normalizeScriptValue(
-            /** `at`: the path is what tells a step function from a value one, and this is a fragment -
-             *  without it a function here was called while the hook was being prepared. */
-            interpolateConfig(pkg.config?.version?.[slot], scope, { at: ['version', slot] }),
-            `version.${slot}`,
-          ),
-        );
-      await hook('before');
-      /** Through the manifest, not through a `package.json` field: where a version is written is
-       *  the provider's business (see `ManifestProvider`), and this is the one place rman changes
-       *  it. */
-      pkg.manifest.version = entry.to!;
-      /** Which fields hold a sibling reference, and what a reference even looks like, is the
-       *  ecosystem's - npm's four fields and its `"workspace:"` protocol used to be spelled out
-       *  here. See `ManifestProvider.updateDependencyVersions`. */
-      Manifest.updateDependencyVersions(pkg, bumpedVersions);
-      await hook('exec');
-      pkg.writeManifest();
-      // Before the `after` hook, so a script reacting to the bump sees the whole new state.
-      const stamped = [stampDockerfile(pkg, entry.to!), ...stampSourceFiles(pkg, entry.to!)].filter(
-        (f): f is string => !!f,
-      );
-      if (stamped.length) {
-        stampedByPackage.set(
-          pkg.name,
-          stamped.map(f => path.relative(repository.dirname, f)),
-        );
-      }
-      await hook('after');
-    }
-
-    const rootEntry = repository.monorepo ? plan.find(e => e.package === repository.rootPackage) : undefined;
-    if (rootEntry?.status === 'bump') {
-      repository.rootPackage.manifest.version = rootEntry.to!;
-      repository.rootPackage.writeManifest();
-    }
-
-    /** Written before the per-group commits below so each group's changelog file lands in the
-     *  *same* commit as its version bump, rather than needing a separate `changelog --write` run.
-     *  Bounded by each package's own *pre-bump* tag (the same one `getPlan` measured "changed
-     *  since" from - see `expandTag`) rather than `changelog`'s own default auto-detection (an npm
-     *  registry lookup, falling back to not-yet-pushed commits) - that boundary can drift from the
-     *  one `version` itself just used, and the not-yet-pushed fallback needs a configured remote
-     *  `version` never required at all. Falls back to `changelog`'s own default only when this
-     *  package genuinely has no prior tag (a first-ever release). */
-    const changelogFileByPackage = new Map<string, string>();
-    if (options.changelog) {
-      for (const entry of bumped) {
-        const fromTag = ChangeHashService.expandTag(entry.package, entry.from);
-        const from = (await git.tagExists(fromTag)) ? fromTag : undefined;
-        const changelogEntries = await ChangelogService.generateToFile(repository, {
-          scope: entry.package.name,
-          root: true,
-          from,
-          // The tag for this release doesn't exist yet (it's created below), so changelog's own
-          // tag-derived version would resolve to the *previous* release and label the entry with it.
-          version: entry.to,
-          // version doesn't consult "publish.skip" at all (a package can still be meaningfully
-          // versioned/changelogged without ever being published) - this entry was already decided
-          // to bump, so its folded-in changelog shouldn't then be silently dropped by that flag.
-          includeSkipped: true,
-        });
-        for (const ce of changelogEntries) {
-          changelogFileByPackage.set(
-            ce.package.name,
-            path.relative(repository.dirname, path.join(ce.package.dirname, ce.filePath)),
-          );
-        }
-      }
-    }
-
-    /** The root's own informational version write isn't part of any group's release, but still
-     *  needs to land in *some* commit rather than being left as an uncommitted local edit. Committed
-     *  *before* the group commits, so the last commit this makes is always a tagged release commit -
-     *  otherwise the tag sits one commit behind HEAD and every `git tag --points-at HEAD` consumer
-     *  (CI capturing the tag it just released, say) comes up empty in a monorepo. */
-    const commits: Commit[] = [];
-    const tagged: Tag[] = [];
-
-    if (rootEntry?.status === 'bump') {
-      const message = `chore: sync root version to ${rootEntry.to}`;
-      const sha = await git.commit(
-        [path.relative(repository.dirname, repository.rootPackage.manifestFileName)],
-        message,
-      );
-      /** No packages: this commit carries the root's informational version and nothing releasable,
-       *  which is why `updated` does not count it either. */
-      commits.push({ sha, message, packages: [] });
-    }
-
-    const byGroup = new Map<string, VersionPlanService.Entry[]>();
-    for (const entry of bumped) {
-      const list = byGroup.get(entry.groupKey);
-      if (list) list.push(entry);
-      else byGroup.set(entry.groupKey, [entry]);
-    }
-    for (const [, groupEntries] of byGroup) {
-      const files = groupEntries.map(e => path.relative(repository.dirname, e.package.manifestFileName));
-      for (const e of groupEntries) {
-        const changelogFile = changelogFileByPackage.get(e.package.name);
-        if (changelogFile) files.push(changelogFile);
-        files.push(...(stampedByPackage.get(e.package.name) ?? []));
-      }
-      const message = buildCommitMessage(repository, groupEntries, options.message);
-      const sha = await git.commit(files, message);
-      commits.push({ sha, message, packages: groupEntries.map(e => e.package.name) });
-      const tags = new Set(groupEntries.map(e => ChangeHashService.expandTag(e.package, e.to!)));
-      for (const tag of tags) {
-        const exists = await git.tagExists(tag);
-        if (!exists) await git.createTag(tag);
-        tagged.push({ name: tag, created: !exists });
-      }
-    }
-
-    /** A repository release tag, on top of the per-group ones - but only once the root is on a
-     *  calendar version. With a single version line the group's own tag already *is* the release
-     *  (same version, same commit), and a second name for it would only add noise to every existing
-     *  repo's tag space. Created last, so it lands on HEAD rather than behind whichever group
-     *  happened to be committed last. */
-    if (rootEntry?.status === 'bump' && isCalendarVersion(rootEntry.to!)) {
-      const releaseTag = expandReleaseTag(repository.rootPackage, rootEntry.to!);
-      if (await git.tagExists(releaseTag)) {
-        throw new Error(
-          `Release tag "${releaseTag}" already exists - a second release within the same minute. ` +
-            'Wait a moment and run again.',
-        );
-      }
-      await git.createTag(releaseTag);
-      tagged.push({ name: releaseTag, created: true, release: true });
-    }
-
-    const pushed = !!options.push && bumped.length > 0;
-    if (pushed) await git.push();
-    return { entries: plan, updated: bumped, commits, tags: tagged, pushed };
   }
 
   /** `.rmanrc version.commitMessage` (root-level; `{version}` is replaced when every bumped package
@@ -342,7 +357,7 @@ export namespace VersionService {
    * pattern missed it) released a tagged commit with a stale constant and said nothing. The error
    * names the file and, when the package's ecosystem declared none, says so.
    *
-   * *How* a version is declared is the provider's (`ManifestProvider.stampVersion`); *which* files
+   * *How* a version is declared is the provider's (`Plugin.stampVersion`); *which* files
    * hold one is the repository's, which is why the list is config and the rewrite is a seam.
    */
   export function stampSourceFiles(pkg: Package, version: string): string[] {
@@ -427,5 +442,11 @@ function assertStampable(pkg: Package, version: string): void {
           : `  This package belongs to no ecosystem (no plugin claimed it), so nothing knows how a ` +
             `version is declared in it. Name a plugin in .rmanrc "plugins".`),
     );
+  }
+}
+
+declare module '../core/service.js' {
+  interface ServiceMap {
+    version: VersionService;
   }
 }

@@ -2,7 +2,7 @@
 
 # `rman clean`
 
-> Comes from **[`rman-node`](../cli-node.md)**, not from rman's core - name it in `.rmanrc`
+> Comes from the **[`node` built-in](../rman.md#the-node-built-in)**, not from rman's core - name it in `.rmanrc`
 > `plugins` (directly, or inherited through `extends`) or this command does not exist.
 
 ```
@@ -29,15 +29,16 @@ options, in addition to:
 | --- | --- | --- | --- | --- |
 | `--progress` | - | boolean | `true` | Show a live progress panel (auto-disabled when not a TTY). |
 | `--dry-run` | - | boolean | `false` | Report what would be removed without actually removing anything. |
-| `--root` | `-r` | boolean | `false` | Clean the whole repository even when standing inside one package's own directory (which otherwise scopes cleaning to just that package). No effect elsewhere. |
+| `--from-root` | `-r` | boolean | `false` | Clean the whole repository even when standing inside one package's own directory (which otherwise scopes cleaning to just that package). No effect elsewhere. |
 
 ## Examples
 
 ```bash
 rman clean
 rman clean --dry-run                 # preview what would be removed, nothing is deleted
-rman clean --root                    # whole repo, even from inside one package's directory
+rman clean --from-root               # whole repo, even from inside one package's directory
 rman clean --scope pkg-a
+rman clean --ignore /                # every member, skipping the root's own sweep
 ```
 
 ```
@@ -46,6 +47,13 @@ rm         pkg-a  src/index.d.ts
 rm         pkg-a  tsconfig.tsbuildinfo
 clean      pkg-b
 ```
+
+`clean` is one of the two commands whose candidate list holds the repository's own root package (the
+other is [`changelog`](changelog.md)), so **`--scope /` / `--ignore /` mean something here** - see
+[package filtering](../cli-rman.md#package-filtering). Worth knowing which is which: the root's
+target is not "the root directory's own output" but a sweep that recurses through every package
+directory, so `--scope /` is the *widest* selection, not the narrowest. An ordinary glob never
+matches the root, so `--scope '*'` is the members alone.
 
 ## Configuration (`.rmanrc clean.*`)
 
@@ -70,4 +78,4 @@ the matching files *inside* an otherwise-deleted directory, leaving the rest of 
 ## See also
 
 - [`rman ci`](ci.md) - removes `node_modules`/lockfiles instead (the complementary concern).
-- [`CleanService`](../node.md#cleanservice) - the underlying service.
+- [`CleanService`](../rman.md#the-node-built-in) - the underlying service.

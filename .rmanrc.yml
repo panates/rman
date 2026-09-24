@@ -1,13 +1,18 @@
-# `publish`, `ci` and `info` are no longer built in - they come from the Node plugin.
+# This repository is a Node one, and says so by name.
 #
-# Named by path rather than as `rman-node`, and only because this repository is the plugin's own:
-# the package's `exports` points at `./index.js`, which is the *published* layout (the build
-# directory becomes the package root), so resolving it by name inside this checkout finds nothing.
-# A consuming repository installs it normally and writes `plugins: ['rman-node']`.
+# It used to be `extends: './packages/node/build/index.js'` - a path into a second published
+# package, which is exactly the cost the 2.0 split was charging every Node repository and which
+# folding the built-ins into `rman` removed. That package is gone, and the line pointing at it
+# outlived it: measured, every command in this checkout exited 1 with
+# `"extends" target "./packages/node/build/index.js" was not found`.
 #
-# It follows that `rman-node` has to be built before `rman publish` exists here - self-hosting a
-# plugin costs exactly one bootstrap step.
-plugins: ['./packages/node/build/index.js']
+# `platform`, and it is now the same statement as `plugins: ['node']` - a root declaration naming a
+# built-in puts it at the front of `plugins`, so `clean` and `ci` arrive with the technology. It was
+# not, for one commit, and this file is where that showed: `rman list` worked with a `node` column
+# and `rman clean` answered `Unknown arguments`.
+#
+# It also no longer needs a bootstrap step: there is nothing to build before `rman clean` exists.
+platform: 'node'
 
 # One version line for the whole repository (rman's default) - `rman` and `rman-node` release
 # together, so a config written for one can never name a version of the other that does not exist.
@@ -17,8 +22,12 @@ plugins: ['./packages/node/build/index.js']
 # child, so it is reached only by an unmarked key or by `[/]`.
 '[*]':
   # `publish` ships the build directory, and generates the manifest there itself.
+  #
+  # `publish.npm.*`, not `publish.directory`: a target's block is named after the target, the way
+  # `publish.docker.*` always was. The key is the `npm` target's, contributed by `rman-node`.
   publish:
-    directory: build
+    npm:
+      directory: build
 
   clean:
     include: ['build', '*.tsbuildinfo']

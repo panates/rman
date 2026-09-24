@@ -1,269 +1,227 @@
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
-import { RunService } from '../services/run.service.js';
-import { VersionPlanService } from '../services/version-plan.service.js';
-import { BinPath } from '../utils/bin-path.js';
-import type { CustomCommand, LoadedCommand } from './custom-command.js';
-import { Manifest, type ManifestProvider } from './manifest.js';
-import { resolveConfigTarget } from './resolve-target.js';
-import { Workspace } from './workspace.js';
-
-/** The `.rmanrc` key naming plugin packages to load. */
-export const PLUGINS_KEY = 'plugins';
+import type { RunService } from '../services/run.service.js';
+import type { VersionPlanService } from '../services/version-plan.service.js';
+import type { BinPath } from '../utils/bin-path.js';
+import type { RmanApplication } from './application.js';
+import type { Manifest, ManifestProvider } from './manifest.js';
+import type { Workspace } from './workspace.js';
 
 /**
- * What a plugin package hands rman.
+ * **One technology, as a whole** - Node, Cargo, Maven. Everything rman needs in order to treat a
+ * directory as a package of that technology.
  *
- * An object rather than a bare array of commands, for the reason `CommandContext` is one: a plugin
- * will eventually contribute more than commands (config defaults, publish targets, a package
- * provider for a non-Node repository), and nothing written against this should have to change when
- * it does.
+ * **This was called `Plugin`, and the name was a lie.** `manifestProvider` is required, which makes
+ * the type a *platform* by definition: a package that only ships commands never touches it, because
+ * commands are a config key. So the narrow thing took the narrow name, and `Plugin` became the
+ * broad one that may carry platforms - a plugin *provides* platforms, and may provide more than
+ * one (a package shipping both `maven` and `gradle` is one plugin, two platforms).
+ *
+ * These were six independent fields on a plugin, each with its own registry, and declaring one
+ * without the others type-checked. It is not a shape that admits sense: `getRunSteps` reads
+ * `pkg.manifest.raw?.scripts`, so contributing npm's step source without npm's manifest reader
+ * leaves it parsing whatever another technology produced. The coupling was already real; only the
+ * type failed to say so.
+ *
+ * **`RmanPlugin` and `TechStack` used to be two types and are now one.** The plugin existed solely to
+ * *register* the stack - its whole `init` was `ctx.addTechStack(...)` plus a command or two - and
+ * once a config carries commands and publish targets itself, that registration step has nothing
+ * left to do. What remains of a plugin is the technology, so that is what the type is.
+ *
+ * **`manifestProvider` stays grouped rather than flattened in here**, and it was tried the other
+ * way first: nine members about one file - reading it, writing it, what it declares, how its
+ * versions are numbered, stamped and looked up on a registry - are more legible as a named group
+ * than as nine siblings of `getBinPaths`. The name also keeps its distance from `Package.manifest`,
+ * which is the *data* this produces rather than the reader.
+ *
+ * **Everything optional is answered by its absence**, never by a default rman invented - see
+ * `basePlatform`.
  */
-export interface RmanPlugin {
-  /** For error messages and `--help` grouping. Conventionally the package's own name. */
+export interface Platform {
+  /**
+   * **The ecosystem this speaks for**, surfaced on every package it reads as `Package.platform` -
+   * `'node'` for the built-in of that name. Short and about the technology, not about the file:
+   * `manifestProvider.fileName` already says `package.json`, and a name repeating it would tell a
+   * caller nothing it did not have.
+   *
+   * This is what lets code that *does* know one ecosystem check before acting on a package -
+   * `if (pkg.platform === 'node')` - which matters most in a repository holding more than one,
+   * since a manifest is read per directory and two packages can legitimately answer to different
+   * technologies. It is also the de-duplication key: registering twice under one name is refused,
+   * because it would define the same commands twice and yargs does not survive that.
+   */
   name: string;
-  commands?: CustomCommand[];
+
+  /** Where this technology's packages keep their identity, and how to change it - reading and
+   *  writing the manifest, what it declares as dependencies, how its versions are numbered,
+   *  stamped, and looked up on a registry. */
+  manifestProvider: ManifestProvider;
+
+  /** Where this technology's packages are, given the repository root - npm reads `workspaces`,
+   *  Cargo a `[workspace] members`. `undefined` when it does not recognize the root. */
+  getWorkspace?: Workspace.Provider;
+
+  /** Directories to put in front of a child process's PATH, so a command an author wrote
+   *  (`eslint .`) runs the repository's pinned copy - `node_modules/.bin` walked up the tree, for
+   *  npm. Every plugin contributes, unlike the seams above where the first answer wins: a PATH is
+   *  a list, and a polyglot repository wants both ecosystems' binaries reachable. */
+  getBinPaths?: BinPath.Provider;
+
   /**
-   * Where `run` can find a package's steps besides its `.rmanrc` - `rman-node` contributes
-   * `package.json#scripts` here, with npm's `pre`/`post` lifecycle.
+   * What the *package itself* declares for a lifecycle script, from this technology's own files -
+   * npm's `package.json` `scripts`, with `pre<script>`/`<script>`/`post<script>`.
    *
-   * Registered in `plugins` declaration order, and only for plugins the repository actually named:
-   * what a script resolves to is then a function of the config rather than of what happened to be
-   * imported.
+   * **A query, not a hook, and not build-specific** - which is why it is `getRunSteps` rather than
+   * anything beginning `on`. It returns what the package declares and rman decides what to do with
+   * it; `run`/`build`/`test` ask, and so does `version`, whose `preversion`/`version`/`postversion`
+   * are the same shape (`runLifecycleSlot` -> `contributedSlots`). A name mentioning `build` would
+   * have been wrong about half its callers.
    */
-  runSteps?: RunService.StepSource;
-  /**
-   * How this ecosystem's repositories are laid out - `rman-node` reads `workspaces` from the root
-   * `package.json` here.
-   *
-   * Loaded **before any package is known**, since this is what finds them: `Repository.create`
-   * reads the root config, loads the plugins it names, and only then asks. A repository naming no
-   * plugin therefore has no packages beyond itself.
-   */
-  workspace?: Workspace.Provider;
-  /**
-   * Where a package's name and version are written, and how it is numbered - `rman-node`
-   * contributes `package.json` here.
-   *
-   * Registered before any package is constructed, since `Package` reads through it. A repository
-   * naming no plugin therefore gets packages named after their own directories at version
-   * `0.0.0` - see `readManifest`.
-   */
-  manifest?: ManifestProvider;
-  /**
-   * How a release is planned - which packages have changed since their last release and what
-   * version each gets. `rman-node` contributes `NodeVersionPlanService` here.
-   *
-   * **`VersionPlanService` is abstract, so `version`/`changed` do not work without one** (they fail
-   * naming this key). Unlike `manifest` and `workspace`, which degrade to honest defaults, a plan is
-   * either right or it quietly releases the wrong set of packages - see `VersionPlanService`.
-   *
-   * Consulted when a command asks, not at load time, so this is declared and nothing else has to
-   * happen as the plugin's module is imported.
-   */
+  getRunSteps?: RunService.StepSource;
+
+  /** How this technology's releases are planned - where a package's change boundary comes from
+   *  when it has no release tag, and how far into its group a bump reaches. */
   versionPlanner?: VersionPlanService;
+}
+
+/**
+ * **A plugin is whatever a package contributes; a platform is one of the things it can contribute.**
+ *
+ * The broad half of the split. `Platform` is a technology and nothing else - required manifest
+ * reader, workspace layout, bin paths, steps, version planning. What is left over is this: an
+ * `init` for whatever the seams do not name yet, and the **declaration** that this plugin provides
+ * platforms.
+ *
+ * **`platforms` is a list, and that is not symmetry.** One package can speak for more than one
+ * technology - `maven` and `gradle` are the same toolchain family and a single plugin shipping both
+ * is the natural shape. A singular field would have made the second one a separate package for no
+ * reason.
+ *
+ * A bare `Platform` is accepted anywhere a `Plugin` is, as sugar for `{ name, platforms: [it] }` -
+ * which is what almost every entry is.
+ */
+export interface Plugin {
+  /** How this plugin is named in messages, and the de-duplication key: registering twice under one
+   *  name is refused. A platform contributed by it keeps its *own* name, which is what a package
+   *  reports as `pkg.platform`. */
+  name: string;
+
+  /** The technologies this plugin provides, if any. */
+  platforms?: Platform[];
+
   /**
-   * Where this ecosystem keeps a repository's locally installed executables - `rman-node`
-   * contributes npm's `node_modules/.bin`, walked up the directory chain.
+   * Anything this plugin contributes that is not a platform, run once when it is registered.
    *
-   * Prepended to PATH for every `exec`/`runBin` child process, so a command an author wrote runs
-   * against the repository's own pinned tools. **Every plugin's entries are used**, not just the
-   * first - see `BinPath`.
+   * **The escape hatch, not the front door.** Commands and publish targets are `.rmanrc` keys
+   * (`commands`, `publishTargets`), so a plugin contributing only those declares them in its own
+   * config and needs no `init` at all. What is left for `init` is whatever the seams do not name
+   * yet, reached through `ctx.app`.
+   *
+   * **It runs inside `Repository.create`**, before any package is known, so `ctx.app.repository`
+   * throws there. Anything wanting the repository belongs in a command's factory instead, which
+   * runs once there is one.
    */
-  binPaths?: BinPath.Provider;
+  init?(ctx: PluginContext): void | Promise<void>;
 }
 
 /**
- * Identity helper for authoring a plugin with full type-checking - the `defineConfig`/
- * `defineCommand` pattern again, for the same reason. Returns `plugin` unchanged.
+ * What `Plugin.init` is handed.
  *
- * **A plugin package's entry point exports a *config*, not this**, so that a package is an
- * `.rmanrc` like any other and can carry a second plugin later without changing shape:
- *
- * ```js
- * // rman-node's entry point
- * import { defineConfig, definePlugin } from 'rman';
- * import publishCommand from './commands/publish.js';
- *
- * export const nodePlugin = definePlugin({ name: 'rman-node', commands: [publishCommand] });
- * export default defineConfig({ plugins: [nodePlugin] });
- * ```
- *
- * **A module exporting the plugin itself is refused**, with a message saying so. Accepting both
- * would mean telling a plugin from a config at runtime, and `name` is a key either may have - the
- * test would be a guess, and guessing "plugin" registers nothing while reporting success.
+ * Only the application today. An object rather than a bare parameter so a member added later
+ * breaks nothing already written against it - the same reason `CommandContext` is one, which has
+ * already paid for itself twice.
  */
-export function definePlugin(plugin: RmanPlugin): RmanPlugin {
-  return plugin;
+export interface PluginContext {
+  app: RmanApplication;
+}
+
+/** Whether `value` came from `definePlatform` or `definePlugin`. */
+export function isDeclared(value: unknown): boolean {
+  return !!value && typeof value === 'object' && (value as Record<symbol, unknown>)[declaredKey()] === true;
+}
+
+/** Declares a **platform** - one technology, whole. Returns it unchanged apart from the mark. */
+export function definePlatform(platform: Platform): Platform {
+  return brand(platform);
+}
+
+/** Declares a **plugin** - whatever a package contributes, platforms included. Returns it unchanged
+ *  apart from the mark. */
+export function definePlugin(plugin: Plugin): Plugin {
+  return brand(plugin);
+}
+
+/** Whether `value` is a platform rather than the broader plugin - `manifestProvider` is what makes
+ *  one, and it is the only required member either type has beyond `name`. */
+export function isPlatform(value: Plugin | Platform): value is Platform {
+  return !!(value as Platform).manifestProvider;
 }
 
 /**
- * Loads every plugin the repository's `.rmanrc "plugins"` declares, in declaration order.
+ * The platform a package gets when **none** claimed its directory - a repository naming no
+ * platform, or a directory none of the named ones recognized.
  *
- * This is what lets a *package* contribute commands. `.rman/*.mjs` covers one repository's own
- * commands (see `loadCustomCommands`); a plugin covers a whole class of repository - `rman-node`
- * carrying everything that only means something because the repository is a Node one, so rman's
- * core does not have to.
+ * It exists so `Package.platform` need not be optional. `Package.provider` was an empty string for
+ * exactly this case, and every reader had to know that; an object with an empty `name` says the
+ * same thing without a guard, and `pkg.provider === 'node'` - the check CLAUDE.md prescribes -
+ * reads the same either way.
  *
- * An entry is a package name, a path, or a plugin object - and a named package's entry point
- * exports a **config**, whose own `plugins` are then loaded the same way (see `loadInto`).
+ * **Every documented behaviour of "no plugin" survives unchanged**, because the absences are the
+ * behaviour:
  *
- * Names resolve relative to the repository root's own `node_modules`, the way `extends` resolves -
- * a plugin is the repository's dependency, not rman's.
- *
- * **A plugin that cannot be loaded throws**, unlike a broken `.rman/*.mjs` file, which is warned
- * about and skipped. The two differ because the consequence does: a skipped local command affects
- * only itself, while a missing plugin silently removes commands the repository is built around -
- * `rman publish` would simply not exist, and "not a known command" sends the reader looking in the
- * wrong place entirely.
+ * - a reader that recognizes nothing -> `Manifest.read` falls through to its own empty manifest,
+ *   exactly as it does when no plugin answers;
+ * - no `getWorkspace` -> a repository naming no plugin has no packages beyond itself, which is the
+ *   boundary working rather than failing (`workspaces` in a `package.json` is npm's idea);
+ * - no `getBinPaths` -> nothing is prepended to a child process's PATH, so the inherited one
+ *   stands on its own rather than being guessed at;
+ * - no `getRunSteps` -> a package's steps come from its `.rmanrc` alone, the core's only source;
+ * - no `versionPlanner` -> `version`/`changed` fail naming the key, rather than releasing a
+ *   plausible but untrue set of packages from a default nobody chose.
  */
-export async function loadPlugins(rootDir: string, rootConfig: RmanConfig): Promise<LoadedCommand[]> {
-  const commands: LoadedCommand[] = [];
-  /** Resolved against the repository root, where the `.rmanrc` declaring them lives. */
-  await loadInto(commands, rootConfig, path.join(rootDir, '.rmanrc'), { files: new Set(), names: new Set() });
-  return commands;
-}
+export const basePlatform: Platform = definePlatform({
+  name: '',
+  manifestProvider: {
+    name: '',
+    fileName: '',
+    /** Recognizes nothing, which is the point: `Manifest.read` falls through to its own empty
+     *  manifest exactly as it does when no plugin answers. */
+    read: (): Manifest | undefined => undefined,
+    write: (): void => undefined,
+  },
+});
 
 /**
- * One config's `plugins`, in declaration order.
+ * **Marks an object as declared through one of the factories below**, so `loadPlugins` can tell a
+ * 2.x contribution from anything else that happens to have the same shape.
  *
- * Recursive because a plugin package **exports a config**, not a plugin: `rman-node`'s entry point
- * is `export default defineConfig({ plugins: [ ... ] })`, so resolving a name lands on another
- * config whose own `plugins` are the ones to register. That also means a plugin package can name a
- * plugin of its own and it simply works.
+ * It exists for one measured case, and there is no structural check that could replace it: an rman
+ * **1.x plugin was `{ name, init }`**, and under this split a 2.x plugin that only runs an `init`
+ * is *also* `{ name, init }`. They are indistinguishable by shape. The guard used to be
+ * `manifestProvider` being required - which only worked while the one type was both halves.
  *
- * `from` is the file the entries are resolved against, and it changes as it descends - an entry in
- * `rman-node`'s config resolves through *its* `node_modules`, not the repository's, the same rule
- * `extends` follows.
+ * Non-enumerable, so it never reaches `JSON.stringify`, `rman config` or a `toEqual` diff, the same
+ * way `ORIGINS` and `PREVIOUS_VALUES` travel.
  *
- * **Only `plugins` is read out of an imported config.** Its other keys are not merged: a config's
- * way into a repository is `extends`, which is the key that says "merge this underneath mine".
- * Reading them here would make a plugin able to configure a repository by being installed.
+ * The cost, stated rather than hidden: a plain object literal in `plugins` is no longer accepted.
+ * `definePlatform`/`definePlugin` is one import and one call, and it is the explicit declaration
+ * that a runtime check needs - a type cannot reach a JavaScript config.
+ *
+ * **A function rather than a `const`, and that is not a preference.** The file layout puts private
+ * declarations below the exported ones, and `basePlatform` is an exported const whose initializer
+ * *calls* `definePlatform` - so a `const DECLARED` below it sits in its temporal dead zone while the
+ * module is still evaluating. Measured: the whole suite failed to load with
+ * `ReferenceError: Cannot access 'DECLARED' before initialization`. A function declaration hoists,
+ * so the key is resolved when it is asked for instead of when the module reaches this line.
+ *
+ * **`Symbol.for`, so two copies of rman in one process agree about the mark.** A per-module symbol
+ * would have a plugin declared against one copy refused by the other - with a message about rman
+ * 1.x plugins, which is the one explanation guaranteed to be wrong.
  */
-async function loadInto(commands: LoadedCommand[], config: RmanConfig, from: string, seen: Seen): Promise<void> {
-  const declared = (config as Record<string, unknown> | undefined)?.[PLUGINS_KEY];
-  if (declared === undefined) return;
-
-  for (const entry of Array.isArray(declared) ? declared : [declared]) {
-    /**
-     * The object form: a JS config handing a plugin over directly, and what a plugin package's own
-     * config holds. Nothing to resolve or import.
-     *
-     * An object here **is** a plugin - it is not guessed at. The one thing checked is that it has a
-     * `name`, because everything downstream (the registration guard, `--help` grouping, every error
-     * message) is keyed by it.
-     */
-    if (isPlainObject(entry)) {
-      if (typeof entry.name !== 'string' || !entry.name) {
-        throw new Error(`A plugin object in "${PLUGINS_KEY}" has no "name" - every other message is keyed by it.`);
-      }
-      register(commands, entry as RmanPlugin, entry.name, from, seen);
-      continue;
-    }
-    if (typeof entry !== 'string' || !entry.trim()) {
-      throw new Error(
-        `"${PLUGINS_KEY}" takes a package name, a path, or a plugin object - not ${JSON.stringify(entry)}`,
-      );
-    }
-
-    const file = resolveConfigTarget(entry, from, PLUGINS_KEY);
-    /** A config naming itself, or two naming each other, would otherwise recurse forever. Keyed by
-     *  resolved file, so the same package reached by two names is still loaded once. */
-    if (seen.files.has(file)) continue;
-    seen.files.add(file);
-
-    const mod: any = await import(pathToFileURL(file).href);
-    const exported = mod?.default ?? mod?.plugin;
-
-    /**
-     * **A module exports one thing: an rman config.** Not a plugin, and not either-or.
-     *
-     * Accepting both meant having to *tell them apart*, and there is no reliable way to - `name` is
-     * a key a config may have as well, so the test came down to "a name plus at least one of the
-     * things a plugin contributes", which is a guess. Guess wrong in the direction of "plugin" and
-     * nothing is registered while the command reports success, which is the worst outcome on offer.
-     * One shape, one rule, one error.
-     */
-    if (!isPlainObject(exported) || (exported as RmanConfig).plugins === undefined) {
-      throw new Error(
-        `Plugin "${entry}" must export an rman config - \`export default defineConfig({ plugins: [ ... ] })\`. ` +
-          describeExport(exported),
-      );
-    }
-    await loadInto(commands, exported as RmanConfig, file, seen);
-  }
+function declaredKey(): symbol {
+  return Symbol.for('rman.declared');
 }
 
-/**
- * Everything a plugin contributes, in one place - so the object and the imported forms cannot drift
- * apart in what they support.
- *
- * **One registration per plugin name.** `plugins` appends at every layer now, so the same plugin
- * arriving twice is an ordinary consequence of `extends` rather than a mistake to report - and
- * registering it twice would define its commands twice, which yargs does not survive. The config
- * merge already drops an identical entry; this catches the rest, including two objects claiming one
- * name and an object that duplicates a named package.
- */
-function register(commands: LoadedCommand[], plugin: RmanPlugin, label: string, specifier: string, seen: Seen): void {
-  if (seen.names.has(plugin.name)) return;
-  seen.names.add(plugin.name);
-  if (plugin.runSteps) RunService.addStepSource(plugin.runSteps);
-  if (plugin.manifest) Manifest.addProvider(plugin.manifest);
-  if (plugin.workspace) Workspace.addProvider(plugin.workspace);
-  if (plugin.binPaths) BinPath.addProvider(plugin.binPaths);
-  if (plugin.versionPlanner) VersionPlanService.setPlanner(plugin.versionPlanner);
-  for (const command of plugin.commands ?? []) {
-    commands.push(toLoadedCommand(command, label || specifier, specifier));
-  }
-}
-
-/**
- * The second half of the error above - what the module *did* export, so the author can see how far
- * off it was.
- *
- * It recognizes a plugin object only to **say so in a message**. That is the one safe use for this
- * shape test: it decides nothing, so a wrong guess costs a slightly less helpful sentence rather
- * than a plugin that silently does not load.
- */
-function describeExport(exported: unknown): string {
-  if (exported === undefined) return 'It has no default export.';
-  if (!isPlainObject(exported)) return `Its default export is a ${typeof exported}.`;
-  const looksLikePlugin = PLUGIN_SEAMS.some(seam => exported[seam] !== undefined);
-  return looksLikePlugin
-    ? `Its default export looks like the plugin itself - put it in a config's "${PLUGINS_KEY}".`
-    : `Its default export has no "${PLUGINS_KEY}".`;
-}
-
-const PLUGIN_SEAMS = ['commands', 'runSteps', 'workspace', 'manifest', 'versionPlanner', 'binPaths'] as const;
-
-/** A config object, as opposed to an array or anything with its own prototype. */
-function isPlainObject(value: unknown): value is Record<string, any> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-/** What has already been loaded during one `loadPlugins` walk - resolved config files, so recursion
- *  terminates, and plugin names, so nothing registers twice. */
-interface Seen {
-  files: Set<string>;
-  names: Set<string>;
-}
-
-/** A plugin's command, checked the same way a `.rman/*.mjs` one is - the name it answers to comes
- *  from its own `command` string, since a plugin has no file name to fall back on. */
-function toLoadedCommand(command: CustomCommand, pluginName: string, specifier: string): LoadedCommand {
-  const declared = command?.command?.trim();
-  if (!declared) {
-    throw new Error(`Plugin "${pluginName}" has a command with no "command" name - it cannot be registered.`);
-  }
-  if (typeof command.handler !== 'function') {
-    throw new Error(`Plugin "${pluginName}" command "${declared}" has no "handler" function.`);
-  }
-  if (typeof command.describe !== 'string' || !command.describe) {
-    throw new Error(
-      `Plugin "${pluginName}" command "${declared}" has no "describe" - \`rman --help\` would have ` +
-        `nothing to list it by.`,
-    );
-  }
-  return { ...command, command: declared, name: declared.split(/\s+/)[0], file: specifier };
+/** Stamps the mark, non-enumerably, and hands the object back. */
+function brand<T extends object>(value: T): T {
+  Object.defineProperty(value, declaredKey(), { value: true, enumerable: false, configurable: true });
+  return value;
 }

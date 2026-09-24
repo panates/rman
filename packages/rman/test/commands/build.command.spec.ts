@@ -2,8 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { runCli } from '../../src/cli.js';
-import { useTestEcosystem } from '../_fixture.js';
+import { runCli, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-build-cmd-test-'));
@@ -83,7 +82,7 @@ describe('commands/build', () => {
     expect(lines.some(l => l.includes('echo tested'))).toBe(false);
   });
 
-  it("shares run's own options, e.g. --root, through the same applyRunOptions() builder", async () => {
+  it("shares run's own options, e.g. --from-root, through the same applyRunOptions() builder", async () => {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
     /** Marks the repository root: `Workspace.findRoot` looks for an `.rmanrc*` or a `.git`,
@@ -93,7 +92,7 @@ describe('commands/build', () => {
     writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0', scripts: { build: quiet('echo b') } });
 
     const lines = await captureLogs(() =>
-      runCli({ cwd: path.join(dir, 'packages/a'), argv: ['build', '--no-progress', '--root'] }),
+      runCli({ cwd: path.join(dir, 'packages/a'), argv: ['build', '--no-progress', '--from-root'] }),
     );
     expect(lines.some(l => l.includes('pkg-a') && l.includes('success'))).toBe(true);
     expect(lines.some(l => l.includes('pkg-b') && l.includes('success'))).toBe(true);

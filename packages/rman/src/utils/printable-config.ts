@@ -5,7 +5,7 @@
  * Needed because a config legitimately holds functions now: a `run.<script>` or `version.<slot>`
  * step written as JavaScript, and an `if` written the same way. It was already needed before that,
  * though, which is the better argument for doing it here rather than at one call site - a
- * `plugins` entry given in its object form carries the plugin's seams, and `rman config --root`
+ * `plugins` entry given in its object form carries the plugin's seams, and `rman config --from-root`
  * died on one with `unacceptable kind of an object to dump [object Function]` (measured, on a
  * repository whose shared config did nothing more unusual than `extends` a plugin package).
  *

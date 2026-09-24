@@ -7,7 +7,13 @@ export default [
     /** `build` is per package now. `old` is the gitignored pre-v1 tree kept locally for
      *  reference - it was only ever passing because its imports happened to be declared in the
      *  root package.json, which the monorepo split moved into `packages/rman`. */
-    ignores: ['**/build/**', '**/node_modules/**', 'old/**'],
+    /**
+     * `support/smoke-types/**` is a *fixture*, not source: it imports `rman` by package name so it
+     * compiles the way a consumer does, against the built `index.d.ts` rather than against `src`.
+     * That is the whole point of it, and it is exactly what `no-extraneous-dependencies` exists to
+     * catch everywhere else - so the directory is excluded rather than the rule silenced inline.
+     */
+    ignores: ['packages/*/build/**', '**/node_modules/**', 'old/**', 'support/smoke-types/**'],
   },
   ...panatesEslint.configs.node,
   {
@@ -35,10 +41,10 @@ export default [
         'error',
         {
           /** The repository root (dev tooling) *and* each package (its own deps and peers, which is
-           *  how `rman-node` declares `rman`). `packageDir` replaces the default nearest-package
+           *  how a third-party plugin declares `rman`). `packageDir` replaces the default nearest-package
            *  lookup rather than adding to it, so every root a test may legitimately import from has
            *  to be listed - a new package gets a line here. */
-          packageDir: [import.meta.dirname, 'packages/rman', 'packages/node'],
+          packageDir: [import.meta.dirname, 'packages/rman'],
           devDependencies: true,
           peerDependencies: true,
         },

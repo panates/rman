@@ -1,15 +1,37 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import glob from 'fast-glob';
-import { Manifest, type ManifestProvider } from '../src/core/manifest.js';
+import { runCli as cliRunCli } from '../src/cli.js';
+import { RmanApplication } from '../src/core/application.js';
+import type { ManifestProvider } from '../src/core/manifest.js';
 import type { Package } from '../src/core/package.js';
+import { basePlatform, definePlatform, definePlugin, type Platform } from '../src/core/plugin.js';
+import { registerPlugin } from '../src/core/plugin-loader.js';
+import type { PublishTarget } from '../src/core/publish-target.js';
+import { Repository } from '../src/core/repository.js';
+import type { ServiceMap } from '../src/core/service.js';
 import { Workspace } from '../src/core/workspace.js';
 import { ChangeHashService } from '../src/services/change-hash.service.js';
 import { RunService } from '../src/services/run.service.js';
 import { VersionPlanService } from '../src/services/version-plan.service.js';
-import { BinPath } from '../src/utils/bin-path.js';
 import type { GitHelper } from '../src/utils/git.js';
 import { stampVersionConstant } from '../src/utils/version-stamp.js';
+
+/**
+ * **The declaration factories, reachable from a config module written into a temp directory.**
+ *
+ * A plugin has to be declared through `definePlatform`/`definePlugin` - the loader refuses a plain
+ * object, because a plain object is exactly what an rman 1.x plugin is. So a fixture's `.rmanrc.mjs`
+ * or `./p.mjs` can no longer be a bare literal, and it cannot `import { definePlatform } from 'rman'`
+ * either: it sits in a bare temp directory with no `node_modules`, and importing the *built* copy
+ * would put a second core in the process - the one thing `tsconfig-test.json`'s `paths` exists to
+ * prevent.
+ *
+ * `runCli` runs in this process, so handing the real functions over here is what keeps those
+ * modules using the implementation rather than restamping the mark themselves. A second spelling of
+ * the brand is a second thing to keep in step, and the one that would rot in silence.
+ */
+Object.assign(globalThis, { __rmanDefinePlatform: definePlatform, __rmanDefinePlugin: definePlugin });
 
 /**
  * The ecosystem rman's **core** specs run against.
@@ -90,9 +112,15 @@ export const testManifest: ManifestProvider = {
   },
 };
 
-/** Packages from the root manifest's `workspaces` globs - the shape the fixtures write. */
-export const testWorkspace: Workspace.Provider = (root: string): Workspace.Layout | undefined => {
-  const file = path.join(root, 'package.json');
+/**
+ * A directory's child packages, from its own manifest's `workspaces` globs - the shape the fixtures
+ * write.
+ *
+ * Per directory, like the real seam: asked of every node the walk reaches, so a fixture nesting a
+ * workspace inside a package gets a tree rather than a flat list.
+ */
+export const testWorkspace: Workspace.Provider = (dir: string): string[] | undefined => {
+  const file = path.join(dir, 'package.json');
   if (!fs.existsSync(file)) return undefined;
   let patterns: unknown;
   try {
@@ -105,10 +133,10 @@ export const testWorkspace: Workspace.Provider = (root: string): Workspace.Layou
   const packageDirs: string[] = [];
   for (const pattern of patterns) {
     if (typeof pattern !== 'string') continue;
-    const dirs = glob.sync(pattern, { cwd: root, absolute: true, deep: 0, onlyDirectories: true });
-    for (const dir of dirs) if (fs.existsSync(path.join(dir, 'package.json'))) packageDirs.push(dir);
+    const dirs = glob.sync(pattern, { cwd: dir, absolute: true, deep: 0, onlyDirectories: true });
+    for (const d of dirs) if (fs.existsSync(path.join(d, 'package.json'))) packageDirs.push(d);
   }
-  return { root, packageDirs };
+  return packageDirs;
 };
 
 /**
@@ -154,63 +182,171 @@ export class TestVersionPlanService extends VersionPlanService {
 }
 
 /**
- * Registers the fixture ecosystem for every test in the enclosing `describe`.
+ * Arms the fixture ecosystem for every test in the enclosing `describe`.
  *
- * Call it inside a `describe`, not at module scope: the root hook in
- * [`support/mocha-root-hooks.ts`](../../../support/mocha-root-hooks.ts) empties every registry
- * before each test, so registration has to happen *after* that - which is what a `beforeEach`
- * declared here does (mocha runs hooks outermost-first, and the root hook is the outermost).
- *
- * `Repository.create` only ever *adds* what `plugins` names, never clears, so a repository built by
- * a spec - directly or through `runCli` - sees these.
+ * Nothing is registered globally any more - there is nowhere to register. This records what the
+ * next `createRepository()` should build its application with, and the record is cleared between
+ * cases so nothing survives one.
  */
 export function useTestEcosystem(): void {
-  beforeEach(registerTestEcosystem);
+  beforeEach(() => {
+    registryVersions.clear();
+    registryCalls.length = 0;
+    extraPlugins.length = 0;
+    extraTargets.length = 0;
+    lastApp = undefined;
+  });
 }
 
 /**
- * Registers a `BinPath` provider offering `<dir>/local-bin` at **every level from `cwd` upward**,
- * for a spec that stubs an executable.
+ * Registers a `Plugin` offering `<dir>/local-bin` at **every level from `cwd` upward**, for a
+ * spec that stubs an executable.
  *
- * Walking up is the part that is easy to get wrong: `exec` runs a step in the *package's* directory,
- * so a provider offering only `<cwd>/local-bin` serves a command run at the repository root and
- * nothing else. Measured - a stubbed `docker` sitting at the root was invisible from
- * `packages/a`, and the **real** `docker` ran instead.
+ * Walking up is the part that is easy to get wrong: a step runs in the *package's* directory, so a
+ * provider offering only `<cwd>/local-bin` serves a command run at the repository root and nothing
+ * else. Measured - a stubbed `docker` sitting at the root was invisible from `packages/a`, and the
+ * **real** `docker` ran instead.
  *
  * The directory is `local-bin`, deliberately not `node_modules/.bin`: that is npm's layout, and
  * `rman-node` is what contributes it. A core spec must not depend on it.
  */
 export function useLocalBin(): void {
   beforeEach(() => {
-    BinPath.addProvider(cwd => {
-      const dirs: string[] = [];
-      let previous: string | undefined;
-      let dir = path.resolve(cwd);
-      while (previous !== dir) {
-        dirs.push(path.join(dir, 'local-bin'));
-        previous = dir;
-        dir = path.resolve(dir, '..');
-      }
-      return dirs;
-    });
+    extraPlugins.push(
+      definePlatform({
+        /** A technology contributing only directories is a real shape - a PATH contributor
+         *  recognizes no package - and the base platform's reader is what keeps it from claiming
+         *  any. */
+        manifestProvider: basePlatform.manifestProvider,
+        name: 'local-bin',
+        getBinPaths: cwd => {
+          const dirs: string[] = [];
+          let previous: string | undefined;
+          let dir = path.resolve(cwd);
+          while (previous !== dir) {
+            dirs.push(path.join(dir, 'local-bin'));
+            previous = dir;
+            dir = path.resolve(dir, '..');
+          }
+          return dirs;
+        },
+      }),
+    );
   });
 }
 
 /**
- * The same registration without mocha's hooks - for a **subprocess**.
+ * Adds a publish target to every application the enclosing `describe` builds.
  *
- * `version --interactive` can only be tested by driving a real stdin, so those specs spawn a child
- * that imports `runCli` itself. That child has no mocha and no `beforeEach`, and the repository it
- * runs in names no plugin, so without calling this it has no manifest provider and no planner.
+ * The same rule every other seam follows: the core registers `docker` and nothing else, so a spec
+ * that needs a registry to publish to **brings one**. A fake target is also the only way to
+ * exercise the contribution itself - `claims`, a target's own flags, two targets colliding on an
+ * option name - without borrowing `rman-node`'s npm one, which a core spec must never do.
  */
-export function registerTestEcosystem(): void {
-  registryVersions.clear();
-  registryCalls.length = 0;
-  Manifest.addProvider(testManifest);
-  Workspace.addProvider(testWorkspace);
-  RunService.addStepSource(testSteps);
-  VersionPlanService.setPlanner(new TestVersionPlanService());
+export function useTarget(target: PublishTarget): void {
+  beforeEach(() => {
+    extraTargets.push(target);
+  });
 }
+
+/**
+ * Adds a second technology, asked **before** the fixture's own - for a spec about a polyglot
+ * repository, where which stack claims a package is the whole question.
+ *
+ * `useLocalBin` is the same mechanism with a stack that claims nothing; this is the case where the
+ * claiming matters, so `createApp` puts a spec's stacks first. A provider recognizing only its own
+ * marker file leaves every other package to the fixture's, which is what makes one repository hold
+ * two ecosystems.
+ */
+export function usePlugin(platform: Platform): void {
+  beforeEach(() => {
+    extraPlugins.push(platform);
+  });
+}
+
+/**
+ * A repository, on an application carrying the fixture's technologies - what a spec calls instead
+ * of `Repository.create`.
+ *
+ * The application is what a technology is registered into, so a spec cannot get one by creating a
+ * repository and hoping something registered earlier is still there. That was exactly the old
+ * failure: registries were module-global, so whichever spec ran first decided the answer for the
+ * rest, and the core appeared to work in tests that had set nothing up.
+ */
+export function createRepository(root?: string, options?: { deep?: number }): Promise<Repository> {
+  const app = createApp();
+  return Repository.create(root, { ...options, app });
+}
+
+/**
+ * An application carrying the fixture's technologies - for a spec that exercises something below
+ * the repository, like `runBin`, which needs the bin directories but no packages.
+ */
+export function createApp(): RmanApplication {
+  const app = new RmanApplication();
+  /**
+   * **A spec's own platforms go on first, and the order is load-bearing.** `platformFor` takes the
+   * first platform whose manifest provider recognizes a directory, and the fixture's claims
+   * anything with a `package.json` - which every package the fixture writes has. Registered after
+   * it, a second technology could never claim one, so a polyglot repository was not expressible at
+   * all. `useLocalBin`'s platform recognizes nothing (`basePlatform`'s reader), so being first
+   * costs it nothing.
+   *
+   * Through `registerPlugin` rather than onto the registries by hand: a bare platform is sugar for
+   * the plugin providing it, and a fixture normalizing that itself is a second implementation of
+   * the thing under test.
+   */
+  for (const platform of extraPlugins) registerPlugin(app, platform);
+  registerPlugin(app, testPlatform);
+  for (const target of extraTargets) app.publishTargets.add(target);
+  lastApp = app;
+  return app;
+}
+
+/** The version planner the last `createRepository()`'s application carries - what a spec asks for
+ *  a plan with, now that there is no registry to read one out of. */
+export function planner(): VersionPlanService {
+  if (!lastApp) throw new Error('No application yet - call createRepository() first.');
+  return VersionPlanService.getPlanner(lastApp);
+}
+
+/**
+ * `runCli` on an application carrying the fixture's technologies.
+ *
+ * The CLI builds its own application per run, so a spec driving it has to hand one over for the
+ * same reason `createRepository` does: a technology is registered *into* an application, and there
+ * is no longer anywhere else for one to be.
+ */
+export function runCli(options?: { argv?: string[]; cwd?: string }): Promise<void> {
+  return cliRunCli({ ...options, app: createApp() });
+}
+
+/** The service a spec is exercising, from the application the last `createRepository()` built. */
+export function service<K extends keyof ServiceMap>(name: K): ServiceMap[K] {
+  if (!lastApp) throw new Error('No application yet - call createRepository() first.');
+  return lastApp.getService(name);
+}
+
+/**
+ * The core's synthetic technology, as one thing.
+ *
+ * Named `'test'` rather than `'node'` on purpose: a core spec must not be able to pass because
+ * `rman-node`'s answers happened to be right.
+ */
+export const testPlatform: Platform = definePlatform({
+  name: 'test',
+  manifestProvider: testManifest,
+  getWorkspace: testWorkspace,
+  getRunSteps: testSteps,
+  versionPlanner: new TestVersionPlanService(),
+});
+
+/** Platforms a spec asked for on top of the fixture's own - see `useLocalBin`. */
+const extraPlugins: Platform[] = [];
+
+/** Publish targets a spec asked for, on top of the core's own `docker` - see `useTarget`. */
+const extraTargets: PublishTarget[] = [];
+let lastApp: RmanApplication | undefined;
 
 /**
  * What the fixture provider answers `publishedVersion` with, keyed by package name - empty unless a

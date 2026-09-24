@@ -1,21 +1,28 @@
 import colors from 'ansi-colors';
-import type { Argv } from 'yargs';
-import type { Repository } from '../core/repository.js';
+import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { VersionPlanService } from '../services/version-plan.service.js';
-import { applyPackageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
+import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 
-export function initCli(repository: Repository, program: Argv) {
-  program.command({
-    command: 'changed',
+const COMMAND = 'changed' as const;
+
+const config = {
+  ...packageFilterOptions,
+  json: { target: 'cli', alias: 'j', describe: 'Print output as JSON', type: 'boolean' },
+} satisfies Record<string, RmanConfig.CommandOption>;
+
+type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
+
+/** Declares no `target: 'config'` option, so it contributes nothing to `RmanConfig` and writes no
+ *  augmentation - a command that owns no config key simply has none. */
+const changedCommand = registerCommand(app => {
+  const repository = app.repository;
+  return {
+    command: COMMAND,
     describe: 'Shows which packages the next "version" run would bump, without changing anything',
-    builder: cmd =>
-      applyPackageFilterOptions(cmd).example('$0 changed', '').example('$0 changed --json', '').option('json', {
-        alias: 'j',
-        describe: 'Print output as JSON',
-        type: 'boolean',
-      }),
-    handler: async args => {
-      const plan = await VersionPlanService.getPlanner().getPlan(repository, readPackageFilterOptions(args));
+    config,
+    examples: [{ command: '$0 changed' }, { command: '$0 changed --json' }],
+    handler: async (args: Args) => {
+      const plan = await VersionPlanService.getPlanner(app).getPlan(repository, readPackageFilterOptions(args));
       const changed = plan.filter(e => e.status === 'bump');
 
       if (args.json) {
@@ -43,5 +50,7 @@ export function initCli(repository: Repository, program: Argv) {
         );
       }
     },
-  });
-}
+  };
+});
+
+export default changedCommand;

@@ -12,7 +12,7 @@ output may come from four places at once, and no single file shows it.
 
 ```bash
 rman config                  # the package you are standing in
-rman config --root           # the repository root's own config instead
+rman config --from-root      # the repository root's own config instead
 rman config --json           # machine-readable
 rman config --json | jq .version
 ```
@@ -26,7 +26,7 @@ Everything that makes a config hard to read back by hand:
 | directory cascade | a parent directory's `.rmanrc`, then the package's own, closest winning |
 | `"[selector]"` blocks | `"[*]"` and any glob that matches this package's **name** |
 | `extends` | configs merged *underneath* the file naming them |
-| `+key` | appended to whatever it is appended to, rather than replacing it |
+| `value` | a key deriving from what the layers below it resolved to |
 | `${{ ... }}` | evaluated for **this** package - `pkg`, `repository`, `file`, `env`, ... |
 
 ```bash
@@ -38,7 +38,7 @@ run:
   build:
     before:
       - echo base          # from the extended config
-      - echo per-package   # +before, appended rather than replacing
+      - echo per-package   # from [...value, ...], added rather than replacing
     exec: tsc -b tsconfig-build.json   # the package's own, beating "[*]"
 clean:
   include:
@@ -50,14 +50,14 @@ group: a-line
 
 | Option | Alias | Description |
 | --- | --- | --- |
-| `--root` | `-r` | Print the repository root's config instead of the current package's. No effect when already at the root. |
+| `--from-root` | `-r` | Print the repository root's config instead of the current package's. No effect when already at the root. |
 | `--json` | - | Print JSON instead of YAML. **Nothing else on stdout**, so it can be piped. |
 
 ## Which package it is about
 
 The same rule `run`/`exec`/`changelog` use: standing inside a package's own directory, that package;
 anywhere else - the repository root, or a directory holding no package (an intermediate
-`packages/`) - the root package. `--root` forces the root from inside a package.
+`packages/`) - the root package. `--from-root` forces the root from inside a package.
 
 Remember that the **root is a package too**, and that a `"[*]"` block is about the *others*: at the
 root you see `allowBranch`, `version.*` and the plugins' root-level keys, and *not* what `"[*]"`

@@ -66,7 +66,7 @@ rman version
 # Apply it: bump versions, write CHANGELOG.md, commit, tag
 rman version --changelog
 
-# Publish everything that isn't already on the registry (needs rman-node)
+# Publish everything that isn't already on the registry
 rman publish
 ```
 
@@ -90,16 +90,28 @@ worked examples of every single command, see **[docs/cli-rman.md](https://github
 | [`diff [package]`](#rman-diff-package) | Shows the git diff since a package's (or the repo's) last release tag. |
 | [`changelog`](#rman-changelog) | Generates a changelog per package from unreleased commits. |
 | [`version [bump]`](#rman-version-bump) | Bumps versions of changed packages (and their dependents). |
+| [`publish`](#rman-publish) | Publishes every package whose version isn't on its registry yet. |
 | [`github-release`](#rman-github-release) | Creates the repository's GitHub Release for its release tag. |
 | [`import <path>`](#rman-import-path) | Imports an external git repository as a new package, with history. |
 
-**`publish`, `ci` and `clean` come from [`rman-node`](https://www.npmjs.com/package/rman-node)**,
-not from this package - each is about npm or TypeScript rather than about repositories. Name the
-plugin in `.rmanrc` to get them:
+**`ci` and `clean` come from the `node` built-in**, which ships inside this package - each is about
+npm or TypeScript rather than about repositories, so nothing it contributes exists until a
+repository asks for it:
 
 ```yaml
-plugins: ['rman-node']
+plugins: ['node']   # by name
+platform: node      # the same statement at a repository root, plus which technology its packages are
 ```
+
+Or say nothing: a repository that declares no technology gets the one its own files imply, announced
+on stderr rather than guessed silently. It used to take a second package (`rman-node`) and a
+`.rmanrc` before anything worked at all.
+
+**`publish` is here, but *where* a package ships is a plugin's to say.** A **publish target** is
+one answer to "is this version on the registry, and how do I push it" - rman ships `docker`
+(any language's project can push an image), and the `node` built-in contributes `npm` with the flags
+that only mean something there (`--access`, `--tag`, `--otp`, `--registry`, ...). So
+`rman publish --help` lists what this repository's targets actually understand.
 
 Options shared across several commands:
 
@@ -108,8 +120,10 @@ Options shared across several commands:
 - **Package filtering** (`list`, `run`/`build`/`test`, `exec`, `version`, `changelog`, and a
   plugin's own commands): `--scope <glob>`, `--ignore <glob>`, `--deps`, `--dependents` - see
   [Package filtering](https://github.com/panates/rman/blob/main/docs/rman.md#package-filtering-scopeignoredepsdependents)
-  for the full semantics.
-- **`--root`/`-r`** (every command that narrows to the package you are standing in -
+  for the full semantics. **`--scope /` is the repository's own root package** - the same `/`
+  `.rmanrc`'s `"[/]"` block uses, and not a glob, so `--scope '*'` means the members and a glob
+  never picks up the root by name.
+- **`--from-root`/`-r`** (every command that narrows to the package you are standing in -
   `run`/`build`/`test`, `exec`, `changelog`, `diff`): run against the whole repository instead.
 - **Branch guard** (every command that mutates state or runs scripts - `run`/`build`/`test`,
   `exec`, `version`): `--allow-branch <glob>`, `--ignore-branch <glob>` -
@@ -134,9 +148,10 @@ rman list --scope '@myorg/*' --ignore '*-internal'
 
 ### `rman info`
 
-Prints local environment (OS/CPU/memory, Node, git) and repository information. A plugin adds its
-own ecosystem's part - `rman-node` reports whichever package manager `.rmanrc "packageManager"`
-names, plus the installed `rman` packages.
+Prints local environment (OS/CPU/memory, Node, git) and repository information. A platform adds its
+own ecosystem's part - the `node` built-in reports whichever package manager
+`.rmanrc "packageManager"` names, plus the installed `rman` packages, and only in a repository that
+asked for it.
 
 ```bash
 rman info
@@ -192,12 +207,12 @@ rman exec --topo=false pwd         # every package independently, alphabetical o
 ### `rman config`
 
 Prints the **effective** config for the package of the current directory - after the directory
-cascade, `"[selector]"` blocks, `extends`, `+key` appends and `${{ ... }}` expressions have all been
+cascade, `"[selector]"` blocks, `extends` and `${{ ... }}` expressions have all been
 applied. What rman actually sees there, which no single file shows.
 
 ```bash
 rman config                  # the package you are standing in
-rman config --root           # the repository root's own config instead
+rman config --from-root           # the repository root's own config instead
 rman config --json | jq .run
 ```
 
@@ -266,6 +281,29 @@ Release-As: patch
 See [docs/rman.md#versionservice](https://github.com/panates/rman/blob/main/docs/rman.md#versionservice) for the full grouping/propagation
 algorithm, prerelease semantics, and `"workspace:"` dependency-range handling.
 
+### `rman publish`
+
+Publishes every package whose current version isn't on its registry yet. Shows the plan first, then
+asks for confirmation (unless `--yes` or `--dry-run`), then publishes in topological order,
+dependencies before dependents.
+
+```bash
+rman publish                    # show the plan, then ask for confirmation
+rman publish --yes              # publish immediately, no confirmation
+rman publish --dry-run --json   # "is there anything to release?", for a CI gate
+rman publish --target docker    # only the packages configured for that target
+```
+
+**Where a package ships is a publish target, and a target is a contribution.** rman ships `docker`;
+the `node` built-in contributes `npm`. A package says where it goes with `.rmanrc "publish.target"`, or says
+nothing and goes wherever the installed targets claim it - so a Cargo package is never assumed to be
+an npm one. Each target adds its own flags, so `rman publish --help` is worth reading in your own
+repository. See
+[docs/cli/publish.md](https://github.com/panates/rman/blob/main/docs/cli/publish.md).
+
+It never looks at whether `version` ran: it inspects what is on disk and on each registry, so it
+behaves the same right after a bump or days later, and re-running is safe.
+
 ### `rman github-release`
 
 Creates the repository's GitHub Release for the version that just shipped - one per run, named after
@@ -294,7 +332,7 @@ rman import ../my-old-standalone-repo --dest libs   # under libs/ instead of pac
 already. After importing, add the new directory to your `workspaces` glob if it isn't already
 covered, then run `rman ci` to install it.
 
-## Shared config (`extends`) and appending (`+key`)
+## Shared config (`extends`) and adding to it (`value`)
 
 House rules live in one package, and a repository names it:
 
@@ -305,13 +343,18 @@ extends: '@panates/rman-monorepo'
 '[*]':
   run:
     build:
-      +before: 'rm -rf ./cache' # adds to the base's step, rather than replacing it
+      # adds to the base's step, rather than replacing it
+      before: "${{ [...value, 'rm -rf ./cache'] }}"
 ```
 
 `extends` merges underneath the file naming it (a package, a path, or a list), and may itself be
-chained. `+key` appends to whatever the key already resolved to - from the base, a parent directory,
-or a selector - which is what lets a repository add one step without restating a list it doesn't
-own. See [docs/rman.md](https://github.com/panates/rman/blob/main/docs/rman.md#inheriting-a-shared-config-extends).
+chained. `value` is what the key already resolved to - from the base, a parent directory, or a
+selector - which is what lets a repository add one step without restating a list it doesn't own. It
+is the list form of whatever is underneath, so the spread needs no guard even when nothing is.
+See [docs/rman.md](https://github.com/panates/rman/blob/main/docs/rman.md#inheriting-a-shared-config-extends).
+
+There was a `+key` prefix for this and it is gone; one still in a config is refused, naming what to
+write instead.
 
 ## Your own commands
 
@@ -408,8 +451,9 @@ import { defineConfig } from 'rman';
 export default defineConfig({ allowBranch: ['main'] });
 ```
 
-With a plugin, import `defineConfig` from the plugin instead (`rman-node`'s carries its own keys
-into the type). The `.rmanrc`/`.rmanrc.yml` forms get no checking - see
+A plugin's keys arrive by declaration merging, so annotating with `RmanConfig` types them too;
+`RmanNodeConfig` is the alias that says out loud which set a config is using. The
+`.rmanrc`/`.rmanrc.yml` forms get no checking - see
 [docs/rman.md#editor-support-types](https://github.com/panates/rman/blob/main/docs/rman.md#editor-support-types) for why the JSON Schema that
 used to cover them was removed.
 

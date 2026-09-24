@@ -1,34 +1,35 @@
 #!/usr/bin/env node
+/** Every built-in command, registered by importing them - see `commands.ts` for why the list lives
+ *  there rather than here. */
+import './commands.js';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import colors from 'ansi-colors';
 import * as yaml from 'js-yaml';
-import yargs, { type Argv } from 'yargs';
+import yargs, { type ArgumentsCamelCase, type Argv, type CommandModule } from 'yargs';
 import { hideBin } from 'yargs/helpers';
-import * as buildCommand from './commands/build.command.js';
-import * as changedCommand from './commands/changed.command.js';
-import * as changelogCommand from './commands/changelog.command.js';
-import * as configCommand from './commands/config.command.js';
-import * as diffCommand from './commands/diff.command.js';
-import * as execCommand from './commands/exec.command.js';
-import * as githubReleaseCommand from './commands/github-release.command.js';
-import * as importCommand from './commands/import.command.js';
-import * as infoCommand from './commands/info.command.js';
-import * as listCommand from './commands/list.command.js';
-import * as runCommand from './commands/run.command.js';
-import * as testCommand from './commands/test.command.js';
-import * as versionCommand from './commands/version.command.js';
 import { version } from './constants.js';
-import { assertNoBuiltinShadowing, type CommandContext, loadCustomCommands } from './core/custom-command.js';
+import { RmanApplication } from './core/application.js';
+import { commandName, toYargsCommand } from './core/command-builder.js';
+import {
+  assertNoBuiltinShadowing,
+  type CommandContext,
+  type CustomCommand,
+  defaultCommandGlobs,
+  loadCustomCommands,
+  type LoadedCommand,
+} from './core/custom-command.js';
 import type { Package } from './core/package.js';
+import { checkCustomCommand } from './core/plugin-loader.js';
 import { Repository } from './core/repository.js';
+import { commandRegistry, type RmanConfig } from './interfaces/rman-config.interface.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/logger.js';
-import { filterPackages, readPackageFilterOptions, readRootOption } from './utils/package-filter.js';
+import { filterPackages, readFromRootOption, readPackageFilterOptions } from './utils/package-filter.js';
 import { printableConfig } from './utils/printable-config.js';
 import { runBin } from './utils/run-bin.js';
 
-export async function runCli(options?: { argv?: string[]; cwd?: string }) {
+export async function runCli(options?: { argv?: string[]; cwd?: string; app?: RmanApplication }) {
   const _argv = options?.argv || hideBin(process.argv);
 
   /**
@@ -45,7 +46,10 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
   }
 
   try {
-    const repository = await Repository.create(options?.cwd);
+    /** One application per run, made here so `--log-level` reaches its logger, and handed to
+     *  `Repository.create` rather than found through a global. */
+    const app = options?.app ?? new RmanApplication();
+    const repository = await Repository.create(options?.cwd, { app });
 
     const program = yargs(_argv)
       .scriptName('rman')
@@ -90,7 +94,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
          * - but it still has to **throw**, not exit.
          *
          * This branch called `process.exit(1)`, and `runCli` is a library entry point: rman's own
-         * bin calls it, so do `rman-node`'s fixtures and every spec. Exiting from in here took the
+         * bin calls it, so do the fixtures and every spec. Exiting from in here took the
          * whole process down before any caller could see the rejection - which in mocha meant the
          * first command that failed killed the run and the suite could not report a single result.
          * The exit belongs to the bin entry alone (see `isMain()` at the bottom), which already does
@@ -110,61 +114,92 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
      */
     interceptConfigFlag(repository, program);
 
-    infoCommand.initCli(repository, program);
-    listCommand.initCli(repository, program);
-    runCommand.initCli(repository, program);
-    buildCommand.initCli(repository, program);
-    changelogCommand.initCli(repository, program);
-    testCommand.initCli(repository, program);
-    versionCommand.initCli(repository, program);
-    githubReleaseCommand.initCli(repository, program);
-    execCommand.initCli(repository, program);
-    changedCommand.initCli(repository, program);
-    diffCommand.initCli(repository, program);
-    configCommand.initCli(repository, program);
-    importCommand.initCli(repository, program);
+    /**
+     * **Built-ins come from `commandRegistry`, in the order their modules were imported.** Each
+     * entry is a register function that has not run yet - it runs here, with the repository, and
+     * returns the command's declaration; `toYargsCommand` is the only thing that knows how a
+     * declaration becomes a yargs registration.
+     *
+     * The thirteen hand-written `initCli(repository, program)` calls this replaces were the second
+     * place a command had to be listed, and the list the shadow check guards with was a third.
+     */
+    const builtIns = commandRegistry.map(register => register(app));
+    for (const meta of builtIns) program.command(toYargsCommand(meta));
 
     /**
-     * Commands that are not built in, from two places, registered after the built-ins so the clash
-     * check below has the full list to compare against:
+     * Commands that are not built in, all from **one** key: `.rmanrc "commands"`, whose default
+     * value is `.rman/*.{js,mjs,cjs}`.
      *
-     * - **plugins** (`.rmanrc "plugins"`) - a *package* contributing commands, which is how
-     *   everything Node-specific lives outside rman's core;
-     * - **`.rman/*.mjs`** - this one repository's own commands.
+     * An entry is a command or a glob naming modules that export one, so a package contributing
+     * commands (a built-in's, a plugin's) and a repository writing its own reach yargs by the same path - there
+     * is one source of non-built-in commands and one precedence slot. A plugin used to hand them
+     * over separately through `addCommand`, which is the step this replaces.
      *
-     * The repository wins a name clash with a plugin, and silently: it is the more specific
-     * statement, the same way its own `.rmanrc` overrides an `extends` base. A plugin taking a
-     * *built-in's* name is still refused outright.
+     * Registered after the built-ins so the shadow check below has the full list to compare
+     * against. A command taking a *built-in's* name is refused outright.
      */
-    /** Already loaded: `Repository.create` had to, because a plugin's workspace provider is what
-     *  finds the packages. This is just what it brought back. */
-    const pluginCommands = repository.pluginCommands;
-    const { commands: localCommands, errors } = await loadCustomCommands(repository.dirname);
-    const localNames = new Set(localCommands.map(c => c.name));
-    const commands = [...pluginCommands.filter(c => !localNames.has(c.name)), ...localCommands];
-    assertNoBuiltinShadowing(commands, BUILT_IN_COMMANDS);
-    for (const custom of commands) {
-      program.command({
-        command: custom.command!,
-        describe: custom.describe,
-        /** Forwarded, not dropped: this loop builds a *new* spec object, so anything the command
-         *  declared and is not copied here is silently lost - `--config` printed the whole config
-         *  for every plugin command until this line existed (measured, on `clean` and `ci`). */
-        configKeys: custom.configKeys,
-        builder: custom.builder ?? (y => y),
-        handler: args => {
-          /** Resolved per invocation, not once at registration: `--log-level` is only known now. */
-          const logLevel = (args.logLevel as LogLevel | undefined) ?? resolveRootLogLevel(repository);
-          const context: CommandContext = {
-            repository,
-            package: repository.currentPackage,
-            runBin: (bin, argv, opts) => runBin(bin, argv, { cwd: repository.dirname, logLevel, ...opts }),
-            logger: new Logger(logLevel),
-          };
-          return custom.handler(context, args);
-        },
-      });
+    const { globs, direct } = commandEntries(repository);
+    const { commands: loaded, errors } = await loadCustomCommands(globs);
+
+    /**
+     * The two authoring forms, resolved the same way - a declarative one's factory runs here,
+     * where `app.repository` exists, rather than when the config was read.
+     *
+     * **The file name is the fallback for `command`**, which is the convention a command loaded
+     * from a *file* has and one written straight into the config has not: `checkCustomCommand`
+     * refuses nameless metadata, and an inline command has nothing to fall back on, so it must say
+     * its own name. Spread *under* the factory's result, so metadata that does declare one -
+     * `deploy <stage>`, with its positionals - wins.
+     *
+     * The name comes from what the factory *returned*, not from the file: those differ exactly
+     * when the metadata declared one, and using the file name would leave the clash check
+     * comparing something yargs never registered.
+     */
+    const localModules = [...direct, ...loaded].map(c => {
+      if (!c.register) return { name: c.name, file: c.file, module: toCustomModule(c.custom!, repository, app) };
+      const declared = c.register(app);
+      const meta = checkCustomCommand({ ...declared, command: declared.command?.trim() || c.name }, c.file);
+      return { name: commandName(meta.command), file: c.file, module: toYargsCommand(meta) };
+    });
+    /**
+     * **One command per name, keeping the last** - which is the precedence that already applied,
+     * made visible instead of left to yargs.
+     *
+     * A repository's own `.rman/check.mjs` overriding a command its config contributed is the
+     * intended escape hatch, and it is deliberately not an error: the same precedence a package's
+     * own `.rmanrc` has over an `extends` base. But both were being *registered*, and what that
+     * cost was the help output - measured, `rman --help` listed `deploy` twice, once with each
+     * description, and nothing said which of the two would run.
+     *
+     * Only the listing was wrong; the override itself was already clean (`rman deploy --help`
+     * showed the winner's options alone, and the loser's flag was rejected), which is why this is
+     * a registration fix and not a change to how a clash resolves. Registered later wins because
+     * `loaded` follows `direct` - a `.rman/` file after a contributed command - and yargs took the
+     * last, so keeping the last keeps today's behaviour exactly.
+     *
+     * The survivor takes the *loser's* position in the list, since that is where the name was
+     * first seen. Help ordering only.
+     */
+    const byName = new Map<string, (typeof localModules)[number]>();
+    for (const command of localModules) byName.set(command.name, command);
+    const commands = [...byName.values()];
+    /**
+     * Said out loud, at `verbose`, because deduplicating silently is what would make this the
+     * trap it is warned about elsewhere: before, two rows at least hinted that something was
+     * doubled - after, the overridden command is simply absent, and "my plugin's command does
+     * nothing" has no thread to pull. Not a warning: an override is a correct thing to do, and a
+     * repository that does it on purpose should not be nagged on every invocation.
+     */
+    if (commands.length < localModules.length) {
+      const logger = new Logger(argvLogLevel(_argv) ?? resolveRootLogLevel(repository));
+      const survivors = new Set(commands);
+      for (const lost of localModules.filter(c => !survivors.has(c))) {
+        const winner = byName.get(lost.name)!;
+        logger.verbose(`"${lost.name}" from ${lost.file} is overridden by ${winner.file}.`);
+      }
     }
+    assertNoBuiltinShadowing(commands, builtInNames(builtIns));
+    for (const { module } of commands) program.command(module);
     /** Warned about, not thrown: one unparseable file must not take the other commands with it.
      *  Loud enough not to be mistaken for success, and it names the file and the reason - "my
      *  command isn't there" is otherwise a long afternoon. */
@@ -208,6 +243,55 @@ export async function runCli(options?: { argv?: string[]; cwd?: string }) {
     if (!e?.logged) console.error(colors.red(e.message));
     throw e;
   }
+}
+
+/**
+ * Everything `.rmanrc "commands"` declares across the repository, split into the globs to load and
+ * the commands written straight into the config.
+ *
+ * **Collected from the root and from every package**, because `commands` is not a root-level key -
+ * a package's own `.rmanrc` may contribute one, and a glob was anchored to that file when it was
+ * read. The commands themselves are repository-wide; there is one command list, so a package
+ * declaring one is contributing it to the repository. (`plugins` and `publishTargets` cannot work
+ * this way: they are read before the packages exist, because a plugin is what finds them.)
+ *
+ * The cascade means a root-declared entry also appears in each package's resolved config, so the
+ * same one arrives many times over. Globs are de-duplicated here and by resolved *file* again in
+ * the loader - the second pass is the one that matters, since two different globs can name one
+ * file. Inline commands are de-duplicated by identity, which is what the cascade produces.
+ *
+ * The `.rman/` default is used only when nothing was declared anywhere. Declaring `commands` and
+ * still wanting `.rman/` scanned means naming it: the key appends to other layers, not to a
+ * built-in fallback, and a default that could never be turned off is not a default.
+ */
+function commandEntries(repository: Repository): { globs: string[]; direct: LoadedCommand[] } {
+  const globs = new Set<string>();
+  const seen = new Set<unknown>();
+  const direct: LoadedCommand[] = [];
+
+  for (const config of [repository.rootPackage.config, ...repository.getPackages().map(p => p.config)]) {
+    const value = config?.commands;
+    for (const entry of Array.isArray(value) ? value : value ? [value] : []) {
+      if (typeof entry === 'string') {
+        if (entry.trim()) globs.add(entry);
+        continue;
+      }
+      if (!entry || seen.has(entry)) continue;
+      seen.add(entry);
+      /** No file to fall back on, so the metadata has to name itself - `checkCustomCommand` says
+       *  so when it does not. `"commands"` stands in for the file in that message. */
+      if (typeof entry === 'function') {
+        direct.push({ name: '', file: '"commands"', register: entry });
+      } else {
+        /** `checkCustomCommand` is what refuses a nameless one, with the message that names the
+         *  omission - reached here rather than at registration so an inline command is checked
+         *  the same way a plugin's used to be. */
+        const custom = checkCustomCommand(entry, '"commands"');
+        direct.push({ name: commandName(custom.command), file: '"commands"', custom });
+      }
+    }
+  }
+  return { globs: globs.size ? [...globs] : defaultCommandGlobs(repository.dirname), direct };
 }
 
 /**
@@ -296,10 +380,10 @@ function readOptions(args: any): Record<string, unknown> {
 
 /** The packages the command would act on - `filterPackages` with the command's own options, so
  *  this is the same set the command will compute, `skip` included. Narrowed to the current package
- *  for a command that scopes by directory, unless `--root` says otherwise. */
+ *  for a command that scopes by directory, unless `--from-root` says otherwise. */
 function commandTargets(repository: Repository, args: any): Package[] {
   const current = repository.currentPackage;
-  if (current && !readRootOption(args)) return [current];
+  if (current && !readFromRootOption(args)) return [current];
   return filterPackages(repository.getPackages(), readPackageFilterOptions(args));
 }
 
@@ -330,23 +414,69 @@ function isMain(): boolean {
 
 if (isMain()) runCli().catch(() => process.exit(1));
 
-/** Every name a built-in command answers to - what a `.rman/*.mjs` command may not take. Kept here
- *  rather than read back out of yargs (which exposes no such list) and pinned by a test against the
- *  `command:` strings in `src/commands/*.command.ts`, so adding a command can't quietly leave a
- *  repository's own able to shadow it. */
-const BUILT_IN_COMMANDS = [
-  'build',
-  'changed',
-  'changelog',
-  'completion',
-  'config',
-  'diff',
-  'exec',
-  'github-release',
-  'import',
-  'info',
-  'list',
-  'run',
-  'test',
-  'version',
-] as const;
+/**
+ * Every name a repository's own command may not take - **derived from what was actually
+ * registered**, not listed.
+ *
+ * It used to be a hand-maintained array, because yargs exposes no such list, and a spec had to pin
+ * it against the command sources so that adding a command could not quietly leave a repository's
+ * own able to shadow it. With the built-ins coming out of `commandRegistry` the list and the
+ * registrations cannot disagree: they are the same walk.
+ *
+ * Aliases count - `ls` is `list`, and shadowing it would be the same mistake. `completion` is
+ * yargs' own command rather than one of ours, so it is the one name still written here.
+ */
+function builtInNames(metas: RmanConfig.CommandMetadata[]): string[] {
+  const names = metas.flatMap(meta => [commandName(meta.command), ...(meta.aliases ?? [])]);
+  return [...names, 'completion'];
+}
+
+/**
+ * A `CustomCommand` - a `.rman/*.mjs` command, or a plugin's written the older way - as the yargs
+ * registration it describes. `toYargsCommand` is the same function for a *declarative* command;
+ * this is the other authoring form, and both end at one `program.command`.
+ *
+ * **Every field has to be copied deliberately**, because this builds a new object: anything the
+ * command declared and this forgets is silently lost. `--config` printed the whole config for every
+ * plugin command until `configKeys` was on this list (measured, on `clean` and `ci`).
+ */
+function toCustomModule(custom: CustomCommand, repository: Repository, app: RmanApplication): CommandModule {
+  return {
+    command: custom.command!,
+    describe: custom.describe,
+    configKeys: custom.configKeys,
+    builder: custom.builder ?? ((y: Argv) => y),
+    handler: (args: ArgumentsCamelCase) => {
+      /** Resolved per invocation, not once at registration: `--log-level` is only known now. */
+      const logLevel = (args.logLevel as LogLevel | undefined) ?? resolveRootLogLevel(repository);
+      const context: CommandContext = {
+        repository,
+        package: repository.currentPackage,
+        runBin: (bin, argv, opts) => runBin(bin, argv, { cwd: repository.dirname, logLevel, app, ...opts }),
+        logger: new Logger(logLevel),
+      };
+      return custom.handler(context, args);
+    },
+  };
+}
+
+/**
+ * `--log-level` read straight off argv, for a message printed **before** yargs parses anything.
+ *
+ * Commands are registered before `parseAsync` runs - registering them is what makes parsing
+ * possible - so a diagnostic emitted at registration time cannot come from `args.logLevel`.
+ * Measured: the override note in `runCli` was silent for `--log-level verbose` and appeared only
+ * when `.rmanrc` said so, which is the one spelling a reader would not reach for first.
+ *
+ * A peek, not a parser. Both spellings, first match wins, and a value that is not a level is left
+ * alone for yargs to reject in its own words - this must not become a second place where an
+ * invalid `--log-level` is diagnosed.
+ */
+function argvLogLevel(argv: string[]): LogLevel | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    const value = arg === '--log-level' ? argv[i + 1] : arg.startsWith('--log-level=') ? arg.slice(12) : undefined;
+    if (value && (LOG_LEVELS as string[]).includes(value)) return value as LogLevel;
+  }
+  return undefined;
+}

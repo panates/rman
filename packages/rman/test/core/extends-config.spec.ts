@@ -51,22 +51,60 @@ describe('core/extends-config', () => {
     expect(await readDirConfig(dir)).toEqual({ group: 'from-b', logLevel: 'info' });
   });
 
-  it('resolves a base that is itself built on another, and lets `+key` accumulate down the chain', async () => {
-    // The pairing that makes a shared config liveable: each layer adds a step instead of restating
-    // the list, which would freeze a copy of the base at the version it was copied from.
+  /**
+   * **A base may itself `extends` another**, and the whole chain is merged before the file naming it
+   * - which is what lets a shared config be built out of layers rather than copied.
+   *
+   * It used to assert that `+key` accumulated down the chain here too, and that pairing is gone
+   * with the prefix: a layer adding to what it inherited now derives from `value`, which the
+   * **merge** only records - it is resolved when the config is interpolated, per package. So the
+   * accumulation is pinned where it can be observed, on a resolved repository (see
+   * `repository.spec.ts`, "hands over a value inherited through the base's own selector block" and
+   * the two beside it); what this case can see is that each layer of the chain arrived at all.
+   */
+  it('resolves a base that is itself built on another', async () => {
     const dir = fixture(
       {
-        'index.mjs': 'export default { "[*]": { run: { build: { before: "base" } } } };\n',
-        'strict.mjs': 'export default { extends: "@test/base", "[*]": { run: { build: { "+before": "strict" } } } };\n',
-        '.rmanrc.yml': "extends: '@test/base/strict'\n\"[*]\":\n  run:\n    build:\n      +before: 'repo'\n",
+        'index.mjs': 'export default { logLevel: "verbose", "[*]": { group: "from-base" } };\n',
+        'strict.mjs': 'export default { extends: "@test/base", allowBranch: ["main"] };\n',
+        '.rmanrc.yml': "extends: '@test/base/strict'\n\"[*]\":\n  run:\n    build:\n      exec: 'tsc -b'\n",
       },
       { '.': './index.mjs', './strict': './strict.mjs' },
     );
     const config: any = await readDirConfig(dir);
-    // Each layer's append lands as soon as there is something to land on, and the base is merged
-    // first - so they resolve here rather than staying outstanding, in chain order.
-    expect(config['[*]'].run.build.before).toEqual(['base', 'strict', 'repo']);
-    expect(config['[*]'].run.build['+before']).toBeUndefined();
+    /** One key from each of the three layers: the deepest base, the middle one, and the file that
+     *  named it - so nothing in the chain was skipped or overwritten wholesale. */
+    expect(config.logLevel).toBe('verbose');
+    expect(config.allowBranch).toEqual(['main']);
+    expect(config['[*]'].group).toBe('from-base');
+    expect(config['[*]'].run.build.exec).toBe('tsc -b');
+  });
+
+  /**
+   * **A CommonJS base contributes, and used to contribute nothing at all.**
+   *
+   * `extends` loaded a module with a bare `await import()`, whose CJS-interop synthesis some ESM
+   * loader hooks - the swc-node transpiler this suite registers via `--import` among them - can
+   * short-circuit into an **empty object**. An empty object is a valid config, so it merged
+   * silently and the base simply was not there.
+   *
+   * The same file loaded correctly as a *directory's* own `.rmanrc.cjs`, because that path always
+   * went through the careful loader; `extends` now shares it (`loadConfigModule`).
+   *
+   * **All three forms in one case, because the failure was specific to one.** Measured with the fix
+   * reverted: `.cjs` answered `undefined` while `.mjs` and `.json` were unaffected - so a case
+   * covering only the module forms in general, or only `.mjs`, would have stayed green throughout.
+   */
+  it('reads a CommonJS base, not only an ESM or JSON one', async () => {
+    const forms: Record<string, string> = {
+      'base.cjs': "module.exports = { logLevel: 'verbose' };\n",
+      'base.mjs': "export default { logLevel: 'verbose' };\n",
+      'base.json': '{ "logLevel": "verbose" }',
+    };
+    for (const [file, body] of Object.entries(forms)) {
+      const dir = fixture({ [file]: body, '.rmanrc.yml': `extends: './node_modules/@test/base/${file}'\n` });
+      expect(await readDirConfig(dir)).toEqual({ logLevel: 'verbose' });
+    }
   });
 
   it('reads a YAML or JSON base as well as a module', async () => {
