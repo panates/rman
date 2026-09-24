@@ -178,6 +178,39 @@ export interface RmanConfigKeys {
   platform?: string;
 
   /**
+   * **The selector this package answers to** - what a `"[glob]"` block and `--scope`/`--ignore`
+   * match against, overriding whatever its platform said.
+   *
+   * ```yaml
+   * # packages/web/.rmanrc
+   * name: web
+   * ```
+   *
+   * **The escape hatch for an ecosystem that cannot name a package, and only that.** npm can:
+   * `package.json#name` exists and identifies the package, so a Node repository never writes this.
+   * An ecosystem where a package need not be named, or where the name is an import path nobody
+   * would type after `--scope`, leaves `ManifestProvider.selector` unanswered and the repository
+   * fills it in here.
+   *
+   * **It does not rename the package.** `pkg.name` is still what the manifest says, so tags,
+   * changelogs and the registry are untouched - this is an address, and `Package.selector` is where
+   * it lands.
+   *
+   * **Unique within the repository, and checked.** Two packages answering to one selector make
+   * `"[that]"` and `--scope that` ambiguous, and the ambiguity is silent: the config reaches both
+   * and `getPackage` returns whichever came first. The error names both directories.
+   *
+   * **Cascades like any unmarked key, which for this one is almost always a mistake** - one
+   * declaration above two packages gives them the same address, so the uniqueness check fires and
+   * says so. Declare it in the package's own `.rmanrc`.
+   *
+   * **Not inside a `"[glob]"` block**, which is refused rather than ignored: the glob matches the
+   * selector, so a block that sets it would need its own answer to find itself. Read from the
+   * unmarked cascade for the same reason `platform` is - before the package exists.
+   */
+  name?: string;
+
+  /**
    * Where this repository keeps command modules of its own - a glob, or a list of them.
    *
    * ```yaml

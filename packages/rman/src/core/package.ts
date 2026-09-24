@@ -109,6 +109,32 @@ export class Package {
   manifestFileName!: string;
 
   /**
+   * **What addresses this package**: what a `.rmanrc "[glob]"` block and `--scope`/`--ignore` match
+   * against, and what must be unique within the repository.
+   *
+   * Three sources, first one that answers:
+   *
+   * 1. the package's own `.rmanrc "name"` - the repository assigning one;
+   * 2. its platform's `manifestProvider.selector`;
+   * 3. the manifest's own `name`, which is the default that answer falls back to.
+   *
+   * **Not `name`, and the split is the point.** `name` is what the package calls itself, read from
+   * its manifest, and it is an *ecosystem's* promise that such a thing exists and identifies the
+   * package - npm's promise, not rman's. Selectors matched `pkg.name` until this existed, so a
+   * repository whose technology has no name concept had packages it could not address at all, and
+   * one whose names are not unique (or are import paths) could only address them badly. They
+   * coincide for every Node repository, which is why nothing had to change for one.
+   *
+   * **The root's is nearly unused, deliberately.** A glob never matches the root and `"[/]"` needs
+   * no name - the root is addressed structurally, which is the whole reason it is `/`. It still has
+   * one so that nothing has to special-case it.
+   *
+   * Assigned by `Repository.create`, which is what has the config; a bare `new Package(dir, app)`
+   * gets the manifest's name, which is sources 2 and 3 with no config to consult.
+   */
+  selector: string;
+
+  /**
    * **The technology this package belongs to** - the platform whose manifest provider claimed the
    * directory, or `basePlatform` when none did.
    *
@@ -159,6 +185,15 @@ export class Package {
   ) {
     this.platform = platform ?? app.platformFor(dirname);
     this._readManifest();
+    this.selector = this.platformSelector();
+  }
+
+  /** What this package's **platform** says addresses it, before any config is consulted - the
+   *  manifest's own name when the platform has no opinion, and the directory when it has no name
+   *  either (which is unique among siblings and is all there is to go on). */
+  platformSelector(): string {
+    const asked = this.platform.manifestProvider.selector?.(this.manifest, this.dirname);
+    return asked || this.manifest.name || this.basename;
   }
 
   get basename(): string {

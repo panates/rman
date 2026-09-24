@@ -267,5 +267,9 @@ function selector(value: string | string[]): (pkg: Package) => boolean {
   const patterns = toArray(value);
   const wantsRoot = patterns.includes(ROOT_SELECTOR);
   const globs = patterns.filter(p => p !== ROOT_SELECTOR);
-  return pkg => (pkg.isRoot ? wantsRoot : globs.length > 0 && micromatch.isMatch(pkg.name, globs));
+  /** Against `pkg.selector`, which is what `.rmanrc`'s `"[glob]"` matches - one vocabulary, as the
+   *  `/` above already is. It was `pkg.name`, and the two coincide for every Node repository; a
+   *  package having a name at all is an ecosystem's promise, and a repository can assign a selector
+   *  where its own does not offer one. */
+  return pkg => (pkg.isRoot ? wantsRoot : globs.length > 0 && micromatch.isMatch(pkg.selector, globs));
 }

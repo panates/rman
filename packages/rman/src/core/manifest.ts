@@ -125,6 +125,23 @@ export interface ManifestProvider {
    */
   splitName?(name: string): { scope?: string; unscopedName: string };
   /**
+   * **What addresses this package** - what a `"[glob]"` block and `--scope`/`--ignore` match
+   * against, and what has to be unique within a repository.
+   *
+   * **The platform's job, because a name is an ecosystem's promise and not rman's.** npm guarantees
+   * `package.json#name` exists and identifies the package, so the node built-in has nothing to do
+   * here and the default - the manifest's own name - is already its answer. An ecosystem where a
+   * package need not be named, or where the name is not unique, returns `undefined` and the
+   * repository assigns one with `.rmanrc "name"`.
+   *
+   * Separate from `Manifest.name`, which is what the package *calls itself*: those coincide for npm
+   * and need not anywhere else. A Go module's name is an import path, and `--scope github.com/x/y`
+   * is not how anyone would want to address it.
+   *
+   * Omit it and the manifest's name is used, so this seam existing changes nothing.
+   */
+  selector?(manifest: Manifest, dir: string): string | undefined;
+  /**
    * Rewrites this manifest's references to in-repo packages that just got a new version.
    *
    * `bumped` maps a package to the version it is being given. What a "reference" looks like is

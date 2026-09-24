@@ -3,20 +3,26 @@ import type { Package } from '../../src/core/package.js';
 import { filterPackages, ROOT_SELECTOR } from '../../src/utils/package-filter.js';
 
 /**
- * A minimal fake `Package` - only `name`, `dependencies` and `isRoot` matter to `filterPackages`.
+ * A minimal fake `Package` - only `selector`, `dependencies` and `isRoot` matter to
+ * `filterPackages`.
+ *
+ * **`selector`, which is what `--scope` matches, and `name` beside it because they are not the same
+ * question.** A package having a name at all is an ecosystem's promise; the selector is what
+ * addresses it inside this repository, and a repository can assign one where its technology offers
+ * none. They coincide here, as they do in every Node repository.
  *
  * `dependencies` holds **packages, not names**: a name identifies a package only where the
  * ecosystem guarantees uniqueness, so the graph is built out of references and `filterPackages`
  * compares by identity. Passing strings here silently matched nothing.
  */
 function pkg(name: string, dependencies: Package[] = []): Package {
-  return { name, dependencies, isRoot: false } as unknown as Package;
+  return { name, selector: name, dependencies, isRoot: false } as unknown as Package;
 }
 
-/** The repository's own root package - what `--scope /` selects. Named like any other package on
- *  purpose: the point of `ROOT_SELECTOR` is that the name is *not* how the root is found. */
+/** The repository's own root package - what `--scope /` selects. Given a selector like any other
+ *  package on purpose: the point of `ROOT_SELECTOR` is that it is *not* how the root is found. */
 function rootPkg(name: string): Package {
-  return { name, dependencies: [], isRoot: true } as unknown as Package;
+  return { name, selector: name, dependencies: [], isRoot: true } as unknown as Package;
 }
 
 /**

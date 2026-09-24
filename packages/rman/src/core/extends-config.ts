@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as yaml from 'js-yaml';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
-import { isSelectorKey } from './config.js';
+import { isSelectorKey, parseSelector } from './config.js';
 import { loadConfigModule } from './load-config-module.js';
 import { mergeConfig } from './merge-config.js';
 import { resolveConfigTarget } from './resolve-target.js';
@@ -44,7 +44,7 @@ export async function resolveExtends(config: RmanConfig, from: string, seen: str
       throw new Error(`"extends" forms a cycle: ${[...seen, file].map(f => path.basename(f)).join(' -> ')}`);
     }
     const loaded = await loadConfigFile(file);
-    assertNoSelectorExtends(loaded, file);
+    assertSelectorBlocks(loaded, file);
     // Recursive: a shared config may itself be built on another.
     mergeConfig(base, await resolveExtends(loaded, file, [...seen, file]), file);
   }
@@ -55,12 +55,20 @@ export async function resolveExtends(config: RmanConfig, from: string, seen: str
 }
 
 /**
- * Refuses `extends` inside a `"[selector]"` block. A selector block is typed as a whole
- * `RmanConfig`, so writing one there looks valid and would simply never be resolved - and a config
- * that quietly does nothing is worse than one that won't load. Inheritance is a statement about
- * the file, not about the packages it happens to name.
+ * **Refuses the keys a `"[selector]"` block cannot carry** - each for its own reason, and the
+ * reason is the same shape every time: a selector block is typed as a whole `RmanConfig`, so any
+ * key looks valid there, and one that can never be read is a config that quietly does nothing.
+ * That is worse than one that will not load.
+ *
+ * - **`extends`** is a statement about the *file*, not about the packages a selector happens to
+ *   name, and it belongs at the top level where it would actually be resolved.
+ * - **`platform` and `name`** are what the selector is derived *from*, so a glob block setting
+ *   either would need its own answer in order to be matched. See below; `"[/]"` is exempt.
+ *
+ * Called on every config form a directory can hold and on every `extends` base, so the file in the
+ * message is the one the line was written in.
  */
-export function assertNoSelectorExtends(config: RmanConfig, file: string): void {
+export function assertSelectorBlocks(config: RmanConfig, file: string): void {
   for (const [key, value] of Object.entries(config)) {
     if (!isSelectorKey(key) || !value || typeof value !== 'object') continue;
     if (EXTENDS_KEY in (value as Record<string, unknown>)) {
@@ -68,6 +76,29 @@ export function assertNoSelectorExtends(config: RmanConfig, file: string): void 
         `"${key}" in "${file}" cannot use "extends" - it belongs at the top level, where it is a ` +
           `statement about this config rather than about the packages the selector names.`,
       );
+    }
+    /**
+     * **The two keys a selector cannot carry, because the selector is downstream of them.**
+     *
+     * A `"[glob]"` matches `Package.selector`, which comes from `name` - and which package a
+     * directory even holds comes from `platform`. Both are read from the *unmarked* cascade, while
+     * the packages are still being found, so a glob block setting either would need its own answer
+     * in order to be matched at all. Typed as a whole `RmanConfig`, both look valid there and both
+     * would simply never be read.
+     *
+     * `"[/]"` is exempt and keeps working: the root is addressed structurally - its directory *is*
+     * the repository root - so a root block needs no selector and is applied during the walk.
+     */
+    if (parseSelector(key).scope === 'root') continue;
+    for (const identity of IDENTITY_KEYS) {
+      if (identity in (value as Record<string, unknown>)) {
+        throw new Error(
+          `"${key}" in "${file}" cannot set "${identity}" - a glob matches a package's selector, ` +
+            `and "${identity}" is what the selector is derived from, so the block could never be ` +
+            `matched in order to apply it. Write it unmarked, in the package's own ".rmanrc", or ` +
+            `under "[/]" for the root package.`,
+        );
+      }
     }
   }
 }
@@ -102,3 +133,7 @@ function asConfig(value: unknown, file: string): RmanConfig {
   delete config.$schema;
   return config as RmanConfig;
 }
+
+/** The keys that decide *what a package is* and *what addresses it*, read from the unmarked
+ *  cascade before any package exists - see `assertSelectorBlocks`. */
+const IDENTITY_KEYS = ['platform', 'name'] as const;

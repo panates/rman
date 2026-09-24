@@ -7,6 +7,7 @@ import type { ManifestProvider } from '../../src/core/manifest.js';
 import { definePlatform, type Platform } from '../../src/core/plugin.js';
 import { Repository } from '../../src/core/repository.js';
 import { Workspace } from '../../src/core/workspace.js';
+import { filterPackages } from '../../src/utils/package-filter.js';
 import { createApp, createRepository, usePlugin, useTestEcosystem } from '../_fixture.js';
 
 /** Stands in for a second technology: `other.json`, whose `members` names its own child packages. */
@@ -27,6 +28,65 @@ const otherPlatform: Platform = definePlatform({
   manifestProvider: otherManifest,
   getWorkspace(dir) {
     const file = path.join(dir, 'other.json');
+    if (!fs.existsSync(file)) return undefined;
+    const members = JSON.parse(fs.readFileSync(file, 'utf-8'))?.members;
+    return Array.isArray(members) ? members.map((m: string) => path.join(dir, m)) : [];
+  },
+});
+
+/**
+ * **A technology whose packages have no name at all** - `anon.json` says only where the members
+ * are. The case `ManifestProvider.selector` and `.rmanrc "name"` exist for: npm can always name a
+ * package, and that is npm's promise rather than rman's.
+ *
+ * `selector` returns `undefined` rather than being omitted, which is the seam being *used*: omitted
+ * it would fall through to the manifest's name, and here the manifest has none to fall through to.
+ */
+const noNamePlatform: Platform = definePlatform({
+  name: 'anon',
+  manifestProvider: {
+    name: 'anon',
+    fileName: 'anon.json',
+    read: dir =>
+      fs.existsSync(path.join(dir, 'anon.json'))
+        ? { name: '', version: '0.0.0', raw: JSON.parse(fs.readFileSync(path.join(dir, 'anon.json'), 'utf-8')) }
+        : undefined,
+    write: () => undefined,
+    selector: () => undefined,
+  },
+  getWorkspace(dir) {
+    const file = path.join(dir, 'anon.json');
+    if (!fs.existsSync(file)) return undefined;
+    const members = JSON.parse(fs.readFileSync(file, 'utf-8'))?.members;
+    return Array.isArray(members) ? members.map((m: string) => path.join(dir, m)) : [];
+  },
+});
+
+/**
+ * **A technology whose name is not what anyone would type after `--scope`** - a Go-shaped module
+ * path. `selector` answers with the last segment, which is the seam doing something the manifest's
+ * own name cannot.
+ *
+ * This is the case that distinguishes the seam from the fallback: with `noName` the manifest's name
+ * is empty, so ignoring `selector` altogether reaches the same answer through `|| this.basename` -
+ * measured, and that spec passed with the seam disabled.
+ */
+const pathNamedPlatform: Platform = definePlatform({
+  name: 'modpath',
+  manifestProvider: {
+    name: 'modpath',
+    fileName: 'mod.json',
+    read: dir => {
+      const file = path.join(dir, 'mod.json');
+      if (!fs.existsSync(file)) return undefined;
+      const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      return { name: raw.module, version: '0.0.0', raw };
+    },
+    write: () => undefined,
+    selector: manifest => manifest.name.split('/').pop(),
+  },
+  getWorkspace(dir) {
+    const file = path.join(dir, 'mod.json');
     if (!fs.existsSync(file)) return undefined;
     const members = JSON.parse(fs.readFileSync(file, 'utf-8'))?.members;
     return Array.isArray(members) ? members.map((m: string) => path.join(dir, m)) : [];
@@ -197,6 +257,189 @@ describe('core/Workspace', () => {
       expect(
         Workspace.flatten(await Workspace.walk(createApp(), dir, { deep: 1 })).map(n => path.basename(n.dirname)),
       ).toEqual(['a']);
+    });
+  });
+
+  /**
+   * **What addresses a package, as opposed to what it calls itself.**
+   *
+   * Selectors matched `pkg.name` until this existed, and a name is an *ecosystem's* promise: npm
+   * guarantees `package.json#name` exists and identifies the package, and nothing else does. So a
+   * repository whose technology has no name concept had packages it could not address at all, and
+   * one whose names are import paths could only address them badly.
+   *
+   * `Package.selector` is that address: the package's own `.rmanrc "name"` if it assigned one,
+   * its platform's answer otherwise. For every Node repository the two coincide, which is why
+   * nothing had to change for one.
+   */
+  describe('the selector', () => {
+    it('defaults to what the platform says, which for a manifest with a name is that name', async () => {
+      const dir = tmp();
+      write(dir, '.rmanrc', {});
+      write(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      write(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const repository = await createRepository(dir);
+      expect(repository.getPackage('pkg-a')!.selector).toBe('pkg-a');
+    });
+
+    /**
+     * **The platform answering with something its manifest's name is not.** A module path
+     * identifies a Go package and is not what anyone would type after `--scope`, so the seam exists
+     * for the platform to offer a better address - separately from `name`, which stays what the
+     * package calls itself.
+     */
+    describe('for a platform whose name is a path', () => {
+      usePlugin(pathNamedPlatform);
+
+      it("takes the platform's answer over the manifest's name", async () => {
+        const dir = tmp();
+        write(dir, '.rmanrc', {});
+        write(dir, 'mod.json', { module: 'example.com/root', members: ['packages/a'] });
+        write(dir, 'packages/a/mod.json', { module: 'example.com/root/web' });
+
+        const repository = await createRepository(dir);
+        const a = repository.getPackages()[0]!;
+        expect(a.name).toBe('example.com/root/web');
+        expect(a.selector).toBe('web');
+        expect(filterPackages(repository.getPackages(), { scope: 'web' })).toHaveLength(1);
+        /** And the path it is *named* addresses nothing, which is the point of not using it. */
+        expect(filterPackages(repository.getPackages(), { scope: 'example.com/root/web' })).toHaveLength(0);
+      });
+    });
+
+    /**
+     * **A platform that declines to name one, and the repository assigning it instead.** `noName`'s
+     * manifests carry no name at all, so its packages are addressable only because `.rmanrc "name"`
+     * exists - which is the case this whole seam is for.
+     */
+    describe('for a platform that cannot supply one', () => {
+      usePlugin(noNamePlatform);
+
+      it('comes from the package\'s own ".rmanrc name", and is what a glob then matches', async () => {
+        const dir = tmp();
+        write(dir, '.rmanrc', {});
+        write(dir, 'anon.json', { members: ['packages/a', 'packages/b'] });
+        write(dir, 'packages/a/anon.json', {});
+        write(dir, 'packages/a/.rmanrc', { name: 'web' });
+        write(dir, 'packages/b/anon.json', {});
+        write(dir, 'packages/b/.rmanrc', { name: 'api', group: 'assigned' });
+
+        const repository = await createRepository(dir);
+        expect(
+          repository
+            .getPackages()
+            .map(p => p.selector)
+            .sort(),
+        ).toEqual(['api', 'web']);
+        /** `--scope` and `"[glob]"` share the vocabulary, so both had to move together. */
+        expect(filterPackages(repository.getPackages(), { scope: 'web' }).map(p => p.selector)).toEqual(['web']);
+        expect(repository.getPackages().find(p => p.selector === 'api')!.config.group).toBe('assigned');
+      });
+
+      /**
+       * **It is an address, not a rename** - and this is the clearest place to see the two apart.
+       * `pkg.name` is what the *manifest* says, which for this technology is nothing at all, so it
+       * stays empty however the repository addresses the package. Tags, changelogs and the registry
+       * read that one; `"[glob]"` and `--scope` read the selector.
+       *
+       * Written first asserting the name fell back to the directory, which it does not: `Manifest`'s
+       * own fallback fires when a provider reads *nothing*, and this one reads a manifest that
+       * happens to be nameless. The selector is where the directory stands in - see `b`.
+       */
+      it("does not become the package's name", async () => {
+        const dir = tmp();
+        write(dir, '.rmanrc', {});
+        write(dir, 'anon.json', { members: ['packages/a', 'packages/b'] });
+        write(dir, 'packages/a/anon.json', {});
+        write(dir, 'packages/a/.rmanrc', { name: 'web' });
+        write(dir, 'packages/b/anon.json', {});
+
+        const repository = await createRepository(dir);
+        const a = repository.getPackages().find(p => p.basename === 'a')!;
+        const b = repository.getPackages().find(p => p.basename === 'b')!;
+        expect(a.selector).toBe('web');
+        expect(a.name).toBe('');
+        /** The one that assigned nothing is still addressable - by its directory, which is unique
+         *  among siblings and is all there is to go on. */
+        expect(b.selector).toBe('b');
+        expect(b.name).toBe('');
+      });
+
+      /**
+       * **The mistake the cascade makes, caught rather than acted on.** `name` cascades like every
+       * unmarked key, so one declaration above two packages gives both the same address - and the
+       * failure is silent in the worst way: the config reaches both, and `getPackage` answers with
+       * whichever came first.
+       */
+      it('refuses two packages answering to one selector, and names the cascade when that caused it', async () => {
+        const dir = tmp();
+        write(dir, '.rmanrc', { name: 'shared' });
+        write(dir, 'anon.json', { members: ['packages/a', 'packages/b'] });
+        write(dir, 'packages/a/anon.json', {});
+        write(dir, 'packages/b/anon.json', {});
+
+        const error = await createRepository(dir).then(
+          () => undefined,
+          (e: Error) => e,
+        );
+        expect(error?.message).toContain('Two packages answer to the selector "shared"');
+        expect(error?.message).toContain('cascading "name" declaration above them');
+      });
+    });
+
+    /**
+     * **A glob block cannot set it, and is refused rather than ignored.** The glob matches the
+     * selector, so a block assigning one would need its own answer in order to be matched at all.
+     * `platform` is the same shape and is refused with it.
+     */
+    it('cannot be set from inside a "[glob]" block, which could never apply', async () => {
+      const dir = tmp();
+      write(dir, '.rmanrc', { '[*]': { name: 'nope' } });
+      write(dir, 'package.json', { name: 'root', private: true, version: '1.0.0' });
+
+      await expect(createRepository(dir)).rejects.toThrow(/cannot set "name"/);
+    });
+
+    it('nor can "platform", for the same reason', async () => {
+      const dir = tmp();
+      write(dir, '.rmanrc', { '[*]': { platform: 'node' } });
+      write(dir, 'package.json', { name: 'root', private: true, version: '1.0.0' });
+
+      await expect(createRepository(dir)).rejects.toThrow(/cannot set "platform"/);
+    });
+
+    /**
+     * **`"[/]"` is exempt, and that is the documented rule rather than an exception**: the root is
+     * addressed structurally - its directory *is* the repository root - so a root block needs no
+     * selector and is applied during the walk.
+     *
+     * This did not work when `platform` landed: `resolveConfig`'s gate was `if (packageName)`, so
+     * the walk skipped every selector block including this one, and the key documented as "keeps it
+     * on the root package alone" silently did nothing.
+     */
+    describe('with a second technology registered', () => {
+      usePlugin(otherPlatform);
+
+      it('lets "[/]" set the root\'s platform, needing no selector to be matched', async () => {
+        const dir = tmp();
+        write(dir, 'other.json', { name: 'root-by-other' });
+        write(dir, 'package.json', { name: 'root-by-test', private: true, version: '1.0.0' });
+
+        /**
+         * **The guess is asserted first, and it is the opposite answer** - without which this spec
+         * proves nothing. Written the other way round (declaring `other`, which a spec's own
+         * platforms being registered first already makes the guess) it passed with the `"[/]"`
+         * support reverted, measured.
+         */
+        write(dir, '.rmanrc', {});
+        expect((await createRepository(dir)).rootPackage.provider).toBe('other');
+
+        write(dir, '.rmanrc', { '[/]': { platform: 'test' } });
+        const repository = await createRepository(dir);
+        expect(repository.rootPackage.provider).toBe('test');
+        expect(repository.rootPackage.name).toBe('root-by-test');
+      });
     });
   });
 

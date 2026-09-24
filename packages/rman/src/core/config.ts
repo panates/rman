@@ -7,7 +7,7 @@ import semver from 'semver';
 import vm from 'vm';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { DETECTED_BUILTIN, type DetectedBuiltin } from '../plugins/detect.js';
-import { assertNoSelectorExtends, EXTENDS_KEY, resolveExtends } from './extends-config.js';
+import { assertSelectorBlocks, EXTENDS_KEY, resolveExtends } from './extends-config.js';
 import { loadConfigModule } from './load-config-module.js';
 import { mergeConfig, ORIGINS, PREVIOUS_VALUES, type PreviousValue } from './merge-config.js';
 import type { RunConditionFn, RunStepFn } from './run-step.js';
@@ -57,7 +57,7 @@ export async function readDirConfig(dirname: string, options?: { inject?: Detect
   if (fs.existsSync(pkgJsonFile)) {
     const pkgJson = JSON.parse(fs.readFileSync(pkgJsonFile, 'utf-8'));
     if (pkgJson && typeof pkgJson.rman === 'object') {
-      assertNoSelectorExtends(pkgJson.rman, pkgJsonFile);
+      assertSelectorBlocks(pkgJson.rman, pkgJsonFile);
       if (EXTENDS_KEY in pkgJson.rman) extendsFrom = pkgJsonFile;
       mergeConfig(result, pkgJson.rman, pkgJsonFile);
     }
@@ -67,7 +67,7 @@ export async function readDirConfig(dirname: string, options?: { inject?: Detect
   if (fs.existsSync(ymlFile)) {
     const obj = yaml.load(fs.readFileSync(ymlFile, 'utf-8'));
     if (obj && typeof obj === 'object') {
-      assertNoSelectorExtends(obj as RmanConfig, ymlFile);
+      assertSelectorBlocks(obj as RmanConfig, ymlFile);
       if (EXTENDS_KEY in obj) extendsFrom = ymlFile;
       mergeConfig(result, obj as Record<string, any>, ymlFile);
     }
@@ -77,7 +77,7 @@ export async function readDirConfig(dirname: string, options?: { inject?: Detect
   if (fs.existsSync(rcFile)) {
     const obj = JSON.parse(fs.readFileSync(rcFile, 'utf-8'));
     if (obj && typeof obj === 'object') {
-      assertNoSelectorExtends(obj, rcFile);
+      assertSelectorBlocks(obj, rcFile);
       if (EXTENDS_KEY in obj) extendsFrom = rcFile;
       mergeConfig(result, obj, rcFile);
     }
@@ -88,7 +88,7 @@ export async function readDirConfig(dirname: string, options?: { inject?: Detect
     if (fs.existsSync(jsFile)) {
       const obj = await loadConfigModule(jsFile);
       if (obj && typeof obj === 'object') {
-        assertNoSelectorExtends(obj, jsFile);
+        assertSelectorBlocks(obj, jsFile);
         if (EXTENDS_KEY in obj) extendsFrom = jsFile;
         mergeConfig(result, obj, jsFile);
       }
@@ -190,14 +190,27 @@ async function expandBuiltinPlugins(config: RmanConfig): Promise<RmanConfig> {
  * repo-wide bookend therefore belongs under `"[/]"`, where its audience is visible; that is the
  * migration this change asks for, and the only one that is not mechanical.
  *
- * `packageName` is what selectors match against; without it, selector blocks contribute nothing at
- * all. The root package passes its own, since `"[/]"` speaks to it.
+ * **`selector` is what a `"[glob]"` block matches** - `Package.selector`, which is the package's
+ * `.rmanrc "name"` if it declares one and its platform's answer otherwise. Without it, glob blocks
+ * contribute nothing: the walk resolves config for a directory *before* the package exists, since
+ * that is where `platform` and `name` are read from, and a glob has nothing to match against yet.
+ *
+ * **`"[/]"` needs no selector, and that is the documented rule rather than an exception.** The root
+ * is addressed structurally - its directory *is* the repository root - which is the whole reason it
+ * is `/` and not a name. So a root block applies whenever the target is the root, named or not, and
+ * `platform` under `"[/]"` therefore works during the walk. It did not until this was noticed: the
+ * gate was `if (packageName)`, so the walk skipped every selector block including that one, and the
+ * key documented as "keeps it on the root package alone" silently did nothing.
+ *
+ * It was called `packageName`, which was wrong twice over: a package is not guaranteed to have a
+ * name (that is an ecosystem's promise, not rman's), and what this matches is the selector, which a
+ * repository can assign itself.
  */
 export async function resolveConfig(
   rootDir: string,
   targetDir: string,
   cache: Map<string, RmanConfig> = new Map(),
-  packageName?: string,
+  selector?: string,
   /** The built-in `Repository.create` decided on, for a repository that declared no technology.
    *  Applied at the **root level only** - `plugins` is read nowhere else, and this is the read whose
    *  result becomes `pkg.config`, which is where `cli.ts` finds a built-in's `commands`. */
@@ -229,9 +242,10 @@ export async function resolveConfig(
      * layer that feeds the directories below it.
      */
     mergeConfig(result, stripSelectors(local));
-    /** Then the selector blocks, **in the order they were written** - see `matchingSelectors`. */
-    if (packageName) {
-      for (const block of matchingSelectors(local, packageName, isRoot)) mergeConfig(result, block);
+    /** Then the selector blocks, **in the order they were written** - see `matchingSelectors`.
+     *  Reached for the root even with no selector, since `"[/]"` is structural. */
+    if (selector !== undefined || isRoot) {
+      for (const block of matchingSelectors(local, selector, isRoot)) mergeConfig(result, block);
     }
   }
   return result;
@@ -297,12 +311,14 @@ export function selectorToRegExp(key: string): RegExp {
  * The cost, which the docs state rather than hide: a catch-all written *below* a narrower block now
  * overrides it. Writing catch-alls first is a convention, not a rule - the file reads top to bottom.
  */
-function matchingSelectors(config: RmanConfig, packageName: string, isRoot: boolean): RmanConfig[] {
+function matchingSelectors(config: RmanConfig, selector: string | undefined, isRoot: boolean): RmanConfig[] {
   const matches: RmanConfig[] = [];
   for (const [key, value] of Object.entries(config)) {
     if (!isSelectorKey(key) || !value || typeof value !== 'object') continue;
     const { scope, test } = parseSelector(key);
-    if (scope === 'root' ? !isRoot : isRoot || !test(packageName)) continue;
+    /** A root block asks only whether this *is* the root - no selector needed, which is what makes
+     *  `/` structural. A glob has to have something to match, and during the walk it does not. */
+    if (scope === 'root' ? !isRoot : isRoot || selector === undefined || !test(selector)) continue;
     matches.push(value as RmanConfig);
   }
   return matches;

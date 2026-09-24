@@ -262,6 +262,58 @@ export class Repository extends Package {
     Object.defineProperty(this, 'children', { value: this.rootPackage.children, enumerable: true });
   }
 
+  /**
+   * Gives every package the selector a `"[glob]"` block and `--scope` match it by, and refuses two
+   * packages that would answer to the same one.
+   *
+   * **Its own step, before any config is resolved by a selector**, which is the ordering that makes
+   * the rest work: `_resolveConfigs` asks `resolveConfig` for each package *by selector*, so an
+   * address assigned afterwards would be applied to nothing.
+   *
+   * **`name` comes from the unmarked cascade only** - the same read `platform` gets, from the same
+   * cache, for the same reason. A `"[glob]"` block cannot set it (`assertSelectorBlocks` refuses
+   * one) because the glob matches the very thing the block would be setting.
+   *
+   * **Uniqueness is checked, and the cascade is the mistake it usually catches.** `name` cascades
+   * like every unmarked key, so one declaration above two packages gives both the same address -
+   * and the failure would otherwise be silent in the worst way: the config reaches both and
+   * `getPackage` returns whichever came first. The message names both directories, and says the
+   * cascade out loud when the two got it from one declaration.
+   */
+  protected async _assignSelectors(rootDir: string, cache: Map<string, RmanConfig>): Promise<void> {
+    const declaredBy = new Map<Package, boolean>();
+    for (const pkg of [this.rootPackage, ...this.packages]) {
+      const config = await resolveConfig(rootDir, pkg.dirname, cache, undefined);
+      const declared = config.name;
+      if (declared !== undefined && (typeof declared !== 'string' || !declared.trim())) {
+        throw new Error(
+          `"name" takes the selector this package answers to - "${pkg.dirname}" gave ${typeof declared}.`,
+        );
+      }
+      pkg.selector = declared?.trim() || pkg.platformSelector();
+      declaredBy.set(pkg, declared !== undefined);
+    }
+    /** The root is left out: a glob never matches it and `"[/]"` needs no name, so it shares an
+     *  address with nobody - see `Package.selector`. */
+    const bySelector = new Map<string, Package>();
+    for (const pkg of this.packages) {
+      const clash = bySelector.get(pkg.selector);
+      if (clash) {
+        const cascaded = declaredBy.get(pkg) && declaredBy.get(clash);
+        throw new Error(
+          `Two packages answer to the selector "${pkg.selector}":\n  ${clash.dirname}\n  ${pkg.dirname}\n` +
+            `  A selector has to be unique - "[${pkg.selector}]" and \`--scope ${pkg.selector}\` ` +
+            `cannot mean two packages.` +
+            (cascaded
+              ? `\n  Both got it from one cascading "name" declaration above them; declare it in ` +
+                `each package's own ".rmanrc" instead.`
+              : ''),
+        );
+      }
+      bySelector.set(pkg.selector, pkg);
+    }
+  }
+
   protected async _resolveConfigs(): Promise<void> {
     const cache = new Map<string, any>();
     /**
@@ -271,15 +323,24 @@ export class Repository extends Package {
      * second `rawConfig` copy of every package's config for that one reader; measured identical.
      */
     /**
-     * The root is resolved **with its name**, like every other package. Not because a glob could
-     * match it - `"[*]"` and every other name pattern speak only to the packages below - but because
-     * `resolveConfig` needs a name to run `matchingSelectors` at all, and `"[/]"` is a selector.
-     * Passing none would silently drop the root's own block.
+     * **By selector, not by name** - `"[glob]"` matches `Package.selector`, which is the package's
+     * own `.rmanrc "name"` when it assigned one and its platform's answer otherwise. They coincide
+     * for every Node repository; they are not the same question, and `name` was the wrong one to
+     * ask, since a package having one at all is an ecosystem's promise rather than rman's.
+     *
+     * The root passes its own too, although no glob can match it: `"[/]"` is applied on the
+     * strength of the target *being* the root and needs no selector at all (see `resolveConfig`).
      */
-    const rootRaw = await resolveConfig(this.dirname, this.dirname, cache, this.rootPackage.name, this.detectedBuiltin);
+    const rootRaw = await resolveConfig(
+      this.dirname,
+      this.dirname,
+      cache,
+      this.rootPackage.selector,
+      this.detectedBuiltin,
+    );
     this.config = interpolateConfig(rootRaw, this.configScope(this.rootPackage), { skip: DEFERRED_PATHS });
     for (const pkg of this.packages) {
-      const raw = await resolveConfig(this.dirname, pkg.dirname, cache, pkg.name, this.detectedBuiltin);
+      const raw = await resolveConfig(this.dirname, pkg.dirname, cache, pkg.selector, this.detectedBuiltin);
       pkg.config = interpolateConfig(raw, this.configScope(pkg), { skip: DEFERRED_PATHS });
     }
     if (this.monorepo) this.rootPackage.config = this.config;
@@ -549,6 +610,9 @@ export class Repository extends Package {
     const packages = nodes.map(node => new Package(node.dirname, app, node.platform));
     const repo = new Repository(app, tree.dirname, packages.length > 0, packages, from, tree.platform);
     repo._linkPackages(tree, nodes, packages);
+    /** Before `_resolveConfigs`, because a `"[glob]"` block is matched against the selector - so
+     *  the addresses have to be settled before anything is resolved by them. */
+    await repo._assignSelectors(rootDir, platformCache);
     /** The application is what the plugins registered into a moment ago; from here on it can hand
      *  out services, which need the repository to work on. */
     (repo as { detectedBuiltin?: DetectedBuiltin }).detectedBuiltin = detected;
