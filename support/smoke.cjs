@@ -70,10 +70,55 @@ for (const { argv, expect, what } of checks) {
   }
 }
 
+failed += typeCheckConsumer();
+
 if (failed) {
   console.error(
-    `\n${failed} of ${checks.length} smoke checks failed. Run \`npm run build\` first if the build is stale.`,
+    `\n${failed} of ${checks.length + 1} smoke checks failed. Run \`npm run build\` first if the build is stale.`,
   );
   process.exit(1);
 }
-process.stdout.write(`\n${checks.length} smoke checks passed.\n`);
+process.stdout.write(`\n${checks.length + 1} smoke checks passed.\n`);
+
+/**
+ * **What a consumer's compiler sees**, which `npm run typecheck` cannot answer.
+ *
+ * `packages/rman/test/tsconfig.json` includes every source file, so a `declare module` augmentation
+ * is in the program whether or not the entry point reaches it - a spec asserting one is typed
+ * passes either way. `support/smoke-types/` resolves `rman` to the built `index.d.ts` and to
+ * nothing else, which is the only vantage point that can tell.
+ *
+ * Measured: deleting the import that carries the node plugin's augmentation left `npm run
+ * typecheck` completely clean, `mocha` at 839 passing, and turned this red.
+ *
+ * A function declaration, so the call above it hoists - the same reason `plugin.ts`'s `declaredKey`
+ * is one.
+ */
+function typeCheckConsumer() {
+  const project = path.join(__dirname, 'smoke-types');
+  try {
+    execFileSync(
+      process.execPath,
+      [require.resolve('typescript/bin/tsc'), '--noEmit', '-p', project],
+      {
+        cwd: repo,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    process.stdout.write('ok    consumer types (support/smoke-types)\n');
+    return 0;
+  } catch (e) {
+    const out = [e.stdout, e.stderr]
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+      .split('\n')
+      .slice(0, 8);
+    console.error(
+      'FAIL  consumer types - a key or export is missing from the built package\n      ' +
+        out.join('\n      '),
+    );
+    return 1;
+  }
+}

@@ -11,6 +11,25 @@
  * *not* exported is deliberately private: config resolution internals, the expression evaluator,
  * the command registry.
  */
+/**
+ * **The `node` built-in's type augmentation, imported for the same reason `commands.ts` is.**
+ *
+ * A `declare module` augmentation applies only where the module declaring it is part of the
+ * program. The node plugin's lives in `plugins/node/augmentation/rman.augmentation.ts` and is
+ * imported by the *plugin's* entry point - which nothing here reached, so `clean`, `publish.npm`
+ * and the rest existed for rman itself and for nobody else.
+ *
+ * **Measured on a real consumer**, `@panates/rman-node`, a config package annotated with these
+ * types: `Object literal may only specify known properties, and 'clean' does not exist in type
+ * 'RmanConfig'`, plus `Property 'npm' does not exist` - ten errors across its config and its own
+ * suite. It is the identical failure the core's command keys caused when they stopped being
+ * hand-written centrally, and it reappeared the moment the plugin moved *inside* rman: until then
+ * a consumer imported `rman-node` and got the augmentation with the package.
+ *
+ * Type-only, so the emitted module is empty - imported for what it declares, not for what it does.
+ * Pinned in `docs-api.spec.ts`, which imports only from this file.
+ */
+import './plugins/node/augmentation/rman.augmentation.js';
 import type { RmanConfig as CommandDeclaration } from './interfaces/rman-config.interface.js';
 
 export { defineConfig } from './core/config.js';
@@ -164,15 +183,13 @@ export {
  *  construction, so anything asking "is this a preview?" has to rule it out first - `github-release`
  *  does, and so must a publish target deciding whether a version needs its own dist-tag. Exported
  *  because that second caller lives in a plugin. */
-export { isCalendarVersion } from './utils/release-version.js';
-export type { RunBinOptions, RunBinResult } from './utils/run-bin.js';
-export { runBin } from './utils/run-bin.js';
-export { OCI_VERSION_LABEL, stampVersionConstant, stampVersionLabel } from './utils/version-stamp.js';
-
 /**
  * **The `node` built-in's own surface.** It ships inside rman rather than as `rman-node`, so its
  * services and target are named from here - a repository asks for the technology with
  * `plugins: ['node']` (or lets detection find it) and never constructs any of this by hand.
+ *
+ * Its `.rmanrc` *keys* arrive separately, through the bare import at the top of this file - see
+ * there for why that import is not tidiness.
  */
 export { BUILTIN_PLUGINS, builtinPluginNames, isBuiltinPlugin } from './plugins/builtins.js';
 export type { NodeConfigKeys, RmanNodeConfig } from './plugins/node/node-config.interface.js';
@@ -182,3 +199,7 @@ export { CleanService } from './plugins/node/services/clean.service.js';
 export { PublishService } from './plugins/node/services/publish.service.js';
 export { NodeVersionPlanService } from './plugins/node/services/version-plan.service.js';
 export type { ParsedWorkspaceRange } from './plugins/node/utils/workspace-range.js';
+export { isCalendarVersion } from './utils/release-version.js';
+export type { RunBinOptions, RunBinResult } from './utils/run-bin.js';
+export { runBin } from './utils/run-bin.js';
+export { OCI_VERSION_LABEL, stampVersionConstant, stampVersionLabel } from './utils/version-stamp.js';

@@ -7,7 +7,13 @@ export default [
     /** `build` is per package now. `old` is the gitignored pre-v1 tree kept locally for
      *  reference - it was only ever passing because its imports happened to be declared in the
      *  root package.json, which the monorepo split moved into `packages/rman`. */
-    ignores: ['packages/*/build/**', '**/node_modules/**', 'old/**'],
+    /**
+     * `support/smoke-types/**` is a *fixture*, not source: it imports `rman` by package name so it
+     * compiles the way a consumer does, against the built `index.d.ts` rather than against `src`.
+     * That is the whole point of it, and it is exactly what `no-extraneous-dependencies` exists to
+     * catch everywhere else - so the directory is excluded rather than the rule silenced inline.
+     */
+    ignores: ['packages/*/build/**', '**/node_modules/**', 'old/**', 'support/smoke-types/**'],
   },
   ...panatesEslint.configs.node,
   {
