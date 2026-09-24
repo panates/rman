@@ -20,6 +20,7 @@ import {
 } from './config.js';
 import { Manifest } from './manifest.js';
 import { Package } from './package.js';
+import type { Platform } from './plugin.js';
 import { loadPlugins } from './plugin-loader.js';
 import { Workspace } from './workspace.js';
 
@@ -73,8 +74,11 @@ export class Repository extends Package {
      *  resolved repository root, possibly several levels up), this is where the user's shell
      *  really was. Used by `currentPackage` to scope commands to "the package I'm standing in". */
     readonly cwd: string = dirname,
+    /** The root directory's own technology, from the same walk that found the packages - so the
+     *  repository and its `rootPackage` agree without either searching the registry again. */
+    platform?: Platform,
   ) {
-    super(dirname, app);
+    super(dirname, app, platform);
     Object.defineProperty(this, 'app', { value: app, enumerable: false, writable: false });
     /**
      * What detection decided for this repository, or `undefined` when it declared its own
@@ -85,7 +89,7 @@ export class Repository extends Package {
      * a repository, and bookkeeping that shows up there turns spec failures into diffs about it.
      */
     Object.defineProperty(this, 'detectedBuiltin', { value: undefined, enumerable: false, writable: true });
-    this.rootPackage = new Package(dirname, app);
+    this.rootPackage = new Package(dirname, app, platform);
     if (!monorepo) this.packages = [this.rootPackage];
     // Config resolution can load a `.rmanrc.cjs`/`.mjs`/`.js` module (dynamic `import()`, always
     // async) - a constructor can't `await`, so `create()` finishes this instance off via `_init()`
@@ -210,29 +214,50 @@ export class Repository extends Package {
    * nothing under `getPackages()` is the root, so only its own unmarked config applies.
    */
   /**
-   * Gives every package its `repository` and `parent`, before any config is resolved - a config
-   * expression or a provider may already want to navigate from a package outwards.
+   * Gives every package its `repository`, and hangs the `parent`/`children` tree off the walk that
+   * found them - before any config is resolved, since a config expression or a provider may already
+   * want to navigate from a package outwards.
+   *
+   * **The containment is read from the tree rather than recomputed from paths.** It used to be an
+   * O(n²) sweep comparing every package's directory against every other's and keeping the longest
+   * prefix - which is the same question `Workspace.walk` answers on the way down, asked again
+   * afterwards with the answer thrown away. Two places deriving one relationship is two places to
+   * disagree; there is one now.
+   *
+   * **`parent` is defined non-enumerably, `children` is a plain field**, which is the one asymmetry
+   * here and it is deliberate: a tree is serialized downwards, so `children` has to be walkable and
+   * `parent` must not be, or every `JSON.stringify` is a cycle. The same way `Repository.app` and
+   * `ORIGINS` travel.
    *
    * A repository's own `repository` is itself, which reads oddly and is the honest answer:
    * `Repository extends Package`, so the repository *is* a package of its own repository.
    */
-  protected _linkPackages(): void {
-    this.repository = this;
-    this.rootPackage.repository = this;
-    for (const pkg of this.packages) {
-      pkg.repository = this;
-      /** The deepest package that strictly contains it - the root for an ordinary member, an
-       *  enclosing package for a nested one. Longest containing path wins, the same rule
-       *  `currentPackage` uses to resolve "the package I am standing in". */
-      let parent: Package | undefined = this.monorepo ? this.rootPackage : undefined;
-      for (const other of this.packages) {
-        if (other === pkg) continue;
-        const rel = path.relative(other.dirname, pkg.dirname);
-        const contains = !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
-        if (contains && (!parent || other.dirname.length > parent.dirname.length)) parent = other;
+  protected _linkPackages(tree: Workspace.Node, nodes: Workspace.Node[], packages: Package[]): void {
+    /** Non-enumerable everywhere, including on the repository itself - see `Package.repository`.
+     *  `writable` because `import` grafts an external repository's packages onto this one. */
+    const link = (pkg: Package): void => {
+      Object.defineProperty(pkg, 'repository', { value: this, enumerable: false, configurable: true, writable: true });
+    };
+    link(this);
+    link(this.rootPackage);
+    for (const pkg of this.packages) link(pkg);
+
+    /** The walk visits a directory once, so one node is one package and this map is a bijection -
+     *  which is what lets the edges below be read off the tree instead of guessed from paths. */
+    const byNode = new Map<Workspace.Node, Package>(nodes.map((node, i) => [node, packages[i]!]));
+    byNode.set(tree, this.rootPackage);
+    for (const node of [tree, ...nodes]) {
+      const pkg = byNode.get(node)!;
+      for (const childNode of node.children) {
+        const child = byNode.get(childNode)!;
+        pkg.children.push(child);
+        Object.defineProperty(child, 'parent', { value: pkg, enumerable: false, configurable: true });
       }
-      pkg.parent = pkg === this.rootPackage ? undefined : parent;
     }
+    /** `Repository extends Package` while holding a separate `rootPackage` for the same directory,
+     *  so both are truthfully the root - they share the one array rather than each getting a copy
+     *  that could drift. */
+    Object.defineProperty(this, 'children', { value: this.rootPackage.children, enumerable: true });
   }
 
   protected async _resolveConfigs(): Promise<void> {
@@ -487,10 +512,17 @@ export class Repository extends Package {
     }
     await loadPlugins(app, rootConfig);
 
-    const layout = Workspace.resolve(app, rootDir);
-    const packages = (layout?.packageDirs ?? []).map(dir => new Package(dir, app));
-    const repo = new Repository(app, layout?.root ?? rootDir, packages.length > 0, packages, from);
-    repo._linkPackages();
+    /**
+     * **The walk**, which is where the package list comes from now - descending from the root,
+     * asking each directory's own technology where its children are. `Workspace.resolve` asked the
+     * root once, through whichever platform recognized it first; the tree is the shape discovery
+     * actually has, and it is what makes a nested package of another technology findable at all.
+     */
+    const tree = Workspace.walk(app, rootDir, options?.deep);
+    const nodes = Workspace.flatten(tree);
+    const packages = nodes.map(node => new Package(node.dirname, app, node.platform));
+    const repo = new Repository(app, tree.dirname, packages.length > 0, packages, from, tree.platform);
+    repo._linkPackages(tree, nodes, packages);
     /** The application is what the plugins registered into a moment ago; from here on it can hand
      *  out services, which need the repository to work on. */
     (repo as { detectedBuiltin?: DetectedBuiltin }).detectedBuiltin = detected;

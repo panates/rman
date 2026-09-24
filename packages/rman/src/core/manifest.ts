@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { RmanApplication } from './application.js';
 import type { Package } from './package.js';
-import { basePlatform, type Platform } from './plugin.js';
+import type { Platform } from './plugin.js';
 import { semverScheme, type VersionScheme } from './version-scheme.js';
 
 /**
@@ -153,46 +153,40 @@ export interface ManifestProvider {
  */
 export namespace Manifest {
   /**
-   * Reads `dir`'s manifest through the first provider that recognizes it, with the scheme that
-   * provider brings.
+   * Reads `dir`'s manifest through **the platform that already claimed it**, with the scheme that
+   * platform brings.
    *
-   * **With no provider registered, or none recognizing the directory**, the fallback is a package
-   * named after its own directory at version `0.0.0`. That is deliberately the least it can claim:
-   * the directory name is a fact, and `0.0.0` is the version a thing has when nothing says
-   * otherwise. The alternative - refusing to construct a package at all - would make `rman info` and
-   * `rman list` fail in a repository whose `.rmanrc` simply names no plugin yet, which is exactly
-   * when someone needs to run them.
+   * **It takes a platform rather than searching for one**, and that is where the walk changed
+   * things. This used to loop over every registered platform, once per `Package` constructed - so a
+   * package asked "who am I?" and the answer was whoever recognized it first, re-derived at every
+   * construction. The walk decides it once per directory now (`Workspace.walk` ->
+   * `app.platformFor`) and hands it to the package, which is also what lets a nested Cargo package
+   * sit inside a Node monorepo: the platform is a fact about the directory, established by whoever
+   * found it, not re-guessed by whoever reads it.
+   *
+   * **When that platform reads nothing** - `basePlatform`, or a provider that claimed the directory
+   * and then found nothing in it - the fallback is a package named after its own directory at
+   * version `0.0.0`. Deliberately the least it can claim: the directory name is a fact, and `0.0.0`
+   * is the version a thing has when nothing says otherwise. The alternative - refusing to construct
+   * a package at all - would make `rman info` and `rman list` fail in a repository whose `.rmanrc`
+   * simply names no plugin yet, which is exactly when someone needs to run them.
    */
   export function read(
-    app: RmanApplication,
+    platform: Platform,
     dir: string,
   ): {
     manifest: Manifest;
     versionScheme: VersionScheme;
     fileName: string;
-    platform: Platform;
   } {
-    for (const platform of app.platforms) {
-      const manifest = platform.manifestProvider.read(dir);
-      if (manifest) {
-        return {
-          manifest,
-          versionScheme: platform.manifestProvider.versionScheme ?? semverScheme,
-          fileName: platform.manifestProvider.fileName,
-          platform,
-        };
-      }
-    }
+    const provider = platform.manifestProvider;
+    const manifest = provider.read(dir);
     return {
-      manifest: { name: path.basename(dir), version: '0.0.0', raw: {} },
-      versionScheme: semverScheme,
-      /** Nothing was read, so nothing can be named - a caller listing "the file I changed" has no
-       *  file to list, which is correct rather than a placeholder that does not exist. */
-      fileName: '',
-      /** Same reasoning: no stack claimed this directory, so it belongs to no technology. The
-       *  base stack's name is empty rather than a sentinel like `'unknown'`, which would read as a
-       *  technology's name and could collide with a real one's. */
-      platform: basePlatform,
+      manifest: manifest ?? { name: path.basename(dir), version: '0.0.0', raw: {} },
+      versionScheme: provider.versionScheme ?? semverScheme,
+      /** Nothing read means nothing to name - a caller listing "the file I changed" has no file to
+       *  list, which is correct rather than a placeholder that does not exist. */
+      fileName: manifest ? provider.fileName : '',
     };
   }
 

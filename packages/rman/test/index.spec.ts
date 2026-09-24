@@ -80,7 +80,11 @@ describe('public API (src/index.ts)', () => {
     expect(typeof api.definePlugin).toBe('function');
     expect(typeof api.isPlatform).toBe('function');
     expect(typeof api.Manifest.read).toBe('function');
-    expect(typeof api.Workspace.resolve).toBe('function');
+    /** `walk`, not `resolve`: discovery descends now, asking each directory's own technology where
+     *  its children are. `flatten` is the other half - the list `Repository.packages` reports. */
+    expect(typeof api.Workspace.walk).toBe('function');
+    expect(typeof api.Workspace.flatten).toBe('function');
+    expect(typeof api.Workspace.findRoot).toBe('function');
     expect(typeof api.BinPath.env).toBe('function');
     expect(typeof api.VersionScheme).toBe('function');
     expect(typeof api.SemverScheme).toBe('function');

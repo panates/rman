@@ -15,7 +15,7 @@ export class Package {
    * document for a command that knows its own ecosystem - the `node` built-in reads `scripts` and
    * `publishConfig` off it - but the core only ever touches `name`, `version` and `private`.
    */
-  manifest: Manifest;
+  manifest!: Manifest;
   /**
    * In-repo packages this one depends on - **the full transitive closure**, not just its direct
    * dependencies (see `Repository._updateDependencies`).
@@ -43,14 +43,54 @@ export class Package {
    * Assigned by `Repository.create` rather than taken as a constructor argument, and it has to be:
    * `Repository extends Package`, so a repository constructing itself runs this constructor before
    * it exists to be passed in. A repository's own is itself.
+   *
+   * **Non-enumerable, and `declare` for the same reason `parent` is** - this is the *other* half of
+   * why a package could not be serialized, and the older half. A `Repository` holds every package,
+   * so one enumerable back-reference makes `JSON.stringify(anyPackage)` a cycle whatever the tree
+   * edges do: measured before `parent` was touched at all, and the error even named it
+   * (`property 'repository' closes the circle`). Making only `parent` non-enumerable would have
+   * delivered a tree that still cannot be dumped, which is the whole reason the asymmetry exists.
+   *
+   * It is the same rule `Repository.app`, `_repoScope` and `_git` already follow: a back-reference
+   * to something that holds everything has no business in a walk of one package.
    */
-  repository!: Repository;
+  declare repository: Repository;
   /**
    * The package whose directory contains this one - the repository root for an ordinary member, and
    * a genuine enclosing package for one nested inside another (which `Repository.currentPackage`
    * already has to reason about). `undefined` for the root itself, which nothing contains.
+   *
+   * **Non-enumerable, and `children` is not** - the two halves of one edge, and only one of them
+   * can be the one a walk follows. A tree is walked downwards, so `children` has to be visible and
+   * `parent` must not be, or a `toEqual` diff climbs back to the root and down again. Assigned
+   * through `defineProperty` by `Repository._linkPackages`, the same way `Repository.app` and
+   * `ORIGINS` travel.
+   *
+   * **`declare`, and that is load-bearing.** A plain `readonly parent?: Package` is a *class field*
+   * under this target, so TypeScript emits `parent;` and every package gets an **enumerable**
+   * `undefined` that the later `defineProperty` only replaces on the packages that have a parent.
+   * Measured: `Object.keys(rootPackage)` listed `parent` while `Object.keys(pkg-a)` did not, which
+   * is the exact opposite of what either name suggests. `declare` emits nothing, so the property
+   * exists only where it is defined.
+   *
+   * **It does not make a `Package` JSON-serializable, and nothing here claims it does** - see
+   * `repository`, which is enumerable and points back at an object holding every package.
    */
-  parent?: Package;
+  declare readonly parent?: Package;
+  /**
+   * The packages whose directories sit directly inside this one - **the tree edge**, in the order
+   * the platform that claimed this directory gave them.
+   *
+   * This is the shape discovery actually has, and it used to be flattened away: a provider was
+   * asked once at the repository root and returned one list, so a package nested inside another was
+   * only reconstructible by comparing path prefixes (which `_linkPackages` and `currentPackage`
+   * both did, separately). `Workspace.walk` descends, so the containment is known as it is found -
+   * and `Repository.packages` is now this tree flattened rather than the other way round.
+   *
+   * Empty for a leaf, and for every package in an ordinary flat monorepo - where the root's
+   * `children` is the whole member list.
+   */
+  readonly children: Package[] = [];
   /**
    * How this package's versions are numbered - `pkg.versionScheme.next(pkg.version, 'minor')`.
    *
@@ -66,7 +106,7 @@ export class Package {
 
   /** The file the manifest was read from, absolute - for a command that has to say which file it
    *  changed (a commit's path list). Empty when no provider recognized this directory. */
-  manifestFileName: string;
+  manifestFileName!: string;
 
   /**
    * **The technology this package belongs to** - the platform whose manifest provider claimed the
@@ -107,12 +147,18 @@ export class Package {
   constructor(
     readonly dirname: string,
     app: RmanApplication,
+    /**
+     * The technology that claimed this directory, when the caller already knows - which
+     * `Repository.create` does, because the walk that found the directory is what established it.
+     *
+     * Optional so a bare `new Package(dir, app)` still works: that is what the fixtures build, and
+     * it is also the honest fallback for anyone constructing a package outside a walk. It costs one
+     * search of the registry (`app.platformFor`), which is what *every* construction used to do.
+     */
+    platform?: Platform,
   ) {
-    const { manifest, versionScheme, fileName, platform } = Manifest.read(app, dirname);
-    this.manifest = manifest;
-    this.versionScheme = versionScheme;
-    this.manifestFileName = fileName ? path.join(dirname, fileName) : '';
-    this.platform = platform;
+    this.platform = platform ?? app.platformFor(dirname);
+    this._readManifest();
   }
 
   get basename(): string {
@@ -150,26 +196,29 @@ export class Package {
     return !!repository && path.resolve(this.dirname) === path.resolve(repository.dirname);
   }
 
-  /** Re-reads from disk - for a command that has just written the manifest itself and wants the
-   *  package to agree with the file again. */
-  /** Re-reads from disk through **its own** technology's provider - no search, since the package
-   *  already knows which one claimed it, and a second opinion on a re-read was never wanted. */
+  /**
+   * Re-reads from disk - for a command that has just written the manifest itself and wants the
+   * package to agree with the file again.
+   *
+   * Through **its own** technology's provider, like the constructor: the package already knows
+   * which platform claimed it, and a second opinion on a re-read was never wanted.
+   */
   reloadManifest(): Manifest {
-    const platform = this.platform;
-    this.manifest = platform.manifestProvider.read(this.dirname) ?? {
-      name: path.basename(this.dirname),
-      version: '0.0.0',
-      raw: {},
-    };
-    this.versionScheme = platform.manifestProvider.versionScheme ?? this.versionScheme;
-    this.manifestFileName = platform.manifestProvider.fileName
-      ? path.join(this.dirname, platform.manifestProvider.fileName)
-      : '';
+    this._readManifest();
     return this.manifest;
   }
 
   /** Writes the current manifest back through its provider. */
   writeManifest(): void {
     this.platform.manifestProvider.write(this.dirname, this.manifest);
+  }
+
+  /** The three fields a manifest read sets, in one place - so construction and `reloadManifest`
+   *  cannot disagree about what "reading the manifest" means. */
+  private _readManifest(): void {
+    const { manifest, versionScheme, fileName } = Manifest.read(this.platform, this.dirname);
+    this.manifest = manifest;
+    this.versionScheme = versionScheme;
+    this.manifestFileName = fileName ? path.join(this.dirname, fileName) : '';
   }
 }

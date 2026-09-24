@@ -4,7 +4,6 @@ import parseNpmScript from '@netlify/parse-npm-script';
 import glob from 'fast-glob';
 import type { Package } from '../../core/package.js';
 import type { Platform } from '../../core/plugin.js';
-import type { Workspace } from '../../core/workspace.js';
 import type { RunService } from '../../services/run.service.js';
 import { NodeManifestProvider } from './node-manifest.provider.js';
 import { NodeVersionPlanService } from './services/version-plan.service.js';
@@ -20,16 +19,26 @@ export class NodePlatform implements Platform {
   manifestProvider = new NodeManifestProvider();
   versionPlanner = new NodeVersionPlanService();
 
-  getWorkspace(root: string): Workspace.Layout | undefined {
-    const manifest = path.join(root, 'package.json');
+  /**
+   * npm's `workspaces` globs, resolved against `dir` - the directories directly below it that hold
+   * a `package.json`.
+   *
+   * **Asked of every directory the walk reaches, not only of the repository root**, which is what
+   * the seam changing from a layout to a per-directory question bought: a `package.json` naming
+   * `workspaces` is a workspace root wherever it sits, so a Node sub-workspace inside a larger
+   * repository is now found by the same code that finds the top one. `deep: 0` already made the
+   * globs one level, so nothing here had to change to make that true.
+   */
+  getWorkspace(dir: string): string[] | undefined {
+    const manifest = path.join(dir, 'package.json');
     if (!fs.existsSync(manifest)) return undefined;
 
     let patterns: unknown;
     try {
       patterns = JSON.parse(fs.readFileSync(manifest, 'utf-8'))?.workspaces;
     } catch {
-      /** A malformed root `package.json` is not this provider's error to report - `Package` will do
-       *  it with the file in hand when something actually reads the manifest. */
+      /** A malformed `package.json` is not this provider's error to report - `Package` will do it
+       *  with the file in hand when something actually reads the manifest. */
       return undefined;
     }
     if (!Array.isArray(patterns)) return undefined;
@@ -37,12 +46,12 @@ export class NodePlatform implements Platform {
     const packageDirs: string[] = [];
     for (const pattern of patterns) {
       if (typeof pattern !== 'string') continue;
-      const dirs = glob.sync(pattern, { cwd: root, absolute: true, deep: 0, onlyDirectories: true });
-      for (const dir of dirs) {
-        if (fs.existsSync(path.join(dir, 'package.json'))) packageDirs.push(dir);
+      const dirs = glob.sync(pattern, { cwd: dir, absolute: true, deep: 0, onlyDirectories: true });
+      for (const d of dirs) {
+        if (fs.existsSync(path.join(d, 'package.json'))) packageDirs.push(d);
       }
     }
-    return { root, packageDirs };
+    return packageDirs;
   }
 
   /**

@@ -112,9 +112,15 @@ export const testManifest: ManifestProvider = {
   },
 };
 
-/** Packages from the root manifest's `workspaces` globs - the shape the fixtures write. */
-export const testWorkspace: Workspace.Provider = (root: string): Workspace.Layout | undefined => {
-  const file = path.join(root, 'package.json');
+/**
+ * A directory's child packages, from its own manifest's `workspaces` globs - the shape the fixtures
+ * write.
+ *
+ * Per directory, like the real seam: asked of every node the walk reaches, so a fixture nesting a
+ * workspace inside a package gets a tree rather than a flat list.
+ */
+export const testWorkspace: Workspace.Provider = (dir: string): string[] | undefined => {
+  const file = path.join(dir, 'package.json');
   if (!fs.existsSync(file)) return undefined;
   let patterns: unknown;
   try {
@@ -127,10 +133,10 @@ export const testWorkspace: Workspace.Provider = (root: string): Workspace.Layou
   const packageDirs: string[] = [];
   for (const pattern of patterns) {
     if (typeof pattern !== 'string') continue;
-    const dirs = glob.sync(pattern, { cwd: root, absolute: true, deep: 0, onlyDirectories: true });
-    for (const dir of dirs) if (fs.existsSync(path.join(dir, 'package.json'))) packageDirs.push(dir);
+    const dirs = glob.sync(pattern, { cwd: dir, absolute: true, deep: 0, onlyDirectories: true });
+    for (const d of dirs) if (fs.existsSync(path.join(d, 'package.json'))) packageDirs.push(d);
   }
-  return { root, packageDirs };
+  return packageDirs;
 };
 
 /**
