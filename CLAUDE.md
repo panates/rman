@@ -331,10 +331,31 @@ work: the type composes and a schema does not.
 
 ## Which ecosystem a package belongs to
 
-`Package.provider` - `'node'` for one read by `rman-node`, empty when no plugin claimed the
-directory. Comes from `Plugin.name`, and that field means the **ecosystem**, not the file
+`Package.provider` - `'node'` for one the `node` built-in read, empty when no platform claimed the
+directory. Comes from `Platform.name`, and that field means the **ecosystem**, not the file
 (`manifestFile` already says `package.json`; a name repeating it carried no information, which is
 why it went unused until this existed).
+
+**`Platform` is the narrow type and `Plugin` is the broad one**, and the names were the other way
+round until the split. `manifestProvider` is required, which makes the narrow type a *platform* by
+definition - a package shipping only commands never touches it, because commands are a config key.
+So a plugin carries `platforms?: Platform[]` and an `init`, may provide more than one technology
+(`maven` and `gradle` are one plugin, two platforms), and a bare `Platform` is sugar for the plugin
+providing only it (`registerPlugin` normalizes that, and the fixtures go through it rather than
+poking the two registries).
+
+- **Both must be declared** through `definePlatform`/`definePlugin`, checked by a non-enumerable
+  brand. No shape test could replace it: an rman **1.x plugin was `{ name, init }`**, and under this
+  split so is a 2.x plugin contributing nothing but an `init`.
+- **The brand cannot be a module-scope `const`.** The file layout puts privates below the exports
+  and `basePlatform`'s initializer *calls* `definePlatform`, so the const sits in its own temporal
+  dead zone: measured, the whole suite failed to load with `Cannot access 'DECLARED' before
+  initialization`. A hoisted function resolving `Symbol.for` fixes it, and two copies of rman in one
+  process then agree about the mark.
+- `RmanApplication` holds both: `platforms` is what every seam iterates, `plugins` is who
+  contributed them. **Detection's second condition is `app.platforms.size`**, not `plugins` - what
+  it would add is a platform, so what must not already be there is a platform; a plugin registering
+  only a command says nothing about which directories hold packages.
 
 - **The escape hatch for code that legitimately knows one technology**: check
   `if (pkg.provider === 'node')` before reaching into `manifest.raw` for something only npm has.
@@ -348,11 +369,60 @@ why it went unused until this existed).
   package is.
 - Not a union type, and never make it one: the set of ecosystems is whatever `plugins` contribute,
   so narrowing it would mean the core naming plugins it cannot know about.
-- **Note a real limitation of the *workspace* seam, which is separate:** `Workspace.resolve` takes
-  the first provider that answers, so in a polyglot repo the ecosystem listed first in `plugins`
-  decides which directories are packages at all - npm's keeps only the `package.json` ones
-  (measured: a `Cargo.toml`-only package was simply not found until a provider that looks for both
-  was listed first). Per-package *identity* is polyglot; per-repository *discovery* is not yet.
+- **The *workspace* seam used to be the limitation here, and is not any more.**
+  `Workspace.resolve` took the first provider that answered the *root*, so the ecosystem listed
+  first in `plugins` decided which directories were packages at all. `Workspace.walk` descends
+  instead - see below - so discovery is polyglot too.
+
+## Discovery walks the tree
+
+[`src/core/workspace.ts`](packages/rman/src/core/workspace.ts). `Workspace.Provider` is
+`(dir) => string[] | undefined`: **the directories directly below `dir` that hold a package**, or
+"not mine". The recursion is the core's (`walk`), so a platform only ever speaks about its own
+packages - which is all a platform knows.
+
+One step: take the directory's declared platform if its config names one, else `app.platformFor`;
+ask **that** platform where its children are; repeat. `Repository.packages` is that tree flattened.
+
+- **A declaration is held to it.** A platform named for a directory it does not recognize is an
+  error naming the file it looked for. The failure it replaces is invisible: the manifest reads as
+  nothing, so the package is named after its directory at `0.0.0` and the repository looks fine.
+- **A directory is visited once**, or a provider naming an ancestor never terminates.
+- **`Package` is handed its platform at construction**, so `Manifest.read(platform, dir)` takes one
+  rather than searching. The platform is a fact about the directory, established by whoever found
+  it, not re-guessed by whoever reads it.
+- **`children` is enumerable and `parent` is not** - one edge, and only one direction can be the one
+  a walk follows. `repository` is non-enumerable for the same reason and was the *older* half of why
+  a `Package` could never be JSON-serialized: a repository holds every package, so one enumerable
+  back-reference is a cycle whatever the tree edges do. Fixing only `parent` would have produced a
+  tree that still cannot be dumped.
+- **`declare readonly parent?: Package`, not a plain field.** A plain declaration is a *class field*
+  under this target, so TypeScript emits `parent;` and every package gets an **enumerable**
+  `undefined` that the later `defineProperty` only replaces where there is a parent. Measured:
+  `Object.keys(rootPackage)` listed `parent` while `Object.keys(pkg-a)` did not.
+
+## A selector addresses a package; a name is what it calls itself
+
+`Package.selector` is what `"[glob]"` and `--scope`/`--ignore` match. A name is an *ecosystem's*
+promise - npm guarantees `package.json#name` exists and identifies the package, and nothing else
+does - so selectors matching `pkg.name` left a repository whose technology has no name concept with
+packages it could not address at all.
+
+Three sources, first that answers: the package's own `.rmanrc "name"`, its platform's
+`ManifestProvider.selector`, the manifest's name. They coincide in every Node repository.
+
+- **A selector is unique, and checked**, because two packages answering to one make `"[that]"` and
+  `--scope that` ambiguous *silently*: the config reaches both and `getPackage` returns the first.
+  `name` cascades like every unmarked key, so one declaration above two packages is the usual way
+  in, and the error says so when that is what happened.
+- **`name` and `platform` cannot sit in a `"[glob]"` block** (`assertSelectorBlocks`, beside the
+  `extends` refusal): the glob matches the selector, and those are what the selector is derived
+  from. `"[/]"` is exempt - the root is addressed structurally, which is the whole reason it is `/`.
+- **`"[/]"` needs no selector, and that did not work.** `resolveConfig`'s gate was
+  `if (packageName)`, so the walk skipped every selector block including that one, and `platform`
+  under `"[/]"` silently did nothing. The gate is `selector !== undefined || isRoot` now.
+- `Repository.listStatus` is keyed by selector too - by name, a technology that does not name its
+  packages had all of them answering to `""`.
 
 ## PATH for a child process: `BinPath`
 
@@ -362,7 +432,7 @@ a command an author wrote (`eslint .`) runs the repo's pinned copy rather than a
 who owns which half:
 
 - **Which directories** is the ecosystem's, and the core has none. `node_modules/.bin` walked up the
-  directory chain is npm's layout; `rman-node` contributes it (`Plugin.getBinPaths`). Measured: a
+  directory chain is npm's layout; `rman-node` contributes it (`Platform.getBinPaths`). Measured: a
   `run` step calling a binary in `node_modules/.bin` fails with `command not found` in a repository
   naming no plugin, and runs with `rman-node` named.
 - **How a PATH is spelled** is the OS's, and stays in the core: `PATH` everywhere but Windows, where
@@ -400,7 +470,7 @@ there is no second type to keep in step by hand.
   `run.build.exec` function therefore matched the value-function pattern and collapsed to its return
   type. And `CODE_SUBTREES` is skipped **at every level**, not just the top, because the selector
   index (`[selector]: RmanConfig`) re-enters the config: without it the walk reached
-  `Plugin.manifestProvider.versionScheme` and rewrote its *methods* - `smallestBump(): string`
+  `Platform.manifestProvider.versionScheme` and rewrote its *methods* - `smallestBump(): string`
   became `string`, the rest became `{}`. **A function with fewer parameters is assignable to one
   with more**, so a zero-argument method matches too; this transform is unsafe over anything
   carrying methods, and the guard is what keeps one out of its way.
@@ -451,13 +521,18 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   `RmanNodeConfig` could never do - the reader holds a `Package`, and `Package.config` is the core's
   type. The augmentation is evaluated where it is used, so `clean` is typed at the place it is
   read.
-- **`RmanNodeConfig` (exported from `rman-node`, with its own `defineConfig`) is the authoring
-  name** - so the import that carries the augmentation is explicit instead of a side effect someone
+- **`RmanNodeConfig` (exported from `rman`, with its own `defineConfig`) is the authoring name** - so the import that carries the augmentation is explicit instead of a side effect someone
   has to remember. Named, not a second `RmanConfig`: one name per meaning.
-- **Trap: one `declare module 'rman'` block per package, or the others stop applying.** A second
-  block silently disabled the first - measured, `SystemInfo.PackageManager` went unresolved at four
-  call sites with nothing pointing at the cause. Every type augmentation therefore lives in
-  [`packages/node/src/augmentation/rman.augmentation.ts`](packages/node/src/augmentation/rman.augmentation.ts),
+- **One `declare module` block per *package name*, or the others stop applying** - measured while
+  the plugin shipped separately: a second `declare module 'rman'` silently disabled the first, and
+  `SystemInfo.PackageManager` went unresolved at four call sites with nothing pointing at the cause.
+  Bundled, the node plugin augments **module paths** like every built-in command's contribution
+  does, so the limit is gone and each interface is augmented where it lives.
+  **The replacement trap is `index.ts`**: an augmentation applies only where its module is in the
+  program, so `src/index.ts` imports `plugins/node/augmentation/rman.augmentation.js` for its types
+  alone - without it `clean` and `publish.npm` exist for rman and for no consumer, and no spec can
+  see it (see `npm run smoke`). Every type augmentation therefore lives in
+  [`packages/rman/src/plugins/node/augmentation/rman.augmentation.ts`](packages/rman/src/plugins/node/augmentation/rman.augmentation.ts),
   beside the others rather than next to the code it describes. The *runtime* half of an augmentation
   still lives with its own subject (`augmentSystemInfo()`, `augmentManifest()`, ...).
 - Measured both ways: with the core alone, `{ clean: ... }` and `{ publish: { npm } }` are
@@ -647,7 +722,7 @@ wins:
    - Pattern has no `{name}` (the default `v*`, one repo-wide tag) → `git describe`, i.e. the nearest
      tag **reachable from HEAD**. No single package owns a repo-wide tag, so ancestry is the right
      criterion.
-3. **No tag → the package's own ecosystem.** `Plugin.manifestProvider.publishedVersion(pkg)` - `npm view`
+3. **No tag → the package's own ecosystem.** `Platform.manifestProvider.publishedVersion(pkg)` - `npm view`
    for a `node` package, whatever a plugin supplies elsewhere, **nothing at all** for a repository
    naming no plugin. The version it returns is turned into a tag name via `expandTag` and used only
    if **that tag actually exists in git**. The one real scenario it covers: a tag exists but isn't in
@@ -703,7 +778,7 @@ touched package counts as changed.
 
 - **Question A**, from the same plan `changed` shows
   (`VersionPlanService.getPlanner().getPlan`); `VersionService.applyPlan` does the writes.
-- **`VersionPlanService` is abstract - a technology supplies the planner** (`Plugin.versionPlanner`,
+- **`VersionPlanService` is abstract - a technology supplies the planner** (`Platform.versionPlanner`,
   `rman-node`'s `NodeVersionPlanService`), and `version`/`changed` fail naming that key when none
   is registered. It does not degrade to a built-in default - a wrong boundary or cascade releases a
   plausible, untrue set of packages.
@@ -712,7 +787,7 @@ touched package counts as changed.
   the root's release identity - none of which belongs to any one technology, and all of which is
   computed for the whole repository at once. The two decisions that *are* a technology's are asked
   per package instead:
-  - **`detectBoundary`** through `plannerFor(pkg)` = `pkg.plugin.versionPlanner ?? this`;
+  - **`detectBoundary`** through `plannerFor(pkg)` = `pkg.platform.versionPlanner ?? this`;
   - **`cascade`** through `cascadeFor(members, bump)`, once per group.
   - **This was a real bug, of exactly the shape the `['npm']` publish default was.** Both came off
     the single slot, so in a polyglot repository a Cargo package's boundary fell back to `npm view`
@@ -1540,6 +1615,24 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   - `register` also allows **one registration per plugin name**, which catches what identity cannot
     (two objects claiming a name, an object duplicating a named package). Registering twice defines
     its commands twice, which yargs does not survive.
+**A root `platform` declaration naming a built-in puts it at the front of `plugins`**
+(`expandBuiltinPlugins`), so the whole built-in arrives - technology, commands, publish targets.
+Saying which technology a repository *is* is saying it has it; making an author write both was a
+distinction only rman could see, and the measured cost was `rman list` working with a `node` column
+beside `Unknown arguments: clean`.
+
+- **At the front**, because `platformFor` takes the first platform that recognizes a directory. Only
+  observable with **two** built-ins - rman ships one, so a control swapping the ends passes until a
+  second is stubbed into `BUILTIN_PLUGINS` (`detect.spec.ts` has the pattern).
+- Read from the unmarked key **or** from `"[/]"`, since both are the root speaking.
+- **Only a built-in is promoted**, checked after the loader's dynamic import: a third-party platform
+  is loaded by the `plugins` entry that brings it, and pushing its bare name in would hand the
+  loader a glob matching no file - the failure reads as the plugin being missing while it is
+  registered perfectly well.
+- **Below the root it loads the technology alone**, and that is structural: `plugins` is read once,
+  at the root, before any package exists, so a nested declaration cannot contribute commands even in
+  principle.
+
 - Don't extend `ALWAYS_APPEND` casually: an always-appending key can never be *un*-said by a closer
   layer, which is only acceptable where the value is a set of contributions rather than a decision.
 
@@ -1675,6 +1768,39 @@ no version planner - so a spec that needs one **brings it**.
   - In CI as its own job on one Node version, beside `lint`: the answer does not vary by runtime, so
     running it inside the test matrix would pay for it three times.
 
+## `npm run smoke` - what the suite structurally cannot see
+
+[`support/smoke.cjs`](support/smoke.cjs), [`support/smoke-types/`](support/smoke-types).
+**Mocha resolves `rman` through `tsconfig-test.json`'s `paths` to `src`, which is a different
+module graph from the compiled one**, and `packages/rman/test/tsconfig.json` includes every source
+file. Two whole classes of failure are invisible to 843 passing specs because of it, and both were
+live at once:
+
+- **An ESM cycle that is fatal in `build/` and harmless in `src`.** The built CLI did not start, on
+  any command, from the commit the node plugin moved inside rman:
+  `ReferenceError: Cannot access 'VersionPlanService' before initialization`, through
+  `core/repository -> plugins/detect -> plugins/builtins -> plugins/node/... -> version-plan`.
+  `detect.ts` imported `builtins.js` statically; `config.ts` already imports it dynamically and
+  documents the same cycle from the other side. **Any new static import into `plugins/` from `core/`
+  is this bug again.**
+- **A `declare module` augmentation that reaches rman and nobody else.** The node plugin's lives in
+  `plugins/node/augmentation/rman.augmentation.ts`, imported by the *plugin's* entry point, which
+  `index.ts` did not reach - so `clean` and `publish.npm` were typed inside rman and were
+  `does not exist in type 'RmanConfig'` for a consumer. The same trap `commands.ts` records, and it
+  reappeared because until the fold a consumer imported `rman-node` and got the augmentation with
+  the package. **A spec cannot pin it**: the test tsconfig loads the augmentation whether or not
+  anything imports it, so an assertion that `clean` is typed passes with the fix reverted.
+  `support/smoke-types/` resolves `rman` to the built `index.d.ts` **and to nothing else**, which is
+  the only vantage point that can tell.
+
+Four checks: `--version` (the module graph alone), `list` (repository, workspace, config cascade),
+`clean --dry-run` (a *contributed* command existing at all), and that consumer typecheck. Run after
+`npm run build`; in CI beside `typecheck`. Each was verified by reintroducing the bug it exists for.
+
+It also caught a second casualty of the same fold: this repository's own `.rmanrc.yml` still said
+`extends: './packages/node/build/index.js'`, a path into the deleted package, so every command here
+exited 1.
+
 ## The build must not need rman
 
 `npm run build` is `npm run build -w packages/rman && npm run build -w packages/node` - plain npm,
@@ -1733,30 +1859,29 @@ Two things this measured, both of which cost more time than the linking did:
     `src`, so a stale `build` is silently what gets tested. `npm install` restores npm's own
     workspace links and undoes all of this.
 
-## Docs: one file per package, and a baseline in each
+## Docs: two reference files, and a baseline in each
 
-**Four reference files, two per package** - split for the same reason the code was: a reader asking
-what `rman` is should not have to know which half of the answer is npm's. The rule for placing a
-section is the rule for placing the code, so they cannot drift apart: whatever is only true because
-the repository is a Node one belongs in the `node` file.
+**There were four, two per package, and there is one package now.** The split existed so a reader
+asking what `rman` is need not know which half of the answer is npm's; `rman-node` was folded in, so
+`docs/node.md` and `docs/cli-node.md` are **deleted** rather than stale. Don't recreate them.
 
 | | |
 | --- | --- |
-| [`docs/cli-rman.md`](docs/cli-rman.md) | the CLI rman ships, plus global options, the shared option groups, and **Where a command comes from** |
-| [`docs/cli-node.md`](docs/cli-node.md) | `rman-node`'s three commands |
-| [`docs/rman.md`](docs/rman.md) | the core's programmatic API |
-| [`docs/node.md`](docs/node.md) | the plugin's |
+| [`docs/cli-rman.md`](docs/cli-rman.md) | every command, plus global options, the shared option groups, and **Where a command comes from** |
+| [`docs/rman.md`](docs/rman.md) | the programmatic API, the config reference, and **The `node` built-in** |
 
-- **`docs/cli/*.md` stays one page per command regardless of who ships it**, and the two index files
-  above both link into it - someone looking up `rman clean` does not know, or need to know, which
-  package provides it. The page itself says so, in a blockquote under its heading.
+- **`docs/cli/*.md` stays one page per command**, which was always the right unit and is now
+  unarguable: a reader looking up `rman clean` did not need to know which package shipped it, and
+  there is nothing left to know.
 - **Named `cli-rman.md`, not `cli/rman.md`.** The latter was tried and reverted within the hour: a
   `docs/cli/rman.md` beside a `docs/rman.md` makes every relative link ambiguous to a *reader*, who
   sees `rman.md` in two places meaning two different documents.
 - `SystemInfo` is the exception worth remembering, and not an inconsistency: the service and the
   `info` command are the **core's**, so they are in `rman.md`; the npm half the plugin augments in
   is a short section of `node.md` pointing back at it.
-- **Check anchors with `github-slugger`, never by eye.** Two long-standing links never jumped:
+- **Check anchors with github-slugger's rule, never by eye - and it is not a dependency here**, so
+  the pass implements it inline: lowercase, drop everything that is not a letter, number, mark,
+  connector, hyphen or space, then spaces to hyphens. Verified against the two cases below. Two long-standing links never jumped:
   `#configuration-rmanrc-rmanrcyml` needs **two** hyphens (the ` / ` in the heading becomes one each)
   and `#expressions--` needs **three**. A link to a missing anchor silently lands at the top of the
   page, so nothing reports it.
@@ -1790,6 +1915,7 @@ Rules:
   whole arc that made services classes, merged the plugin seams into one `Plugin` and introduced
   `RmanApplication` left the page describing none of it, because nothing looked - mocha transpiles
   without type-checking and no spec imported what the page claims.
-- **Check anchors after any heading change**, with the `github-slugger` pass - 162 links across
-  `docs/`, `docs/cli/` and the two published READMEs resolve today, and a link to a missing anchor
-  lands silently at the top of the page.
+- **Check anchors after any heading change.** The last full pass: **243 links, 1 broken** - and that
+  one is `packages/rman/README.md -> LICENSE`, which resolves in the *published* package, where
+  postbuild copies the root LICENSE beside the README. A link to a missing anchor lands silently at
+  the top of the page, so nothing else reports it.
