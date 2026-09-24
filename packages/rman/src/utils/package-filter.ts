@@ -15,6 +15,23 @@ export interface PackageFilterOptions {
   /** Exclude packages whose name matches at least one of these globs (or `"/"`) - applied after
    *  `scope`. */
   ignore?: string | string[];
+  /**
+   * Only include packages belonging to one of these **platforms** (`Package.provider`) - `['node']`,
+   * or `'node,cargo'` as one comma-separated value.
+   *
+   * **Which technology a package belongs to only became a per-package question when the walk
+   * started finding nested packages of another platform**, and this is the filter that question
+   * needs: in a polyglot repository `rman run build --platform node` is the whole npm half of it,
+   * and there was no way to say that. Where every package is one technology it selects everything
+   * or nothing, which is the honest answer rather than a flag that does nothing.
+   *
+   * **Names, not globs.** A platform's name is a short identifier a plugin chose (`'node'`), so the
+   * set of valid values is known and finite - which is also why a name that no package in the
+   * repository belongs to is an **error** listing the ones that are there, the same call
+   * `publish --target` makes. A glob would put this back to guessing, and a typo back to a silent
+   * empty result.
+   */
+  platform?: string | string[];
   /** Also include every package the matched set depends on (transitively) - e.g. to build
    *  everything a scoped app actually needs. */
   deps?: boolean;
@@ -74,6 +91,11 @@ export const packageFilterOptions = {
   ignore: {
     target: 'cli',
     describe: 'Exclude packages matching this glob (or "/" for the root) - applied after --scope',
+    type: 'string',
+  },
+  platform: {
+    target: 'cli',
+    describe: 'Only include packages of these platforms, e.g. --platform=node,cargo (repeatable)',
     type: 'string',
   },
   deps: {
@@ -136,6 +158,10 @@ export function applyPackageFilterOptions<T>(cmd: Argv<T>): Argv<T> {
       describe: 'Exclude packages matching this glob (or "/" for the root) - applied after --scope',
       type: 'string',
     })
+    .option('platform', {
+      describe: 'Only include packages of these platforms, e.g. --platform=node,cargo (repeatable)',
+      type: 'string',
+    })
     .option('deps', {
       describe: 'Also include every package the matched set depends on',
       type: 'boolean',
@@ -150,6 +176,7 @@ export function readPackageFilterOptions(args: any): PackageFilterOptions {
   return {
     scope: args.scope as string[] | undefined,
     ignore: args.ignore as string[] | undefined,
+    platform: args.platform as string[] | undefined,
     deps: args.deps as boolean | undefined,
     dependents: args.dependents as boolean | undefined,
   };
@@ -191,6 +218,10 @@ export function filterPackages(
   if (options.ignore) {
     const selects = selector(options.ignore);
     matched = matched.filter(p => !selects(p));
+  }
+  if (options.platform !== undefined) {
+    const wanted = platformNames(options.platform, packages);
+    matched = matched.filter(p => wanted.has(p.provider.toLowerCase()));
   }
   if (!options.deps && !options.dependents) return matched;
 
@@ -263,6 +294,48 @@ function toArray(value: string | string[]): string[] {
  * For `clean` that is destructive rather than merely surprising, since the root's own sweep recurses
  * through `packages/*`. Globs are the members, `/` is the root, in both vocabularies.
  */
+/**
+ * `--platform` as a set of lower-cased names, refusing one no package in the repository belongs to.
+ *
+ * **Comma-split, unlike `--scope`, and the asymmetry is the values' own.** A platform's name is a
+ * short identifier a plugin chose, so `--platform=node,cargo` cannot be ambiguous; a scope glob is
+ * arbitrary text, where splitting would take a character away from the pattern language. Repeating
+ * the flag works for both.
+ *
+ * **An unknown name is an error, where an unmatched `--scope` glob is not**, and the difference is
+ * whether rman knows the answer set. It does here: the platforms are the ones its packages belong
+ * to, so `--platform crago` is a typo rman can see, and left alone it is the silent empty result
+ * this whole codebase keeps ruling out. The message lists what the repository has - the same call
+ * `publish --target` makes against its registry.
+ *
+ * **Compared case-insensitively.** `Platform.name` is the authority on spelling and `--platform Node`
+ * is not a different request; refusing it would be pedantry with an empty result attached.
+ *
+ * Asked of the packages rather than of `app.platforms`, which `filterPackages` does not have and
+ * which would be the wrong set anyway: a registered platform that claimed no directory is not an
+ * answer to "what is in this repository".
+ */
+function platformNames(value: string | string[], packages: Package[]): Set<string> {
+  const wanted = toArray(value)
+    .flatMap(entry => entry.split(','))
+    .map(name => name.trim().toLowerCase())
+    .filter(Boolean);
+  /** An empty `provider` is a package no technology claimed, and there is no spelling for it - a
+   *  flag selecting "none" would be `--platform ''`, which no shell makes pleasant. Left out of the
+   *  known set, so naming it is refused like any other unknown. */
+  const present = new Set(packages.map(p => p.provider.toLowerCase()).filter(Boolean));
+  for (const name of wanted) {
+    if (present.has(name)) continue;
+    throw new Error(
+      `--platform "${name}" matches no package in this repository. ` +
+        (present.size
+          ? `It holds: ${[...present].sort().join(', ')}.`
+          : 'No package here belongs to a platform - its ".rmanrc" names no "plugins".'),
+    );
+  }
+  return new Set(wanted);
+}
+
 function selector(value: string | string[]): (pkg: Package) => boolean {
   const patterns = toArray(value);
   const wantsRoot = patterns.includes(ROOT_SELECTOR);

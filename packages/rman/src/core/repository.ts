@@ -136,11 +136,25 @@ export class Repository extends Package {
    * dirty, the reference point decides the rest: without `hash`, `committed`
    * means committed but not yet in the upstream branch; with `hash`, `changed`
    * means it differs from that commit. Otherwise a package is `clean`.
+   *
+   * **Keyed by `Package.selector`**, which is what addresses a package - it was `name`, and the two
+   * coincide wherever a technology names its packages. A repository whose does not had every such
+   * package answering to `""`, so one entry stood for all of them.
+   *
+   * **`includeRoot` is opt-in, and the reason is that the root's answer means something different.**
+   * Its directory contains every other package, so the same rule - "does a changed file fall under
+   * this directory" - reports `dirty` for the root whenever *anything* in the repository is dirty.
+   * That is the honest reading of the rule rather than a bug, and it is not what `run --changed`
+   * wants, so only a caller that asked for the root gets it (`rman list`'s table, which shows the
+   * root as the tree's own row).
    */
-  async listStatus(options?: { hash?: string }): Promise<Record<string, Repository.PackageStatus>> {
+  async listStatus(options?: {
+    hash?: string;
+    includeRoot?: boolean;
+  }): Promise<Record<string, Repository.PackageStatus>> {
     const hash = options?.hash;
     const git = new GitHelper({ cwd: this.dirname });
-    const packages = this.getPackages();
+    const packages = options?.includeRoot ? [this.rootPackage, ...this.getPackages()] : this.getPackages();
     const belongsTo = (p: Package, files: string[]) => files.some(f => !path.relative(p.dirname, f).startsWith('..'));
 
     const [dirtyFiles, referenceFiles] = await Promise.all([
@@ -150,9 +164,9 @@ export class Repository extends Package {
 
     const result: Record<string, Repository.PackageStatus> = {};
     for (const p of packages) {
-      if (belongsTo(p, dirtyFiles)) result[p.name] = 'dirty';
-      else if (belongsTo(p, referenceFiles)) result[p.name] = hash ? 'changed' : 'committed';
-      else result[p.name] = 'clean';
+      if (belongsTo(p, dirtyFiles)) result[p.selector] = 'dirty';
+      else if (belongsTo(p, referenceFiles)) result[p.selector] = hash ? 'changed' : 'committed';
+      else result[p.selector] = 'clean';
     }
     return result;
   }

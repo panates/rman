@@ -1,4 +1,5 @@
 import path from 'path';
+import type { Package } from '../core/package.js';
 import { type PublishTargetName, targetsOf } from '../core/publish-target.js';
 import type { Repository } from '../core/repository.js';
 import { Service } from '../core/service.js';
@@ -31,26 +32,42 @@ export class ListService extends Service {
      *  *in* the repository and still listed - hiding it would answer a different question. Every
      *  other caller honours it, being a command that acts rather than reports. */
     const packages = filterPackages(repository.getPackages({ toposort: options.toposort }), options, false);
-    const status = await repository.listStatus({ hash: options.changedSince });
+    const status = await repository.listStatus({ hash: options.changedSince, includeRoot: options.includeRoot });
 
-    let items: ListService.Item[] = packages.map(p => {
+    const item = (p: Package): ListService.Item => {
       /** **Asked, not assumed.** This read the config key directly and defaulted to `['npm']`, so a
        *  Cargo package in a polyglot repository was reported as shipping to npm - which is what
        *  `PublishTarget.claims` exists to answer, per target, from the ecosystem that knows. */
       const publishTargets = targetsOf(this.app, p).map(t => t.name);
       return {
         name: p.name,
+        selector: p.selector,
         version: p.version,
+        platform: p.provider,
+        depth: depthOf(p),
+        isRoot: p === repository.rootPackage,
         location: path.relative(repository.dirname, p.dirname) || '.',
         private: p.isPrivate,
-        status: status[p.name],
+        status: status[p.selector]!,
         dependencies: p.dependencies.map(d => d.name),
         publishTargets: [...publishTargets],
         docker: publishTargets.includes('docker') ? p.config.publish?.docker : undefined,
       };
-    });
+    };
+
+    let items: ListService.Item[] = packages.map(item);
 
     if (options.changed || options.changedSince) items = items.filter(it => it.status !== 'clean');
+    /**
+     * **The root goes on the front, after filtering, and is never filtered out.** It is the tree's
+     * own row - what the members' indentation hangs from - so a `--scope` that narrows the members
+     * still leaves it standing rather than removing the thing they are nested under. A glob never
+     * matches the root anyway (`ROOT_SELECTOR`), so there is no filter here to respect.
+     *
+     * Not in a single-package repository, where `repository.packages` already *is* `[rootPackage]`
+     * and it would appear twice.
+     */
+    if (options.includeRoot && repository.monorepo) items.unshift(item(repository.rootPackage));
     return items;
   }
 }
@@ -59,6 +76,16 @@ export namespace ListService {
   export interface Options extends PackageFilterOptions {
     /** Topological order (dependencies before dependents) instead of lexical by directory. */
     toposort?: boolean;
+    /**
+     * Also report the **root package**, first, as the row the members' `depth` is measured from.
+     *
+     * Opt-in rather than always, because it changes what the answer *is*: `repository.packages` is
+     * the workspace members, so every other reader of this list - and the count `rman list` prints -
+     * is about them. `rman list`'s table asks for it because a tree needs a root to hang from; its
+     * `--json`, `--parseable` and `--short` forms do not, and a consumer parsing them sees exactly
+     * what it saw before.
+     */
+    includeRoot?: boolean;
     /** Only include packages that have changed since the last publish (dirty or committed but
      *  not yet published) - or, with `changedSince`, since that specific commit/hash. */
     changed?: boolean;
@@ -67,7 +94,24 @@ export namespace ListService {
 
   export interface Item {
     name: string;
+    /** What addresses this package - `"[glob]"` and `--scope` match it. The same as `name` wherever
+     *  the technology names its packages, which is every Node repository; see `Package.selector`. */
+    selector: string;
     version: string;
+    /** The technology that claimed this package's directory - `Package.provider`. Empty when none
+     *  did, which is a repository naming no plugin. */
+    platform: string;
+    /**
+     * How far below the **root package** this one sits: `0` for the root itself, `1` for an ordinary
+     * member, more for a package nested inside another.
+     *
+     * A fact about the package rather than about this list's order, so it is still right under
+     * `--toposort` - which reorders the rows and leaves the nesting where it is.
+     */
+    depth: number;
+    /** Whether this row *is* the root package - present only when `includeRoot` asked for it, or in
+     *  a single-package repository where the root is the one member. */
+    isRoot: boolean;
     location: string;
     private: boolean;
     status: Repository.PackageStatus;
@@ -88,4 +132,17 @@ declare module '../core/service.js' {
   interface ServiceMap {
     list: ListService;
   }
+}
+
+/**
+ * How far below the root `pkg` sits, by walking `parent` - `0` for the root itself.
+ *
+ * From the tree edge rather than by counting path segments, which would be a different number: a
+ * package in `packages/a` is two directories down and one *package* down, and it is the second that
+ * the indentation is about.
+ */
+function depthOf(pkg: Package): number {
+  let depth = 0;
+  for (let at = pkg.parent; at; at = at.parent) depth++;
+  return depth;
 }
