@@ -103,22 +103,40 @@ export abstract class VersionPlanService {
 
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
     const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
+    const dirty = packages.filter(isDirty);
 
     const entries = new Map<string, VersionPlanService.Entry>();
-    const eligible: Package[] = [];
-    for (const pkg of packages) {
-      if (isDirty(pkg)) {
-        entries.set(pkg.name, {
-          package: pkg,
-          groupKey: this.resolveGroupKey(pkg),
-          group: this.groupLabel(this.resolveGroupKey(pkg)),
-          status: options.ignoreDirty ? 'skip' : 'error',
-          from: pkg.version,
-          reason: 'uncommitted local changes',
-        });
-        continue;
-      }
-      eligible.push(pkg);
+    /**
+     * **A dirty package is removed from the plan only when the run is going to proceed without it.**
+     * The two answers are not symmetric, and treating them as one is what left the `To` column
+     * blank on the command that exists to show it.
+     *
+     * - `--ignore-dirty` **writes**. The package is deliberately excluded, so it must not reach a
+     *   group either: a number its clean siblings receive cannot be derived from commits nobody is
+     *   releasing, and a `to` printed beside `skip` would name a version that package is not
+     *   getting. Diverted here, before `eligible`.
+     * - Aborting writes **nothing** - `getPlan` is pure and the command throws after printing - so
+     *   there is no number to keep safe, and the one thing the reader wants is what each package
+     *   would have got once it is committed. The plan is computed in full and the dirty entries are
+     *   marked at the very end, below.
+     *
+     * Excluding them from the abort case cost more than the column. `buildRootEntry` reads
+     * `e.to ?? e.from`, and its `groupCount` comes from the groups that were actually built - so a
+     * dirty tree quietly moved the repository's own release identity: measured on a four-package
+     * repo with `group: false`, three dirty packages left one group standing, which is
+     * `usesCalendarVersion`'s "one line" case, and the root reported `0.0.5 -> 2.1.6` on the
+     * *semver* path instead of the calendar version it takes with four.
+     */
+    const eligible = options.ignoreDirty ? packages.filter(pkg => !dirty.includes(pkg)) : packages;
+    for (const pkg of options.ignoreDirty ? dirty : []) {
+      entries.set(pkg.name, {
+        package: pkg,
+        groupKey: this.resolveGroupKey(pkg),
+        group: this.groupLabel(this.resolveGroupKey(pkg)),
+        status: 'skip',
+        from: pkg.version,
+        reason: 'uncommitted local changes',
+      });
     }
 
     const commitMessage = repository.rootPackage.config?.version?.commitMessage;
@@ -166,6 +184,25 @@ export abstract class VersionPlanService {
           now: options.now ?? (() => new Date()),
         }),
       );
+    }
+
+    /**
+     * The abort case, marked **after** the root entry so the whole table reads as one coherent
+     * "if this were committed" preview rather than a mixture of two.
+     *
+     * `to` survives the overwrite; `status` is what every writer filters on (`VersionService`,
+     * `changed`), so an `'error'` entry carrying a version cannot be applied by any of them - and
+     * `version` throws on the first error before it would reach `applyPlan` anyway. The reason
+     * keeps the boundary it was computed from, because the status column already says `error` and
+     * a reader losing `changed since <tag>` loses the only thing that explains the number.
+     */
+    if (!options.ignoreDirty) {
+      for (const pkg of dirty) {
+        const entry = entries.get(pkg.name);
+        if (!entry) continue;
+        entry.status = 'error';
+        entry.reason = entry.reason ? `uncommitted local changes (${entry.reason})` : 'uncommitted local changes';
+      }
     }
     return result;
   }
@@ -522,7 +559,11 @@ export namespace VersionPlanService {
     group: string;
     status: 'bump' | 'skip' | 'error' | 'no-change';
     from: string;
-    /** Only set when `status === 'bump'`. */
+    /** The version this package would receive. Set for `'bump'`, and for an `'error'` entry that
+     *  earned one - a package with uncommitted changes aborts the run, and `--show` exists to say
+     *  what it would get. **Never** set for `'skip'`: `--ignore-dirty` proceeds to write, and a
+     *  version beside an excluded package would name one it is not getting. So `status`, not `to`,
+     *  is what decides whether something is applied. */
     to?: string;
     /** Human-readable explanation - e.g. why a package was skipped, or why it's being bumped
      *  despite having no commits of its own (a dependency of it changed elsewhere). */

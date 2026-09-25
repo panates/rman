@@ -40,13 +40,26 @@ rman version
 ```
 
 ```
-Status     Package  Group      From   To     Reason
----------  -------  ---------  -----  -----  -------------------------------
-bump       pkg-a    (default)  1.2.0  1.3.0  changed since v1.2.0
-bump       pkg-b    (default)  1.0.4  1.1.0  in-group dependent of a minor change
+Status     Package  Group      From       To     Reason
+---------  -------  ---------  -----  --  -----  -----------------------------------------------------------
+bump       root     (root)     1.2.0  ->  2.1.0  informational - monorepo root is never published on its own
+---------  -------  ---------  -----  --  -----  -----------------------------------------------------------
+bump       pkg-a    (default)  1.2.0  ->  2.1.0  changed since v1.2.0
+bump       pkg-b    (default)  1.0.4  ->  2.1.0  in-group dependent of a minor change
 no-change  pkg-c    (default)  2.0.1
 Run again with an explicit bump, --interactive, or --yes, to apply.
 ```
+
+**Reading the table.** The **repository root comes first**, above a rule: its number is the
+repository's release identity - what a [`github-release`](github-release.md) is named after - and
+not a package release at all. Below it, each block is one version line: a group's members are
+printed together however the workspace ordered them, and the packages that belong to no group share
+a final block. `Group` is written only where it says something - a package grouped with nobody would
+otherwise repeat its own name one column to the right.
+
+Note that `pkg-b` lands on `2.1.0` rather than `1.1.0`: it shares the `default` group with `pkg-a`,
+and **a group releases as one number** - the highest among its members. Use
+[`group`](../rman.md#configuration-rmanrc--rmanrcyml) to give a package its own line.
 
 ```bash
 rman version --interactive        # same preview, then asks "Apply these changes? (y/N)"
@@ -70,6 +83,25 @@ rman version patch --show         # preview what an explicit patch bump would do
 Any package with uncommitted local changes aborts the whole run (`N package(s) have uncommitted
 local changes (pass --ignore-dirty to exclude them instead of aborting)`) unless `--ignore-dirty`
 is given. With nothing to bump at all, prints `Nothing to version.`.
+
+**The aborted row still names the version**, because the package being worked on is the one you
+wanted the preview for. Nothing is written - the run stops before `version` touches a manifest -
+so the number is what you would get once it is committed:
+
+```
+Status  Package  Group      From       To     Reason
+------  -------  ---------  -----  --  -----  -----------------------------------------------------------
+bump    root     (root)     1.2.0  ->  2.1.0  informational - monorepo root is never published on its own
+------  -------  ---------  -----  --  -----  -----------------------------------------------------------
+bump    pkg-a    (default)  1.2.0  ->  2.1.0  changed since v1.2.0
+bump    pkg-b    (default)  1.0.4  ->  2.1.0  in-group dependent of a minor change
+error   pkg-c    (default)  2.0.1  ->  2.1.0  uncommitted local changes (changed since v1.2.0)
+1 package(s) have uncommitted local changes (pass --ignore-dirty to exclude them instead of aborting)
+```
+
+`--ignore-dirty` is deliberately different: the run **proceeds and writes**, so a skipped package is
+given no version at all rather than one it is not going to receive, and it stays out of its group so
+no sibling inherits a number from commits nobody is releasing.
 
 ## What it reports once applied
 
