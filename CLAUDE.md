@@ -999,6 +999,21 @@ saw one thing to release and it was the one thing that must never be published.
     the boundary and the cuts cannot disagree. They did, for one commit: the boundary bridged to the
     shared `v*` while the split still looked only for `{name}@*`, which a repository mid-transition
     has none of - so the backfill found nothing to cut at.
+- **An entry's heading is its tag** (`{{title}}`, `resolveHeading`). It was `{{package}}
+  {{version}}`, assembled from a label and a version read off the latest tag - which states
+  something untrue wherever a tag covers more than one package: the repository root was headed
+  `## panates-javascript repository 2.1.6`, and the root package there is `panates-style` at
+  `0.0.5`. An untagged segment is `Unreleased — <label>`, dated today.
+  - **The label has to stay in it.** `Unreleased` alone was tried and 22 specs caught the loss:
+    `rman changelog` prints every package to one stream, so consecutive `## Unreleased` blocks say
+    nothing about which package each belongs to.
+  - **The date follows the heading**: a tagged segment takes the tag's committer date, an untagged
+    one takes today. Reading the last tag's date for unreleased commits headed them with the day of
+    the release before them.
+  - `{{package}}`, `{{version}}` and `{{tag}}` stay bound for a repository's own template - only the
+    default changed. **Don't pin a heading's layout in a spec**: `toContain('## pkg-a 1.0.0')` did,
+    in twenty-two places, so a presentation change turned all of them red for no defect. Both spec
+    files have a `headingFor(name)` regex helper for this.
   - The `---` between releases is the **writer's**, not the template's: an entry printed to stdout
     or handed to `github-release` as a body has nothing below it to be separated from. None is
     written into a fresh file.

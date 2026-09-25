@@ -33,6 +33,16 @@ async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
   return lines;
 }
 
+/**
+ * **A heading naming `name`**, whatever shape the heading happens to take - `## v1.2.0`,
+ * `## Unreleased — pkg-a`, or a repository's own `changelog.template`. Asserting the literal
+ * `'## pkg-a 1.0.0'` pinned the default template's layout in twenty-two places, so changing the
+ * heading - which is a presentation decision - turned every one of them red for no defect.
+ */
+function headingFor(name: string): RegExp {
+  return new RegExp(`^## .*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'm');
+}
+
 describe('commands/changelog', () => {
   useTestEcosystem();
 
@@ -92,7 +102,7 @@ describe('commands/changelog', () => {
       const { dir, baseHash } = fixtureWithOneFeature();
       const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--from', baseHash] }));
       const joined = lines.join('\n');
-      expect(joined).toContain('## pkg-a');
+      expect(joined).toMatch(headingFor('pkg-a'));
       expect(joined).toContain('a shiny new feature');
       expect(lines.some(l => l.includes('updated'))).toBe(false);
       expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
@@ -355,8 +365,10 @@ describe('commands/changelog', () => {
       execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
       execFileSync('git', ['commit', '-q', '-m', 'fix: after the release'], { cwd: dir, stdio: 'pipe' });
 
-      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['changelog'] }));
-      expect(lines.join('\n')).toContain('1.0.0 (2020-03-04)');
+      /** `--write`, because only a backfill reaches back *through* the tag - a print run's boundary
+       *  is that tag, so the range holds no tagged segment to date. */
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      expect(fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf-8')).toContain('## v1.0.0 (2020-03-04)');
     });
 
     /** The case today's date was written for, and it stays: a caller passing the version is
@@ -409,8 +421,8 @@ describe('commands/changelog', () => {
         runCli({ cwd: path.join(dir, 'packages/a'), argv: ['changelog', '--from', baseHash, '--from-root'] }),
       );
       const joined = lines.join('\n');
-      expect(joined).toContain('## pkg-a');
-      expect(joined).toContain('## pkg-b');
+      expect(joined).toMatch(headingFor('pkg-a'));
+      expect(joined).toMatch(headingFor('pkg-b'));
     });
   });
 
@@ -455,8 +467,8 @@ describe('commands/changelog', () => {
       );
       const joined = lines.join('\n');
       expect(joined).toContain('something at the root');
-      expect(joined).not.toContain('## pkg-a');
-      expect(joined).not.toContain('## pkg-b');
+      expect(joined).not.toMatch(headingFor('pkg-a'));
+      expect(joined).not.toMatch(headingFor('pkg-b'));
     });
 
     /**
@@ -479,7 +491,7 @@ describe('commands/changelog', () => {
         runCli({ cwd: dir, argv: ['changelog', '--from', baseHash, '--ignore', '/'] }),
       );
       const joined = lines.join('\n');
-      expect(joined).toContain('## pkg-a');
+      expect(joined).toMatch(headingFor('pkg-a'));
       expect(joined).not.toContain('something at the root');
     });
   });

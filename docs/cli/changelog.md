@@ -1,4 +1,4 @@
-<!-- verified against commit a8ce9fd - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 2152cf1 - see ../cli-rman.md for the baseline convention -->
 
 # `rman changelog`
 
@@ -117,8 +117,26 @@ A release tag sits on the **release commit**, which comes after the work it desc
 commit closes its segment and is then dropped from the list like any other release marker. It heads
 the entry without appearing in it.
 
-The commits after the newest tag are the unreleased segment, headed by the package's latest released
-version unless `--release-version` names the one being prepared.
+**The heading is the tag**, because the tag is what the entry describes. It used to be assembled out
+of the package label and a version read back from the latest tag, which went wrong exactly where a
+tag covers more than one package: the repository root was headed
+`## panates-javascript repository 2.1.6 (2026-04-30)`, stating a version the repository does not
+have - its root package is `panates-style` at `0.0.5`, and `2.1.6` came off the `v2.1.6` tag.
+
+The commits after the newest tag are the **unreleased** segment, and it says so:
+
+```markdown
+## Unreleased — panates-javascript repository (2026-09-25)
+```
+
+Dated today, since that is when it is being written - it used to borrow the previous release's
+number *and its date*, so the not-yet-released commits were headed by the release before them. The
+package label stays in it because `rman changelog` prints every package's entry to one stream, where
+three consecutive `## Unreleased` blocks would say nothing about which package each belongs to.
+`--release-version` replaces it with the tag that release is about to get.
+
+`{{title}}` is what the default template renders; `{{package}}`, `{{version}}` and `{{tag}}` are all
+still bound, so a repository wanting the old shape writes its own `changelog.template`.
 
 **Both halves of this were measured as bugs.** Taking the boundary from the release *tag* meant it
 did not move between two writes, so a second run re-listed every commit since that tag on top of

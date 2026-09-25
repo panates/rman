@@ -220,7 +220,20 @@ function renderCommitsBlock(grouped: GroupedCommits): string {
   return sections.join('\n\n');
 }
 
-const DEFAULT_TEMPLATE = '## {{package}} {{version}} ({{date}})\n\n{{commits}}\n';
+/**
+ * **`{{title}}`, not `{{package}} {{version}}`** - an entry that a release tag closes is headed by
+ * that tag, because the tag is what it describes.
+ *
+ * The old heading was assembled out of two things that do not always belong together, and the
+ * repository root is where that showed: `## panates-javascript repository 2.1.6 (2026-04-30)`
+ * states a version the repository does not have - its root package was `panates-style` at `0.0.5`,
+ * and `2.1.6` was read off the `v2.1.6` tag. It also reads as one package's notes when the tag
+ * covers the whole repository.
+ *
+ * `{{package}}`, `{{version}}` and `{{tag}}` are all still bound, so a repository that wants the
+ * old shape - or the package's name kept beside the tag - writes its own `changelog.template`.
+ */
+const DEFAULT_TEMPLATE = '## {{title}} ({{date}})\n\n{{commits}}\n';
 
 /** `.rmanrc changelog.template` is a *path* to a template file (resolved relative to the
  *  repository root, regardless of which level's `.rmanrc` declared it), not the template text
@@ -274,9 +287,10 @@ function resolveFilePath(pkg: Package, optionsFilePath?: string): string {
 async function resolveHeading(
   git: GitHelper,
   pkg: Package,
+  label: string,
   versionOverride: string | undefined,
   segmentTag: string | undefined,
-): Promise<{ version: string; date: string }> {
+): Promise<{ version: string; date: string; title: string }> {
   const today = new Date().toISOString().slice(0, 10);
   const expanded = ChangeHashService.tagPattern(pkg).replace('{name}', pkg.name);
 
@@ -287,17 +301,34 @@ async function resolveHeading(
     return {
       version: ChangeHashService.extractVersion(segmentTag, expanded),
       date: (await git.commitDate(segmentTag)) ?? today,
+      title: segmentTag,
     };
   }
 
-  if (versionOverride) return { version: versionOverride, date: today };
+  /**
+   * A caller naming the version is naming the one being **prepared** - `version --changelog` writes
+   * the entry before it commits and tags. So the heading is the tag that release is about to get,
+   * which keeps every heading in the file the same kind of thing, and the date is today because
+   * that is when it is happening.
+   */
+  if (versionOverride) {
+    return { version: versionOverride, date: today, title: ChangeHashService.expandTag(pkg, versionOverride) };
+  }
 
-  const tag = await ChangeHashService.findLatestTag(git, pkg);
-  if (!tag) return { version: pkg.version || '', date: today };
-  return {
-    version: ChangeHashService.extractVersion(tag, expanded),
-    date: (await git.commitDate(tag)) ?? today,
-  };
+  /**
+   * **Nothing else is a release**, so nothing else gets a release's heading. This used to read the
+   * package's latest tag and use its version *and its date* - so the commits that are not released
+   * yet were headed with the number and the day of the release before them. In the repository root
+   * that produced `## panates-javascript repository 2.1.6 (2026-04-30)` sitting above the real
+   * `## v2.1.6 (2026-04-30)`: the same release named twice, once wrongly.
+   *
+   * **The label stays in it**, which `Unreleased` alone loses: `rman changelog` prints every
+   * package's entry to one stream, and three consecutive `## Unreleased` blocks say nothing about
+   * which package each belongs to. Measured - 22 specs caught exactly that.
+   *
+   * `version` is still what it always was, for a template that wants it - only the heading changed.
+   */
+  return { version: pkg.version || '', date: today, title: `Unreleased — ${label}` };
 }
 
 /**
@@ -401,10 +432,12 @@ async function renderEntry(
   segmentTag: string | undefined,
 ): Promise<{ version: string; content: string }> {
   const template = resolveTemplate(repository, pkg);
-  const { version, date } = await resolveHeading(git, pkg, versionOverride, segmentTag);
+  const { version, date, title } = await resolveHeading(git, pkg, label, versionOverride, segmentTag);
   const content = render(template, {
     package: label,
     version,
+    tag: segmentTag ?? '',
+    title,
     date,
     commits: renderCommitsBlock(grouped),
     features: bulletList(grouped.features),
