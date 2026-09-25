@@ -29,5 +29,5 @@ has changed since it, prints `No changes since <tag>.`.
 
 ## See also
 
-- [`rman changed`](changed.md) - a version-bump-level summary instead of a raw diff.
+- [`rman version --show`](version.md) - a version-bump-level summary instead of a raw diff.
 - [`rman changelog`](changelog.md) - a formatted, grouped changelog instead of a raw diff.

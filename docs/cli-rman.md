@@ -44,7 +44,6 @@ rman <command> --help   # full option list for that one command
 | `test` | [`docs/cli/test.md`](cli/test.md) | Alias for `run test`. |
 | `exec [command..]` | [`docs/cli/exec.md`](cli/exec.md) | Runs an arbitrary shell command in each package. |
 | `config` | [`docs/cli/config.md`](cli/config.md) | Prints the effective `.rmanrc` config for the current directory's package. |
-| `changed` | [`docs/cli/changed.md`](cli/changed.md) | Shows which packages the next `version` run would bump. |
 | `diff [package]` | [`docs/cli/diff.md`](cli/diff.md) | Shows the git diff since a package's (or the repo's) last release tag. |
 | `changelog` | [`docs/cli/changelog.md`](cli/changelog.md) | Generates a changelog per package from unreleased commits. |
 | `version [bump]` | [`docs/cli/version.md`](cli/version.md) | Bumps versions of changed packages (and their dependents). |
@@ -288,7 +287,7 @@ directory is inside one package's own directory (rather than the repository root
 at the repository root, or your current directory isn't inside any known package (e.g. a plain
 single-package repo).
 
-`version`, `publish`, `list` and `changed` already work across the whole repository, so they
+`version`, `publish` and `list` already work across the whole repository, so they
 deliberately have **no** `--from-root`: a flag that does nothing reads as a promise.
 
 > **It was `--root`/`-r` through 1.x.** The name said the opposite of what the flag does - every
@@ -380,7 +379,7 @@ rman publish --ignore-branch 'feature/*'
 An explicit CLI `--allow-branch`/`--ignore-branch` **replaces** the equivalent root `.rmanrc` key
 entirely (they never combine, the same precedence `packageManager` uses). With neither set
 anywhere, every branch is allowed. A detached `HEAD`, or a directory that isn't a git repository at
-all, is never blocked. Read-only/non-branch-sensitive commands (`list`, `changed`, `diff`, `info`,
+all, is never blocked. Read-only/non-branch-sensitive commands (`list`, `diff`, `info`,
 `changelog`, `import`) deliberately do **not** have this guard.
 
 ## Exit codes and the `logged` convention

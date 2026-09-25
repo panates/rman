@@ -2094,7 +2094,7 @@ const app = repository.app;
 // Runs "build" in every package, dependency order, CPU-count concurrency.
 await app.getService('run').runScript('build');
 
-// Only in packages changed since the last publish, serially, never bailing on a single failure:
+// Only in packages touched but not pushed, serially, never bailing on a single failure:
 await app.getService('run').runScript('test', { changed: true, parallel: false, bail: false });
 ```
 
@@ -2150,7 +2150,7 @@ each optionally `= <hash-or-{ENV}>`) combined with `and`/`or`/`not`/`(...)` (`an
 ```yaml
 run:
   build:
-    if: changed # changed since the last publish
+    if: changed # touched but not pushed
   test:
     if: changed = a1b2c3d # changed since a specific commit
   deploy:

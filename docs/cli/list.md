@@ -24,7 +24,7 @@ Accepts [package filtering](../cli-rman.md#package-filtering) (`--scope`, `--ign
 | `--toposort` | `-t` | boolean | Sort packages in topological order (dependencies before dependents) instead of lexical directory order. |
 | `--graph` | `-g` | boolean | Show the dependency graph as a JSON-formatted adjacency list (`{ "name": ["dep-a", "dep-b"] }`). |
 | `--json` | `-j` | boolean | Show output as JSON (the full `ListService.Item[]` array). |
-| `--changed` | `-c` | boolean | Only list packages that have changed since the last publish (dirty, or committed but not yet published). |
+| `--changed` | `-c` | boolean | Only list packages you have **touched but not pushed** - uncommitted, or committed and not yet on the upstream branch. Not a release question: after a push this empties out. |
 | `--changed-since <hash>` | - | string | Only list packages that have changed since the given git commit/hash. |
 
 `--graph`/`--short` each conflict with `--parseable`/`--json` (yargs refuses the combination
@@ -89,5 +89,10 @@ reaches them as data, through `depth` and `isRoot`.
 
 ## See also
 
-- [`rman changed`](changed.md) - similar idea, but scoped to what `version` would specifically bump.
+- [`rman version --show`](version.md) - a **different question**, and the two are not
+  interchangeable: `--changed` here is what you have touched (working tree + `git cherry`), so it
+  empties out the moment you push; `version` asks what has changed since each package's last
+  *release*. Measured on one repository with everything pushed and clean: `list --changed` found 0
+  packages while `version --show` reported one waiting to be released. Never gate a release on this
+  flag.
 - [`ListService`](../rman.md#listservice) - the underlying pure data function.

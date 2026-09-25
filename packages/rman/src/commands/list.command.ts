@@ -33,7 +33,8 @@ const config = {
   changed: {
     target: 'cli',
     alias: 'c',
-    describe: 'Only list packages that have changed since the last publish (dirty or committed but not yet published)',
+    describe:
+      'Only list packages you have touched but not pushed - uncommitted, or committed and not yet on the upstream branch. Not a release question; see "version --json" for that',
     type: 'boolean',
   },
   changedSince: {

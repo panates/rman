@@ -31,6 +31,7 @@ options, in addition to:
 | `--changelog` | - | boolean | Also write each bumped package's `CHANGELOG.md` (same as running `changelog --write` separately) and fold it into the same commit as the version bump. Default: `.rmanrc "version.changelog"`, or `false` - `--no-changelog` still overrides it off for one run, even when that's `true`. |
 | `--preid <name>` | - | string | Make the bump a prerelease with this identifier (e.g. `"beta"` -> `1.2.3-beta.0`). Running again with the same `--preid` increments it (`-> 1.2.3-beta.1`); a different identifier starts a fresh prerelease line. Ignored when `bump` is an explicit semver version. |
 | `--show` | - | boolean | Show the resulting plan for the given `bump` without applying it - unlike omitting `bump` entirely, this still uses the given release-type keyword/version to compute the plan, just never writes it. Conflicts with `--interactive`. |
+| `--json` | `-j` | boolean | Print the plan as JSON and write nothing - the machine-readable form of `--show`, and what the removed `changed` command was for. See [`--json`: the plan, for a script](#--json-the-plan-for-a-script). Conflicts with `--interactive` and `--yes`. |
 
 ## Examples
 
@@ -102,6 +103,46 @@ error   pkg-c    (default)  2.0.1  ->  2.1.0  uncommitted local changes (changed
 `--ignore-dirty` is deliberately different: the run **proceeds and writes**, so a skipped package is
 given no version at all rather than one it is not going to receive, and it stays out of its group so
 no sibling inherits a number from commits nobody is releasing.
+
+## `--json`: the plan, for a script
+
+`--json` prints the same plan as a JSON array and **writes nothing** - the machine-readable form of
+`--show`. This is what `rman changed` was, and it replaces it.
+
+```bash
+rman version --json
+```
+
+```json
+[
+  { "name": "pkg-a", "selector": "pkg-a", "isRoot": false, "group": "default",
+    "status": "bump", "from": "1.0.0", "to": "1.1.0", "reason": "changed since v1.0.0" },
+  { "name": "root", "selector": "root", "isRoot": true, "group": "root",
+    "status": "bump", "from": "1.0.0", "to": "1.1.0",
+    "reason": "informational - monorepo root is never published on its own" }
+]
+```
+
+**Every entry is here, unfiltered, each carrying its own `status`** - and that is the fix rather
+than a detail. `rman changed` returned only `status === "bump"` entries, and two things fall through
+that filter in opposite directions: the repository **root** reports a bump (it is informational, and
+that fact lived only in `reason`), while a package with uncommitted changes is `"error"`. Measured
+on a dirty tree, the array came back holding exactly one name - the root, the one package that must
+never be published - with the package that had actually changed missing entirely.
+
+So `isRoot` is stated rather than left to be inferred from the group label, and a dirty package
+appears with `status: "error"` and the version it would get. Select what you want:
+
+```bash
+rman version --json | jq '[.[] | select(.isRoot | not) | select(.status == "bump") | .name]'
+```
+
+**The run resolves either way, even with a dirty package.** `--show` exits 1 there because a person
+needs stopping; here the same fact is in the data, and a non-zero exit would make a pipeline bail
+before it could read the rows that explain why.
+
+Still not a release gate - that is [`publish`](publish.md), which asks the registry whether each
+version is actually out there. A package can need no version bump and still be unpublished.
 
 ## What it reports once applied
 
@@ -285,6 +326,6 @@ its full test-verified examples. How a number actually moves is the **version sc
 
 ## See also
 
-- [`rman changed`](changed.md) - the same plan, filtered to just what would bump, no apply step.
+- [`rman version --json`](#--json-the-plan-for-a-script) - the same plan, machine-readable, no apply step.
 - [`rman publish`](publish.md) - typically run right after `version` (or independently).
 - [`rman changelog`](changelog.md) - what `--changelog` folds in, runnable on its own too.

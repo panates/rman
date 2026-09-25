@@ -86,8 +86,10 @@ export namespace ListService {
      * what it saw before.
      */
     includeRoot?: boolean;
-    /** Only include packages that have changed since the last publish (dirty or committed but
-     *  not yet published) - or, with `changedSince`, since that specific commit/hash. */
+    /** Only include packages the developer has touched but not pushed (dirty, or committed and not
+     *  yet on the upstream branch) - or, with `changedSince`, since that specific commit/hash.
+     *  **Question C, never a release question**: after a push `git cherry` is empty and everything
+     *  reads `clean`, which does not mean there is nothing left to release. */
     changed?: boolean;
     changedSince?: string;
   }

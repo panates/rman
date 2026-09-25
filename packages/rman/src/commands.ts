@@ -13,7 +13,6 @@
  * being hand-written centrally, in what is now `rman-config.interface.ts`).
  */
 import './commands/build.command.js';
-import './commands/changed.command.js';
 import './commands/changelog.command.js';
 import './commands/config.command.js';
 import './commands/diff.command.js';

@@ -56,7 +56,8 @@ export const runOptions = {
   changed: {
     target: 'cli',
     alias: 'c',
-    describe: 'Only run in packages that have changed since the last publish',
+    describe:
+      'Only run in packages you have touched but not pushed - uncommitted, or committed and not yet on the upstream branch. Not a release question; see "version --json" for that',
     type: 'boolean',
   },
   changedSince: {

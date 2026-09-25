@@ -502,7 +502,7 @@ export namespace RunService {
    *
    *   run:
    *     build:
-   *       if: changed                                    # changed since the last publish
+   *       if: changed                                    # touched but not pushed
    *     test:
    *       if: changed = a1b2c3d                           # changed since a specific commit
    *       if: changed = {CHANGE_HASH}                     # {NAME} -> process.env.NAME first

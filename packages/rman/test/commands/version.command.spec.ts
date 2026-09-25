@@ -285,6 +285,86 @@ describe('commands/version', () => {
     });
   });
 
+  /**
+   * **`--json` replaced `rman changed`**, which was this same plan filtered to `status === 'bump'`.
+   * That one-line filter produced two silent wrongs at once, and the specs here are the two of
+   * them: the root reports `'bump'` (it is informational, and that fact lived only in `reason`), so
+   * it was the one entry a consumer saw; and a package with uncommitted changes is `'error'`, so
+   * the package that had actually changed was dropped. On a dirty tree the array came back holding
+   * exactly one name - the repository root, which must never be published.
+   */
+  describe('--json', () => {
+    async function planJson(dir: string, argv: string[] = []): Promise<any[]> {
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--json', ...argv] }));
+      return JSON.parse(lines.join('\n'));
+    }
+
+    it('prints the plan as JSON and nothing else - no table beside it', async () => {
+      const dir = fixture();
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--json'] }));
+
+      expect(() => JSON.parse(lines.join('\n'))).not.toThrow();
+      /** The table's own header would be the giveaway, and it would also break `jq`. */
+      expect(lines.join('\n')).not.toContain('Reason');
+    });
+
+    it('states isRoot rather than leaving it to be inferred from the group label', async () => {
+      const entries = await planJson(fixture());
+      const root = entries.find(e => e.isRoot);
+
+      expect(root).toBeDefined();
+      expect(root.name).toBe('root');
+      /** The reason the root has to be *identifiable*: it reports a bump like any other entry. */
+      expect(root.status).toBe('bump');
+      expect(entries.filter(e => !e.isRoot).map(e => e.name)).toEqual(['pkg-a']);
+    });
+
+    it('keeps a dirty package in the output, with its status, instead of dropping it', async () => {
+      const dir = fixture();
+      fs.writeFileSync(path.join(dir, 'packages/a/dirty.txt'), 'uncommitted');
+      const entries = await planJson(dir);
+      const a = entries.find(e => e.name === 'pkg-a');
+
+      expect(a).toBeDefined();
+      expect(a.status).toBe('error');
+      expect(a.to).toBe('1.0.1');
+      expect(a.reason).toContain('uncommitted local changes');
+    });
+
+    /** `--show` exits 1 on a dirty package because a person needs stopping. Here the same fact is
+     *  in the data, and a non-zero exit would make a pipeline bail before reading the rows that
+     *  explain it - so the run has to resolve. */
+    it('does not fail the run over a dirty package, since the data says so', async () => {
+      const dir = fixture();
+      fs.writeFileSync(path.join(dir, 'packages/a/dirty.txt'), 'uncommitted');
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--json'] }));
+    });
+
+    it('writes nothing, even with an explicit bump', async () => {
+      const dir = fixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'major', '--json'] }));
+
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
+      expect(pkg.version).toBe('1.0.0');
+    });
+
+    it('the "changed" command it replaced is gone', async () => {
+      const dir = fixture();
+      /**
+       * yargs prints its own "Unknown argument" through `console.error`, which `captureLogs` does
+       * not patch - left through, the reporter and the stray write race for the same stream and a
+       * line comes out spliced. Silenced here rather than tolerated.
+       */
+      const error = console.error;
+      console.error = () => {};
+      try {
+        await expectCliFailure(() => runCli({ cwd: dir, argv: ['changed'] }));
+      } finally {
+        console.error = error;
+      }
+    });
+  });
+
   describe('the plan table', () => {
     /**
      * `pkg-a` and `pkg-c` share a version line; `pkg-b` sits between them in *package* order, which

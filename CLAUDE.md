@@ -632,8 +632,8 @@ through `filterPackages` the way the command computes it), and the `.rmanrc` tho
   - **`filterPackages`' third argument is the only opt-out, and `list` is the only caller that uses
     it.** The test for a new command: does it *do* something to the packages, or *report* on them?
     An inventory hiding part of the repository answers a different question than the one asked.
-    `changed` follows `version` (it honours skip), because its whole job is to say what `version`
-    would do.
+    `version --json` follows `version` (it honours skip), because its whole job is to say what a
+    real run would do.
   - The finer-grained keys stay, and are not the same statement: `run.<script>.skip` stops one
     script, `publish.skip` means "never distributed, by any target" - which `changelog` reuses on
     purpose - and `version` deliberately honours *neither* of those (a package can be meaningfully
@@ -642,7 +642,7 @@ through `filterPackages` the way the command computes it), and the `.rmanrc` tho
   hand-written builder form), not from four near-identical option blocks. It means something **only
   where a command scopes by the current directory** - `run`/`build`/`test`, `exec`, `clean`,
   `changelog`, `diff` narrow to `Repository.currentPackage` when you stand inside a package, and
-  this is the escape hatch. Do **not** add it to `version`, `publish`, `list` or `changed`: they
+  this is the escape hatch. Do **not** add it to `version`, `publish` or `list`: they
   already work across the whole repository, so the flag would do nothing, and a no-op flag reads as
   a promise.
   - `diff` was the measured gap - it narrowed to the current package like the others but had no way
@@ -694,7 +694,7 @@ sources and are **not** interchangeable. Before touching a command, establish wh
 
 | | Question | Criterion | Commands |
 | --- | --- | --- | --- |
-| **A** | Which packages have **changed** since their last release? | the package's last release tag + commits after it whose files fall under that package | `changed`, `version`, `changelog` (+ `github-release`, for release notes only) |
+| **A** | Which packages have **changed** since their last release? | the package's last release tag + commits after it whose files fall under that package | `version` (`--show`/`--json`), `changelog` (+ `github-release`, for release notes only) |
 | **B** | Which packages' current version is **not on the registry yet**? | the target's own registry (branches per package) | `publish`, `github-release` |
 | **C** | Which packages have I **touched** right now? | working tree + `git cherry` (`Repository.listStatus`) | `list --changed`, `run --changed`/`--changed-since` |
 
@@ -804,21 +804,42 @@ those touching more than half of all packages - to the root instead of repeating
 package (`ownersOf`/`BROAD_COMMIT_THRESHOLD`). Version bumping makes no such distinction: every
 touched package counts as changed.
 
-### `changed`
+### `changed` was removed - `version --json` is the machine-readable plan
 
-- **Question A.** `VersionPlanService.getPlanner().getPlan` filtered to `status === 'bump'`; writes
-  nothing.
-- Takes its boundary from the planner's `detectBoundary` (`detectChangeHash` for every planner so
-  far). **Never asks a registry whether a version is published** - the one registry call in that
-  path borrows a version string to guess a tag name for a package that has no tag at all, and is
-  used only if that tag exists in git. That is not B.
+**Don't re-add it.** It answered the same question as `version --show` from the same `getPlan`, and
+what it added was a filter: `status === 'bump'`. Two things fall through that filter in opposite
+directions, and measured together on a dirty tree they produced the worst possible answer - an array
+holding exactly **one** name, the repository **root** (`buildRootEntry` reports `'bump'`, and the
+fact that it is informational lived only in `reason`), with `pkg-a`, the package that had actually
+changed, missing because a package with uncommitted changes is `'error'`. A CI script reading that
+saw one thing to release and it was the one thing that must never be published.
+
+- **`--json` prints the plan unfiltered**, every entry carrying its own `status`, with `isRoot`
+  stated rather than left to be inferred from `group === 'root'`. A consumer selects what it wants
+  and can see what it is leaving out. Printed before `printPlan` and before the dirty-package
+  throw, so stdout holds one JSON document and nothing else.
+- **It resolves even with a dirty package**, where `--show` exits 1: a person needs stopping, a
+  pipeline needs the rows that explain why, and overloading the exit code would make it bail before
+  reading them.
+- **`list --changed` is not a replacement and never was** - it is question **C** (working tree +
+  `git cherry`), so it empties out the moment you push. Measured on one repository with everything
+  pushed and clean: `list --changed` found 0 packages while `version --show` reported one waiting to
+  be released. The two cannot be merged; that was checked before `changed` was removed.
+  - Its own `--changed` help text said "since the last **publish**" in five places (the CLI
+    describe, `run`'s, `list`'s doc, `test`'s, the README) while the code reads `git cherry`, i.e.
+    not **pushed**. That wording is most of why `list --changed` looked like it could stand in for a
+    release question. Fixed; keep it fixed.
+- Boundaries still come from the planner's `detectBoundary`. **Nothing here asks a registry whether
+  a version is published** - the one registry call in that path borrows a version string to guess a
+  tag name for a package that has no tag at all, and is used only if that tag exists in git. That is
+  not B.
 - **Empty output does not mean "nothing to publish"** - it means "no package needs a new version".
   Don't gate a CI release pipeline on it; that decision belongs to B (`publish`).
 
 ### `version`
 
-- **Question A**, from the same plan `changed` shows
-  (`VersionPlanService.getPlanner().getPlan`); `VersionService.applyPlan` does the writes.
+- **Question A** (`VersionPlanService.getPlanner().getPlan`); `VersionService.applyPlan` does the
+  writes, and `--show`/`--json` stop before them.
 - **`VersionPlanService` is abstract - a technology supplies the planner** (`Platform.versionPlanner`,
   `rman-node`'s `NodeVersionPlanService`), and `version`/`changed` fail naming that key when none
   is registered. It does not degrade to a built-in default - a wrong boundary or cascade releases a
@@ -1034,7 +1055,7 @@ touched package counts as changed.
     Pinned with a negative control: dropping the calendar clause turns the calendar spec red.
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
-- In CI, gate the release pipeline on **this** plan, not on `changed`.
+- In CI, gate the release pipeline on **this** plan, not on `version --json`.
 - `.rmanrc "publish.skip"` excludes a package from **every** target.
 - `publish.target` is about **package distribution only** - which registry a package's artifact
   goes to. `"github"` as a value would read as *GitHub Packages* (`npm.pkg.github.com`), which is

@@ -49,6 +49,15 @@ const config = {
     type: 'boolean',
     conflicts: 'interactive',
   },
+  json: {
+    target: 'cli',
+    alias: 'j',
+    describe:
+      'Print the plan as JSON and write nothing - the machine-readable form of --show, and what ' +
+      'the removed "changed" command was for.',
+    type: 'boolean',
+    conflicts: ['interactive', 'yes'],
+  },
   ignoreDirty: {
     target: 'cli',
     cliName: 'ignore-dirty',
@@ -235,6 +244,45 @@ const versionCommand = registerCommand(app => {
         ignoreDirty: args.ignoreDirty,
         preid: args.preid,
       });
+      /**
+       * **The machine-readable plan, and the whole of it.** This replaced `rman changed`, which
+       * was `getPlan` filtered to `status === 'bump'` - and that one-line filter produced two
+       * silent wrongs at once, measured together on a dirty tree: the entry it returned was the
+       * repository **root** (`buildRootEntry` reports `'bump'`, and the fact that it is
+       * informational lived only in `reason`), while `pkg-a`, the package that had actually
+       * changed, was dropped because a package with uncommitted changes is `'error'`. A CI script
+       * reading that array saw one name to release and it was the one name that must never be
+       * published.
+       *
+       * So nothing is filtered here. Every entry carries its own `status`, and `isRoot` is stated
+       * rather than left to be inferred from `group === "root"` - a consumer selects what it wants
+       * and can see what it is leaving out. Printed **before** the table and before the
+       * dirty-package throw, so stdout holds one JSON document and nothing else.
+       *
+       * **Exit 0 either way, deliberately.** `--show` exits 1 on a dirty package because a person
+       * needs stopping; here the same fact is in the data, and overloading the exit code would
+       * make a pipeline bail before it could read the very rows that explain why.
+       */
+      if (args.json) {
+        console.log(
+          JSON.stringify(
+            plan.map(e => ({
+              name: e.package.name,
+              selector: e.package.selector,
+              isRoot: e.package.isRoot,
+              group: e.group,
+              status: e.status,
+              from: e.from,
+              to: e.to,
+              reason: e.reason,
+            })),
+            undefined,
+            2,
+          ),
+        );
+        return;
+      }
+
       printPlan(plan);
 
       const errors = plan.filter(e => e.status === 'error');

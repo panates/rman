@@ -20,7 +20,7 @@ for the full table.
 ```bash
 rman test
 rman test --topo=false            # test packages are usually independent of each other
-rman test --changed               # only packages changed since the last publish
+rman test --changed               # only packages you have touched but not pushed
 ```
 
 A common setup: since tests are typically independent of the build dependency graph, disable
