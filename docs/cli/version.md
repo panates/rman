@@ -1,4 +1,4 @@
-<!-- verified against commit 0e33a0a - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 16c3525 - see ../cli-rman.md for the baseline convention -->
 
 # `rman version [bump]`
 

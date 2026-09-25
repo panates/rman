@@ -1,8 +1,8 @@
 <!--
 docs-baseline
-git-commit: f43a447
+git-commit: 16c3525
 package-version: 2.0.0-beta.2
-date: 2026-09-24
+date: 2026-09-25
 
 Verified against `packages/rman/src/cli.ts`, every `packages/rman/src/commands/*.command.ts` and
 the `node` built-in's own commands as of the commit above (and the matching specs for behavior

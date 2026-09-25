@@ -1,8 +1,8 @@
 <!--
 docs-baseline
-git-commit: f43a447
+git-commit: 16c3525
 package-version: 2.0.0-beta.2
-date: 2026-09-24
+date: 2026-09-25
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
