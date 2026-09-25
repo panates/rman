@@ -107,7 +107,8 @@ describe('services/changelog', () => {
     // the docs commit only touched a root-level file - it belongs to root's own entry.
     expect(output).toMatch(headingFor(`${path.basename(dir)} repository`));
     expect(output).toContain('### 🔧 Other Changes');
-    expect(output).toContain('- docs: update readme');
+    /** The bullet no longer repeats the type its heading already names - see `changelog.titles`. */
+    expect(output).toContain('- update readme');
   });
 
   it('labels the root entry "<repo dir name> repository", not the root package.json\'s own (often private, non-published) name', async () => {
@@ -165,7 +166,7 @@ describe('services/changelog', () => {
     const output = content(await service('changelog').getEntries({ from: baseHash }));
 
     expect(output).toMatch(headingFor(`${path.basename(dir)} repository`));
-    expect(output).toContain('- docs: refresh every README');
+    expect(output).toContain('- refresh every README');
     expect(output).not.toMatch(headingFor('pkg-a'));
     expect(output).not.toMatch(headingFor('pkg-b'));
     expect(output).not.toMatch(headingFor('pkg-c'));
@@ -439,7 +440,8 @@ describe('services/changelog', () => {
       const output = content(await service('changelog').getEntries({ from: baseHash }));
       expect(output).not.toMatch(headingFor('pkg-a')); // its only commit was ignored -> no entry
       expect(output).toMatch(headingFor('pkg-b'));
-      expect(output).toContain('chore(pkg-b): tidy up');
+      /** The scope survives as `**pkg-b:**`; the type does not, the heading having said it. */
+      expect(output).toContain('**pkg-b:** tidy up');
     });
   });
 
@@ -941,7 +943,7 @@ describe('services/changelog', () => {
       expect(root).toBeDefined();
       // nothing has ever been released here (no tag, nothing on npm), so the boundary-free view
       // reaches all the way back to the first commit.
-      expect(root!.other).toEqual(['init', 'docs: update readme']);
+      expect(root!.other).toEqual(['init', 'update readme']);
     });
 
     it('returns [] when there is nothing unreleased', async () => {

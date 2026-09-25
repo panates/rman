@@ -1014,6 +1014,31 @@ saw one thing to release and it was the one thing that must never be published.
     default changed. **Don't pin a heading's layout in a spec**: `toContain('## pkg-a 1.0.0')` did,
     in twenty-two places, so a presentation change turned all of them red for no defect. Both spec
     files have a `headingFor(name)` regex helper for this.
+- **`changelog.titles` maps a commit type to its section heading** (`resolveTitles`/`groupCommits`),
+  and with it the section order. It was three hardcoded strings, so `feat` and `fix` were the only
+  two types rman could name and everything else - `dev`, `docs`, `perf` - shared "Other Changes".
+  - **Merged over the defaults per key, not replacing them** - the `vars` rule rather than a new
+    exception, and what the shape asks for: naming `dev` must not silently cost a repository its
+    `feat` and `fix`. Renaming a default keeps its position. The cost: a default section cannot be
+    *removed* by omission; `ignoreTypes` is the key that drops a type, and it still wins.
+  - **`changelog.sortTitles` orders the sections; `titles` only words them.** Two keys because two
+    decisions: order used to fall out of the order `titles` was written in, which quietly meant
+    renaming `feat` was also re-deciding where it sits. A sort, not a filter - an unlisted type
+    keeps its place after the listed ones.
+    - **Only a type with a heading of its own takes a position.** A type nobody named resolves to
+      the catch-all, so ordering by it drags the catch-all to that position: measured,
+      `sortTitles: ['docs', 'fix', 'feat']` with no `docs` heading put "Other Changes" first and
+      swallowed everything after it.
+  - **`'*'` is the catch-all and is always rendered last**, whatever position it was declared in - a
+    catch-all in the middle silently swallows the sections after it.
+  - **The type prefix is stripped in every section now.** It was `push(line)` for `feat`/`fix` and
+    `push(subject)` for the rest, so Other Changes read `- chore: bump deps` while Features read
+    `- a new capability`. With every type able to carry a heading that asymmetry has no defence.
+    A non-Conventional subject has no prefix to strip and is kept whole.
+  - **`Entry.features/fixes/other` and `{{features}}`/`{{fixes}}`/`{{other}}` are derived**
+    (`legacyBuckets`), so they keep meaning what they meant - whatever `feat` and `fix` are listed
+    under, everything else together. `Entry.sections` is the shape that does not lose a repository's
+    own headings; prefer it.
 - **`changelog.unreleased` defaults to `true`, so the flag that acts is `--no-unreleased`** -
   the one place this deliberately parts from `auto-changelog`, which defaults its equivalent off.
   That tool documents a finished history; `rman changelog` exists to answer what is *not* released

@@ -142,24 +142,29 @@ export class ChangelogService extends Service {
       const floor = await resolveStartingPoint(git, pkg, options);
       const floorIndex = floor?.sha ? commitsByTarget[i].findIndex(c => c.sha === floor.sha) : -1;
       const withUnreleased = resolveUnreleased(pkg, options);
+      const titles = resolveTitles(pkg);
+      const order = resolveOrder(pkg, titles);
       for (const segment of await splitByRelease(git, pkg, commitsByTarget[i])) {
         if (!segment.tag && !withUnreleased) continue;
         if (await isBelowStartingPoint(git, pkg, segment, floor, floorIndex)) continue;
         const ownCommits = dropVersionBumps(segment.commits).filter(c => ownersOf(repository, c).has(pkg));
         if (!ownCommits.length) continue;
-        const grouped = groupCommits(
+        const sections = groupCommits(
           ownCommits.map(c => c.subject),
           ignoreTypesConfig(pkg),
+          titles,
+          order,
         );
         // every commit could have been dropped by ignoreTypes - skip this package's entry entirely
         // rather than rendering a heading with nothing real underneath it.
-        if (!grouped.features.length && !grouped.fixes.length && !grouped.other.length) continue;
+        if (!sections.length) continue;
 
         const { version, content } = await renderEntry(
           repository,
           pkg,
           label,
-          grouped,
+          sections,
+          titles,
           git,
           options.version,
           segment.tag,
@@ -168,9 +173,8 @@ export class ChangelogService extends Service {
           package: pkg,
           label,
           version,
-          features: grouped.features,
-          fixes: grouped.fixes,
-          other: grouped.other,
+          sections,
+          ...legacyBuckets(sections, titles),
           content,
           filePath: resolveFilePath(pkg, options.filePath),
         });
@@ -180,10 +184,9 @@ export class ChangelogService extends Service {
   }
 }
 
-interface GroupedCommits {
-  features: string[];
-  fixes: string[];
-  other: string[];
+interface Section {
+  title: string;
+  lines: string[];
 }
 
 /** `.rmanrc changelog.ignoreTypes` (cascaded, per-package overridable) - Conventional Commits
@@ -195,34 +198,133 @@ function ignoreTypesConfig(pkg: Package): Set<string> {
   return new Set(Array.isArray(v) ? v.map(t => String(t).toLowerCase()) : []);
 }
 
-function groupCommits(subjects: string[], ignoreTypes: Set<string> = new Set()): GroupedCommits {
-  const grouped: GroupedCommits = { features: [], fixes: [], other: [] };
+/**
+ * **The headings, and the order they come out in** - `.rmanrc changelog.titles`, merged **per key**
+ * over the defaults rather than replacing them.
+ *
+ * Merging is the `vars` rule rather than a new exception, and it is what the shape of the key asks
+ * for: naming `dev` adds a section, and should not silently cost a repository its `feat` and `fix`.
+ * Renaming `feat` leaves it where it was, so the running order survives a rename. The cost, stated:
+ * a default section cannot be *removed* by leaving it out - `changelog.ignoreTypes` is the key that
+ * drops a type entirely.
+ *
+ * `'*'` is the heading for every type nobody named, and is always last however it was declared -
+ * a catch-all in the middle of the order would silently swallow the sections after it.
+ */
+function resolveTitles(pkg: Package): Map<string, string> {
+  const titles = new Map(DEFAULT_TITLES);
+  const cfg = pkg.config?.changelog?.titles;
+  if (cfg && typeof cfg === 'object') {
+    for (const [type, title] of Object.entries(cfg)) {
+      if (typeof title === 'string' && title) titles.set(type.toLowerCase(), title);
+    }
+  }
+  return titles;
+}
+
+/**
+ * One list of lines per heading, in the heading order, empty ones dropped.
+ *
+ * **The type prefix is stripped for every section, not just two.** It used to be `push(line)` for
+ * `feat`/`fix` and `push(subject)` for everything else, so Features read `- the first feature`
+ * while Other Changes read `- chore: write changelog` - the heading naming the type and the bullet
+ * repeating it. With every type able to have a heading of its own that asymmetry has no defence
+ * left. A subject that is not Conventional Commits at all has no prefix to strip and is kept whole.
+ */
+function groupCommits(
+  subjects: string[],
+  ignoreTypes: Set<string>,
+  titles: Map<string, string>,
+  order: string[],
+): Section[] {
+  const CATCH_ALL = '*';
+  const byTitle = new Map<string, string[]>();
+  const titleFor = (type: string) => titles.get(type) ?? titles.get(CATCH_ALL) ?? DEFAULT_TITLES.get(CATCH_ALL)!;
+  const push = (title: string, line: string) => {
+    const lines = byTitle.get(title);
+    if (lines) lines.push(line);
+    else byTitle.set(title, [line]);
+  };
+
   for (const subject of subjects) {
     const parsed = ConventionalCommitsService.parseSubject(subject);
     if (!parsed) {
-      grouped.other.push(subject);
+      push(titleFor(CATCH_ALL), subject);
       continue;
     }
     const { type, scope, description } = parsed;
     if (ignoreTypes.has(type)) continue;
-    const line = scope ? `**${scope}:** ${description}` : description;
-    if (type === 'feat') grouped.features.push(line);
-    else if (type === 'fix') grouped.fixes.push(line);
-    else grouped.other.push(subject);
+    push(titleFor(type), scope ? `**${scope}:** ${description}` : description);
   }
-  return grouped;
+
+  /**
+   * Only a type with a heading of its own takes a position. A type nobody named resolves to the
+   * catch-all, so ordering by it would drag the catch-all to wherever that type was listed -
+   * measured: `sortTitles: ['docs', 'fix', 'feat']` with no `docs` heading put "Other Changes"
+   * first and swallowed the sections after it.
+   */
+  const ordered = [...new Set(order.filter(t => t !== CATCH_ALL && titles.has(t)).map(titleFor))];
+  ordered.push(titleFor(CATCH_ALL));
+  const sections: Section[] = [];
+  for (const title of ordered) {
+    const lines = byTitle.get(title);
+    if (lines?.length) sections.push({ title, lines });
+    byTitle.delete(title);
+  }
+  /** A heading a repository named for a type nobody used is not rendered; one it named that the
+   *  ordering above somehow missed still is, rather than being dropped on the floor. */
+  for (const [title, lines] of byTitle) if (lines.length) sections.push({ title, lines });
+  return sections;
 }
+
+/**
+ * **The order the sections come out in** - `.rmanrc changelog.sortTitles`, a list of commit types.
+ *
+ * Separate from `titles` because they are separate decisions. Order used to fall out of the order
+ * `titles` was written in, which quietly meant a repository renaming `feat` was also re-deciding
+ * where it sits; a key that patches wording should not move things.
+ *
+ * Types it leaves out keep their place **after** the listed ones, in the order `titles` knows them
+ * (the defaults first, then anything the repository added) - it is a sort, not a filter, and
+ * `ignoreTypes` is what drops a type. `'*'` is appended by `groupCommits` whatever this says.
+ */
+function resolveOrder(pkg: Package, titles: Map<string, string>): string[] {
+  const cfg = pkg.config?.changelog?.sortTitles;
+  const listed = Array.isArray(cfg) ? cfg.map(t => String(t).toLowerCase()) : [];
+  return [...new Set([...listed, ...titles.keys()])];
+}
+
+/**
+ * `features`/`fixes`/`other` derived back out of the sections, for `{{features}}`/`{{fixes}}`/
+ * `{{other}}` and for `Entry`'s own three fields.
+ *
+ * Both were the public surface before headings were configurable, so they keep meaning what they
+ * meant: whatever `feat` and `fix` are listed under, and everything else together. A repository
+ * that renames those headings still gets them here; one that adds `dev` finds it in `other`, which
+ * is the only honest place for it in a shape that has three slots.
+ */
+function legacyBuckets(sections: Section[], titles: Map<string, string>) {
+  const of = (type: string) => sections.find(s => s.title === titles.get(type))?.lines ?? [];
+  const features = of('feat');
+  const fixes = of('fix');
+  const other = sections.filter(s => s.lines !== features && s.lines !== fixes).flatMap(s => s.lines);
+  return { features, fixes, other };
+}
+
+/** `feat`/`fix`/everything else, which is what rman shipped before `changelog.titles` existed and
+ *  so is what a repository that sets nothing still gets, wording and order alike. */
+const DEFAULT_TITLES = new Map([
+  ['feat', '✨ Features'],
+  ['fix', '🐛 Bug Fixes'],
+  ['*', '🔧 Other Changes'],
+]);
 
 function bulletList(lines: string[]): string {
   return lines.map(l => `- ${l}`).join('\n');
 }
 
-function renderCommitsBlock(grouped: GroupedCommits): string {
-  const sections: string[] = [];
-  if (grouped.features.length) sections.push(`### ✨ Features\n\n${bulletList(grouped.features)}`);
-  if (grouped.fixes.length) sections.push(`### 🐛 Bug Fixes\n\n${bulletList(grouped.fixes)}`);
-  if (grouped.other.length) sections.push(`### 🔧 Other Changes\n\n${bulletList(grouped.other)}`);
-  return sections.join('\n\n');
+function renderCommitsBlock(sections: Section[]): string {
+  return sections.map(s => `### ${s.title}\n\n${bulletList(s.lines)}`).join('\n\n');
 }
 
 /**
@@ -551,7 +653,8 @@ async function renderEntry(
   repository: Repository,
   pkg: Package,
   label: string,
-  grouped: GroupedCommits,
+  sections: Section[],
+  titles: Map<string, string>,
   git: GitHelper,
   versionOverride: string | undefined,
   segmentTag: string | undefined,
@@ -564,10 +667,8 @@ async function renderEntry(
     tag: segmentTag ?? '',
     title,
     date,
-    commits: renderCommitsBlock(grouped),
-    features: bulletList(grouped.features),
-    fixes: bulletList(grouped.fixes),
-    other: bulletList(grouped.other),
+    commits: renderCommitsBlock(sections),
+    ...Object.fromEntries(Object.entries(legacyBuckets(sections, titles)).map(([k, v]) => [k, bulletList(v)])),
   });
   return { version, content };
 }
@@ -712,6 +813,13 @@ export namespace ChangelogService {
     /** `options.version` when the caller gave one, otherwise resolved from git tags rather than
      *  package.json - see `resolveVersion`. */
     version: string;
+    /** Every section this entry renders, in the order it renders them - the heading a repository
+     *  chose through `.rmanrc changelog.titles`, and the lines under it. */
+    sections: { title: string; lines: string[] }[];
+    /** The three buckets `Entry` carried before headings were configurable, derived from
+     *  `sections` so they keep meaning what they meant: whatever `feat` and `fix` are listed under,
+     *  and everything else together. A repository that adds a section of its own finds it in
+     *  `other` - the only honest slot for it in a shape that has three. */
     features: string[];
     fixes: string[];
     other: string[];

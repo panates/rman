@@ -149,6 +149,78 @@ version number. And with no changelog file at all, the tag boundary documented o
 Running `--write` twice with no commit in between now says `No unreleased changes.` and leaves the
 file byte-identical.
 
+## Section headings (`changelog.titles`)
+
+The headings were three fixed strings, so a repository writing `dev:` commits had nowhere to put
+them but "Other Changes". `changelog.titles` maps a Conventional Commits type to the heading it is
+listed under - and with it, the order the sections come out in:
+
+```yaml
+changelog:
+  titles:
+    feat: New Features
+    dev: Development Changes
+```
+
+```markdown
+### New Features
+- a new capability
+
+### 🐛 Bug Fixes
+- **parser:** handle empty input
+
+### Development Changes
+- rework the harness
+
+### 🔧 Other Changes
+- bump deps
+```
+
+| | |
+| --- | --- |
+| **Merged over the defaults, per key** | naming `dev` adds a section without costing you `feat` and `fix`; renaming `feat` leaves it where it was in the order. The same rule `vars` follows. |
+| **Two types, one heading** | they share one section - `{ dev: Internal, chore: Internal }`. |
+| **`'*'`** | the heading for every type nobody named, and **always rendered last** whatever position it was declared in: a catch-all in the middle would swallow the sections after it. A subject that is not Conventional Commits at all has no type to key off and lands there too. |
+| **Order** | `sortTitles`, below. |
+
+## Section order (`changelog.sortTitles`)
+
+A list of commit **types**, in the order you want their sections:
+
+```yaml
+changelog:
+  titles:
+    feat: New Features
+    dev: Development Changes
+  sortTitles: [dev, fix, feat]
+```
+
+```
+### Development Changes
+### 🐛 Bug Fixes
+### New Features
+### 🔧 Other Changes
+```
+
+Separate from `titles` because they are two decisions: `titles` patches a heading's *wording*, so
+letting it also decide position would mean renaming `feat` silently moved it.
+
+- **A sort, not a filter.** A type you leave out keeps its place after the ones you listed;
+  `ignoreTypes` is what drops a type.
+- **Listing a type with no heading of its own does nothing** - there is no section to sort. It does
+  not create one, and it does not drag the catch-all up to that position.
+- **`'*'` is last however you list it**, for the same reason as above: a catch-all in the middle
+  swallows the sections after it.
+
+The cost, stated rather than hidden: a default section cannot be *removed* by leaving it out of
+`titles`. [`changelog.ignoreTypes`](#configuration-rmanrc-changelog) is the key that drops a type
+entirely, and it still wins - a type named here and ignored there gets no heading.
+
+**The type prefix is stripped in every section now**, not only in Features and Bug Fixes. It used
+to be, so "Other Changes" read `- chore: bump deps` - the heading naming the type and the bullet
+repeating it - while Features read `- a new capability`. With every type able to have a heading of
+its own, that asymmetry has no defence left.
+
 ## Leaving the unreleased entry out
 
 The commits after the newest tag get their own entry by default. `--no-unreleased` (or `.rmanrc

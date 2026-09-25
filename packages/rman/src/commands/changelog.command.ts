@@ -1,4 +1,5 @@
 import colors from 'ansi-colors';
+import type { ConfigValue } from '../core/config.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
 import { Logger, resolveRootLogLevel } from '../utils/logger.js';
@@ -118,6 +119,41 @@ const config = {
   },
 } satisfies Record<string, RmanConfig.CommandOption>;
 
+/**
+ * **What a `CommandOption` cannot say**, which is the only thing `Extra` is for: `titles` is a map
+ * from commit type to section heading, and an option says `type: 'string'`.
+ */
+export interface ChangelogExtraKeys {
+  /**
+   * The heading each Conventional Commits type is listed under - `{ feat: 'New Features', dev:
+   * 'Development Changes' }`. Per-package cascaded.
+   *
+   * **Merged over the defaults per key, not replacing them**, the way `vars` merges: naming `dev`
+   * adds a section without silently costing you `feat` and `fix`, and renaming `feat` leaves it
+   * where it was in the order. The cost, stated rather than hidden - you cannot *remove* a default
+   * section by leaving it out; `changelog.ignoreTypes` is the key that drops a type entirely.
+   *
+   * Two types sharing a heading share one section. `'*'` is the heading for every type that is not
+   * named here, and is always rendered last; a subject that is not Conventional Commits at all has
+   * no type to key off and lands there too.
+   *
+   * Sections come out in the order the types were declared, defaults first - so a repository
+   * chooses both the wording and the running order.
+   */
+  titles?: ConfigValue<Record<string, string>>;
+  /**
+   * The order the sections come out in, as a list of commit **types** - `['fix', 'feat', 'docs']`.
+   * Per-package cascaded.
+   *
+   * Separate from `titles` because they are separate decisions, and letting one key do both was
+   * the wrong shape: `titles` patches a heading's *wording*, so a repository renaming `feat` would
+   * otherwise also be silently re-deciding where it sits. A type left out keeps its place after the
+   * listed ones; `'*'` is always last whatever this says, since a catch-all in the middle swallows
+   * the sections after it.
+   */
+  sortTitles?: ConfigValue<string[]>;
+}
+
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 
 const changelogCommand = registerCommand(app => {
@@ -175,6 +211,9 @@ export default changelogCommand;
 
 declare module '../interfaces/rman-config.interface.js' {
   namespace RmanConfig {
-    interface CommandConfigs extends RmanConfig.CommandContribution<ReturnType<typeof changelogCommand>> {}
+    interface CommandConfigs extends RmanConfig.CommandContribution<
+      ReturnType<typeof changelogCommand>,
+      ChangelogExtraKeys
+    > {}
   }
 }

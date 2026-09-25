@@ -284,6 +284,146 @@ describe('commands/changelog', () => {
    * deliberate - `rman changelog` exists to answer what is *not* released yet, and off by default
    * would make the common case need a flag.
    */
+  /**
+   * **The section headings were three hardcoded strings**, so a repository writing `dev:` commits
+   * had nowhere to put them but "Other Changes". `changelog.titles` maps a Conventional Commits
+   * type to the heading it is listed under, and with it the order sections come out in.
+   */
+  describe('changelog.titles', () => {
+    function commitsFixture(rc?: unknown): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      if (rc) fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(rc));
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: a new capability');
+      for (const message of ['fix(parser): handle empty input', 'dev: rework the harness', 'chore: bump deps']) {
+        fs.writeFileSync(path.join(dir, `${message.length}.txt`), 'x');
+        run('add', '-A');
+        run('commit', '-q', '-m', message);
+      }
+      return dir;
+    }
+
+    const output = async (dir: string) =>
+      (await captureLogs(() => runCli({ cwd: dir, argv: ['changelog'] }))).join('\n');
+    const headings = (out: string) => out.split('\n').filter(l => l.startsWith('### '));
+
+    it('defaults to what rman shipped, wording and order alike', async () => {
+      expect(headings(await output(commitsFixture()))).toEqual([
+        '### ✨ Features',
+        '### 🐛 Bug Fixes',
+        '### 🔧 Other Changes',
+      ]);
+    });
+
+    /** The key the user asked for, verbatim - and `fix` keeps its default rather than being lost
+     *  to a wholesale replace, which is what makes naming one type safe. */
+    it('renames a type’s heading and adds one, keeping the defaults it did not name', async () => {
+      const dir = commitsFixture({ changelog: { titles: { feat: 'New Features', dev: 'Development Changes' } } });
+      expect(headings(await output(dir))).toEqual([
+        '### New Features',
+        '### 🐛 Bug Fixes',
+        '### Development Changes',
+        '### 🔧 Other Changes',
+      ]);
+    });
+
+    it('keeps a renamed type where it was in the order', async () => {
+      const dir = commitsFixture({ changelog: { titles: { feat: 'Zzz Renamed Last Alphabetically' } } });
+      expect(headings(await output(dir))[0]).toBe('### Zzz Renamed Last Alphabetically');
+    });
+
+    it('puts two types sharing a heading in one section', async () => {
+      const dir = commitsFixture({ changelog: { titles: { dev: 'Internal', chore: 'Internal' } } });
+      const out = await output(dir);
+
+      expect(headings(out).filter(h => h === '### Internal')).toHaveLength(1);
+      expect(out).toContain('rework the harness');
+      expect(out).toContain('bump deps');
+    });
+
+    /**
+     * **`sortTitles` orders, `titles` words** - two keys because they are two decisions. Order used
+     * to fall out of the order `titles` was written in, which quietly meant renaming `feat` was
+     * also re-deciding where it sits.
+     */
+    it('sortTitles puts the sections in the order it lists, whatever titles said', async () => {
+      const dir = commitsFixture({
+        changelog: { titles: { feat: 'New Features', dev: 'Development Changes' }, sortTitles: ['dev', 'fix', 'feat'] },
+      });
+      expect(headings(await output(dir))).toEqual([
+        '### Development Changes',
+        '### 🐛 Bug Fixes',
+        '### New Features',
+        '### 🔧 Other Changes',
+      ]);
+    });
+
+    /** A sort, not a filter - and the catch-all stays last however it is listed. */
+    it('leaves an unlisted type after the ones it listed, and still ends with the catch-all', async () => {
+      const dir = commitsFixture({
+        changelog: { titles: { dev: 'Development Changes' }, sortTitles: ['dev', '*'] },
+      });
+      const rows = headings(await output(dir));
+
+      expect(rows[0]).toBe('### Development Changes');
+      expect(rows).toContain('### ✨ Features');
+      expect(rows[rows.length - 1]).toBe('### 🔧 Other Changes');
+    });
+
+    /** Naming a type nobody gave a heading sorts nothing, because there is no section to sort -
+     *  `sortTitles` orders sections, it does not create them. */
+    it('is a no-op for a type with no heading of its own', async () => {
+      const dir = commitsFixture({ changelog: { sortTitles: ['docs', 'fix', 'feat'] } });
+      expect(headings(await output(dir))).toEqual(['### 🐛 Bug Fixes', '### ✨ Features', '### 🔧 Other Changes']);
+    });
+
+    /** A catch-all in the middle of the order would silently swallow the sections after it. */
+    it('renames the catch-all through "*", and still renders it last', async () => {
+      const dir = commitsFixture({ changelog: { titles: { '*': 'Everything Else', dev: 'Development Changes' } } });
+      const rows = headings(await output(dir));
+
+      expect(rows).toContain('### Everything Else');
+      expect(rows[rows.length - 1]).toBe('### Everything Else');
+    });
+
+    /**
+     * **The type prefix is stripped in every section now.** It used to be stripped for `feat`/`fix`
+     * and kept everywhere else, so Features read `- a new capability` while Other Changes read
+     * `- chore: bump deps` - the heading naming the type and the bullet repeating it. With every
+     * type able to have a heading of its own, that asymmetry has no defence left.
+     */
+    it('strips the type from every bullet, not just the two it used to', async () => {
+      const out = await output(commitsFixture());
+      expect(out).toContain('- bump deps');
+      expect(out).not.toContain('- chore: bump deps');
+    });
+
+    it('leaves a subject that is not Conventional Commits whole - there is no prefix to strip', async () => {
+      const dir = commitsFixture();
+      fs.writeFileSync(path.join(dir, 'plain.txt'), 'x');
+      execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-q', '-m', 'just a plain message'], { cwd: dir, stdio: 'pipe' });
+
+      expect(await output(dir)).toContain('- just a plain message');
+    });
+
+    /** Naming a heading is not a way to drop a type - `ignoreTypes` is, and it still wins. */
+    it('renders no heading for a type that ignoreTypes dropped', async () => {
+      const dir = commitsFixture({
+        changelog: { titles: { dev: 'Development Changes' }, ignoreTypes: ['dev'] },
+      });
+      const out = await output(dir);
+
+      expect(headings(out)).not.toContain('### Development Changes');
+      expect(out).not.toContain('rework the harness');
+    });
+  });
+
   describe('changelog.unreleased', () => {
     function twoReleaseFixture(): string {
       const dir = tmp();
