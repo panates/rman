@@ -152,6 +152,132 @@ describe('commands/changelog', () => {
    * commit since that tag on top of the entry that already held them. Measured before the fix: one
    * commit appeared twice, under two headings carrying the same version number.
    */
+  /**
+   * **A floor on how far back the changelog goes.** A first `--write` reaches through every release
+   * there has ever been, and for a package that has shipped for years most of that is not what a
+   * changelog is for. One key rather than `auto-changelog`'s two, taking whichever form the answer
+   * has - and a third neither of those covers, a commit.
+   */
+  describe('changelog.startingAt', () => {
+    /** Three releases, each dated years apart, plus one unreleased commit - so a version floor, a
+     *  date floor and a commit floor all have different right answers. */
+    function historyFixture(): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '3.0.0' });
+      const at = (date: string, ...args: string[]) =>
+        execFileSync('git', args, {
+          cwd: dir,
+          stdio: 'pipe',
+          env: { ...process.env, GIT_COMMITTER_DATE: date, GIT_AUTHOR_DATE: date },
+        });
+      at('2019-01-01T00:00:00+00:00', 'init', '-q');
+      execFileSync('git', ['config', 'user.email', 't@t.com'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: dir, stdio: 'pipe' });
+      at('2019-01-01T00:00:00+00:00', 'add', '-A');
+      at('2019-01-01T00:00:00+00:00', 'commit', '-q', '-m', 'feat: earliest work');
+      at('2019-01-01T00:00:00+00:00', 'tag', 'v1.0.0');
+      for (const [file, date, version] of [
+        ['a.txt', '2021-05-05T00:00:00+00:00', 'v2.0.0'],
+        ['b.txt', '2024-09-09T00:00:00+00:00', 'v3.0.0'],
+      ]) {
+        fs.writeFileSync(path.join(dir, file), 'x');
+        at(date, 'add', '-A');
+        at(date, 'commit', '-q', '-m', `feat: work for ${version}`);
+        at(date, 'tag', version);
+      }
+      fs.writeFileSync(path.join(dir, 'c.txt'), 'x');
+      execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-q', '-m', 'fix: unreleased'], { cwd: dir, stdio: 'pipe' });
+      return dir;
+    }
+
+    async function headingsWith(dir: string, ...argv: string[]): Promise<string[]> {
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write', ...argv] }));
+      const written = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf-8');
+      return written.split('\n').filter(l => l.startsWith('## '));
+    }
+
+    it('documents every release when nothing sets a floor', async () => {
+      const headings = await headingsWith(historyFixture());
+      expect(headings.filter(h => h.includes('v'))).toHaveLength(3);
+    });
+
+    it('takes a version, inclusively', async () => {
+      const headings = await headingsWith(historyFixture(), '--starting-at', '2.0.0');
+      expect(headings.some(h => h.includes('v2.0.0'))).toBe(true);
+      expect(headings.some(h => h.includes('v1.0.0'))).toBe(false);
+    });
+
+    /** The same floor written as the tag - a repository should not have to know which spelling the
+     *  key wants. */
+    it('takes the release tag just as well', async () => {
+      const headings = await headingsWith(historyFixture(), '--starting-at', 'v2.0.0');
+      expect(headings.some(h => h.includes('v2.0.0'))).toBe(true);
+      expect(headings.some(h => h.includes('v1.0.0'))).toBe(false);
+    });
+
+    it('takes a date, against each release’s own day', async () => {
+      const headings = await headingsWith(historyFixture(), '--starting-at', '2024-01-01');
+      expect(headings.some(h => h.includes('v3.0.0'))).toBe(true);
+      expect(headings.some(h => h.includes('v2.0.0'))).toBe(false);
+    });
+
+    it('takes a commit, keeping the release that commit belongs to', async () => {
+      const dir = historyFixture();
+      const sha = execFileSync('git', ['rev-list', '-n1', 'v2.0.0'], { cwd: dir }).toString().trim();
+
+      const headings = await headingsWith(dir, '--starting-at', sha);
+      expect(headings.some(h => h.includes('v2.0.0'))).toBe(true);
+      expect(headings.some(h => h.includes('v1.0.0'))).toBe(false);
+    });
+
+    /** The floor is about history. Dropping the commits that are not released yet would hide the
+     *  very thing most runs are asking about. */
+    it('never drops the unreleased entry, whatever the floor', async () => {
+      for (const floor of ['3.0.0', '2026-01-01']) {
+        const headings = await headingsWith(historyFixture(), '--starting-at', floor);
+        expect(headings.some(h => h.includes('Unreleased'))).toBe(true);
+      }
+    });
+
+    it('reads .rmanrc changelog.startingAt, and the flag wins over it', async () => {
+      const dir = historyFixture();
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { startingAt: '3.0.0' } }));
+      execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-q', '-m', 'chore: floor'], { cwd: dir, stdio: 'pipe' });
+
+      expect((await headingsWith(dir)).some(h => h.includes('v2.0.0'))).toBe(false);
+      fs.rmSync(path.join(dir, 'CHANGELOG.md'));
+      expect((await headingsWith(dir, '--starting-at', '1.0.0')).some(h => h.includes('v1.0.0'))).toBe(true);
+    });
+
+    /** A value matching none of the three forms is a configuration mistake, and silence is the bad
+     *  outcome either way: read as "never below" it leaves the changelog looking complete, read as
+     *  "always below" it empties it. */
+    it('refuses a value that is none of the three forms, naming all of them', async () => {
+      const dir = historyFixture();
+      const error = console.error;
+      console.error = () => {};
+      try {
+        const failure = await captureLogs(() =>
+          runCli({ cwd: dir, argv: ['changelog', '--starting-at', 'banana'] }),
+        ).then(
+          () => {
+            throw new Error('expected the command to fail, but it resolved');
+          },
+          (e: unknown) => e as Error,
+        );
+        const message = failure.message;
+        expect(message).toContain('changelog.startingAt');
+        expect(message).toContain('version or release tag');
+        expect(message).toContain('date');
+        expect(message).toContain('commit');
+      } finally {
+        console.error = error;
+      }
+    });
+  });
+
   describe('--write picks up where the file left off', () => {
     /** A repository with a `v1.0.0` tag and one commit on either side of it, so "since the tag"
      *  and "the whole history" are distinguishable answers. */

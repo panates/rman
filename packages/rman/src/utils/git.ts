@@ -259,6 +259,20 @@ export class GitHelper {
     }
   }
 
+  /** The commit `ref` names - a sha, a tag, a branch - or `undefined` when git does not recognize
+   *  it. `^{commit}` so an annotated tag answers with the commit rather than the tag object, and
+   *  so a tree or blob answers with nothing rather than a sha that matches no commit. */
+  async resolveCommit(ref: string): Promise<string | undefined> {
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+        cwd: this.cwd,
+      });
+      return stdout.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async headSha(): Promise<string | undefined> {
     try {
       const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: this.cwd });

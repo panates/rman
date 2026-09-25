@@ -1257,6 +1257,7 @@ step there is mistaken for a value.
 | `version.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). A `RunStepValue` is a shell command **or a function** - see [Function steps](#function-steps). |
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
 | `changelog.template` | `string` (a file **path**, relative to repo root) | built-in template | Per-package cascaded. Throws if the path doesn't exist. |
+| `changelog.startingAt` | `string` (a version/tag, a `YYYY-MM-DD` date, or a commit) | none | Per-package cascaded. Where this package's changelog begins - releases older than it are left out, inclusive of the one named. The unreleased entry is never dropped by it. A value matching none of the three forms is an error. |
 | `changelog.filePath` | `string` | `'CHANGELOG.md'` | Per-package cascaded, relative to that package's own directory. CLI `--file-path` wins when given. |
 | `changelog.tagPattern` | `string` (glob, may contain `{name}`) | **derived** - `'v*'` with one version line, `'{name}@*'` with several | Per-package cascaded. `{name}` → independent per-package tags (`{name}@*`); no `{name}` → one shared repo-wide tag scheme. See below. |
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |

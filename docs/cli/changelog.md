@@ -22,6 +22,7 @@ Accepts [package filtering](../cli-rman.md#package-filtering) options, in additi
 | `--file-path <path>` | - | string | With `--write`, the file to prepend into, relative to each package's own directory. Default `"CHANGELOG.md"`, or `.rmanrc "changelog.filePath"`. |
 | `--from-root` | `-r` | boolean | Generate for the whole repository even when standing inside one package's own directory (which otherwise scopes it to just that package). No effect elsewhere. |
 | `--include-skipped` | - | boolean | Also generate for a package with `.rmanrc "publish.skip"` - excluded by default. |
+| `--starting-at <ref>` | - | string | Where this package's changelog begins - a version or release tag (inclusive), a `YYYY-MM-DD` date, or a commit. Releases older than it are left out. Also `.rmanrc "changelog.startingAt"`. See [Where a changelog begins](#where-a-changelog-begins). |
 | `--release-version <v>` | - | string | The version these notes are **for** - what the entry heading shows. Default: read back from each package's own latest release tag, which is only right once that release is tagged. Pass it when generating notes ahead of the bump (e.g. from `changed --json`), otherwise the heading shows the *previous* release. |
 
 ## Examples
@@ -146,6 +147,39 @@ version number. And with no changelog file at all, the tag boundary documented o
 
 Running `--write` twice with no commit in between now says `No unreleased changes.` and leaves the
 file byte-identical.
+
+## Where a changelog begins
+
+A first `--write` reaches back through every release there has ever been. For a package that has
+shipped for years, most of that is not what a changelog is for - so `changelog.startingAt` (or
+`--starting-at`) puts a floor under it:
+
+```yaml
+# packages/core/.rmanrc.yml - this package's changelog starts at 2.0
+changelog:
+  startingAt: '2.0.0'
+```
+
+One key, taking whichever form the answer naturally has. They are told apart in this order, because
+the shapes overlap and a rule nobody can see is a trap:
+
+| Form | Example | Meaning |
+| --- | --- | --- |
+| a `YYYY-MM-DD` date | `2024-01-01` | releases made on or after that day |
+| a version or release tag | `2.0.0`, `v2.0.0`, `@scope/pkg@2.0.0` | that release and everything newer |
+| a commit | `64e111b`, or any ref git resolves | the release that commit belongs to, and newer |
+
+All three are **inclusive**: naming `2.0.0` keeps `2.0.0`. The one genuine collision is a tag whose
+name is also hex (`deadbee`) - the tag wins, because a repository that named a tag has said what it
+means. A value matching none of the three is refused, naming all three: read as "never below" it
+would leave the changelog looking complete, and as "always below" it would empty it.
+
+**The unreleased entry is never dropped**, whatever the floor says. The floor is about history;
+hiding the commits that are not released yet would hide the very thing most runs are asking about.
+
+**This is not `--from`**, though a commit-shaped value makes them look alike. `--from` is *this
+run's* boundary and applies identically to every package; `startingAt` is a lasting fact about one
+package, cascaded like any other config key, and still holds on the run after next.
 
 ## `{{date}}` is the release's date, not today's
 

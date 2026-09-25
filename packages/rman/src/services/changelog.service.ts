@@ -139,7 +139,10 @@ export class ChangelogService extends Service {
        * falls inside the range and there is exactly one segment - which is what `version
        * --changelog` and `github-release` see too, since both pass an explicit boundary.
        */
+      const floor = await resolveStartingPoint(git, pkg, options);
+      const floorIndex = floor?.sha ? commitsByTarget[i].findIndex(c => c.sha === floor.sha) : -1;
       for (const segment of await splitByRelease(git, pkg, commitsByTarget[i])) {
+        if (await isBelowStartingPoint(git, pkg, segment, floor, floorIndex)) continue;
         const ownCommits = dropVersionBumps(segment.commits).filter(c => ownersOf(repository, c).has(pkg));
         if (!ownCommits.length) continue;
         const grouped = groupCommits(
@@ -259,6 +262,102 @@ const DEFAULT_CHANGELOG_FILE = 'CHANGELOG.md';
  *  `optionsFilePath` (`Changelog.Options.filePath`, CLI `--file-path`) applies the same way to
  *  every package and wins over `.rmanrc changelog.filePath` (cascaded, per-package overridable),
  *  which in turn wins over the default `'CHANGELOG.md'`. */
+/**
+ * **Where this package's changelog begins** - `.rmanrc changelog.startingAt`, or the CLI flag,
+ * which wins as everywhere.
+ *
+ * The need is a package whose early development is noise: a first `--write` reaches back through
+ * every release there has ever been, and for something that has shipped for years most of that is
+ * not what a changelog is for. `auto-changelog` spells this as two options, `--starting-version`
+ * and `--starting-date`; one key taking whichever form the answer has reads better, and admits a
+ * third that neither covers - a commit, for a package whose history does not begin at a tag.
+ *
+ * **Three forms, decided in this order**, because the shapes overlap and a rule nobody can see is
+ * a trap:
+ *
+ * 1. `YYYY-MM-DD` - a date. Checked first because that shape is unambiguous.
+ * 2. a **version or release tag** - `2.0.0`, `v2.0.0`, `@scope/pkg@2.0.0` all resolve to a version,
+ *    so a repository does not have to know which spelling this key wants.
+ * 3. a **commit** anything else git can resolve.
+ *
+ * A string that is none of the three is a configuration mistake and says so, naming all three. The
+ * one genuine collision is a tag whose name is also hex (`deadbee`): the tag wins, because a
+ * repository that named a tag that has said what it means.
+ *
+ * **Not `--from`.** That is this run's boundary, applies identically to every package and overrides
+ * detection; this is a lasting fact about one package, cascaded like any other config key, and
+ * still holds on the run after next. They read alike for a commit and are not the same thing.
+ */
+async function resolveStartingPoint(
+  git: GitHelper,
+  pkg: Package,
+  options: ChangelogService.Options,
+): Promise<StartingPoint | undefined> {
+  const cfg = pkg.config?.changelog?.startingAt;
+  const value = options.startingAt ?? (typeof cfg === 'string' ? cfg : '');
+  if (!value) return undefined;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return { date: value };
+
+  if (pkg.versionScheme.isValid(value)) return { version: value };
+  const asTagVersion = ChangeHashService.extractVersion(
+    value,
+    ChangeHashService.tagPattern(pkg).replace('{name}', pkg.name),
+  );
+  if (pkg.versionScheme.isValid(asTagVersion)) return { version: asTagVersion };
+
+  const sha = await git.resolveCommit(value);
+  if (sha) return { sha };
+
+  throw new Error(
+    `Invalid "changelog.startingAt" for "${pkg.name}": "${value}" is not a ${pkg.versionScheme.name} ` +
+      'version or release tag, a YYYY-MM-DD date, or a commit in this repository',
+  );
+}
+
+interface StartingPoint {
+  version?: string;
+  date?: string;
+  sha?: string;
+}
+
+/**
+ * Whether this segment's release falls below the floor, and so is left out.
+ *
+ * **Only a tagged segment can**, and that is the rule rather than an edge case: the unreleased
+ * segment is happening now, so no past floor is above it, and dropping it would hide the very
+ * commits the run was asked about.
+ *
+ * All three forms are **inclusive**, matching `auto-changelog`: naming 2.0.0 keeps 2.0.0, and
+ * naming a commit keeps the release that commit belongs to.
+ */
+async function isBelowStartingPoint(
+  git: GitHelper,
+  pkg: Package,
+  segment: { tag?: string; endIndex: number },
+  floor: StartingPoint | undefined,
+  floorIndex: number,
+): Promise<boolean> {
+  if (!floor || !segment.tag) return false;
+
+  if (floor.version) {
+    const expanded = ChangeHashService.tagPattern(pkg).replace('{name}', pkg.name);
+    const version = ChangeHashService.extractVersion(segment.tag, expanded);
+    /** A tag carrying no version the scheme can read is kept - a floor is for leaving out history,
+     *  never for losing what it cannot classify. */
+    if (pkg.versionScheme.isValid(version) && pkg.versionScheme.compare(version, floor.version) < 0) return true;
+  }
+  if (floor.date) {
+    const date = await git.commitDate(segment.tag);
+    if (date && date < floor.date) return true;
+  }
+  /** The commit's own place in the range decides, so no second git call: a release that ended
+   *  before the floor commit is below it. `-1` means the floor is not in this range at all -
+   *  older than everything here, so nothing is below it. */
+  if (floor.sha && floorIndex >= 0 && segment.endIndex < floorIndex) return true;
+  return false;
+}
+
 function resolveFilePath(pkg: Package, optionsFilePath?: string): string {
   if (optionsFilePath) return optionsFilePath;
   const cfg = pkg.config?.changelog?.filePath;
@@ -345,11 +444,7 @@ async function resolveHeading(
  * A tag pointing at a commit outside the range simply never matches, which is what should happen -
  * it belongs to a release this run is not describing.
  */
-async function splitByRelease(
-  git: GitHelper,
-  pkg: Package,
-  commits: CommitInfo[],
-): Promise<{ tag?: string; commits: CommitInfo[] }[]> {
+async function splitByRelease(git: GitHelper, pkg: Package, commits: CommitInfo[]): Promise<Segment[]> {
   if (!commits.length) return [];
   const tagBySha = new Map<string, string>();
   for (const pattern of ChangeHashService.releaseTagPatterns(pkg)) {
@@ -357,20 +452,28 @@ async function splitByRelease(
      *  shared `v*` is only there to cover the releases it predates. */
     for (const { tag, sha } of await git.listTagCommits(pattern)) if (!tagBySha.has(sha)) tagBySha.set(sha, tag);
   }
-  if (!tagBySha.size) return [{ commits }];
+  if (!tagBySha.size) return [{ commits, endIndex: commits.length - 1 }];
 
-  const segments: { tag?: string; commits: CommitInfo[] }[] = [];
+  const segments: Segment[] = [];
   let current: CommitInfo[] = [];
-  for (const commit of commits) {
+  for (const [index, commit] of commits.entries()) {
     current.push(commit);
     const tag = tagBySha.get(commit.sha);
     if (tag) {
-      segments.push({ tag, commits: current });
+      segments.push({ tag, commits: current, endIndex: index });
       current = [];
     }
   }
-  if (current.length) segments.push({ commits: current });
+  if (current.length) segments.push({ commits: current, endIndex: commits.length - 1 });
   return segments;
+}
+
+interface Segment {
+  tag?: string;
+  commits: CommitInfo[];
+  /** Where this segment ends in the range it was cut from - what a commit-shaped
+   *  `changelog.startingAt` is compared against, with no second git call. */
+  endIndex: number;
 }
 
 /** The most specific package whose directory contains `file` - the repository root itself as the
@@ -567,6 +670,10 @@ export namespace ChangelogService {
      * different question and deliberately ignores all of it.
      */
     write?: boolean;
+    /** Where this package's changelog begins - a version or release tag, a `YYYY-MM-DD` date, or a
+     *  commit. Releases below it are left out. `.rmanrc changelog.startingAt` when omitted; see
+     *  `resolveStartingPoint` for how the three forms are told apart. */
+    startingAt?: string;
   }
 
   /** One package's (root included) generated changelog entry - what `getEntries`/`generate`

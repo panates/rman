@@ -1014,6 +1014,22 @@ saw one thing to release and it was the one thing that must never be published.
     default changed. **Don't pin a heading's layout in a spec**: `toContain('## pkg-a 1.0.0')` did,
     in twenty-two places, so a presentation change turned all of them red for no defect. Both spec
     files have a `headingFor(name)` regex helper for this.
+- **`changelog.startingAt` puts a floor under how far back a backfill goes** (`resolveStartingPoint`)
+  - one key taking a version/tag, a `YYYY-MM-DD` date, or a commit, where `auto-changelog` has two
+  options and no commit form. Decided in that order, because the shapes overlap: date shape first,
+  then anything the scheme reads as a version (so `2.0.0`, `v2.0.0` and `@scope/pkg@2.0.0` all
+  work), then anything git resolves. A tag whose name is also hex wins over the sha reading.
+  - **Inclusive**, all three, matching `auto-changelog`.
+  - **The unreleased segment is never filtered.** It is happening now, so no past floor is above it,
+    and dropping it hides what most runs are asking about. A tag carrying no readable version is
+    kept for the same reason - a floor leaves out history, it does not lose what it cannot classify.
+  - **A value matching none of the three is refused**, and silence is the bad outcome either way:
+    read as "never below" the changelog looks complete, read as "always below" it empties.
+  - **Not `--from`**, though a commit-shaped value makes them look alike: `--from` is this run's
+    boundary and applies identically to every package, while this is a lasting per-package fact that
+    cascades and still holds next run. That distinction is the reason both exist.
+  - The commit form is compared by **position in the range already fetched** (`Segment.endIndex`),
+    so it costs no extra git call; `-1` means the floor is older than the range and nothing is below.
   - The `---` between releases is the **writer's**, not the template's: an entry printed to stdout
     or handed to `github-release` as a body has nothing below it to be separated from. None is
     written into a fresh file.

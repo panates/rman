@@ -76,6 +76,25 @@ const config = {
       'Default "v*", one repo-wide tag resolved through git describe.',
     type: 'string',
   },
+  /**
+   * **Where a package's history starts being worth documenting**, as one key taking whichever form
+   * the answer naturally has - a version or tag, a date, or a commit.
+   *
+   * `'both'`, because it is a lasting fact about the package ("we do not publish what happened
+   * before 2.0"), not a decision per run. That is also what separates it from `--from`, which those
+   * three forms would otherwise duplicate: `--from` is this run's boundary and applies identically
+   * to every package, while this lives in `.rmanrc`, is cascaded per package, and still holds on
+   * the run after next.
+   */
+  startingAt: {
+    target: 'both',
+    cliName: 'starting-at',
+    describe:
+      "Where this package's changelog begins: a version or release tag (inclusive), a YYYY-MM-DD " +
+      'date, or a commit. Releases older than it are left out - for a package whose early ' +
+      'development does not belong in its changelog',
+    type: 'string',
+  },
 } satisfies Record<string, RmanConfig.CommandOption>;
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
@@ -113,6 +132,7 @@ const changelogCommand = registerCommand(app => {
         fromRoot: args.fromRoot,
         includeSkipped: args.includeSkipped,
         version: args.releaseVersion,
+        startingAt: args.startingAt,
       };
       const changelog = app.getService('changelog');
       const entries = write ? await changelog.generateToFile(options) : await changelog.getEntries(options);
