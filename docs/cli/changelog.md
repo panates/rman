@@ -1,4 +1,4 @@
-<!-- verified against commit 2152cf1 - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit e99d5f6 - see ../cli-rman.md for the baseline convention -->
 
 # `rman changelog`
 
