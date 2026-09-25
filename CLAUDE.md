@@ -748,6 +748,47 @@ wins:
 Tag naming also has a single source: `ChangeHashService.expandTag` (forward: version → tag name) and
 `.findLatestTag` (backward), both in that same file. Don't build a tag name anywhere else.
 
+### `changelog.tagPattern` has no fixed default - it is derived from the group count
+
+`v*` with **one** version line, `{name}@*` with several (`resolvePattern` in
+`change-hash.service.ts`). The same structural rule `usesCalendarVersion` already applies to the
+root's scheme, and for the same reason: reading the versions instead would move the answer under
+the repository's feet.
+
+- **A repo-wide pattern is resolved with `git describe --match`**, i.e. the nearest tag HEAD
+  descends from *whichever package it belongs to* - correct while everything releases together and
+  **silently wrong** the moment it does not. Measured on a two-line repository: releasing `pkg-a`
+  put `v1.1.0` on HEAD, and `pkg-b` - holding a committed, unreleased `fix:` of its own behind that
+  tag - reported `no-change` and shipped nothing. Under `{name}@*` the same repo answers
+  `bump 1.0.0 -> 1.0.1, changed since pkg-b@1.0.0`. This is the sibling of the trap already
+  recorded for `version.releaseTagPattern`; it was only ever fixed for the *release* tag.
+- **The bridge: a derived `{name}` pattern falls back to the repo-wide `v*` tag while a package has
+  no tag of its own.** That is the boundary that *was* correct - before the split every package
+  genuinely shared it - so the first run after grouping reads the same commits as yesterday and
+  writes a `{name}` tag every later run finds directly. Without it the transition is destructive:
+  measured on a four-package repository, every package came back `unreleased commits` and three
+  jumped a major on a `feat!:` buried in the full history.
+- **Only for a *derived* pattern**, never over a repository's own declaration - borrowing a `v*`
+  tag it never asked about could hand a package a boundary belonging to something else, and reading
+  too little is the failure that ships nothing and says nothing. `resolvePattern` returns
+  `{ pattern, derived }` for exactly this; `tagPattern` exposes only the pattern.
+- **The root keeps `v*`.** It is never a group member, so the count says nothing about it, and the
+  one caller (`github-release`'s `releaseTagGlob`) asks only when the root is *not* on a calendar
+  version - the single-line case, where `v*` is the answer anyway.
+- A group's members each get **their own tag at the group's shared version** - `applyPlan` expands
+  per entry into a `Set`, so `v*` dedups to one tag and `{name}@*` yields one per package. Measured:
+  a two-member group produced `pkg-a@1.0.2, pkg-b@1.0.2`, and each found its own on the next run.
+- **`groupKeyOf` is in [`utils/version-group.ts`](packages/rman/src/utils/version-group.ts) and
+  `VersionPlanService.resolveGroupKey` delegates to it.** Two copies of those five lines would be
+  easy to write and impossible to keep in step, and the failure is silent: a boundary computed under
+  one answer, a tag written under the other. `resolveGroupKey` stays `protected` so a planner can
+  still override the batching; what it cannot do is leave the tag pattern behind.
+- **`change-hash.service.spec.ts` cannot see any of this** - it builds a bare
+  `new Package(dir, createApp())`, which belongs to no repository, so `versionLineCount` answers 1
+  and every pattern is `v*`. The whole file stayed green when the default changed. The specs that
+  do see it are in `version.command.spec.ts` ("which pattern names a release tag"), end to end on a
+  real repository, reading the tags a run actually creates.
+
 **`--from` takes a ref or the keyword `auto`** (`ChangeHashService.AUTO`), which is what omitting it
 already means. It used to be `npm`, which named a *source* and the wrong one - most of detection is
 git, and the registry part is the ecosystem's now. A rename, not an alias: `--from npm` means a ref

@@ -205,6 +205,86 @@ describe('commands/version', () => {
     });
   });
 
+  /**
+   * **A repo-wide tag cannot name a release the repository does not share**, so which pattern is
+   * the default is derived from how many version lines there are rather than left to be remembered.
+   *
+   * Every spec here builds a real repository and reads the tags a run *creates*, end to end. The
+   * seam these exercise is invisible to `change-hash.service.spec.ts`, which builds a bare
+   * `new Package(dir, createApp())` - no repository, so no version lines to count, so `v*` for
+   * everything. That is why the whole file stayed green when this default changed.
+   */
+  describe('which pattern names a release tag', () => {
+    function twoLineFixture(rc: Record<string, unknown> = { group: false }): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(rc));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+      /** The repository's history so far: one shared `v*` tag, which is what every repository that
+       *  predates its own second version line actually has. */
+      git(dir, 'tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      commitAll(dir, 'fix: a bug in pkg-a');
+      return dir;
+    }
+
+    async function planOf(dir: string): Promise<string> {
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--show'] }));
+      return lines.join('\n');
+    }
+
+    it('one version line keeps the shared v* tag', async () => {
+      const dir = fixture(); // a single package, so a single line
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+      expect(git(dir, 'tag', '--list').split('\n')).toContain('v1.0.1');
+    });
+
+    it('several version lines name the tag after the package', async () => {
+      const dir = twoLineFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--scope', 'pkg-a'] }));
+
+      const tags = git(dir, 'tag', '--list').split('\n');
+      expect(tags).toContain('pkg-a@1.0.1');
+      expect(tags).not.toContain('v1.0.1');
+    });
+
+    /**
+     * **The bridge across the default changing.** The repository has only `v1.0.0`, so `pkg-a` has
+     * no tag under its own name yet - and reading the whole history instead would re-propose
+     * everything ever committed. The boundary that *was* correct is the shared tag, because before
+     * the split every package genuinely shared it.
+     */
+    it('measures from the old shared tag while a package has no tag of its own yet', async () => {
+      expect(await planOf(twoLineFixture())).toContain('changed since v1.0.0');
+    });
+
+    it('reads its own tag once one exists, not the shared one', async () => {
+      const dir = twoLineFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--scope', 'pkg-a'] }));
+      fs.writeFileSync(path.join(dir, 'packages/a/y.txt'), 'y');
+      commitAll(dir, 'fix: another bug in pkg-a');
+
+      expect(await planOf(dir)).toContain('changed since pkg-a@1.0.1');
+    });
+
+    /**
+     * **The bridge is only for a pattern rman chose.** A repository that declared `{name}@*` itself
+     * has said what names its tags; borrowing a `v*` tag it never asked about could hand a package
+     * a boundary belonging to something else. So the same repository, with the same tags, answers
+     * differently depending on whether the pattern was derived - which is the whole distinction.
+     */
+    it('never borrows the shared tag when the pattern was declared, not derived', async () => {
+      const dir = twoLineFixture({ group: false, changelog: { tagPattern: '{name}@*' } });
+      const out = await planOf(dir);
+
+      expect(out).toContain('unreleased commits');
+      expect(out).not.toContain('changed since v1.0.0');
+    });
+  });
+
   describe('the plan table', () => {
     /**
      * `pkg-a` and `pkg-c` share a version line; `pkg-b` sits between them in *package* order, which

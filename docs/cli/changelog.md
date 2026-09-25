@@ -66,7 +66,8 @@ changes.`.
 ```yaml
 changelog:
   ignoreTypes: [chore, ci] # commit types dropped entirely, not just folded into "Other Changes"
-  tagPattern: 'v*' # or "{name}@*" for independent per-package tags
+  tagPattern: 'v*' # rarely needed - the default is derived from how many version lines the
+  #                  repository has: 'v*' with one, '{name}@*' with several
   filePath: CHANGELOG.md
   template: changelog.template.md # a PATH to a template file, relative to the repo root
 ```

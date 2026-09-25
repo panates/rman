@@ -6,6 +6,7 @@ import { assertOneScheme, type ChangeKind, semverScheme, VersionScheme } from '.
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { findLastReleaseVersion, formatCalendarVersion, usesCalendarVersion } from '../utils/release-version.js';
+import { groupKeyOf } from '../utils/version-group.js';
 import { ConventionalCommitsService } from './conventional-commits.service.js';
 
 /**
@@ -319,10 +320,7 @@ export abstract class VersionPlanService {
    *  group; a non-empty string joins exactly the other packages sharing that string, regardless of
    *  the repo's own default; `false` makes it a solo group of one. */
   protected resolveGroupKey(pkg: Package): string {
-    const g = pkg.config?.group;
-    if (g === false) return `solo:${pkg.name}`;
-    if (typeof g === 'string' && g) return `named:${g}`;
-    return 'default';
+    return groupKeyOf(pkg);
   }
 
   /** The human-readable name behind a `groupKey` - what a plan's `group` column shows. */

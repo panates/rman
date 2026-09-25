@@ -1258,7 +1258,7 @@ step there is mistaken for a value.
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
 | `changelog.template` | `string` (a file **path**, relative to repo root) | built-in template | Per-package cascaded. Throws if the path doesn't exist. |
 | `changelog.filePath` | `string` | `'CHANGELOG.md'` | Per-package cascaded, relative to that package's own directory. CLI `--file-path` wins when given. |
-| `changelog.tagPattern` | `string` (glob, may contain `{name}`) | `'v*'` | Per-package cascaded. `{name}` → independent per-package tags (`{name}@*`); no `{name}` → one shared repo-wide tag scheme. |
+| `changelog.tagPattern` | `string` (glob, may contain `{name}`) | **derived** - `'v*'` with one version line, `'{name}@*'` with several | Per-package cascaded. `{name}` → independent per-package tags (`{name}@*`); no `{name}` → one shared repo-wide tag scheme. See below. |
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |
 | `clean.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of `clean` entirely. |
 | `publish.target` | `string` or an array of them | whichever installed targets *claim* the package | Per-package cascaded. Which **registry** `publish` ships this package to - a name from the installed [publish targets](#publishtarget), never a fixed list. Each has its own "already published?" check: npm via `npm view`, docker via `docker manifest inspect`. A name nothing implements is an error naming the ones this repository has. The repository's GitHub Release is not a target here - see `githubRelease`. |
@@ -1568,6 +1568,32 @@ bumped by that severity. Which members actually *receive* the new version depend
 Across groups, a package depending on another group's bumped package always receives exactly a
 **patch** bump of its own (never the source's severity) - this can itself ripple into a third
 group, and so on, but a patch never re-triggers its own group's minor/major cascade.
+
+#### Grouping decides how release tags are named
+
+`changelog.tagPattern` has **no fixed default**. It is derived from how many version lines the
+repository has, the same way the root's own versioning scheme is (see
+[The repository's own version](#the-repositorys-own-version-monorepo-root)):
+
+| Version lines | Default pattern | Tags |
+| --- | --- | --- |
+| one | `v*` | `v1.2.3`, shared by every package |
+| several | `{name}@*` | `pkg-a@1.2.3`, one per package |
+
+**This is not a preference.** A pattern without `{name}` is resolved with `git describe --match` -
+the nearest tag HEAD descends from, whichever package it belongs to - which is exactly right while
+every package releases together and silently wrong the moment they do not. Measured on a two-line
+repository: releasing `pkg-a` put `v1.1.0` on HEAD, and `pkg-b`, which had a committed but
+unreleased `fix:` of its own sitting behind that tag, reported `no-change` and shipped nothing. Each
+group member still gets its own tag at the group's shared version, so every package is findable by
+name.
+
+**Growing a second version line needs no migration.** While a package has no tag under its own name
+yet, the boundary falls back to the repository-wide `v*` tag - the one that *was* correct, since
+before the split every package genuinely shared it. So the first run after grouping reads the same
+commits it would have read before, and writes a `{name}` tag that every run after it finds
+directly. Declaring `changelog.tagPattern` yourself turns that fallback off: a repository that has
+said what names its tags is not handed a boundary from a tag it never asked about.
 
 #### Severity auto-detection from commits
 
