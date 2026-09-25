@@ -21,8 +21,19 @@ export class ChangelogService extends Service {
    * the CLI command - printing what happened is the command's job.
    */
   async generateToFile(options: ChangelogService.Options = {}): Promise<ChangelogService.Entry[]> {
-    const entries = await this.getEntries(options);
-    for (const entry of entries) prependToChangelogFile(entry.package, entry.filePath, entry.content);
+    const entries = await this.getEntries({ ...options, write: true });
+    /**
+     * **Where each file is documented up to, recorded in the file itself.** Read back by
+     * `resolveBoundary` on the next run, which is what makes a second `--write` append the commits
+     * since this one rather than re-emitting everything since the last tag.
+     *
+     * HEAD, resolved **once**: every entry in this run covers the same range, and asking per
+     * package could straddle a commit made while the run was in flight.
+     */
+    const documentedUpTo = await new GitHelper({ cwd: this.repository.dirname }).headSha();
+    for (const entry of entries) {
+      prependToChangelogFile(entry.package, entry.filePath, entry.content, documentedUpTo);
+    }
     return entries;
   }
 
@@ -91,7 +102,14 @@ export class ChangelogService extends Service {
         // No boundary at all means nothing has ever been released, so everything so far is
         // unreleased - the same fallback `VersionService` makes. (Not "not yet pushed": that reads
         // as empty the moment a first release is pushed, and for a repo with no remote at all.)
-        promise = (hash ? git.listCommits({ hash }) : git.listAllCommits()).then(dropVersionBumps);
+        //
+        /**
+         * **Release markers are dropped per segment, not here.** A release tag sits on exactly the
+         * commit this filter removes, so dropping first leaves `splitByRelease` matching tags
+         * against shas that are no longer in the list - every cut silently missed, and the whole
+         * range rendered as one release. Measured while writing it.
+         */
+        promise = hash ? git.listCommits({ hash }) : git.listAllCommits();
         commitsByHash.set(key, promise);
       }
       return promise;
@@ -99,11 +117,8 @@ export class ChangelogService extends Service {
 
     const commitsByTarget = await Promise.all(
       targets.map(async pkg => {
-        const catchUpFile = path.join(pkg.dirname, resolveFilePath(pkg, options.filePath));
-        const from = await ChangeHashService.detect(git, pkg, {
-          from: options.from,
-          catchUpFile: fs.existsSync(catchUpFile) ? catchUpFile : undefined,
-        });
+        const changelogFile = path.join(pkg.dirname, resolveFilePath(pkg, options.filePath));
+        const from = await resolveBoundary(git, pkg, changelogFile, options);
         return listCommitsCached(from);
       }),
     );
@@ -111,28 +126,50 @@ export class ChangelogService extends Service {
     const entries: ChangelogService.Entry[] = [];
     for (let i = 0; i < targets.length; i++) {
       const pkg = targets[i];
-      const ownCommits = commitsByTarget[i].filter(c => ownersOf(repository, c).has(pkg));
-      if (!ownCommits.length) continue;
-      const grouped = groupCommits(
-        ownCommits.map(c => c.subject),
-        ignoreTypesConfig(pkg),
-      );
-      // every commit could have been dropped by ignoreTypes - skip this package's entry entirely
-      // rather than rendering a heading with nothing real underneath it.
-      if (!grouped.features.length && !grouped.fixes.length && !grouped.other.length) continue;
-
       const label = pkg === repository.rootPackage ? `${path.basename(repository.dirname)} repository` : pkg.name;
-      const { version, content } = await renderEntry(repository, pkg, label, grouped, git, options.version);
-      entries.push({
-        package: pkg,
-        label,
-        version,
-        features: grouped.features,
-        fixes: grouped.fixes,
-        other: grouped.other,
-        content,
-        filePath: resolveFilePath(pkg, options.filePath),
-      });
+
+      /**
+       * **One entry per release in the range, not one entry per package.** The range is whatever
+       * the boundary opened up, and a release tag inside it ends a release: a changelog that does
+       * not cut there is not a changelog, it is a commit list. Measured on a real repository - a
+       * first `--write` with no changelog file reaches back through twelve tags, and every commit
+       * in all of them landed under a single `v2.1.6` heading.
+       *
+       * Ordinary runs are unaffected by construction: the boundary is the last release, so no tag
+       * falls inside the range and there is exactly one segment - which is what `version
+       * --changelog` and `github-release` see too, since both pass an explicit boundary.
+       */
+      for (const segment of await splitByRelease(git, pkg, commitsByTarget[i])) {
+        const ownCommits = dropVersionBumps(segment.commits).filter(c => ownersOf(repository, c).has(pkg));
+        if (!ownCommits.length) continue;
+        const grouped = groupCommits(
+          ownCommits.map(c => c.subject),
+          ignoreTypesConfig(pkg),
+        );
+        // every commit could have been dropped by ignoreTypes - skip this package's entry entirely
+        // rather than rendering a heading with nothing real underneath it.
+        if (!grouped.features.length && !grouped.fixes.length && !grouped.other.length) continue;
+
+        const { version, content } = await renderEntry(
+          repository,
+          pkg,
+          label,
+          grouped,
+          git,
+          options.version,
+          segment.tag,
+        );
+        entries.push({
+          package: pkg,
+          label,
+          version,
+          features: grouped.features,
+          fixes: grouped.fixes,
+          other: grouped.other,
+          content,
+          filePath: resolveFilePath(pkg, options.filePath),
+        });
+      }
     }
     return entries;
   }
@@ -220,11 +257,89 @@ function resolveFilePath(pkg: Package, optionsFilePath?: string): string {
  * `{{version}}` doc on `Changelog.getEntries`) package.json. Falls back to package.json's version
  * if no matching tag exists at all (never tagged, or a fresh package) - see `findLatestTag`.
  */
-async function resolveVersion(git: GitHelper, pkg: Package): Promise<string> {
+/**
+ * The version an entry is headed with, **and the date that release actually happened**.
+ *
+ * The two used to come from different places: the version was read back from the package's latest
+ * tag while the date was `new Date()`. So regenerating notes for an already-tagged release headed
+ * them with that release's number and *today's* date - measured on a real repository,
+ * `## @panates/eslint-config v2.1.6 (2026-09-25)` for a v2.1.6 tagged days earlier. Two halves of
+ * one heading describing two different releases.
+ *
+ * Today's date is still right for the case it was written for: a caller that passes `version`
+ * explicitly is describing a release that **does not exist yet** (`version --changelog` writes the
+ * entry before it commits and tags), so there is no tag to read a date off and the clock is the
+ * only answer. That is why this is decided here, beside the version, rather than at the template.
+ */
+async function resolveHeading(
+  git: GitHelper,
+  pkg: Package,
+  versionOverride: string | undefined,
+  segmentTag: string | undefined,
+): Promise<{ version: string; date: string }> {
+  const today = new Date().toISOString().slice(0, 10);
+  const expanded = ChangeHashService.tagPattern(pkg).replace('{name}', pkg.name);
+
+  /** A segment that a release tag closes is headed by **that** release, whatever the newest one
+   *  is - which is the whole point of splitting, and the reason an override cannot win here: a
+   *  caller naming a version is naming the *unreleased* one, the segment with no tag. */
+  if (segmentTag) {
+    return {
+      version: ChangeHashService.extractVersion(segmentTag, expanded),
+      date: (await git.commitDate(segmentTag)) ?? today,
+    };
+  }
+
+  if (versionOverride) return { version: versionOverride, date: today };
+
   const tag = await ChangeHashService.findLatestTag(git, pkg);
-  return tag
-    ? ChangeHashService.extractVersion(tag, ChangeHashService.tagPattern(pkg).replace('{name}', pkg.name))
-    : pkg.version || '';
+  if (!tag) return { version: pkg.version || '', date: today };
+  return {
+    version: ChangeHashService.extractVersion(tag, expanded),
+    date: (await git.commitDate(tag)) ?? today,
+  };
+}
+
+/**
+ * The range cut into releases: each **release tag inside it** closes a segment, and whatever
+ * follows the last one is the unreleased segment (`tag: undefined`).
+ *
+ * Oldest first, because `generateToFile` prepends each entry in turn - so the last one written is
+ * the one that ends up at the top of the file.
+ *
+ * The tagged commit belongs to the segment it **closes**: a release tag sits on the release commit,
+ * which comes after the work it releases. That commit is then dropped by `dropVersionBumps` like
+ * any other release marker, so it heads the segment without appearing in it.
+ *
+ * A tag pointing at a commit outside the range simply never matches, which is what should happen -
+ * it belongs to a release this run is not describing.
+ */
+async function splitByRelease(
+  git: GitHelper,
+  pkg: Package,
+  commits: CommitInfo[],
+): Promise<{ tag?: string; commits: CommitInfo[] }[]> {
+  if (!commits.length) return [];
+  const tagBySha = new Map<string, string>();
+  for (const pattern of ChangeHashService.releaseTagPatterns(pkg)) {
+    /** Earlier patterns win: a package with tags under its own name is described by those, and the
+     *  shared `v*` is only there to cover the releases it predates. */
+    for (const { tag, sha } of await git.listTagCommits(pattern)) if (!tagBySha.has(sha)) tagBySha.set(sha, tag);
+  }
+  if (!tagBySha.size) return [{ commits }];
+
+  const segments: { tag?: string; commits: CommitInfo[] }[] = [];
+  let current: CommitInfo[] = [];
+  for (const commit of commits) {
+    current.push(commit);
+    const tag = tagBySha.get(commit.sha);
+    if (tag) {
+      segments.push({ tag, commits: current });
+      current = [];
+    }
+  }
+  if (current.length) segments.push({ commits: current });
+  return segments;
 }
 
 /** The most specific package whose directory contains `file` - the repository root itself as the
@@ -283,13 +398,14 @@ async function renderEntry(
   grouped: GroupedCommits,
   git: GitHelper,
   versionOverride: string | undefined,
+  segmentTag: string | undefined,
 ): Promise<{ version: string; content: string }> {
   const template = resolveTemplate(repository, pkg);
-  const version = versionOverride ?? (await resolveVersion(git, pkg));
+  const { version, date } = await resolveHeading(git, pkg, versionOverride, segmentTag);
   const content = render(template, {
     package: label,
     version,
-    date: new Date().toISOString().slice(0, 10),
+    date,
     commits: renderCommitsBlock(grouped),
     features: bulletList(grouped.features),
     fixes: bulletList(grouped.fixes),
@@ -298,17 +414,83 @@ async function renderEntry(
   return { version, content };
 }
 
+/**
+ * **Where a changelog file says it is documented up to**, written by `--write` and read back by
+ * `resolveBoundary`. An HTML comment, so it renders as nothing at all.
+ *
+ * The alternative was parsing the topmost version heading back out of the file, and it fails on the
+ * one thing this has to survive: `changelog.template` is the *repository's*, so the heading is a
+ * shape rman did not choose and cannot reliably read. The other alternative - the file's own last
+ * modifying commit - is what `catchUpFile` already does, and it cannot be the boundary because any
+ * unrelated edit (a typo, a hand-written note) would move it forward and drop every commit in
+ * between, silently.
+ */
+const MARKER = /^<!-- rman:documented-up-to ([0-9a-f]{7,40}) -->[ \t]*\r?\n+/m;
+
+/**
+ * The boundary this package's notes start from.
+ *
+ * `--from` wins outright, as everywhere. Otherwise, **for a `--write` run only**, the changelog
+ * file decides - it is the thing being appended to, so where it stopped is the question:
+ *
+ * - **A marker** - start there. Measured without it: a second `--write` re-listed every commit
+ *   since the last tag on top of the entry that already held them, so one commit appeared twice
+ *   under two headings carrying the same version number.
+ * - **No file at all** - the whole history, because nothing has been documented. Measured without
+ *   it: the first `--write` in a repository with a `v1.0.0` tag documented only the commits *after*
+ *   that tag, and the ones before it were never written anywhere and never would be.
+ * - **A file with no marker** - one rman did not write, or wrote before markers existed. Fall back
+ *   to ordinary detection, which is where `catchUpFile` still earns its place: it widens the tag
+ *   boundary backwards to the file's last commit, so a stale changelog catches up rather than
+ *   skipping. The next write leaves a marker, so this is the one run that has to guess.
+ *
+ * A **print** run is deliberately none of this: nothing is being appended, and answering "the notes
+ * for this release" with "nothing, it is all documented" would be the wrong question answered.
+ */
+async function resolveBoundary(
+  git: GitHelper,
+  pkg: Package,
+  changelogFile: string,
+  options: ChangelogService.Options,
+): Promise<string | undefined> {
+  if (options.from && options.from !== ChangeHashService.AUTO) return options.from;
+
+  if (options.write) {
+    const exists = fs.existsSync(changelogFile);
+    if (!exists) return undefined;
+    const marker = MARKER.exec(fs.readFileSync(changelogFile, 'utf-8'));
+    if (marker) return marker[1];
+  }
+
+  return ChangeHashService.detect(git, pkg, {
+    from: options.from,
+    catchUpFile: fs.existsSync(changelogFile) ? changelogFile : undefined,
+  });
+}
+
 /** Prepends `content` right after the top-level "# Changelog" heading if the file already has
  *  one, otherwise creates the file (and any missing parent directory - `relFilePath` can nest one,
  *  e.g. `'docs/CHANGELOG.md'`) with one. Leaves everything already in the file untouched below it. */
-function prependToChangelogFile(pkg: Package, relFilePath: string, content: string): void {
+function prependToChangelogFile(
+  pkg: Package,
+  relFilePath: string,
+  content: string,
+  documentedUpTo: string | undefined,
+): void {
   const file = path.join(pkg.dirname, relFilePath);
   const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
   const headerMatch = /^# Changelog\r?\n+/.exec(existing);
   const header = headerMatch ? headerMatch[0] : '# Changelog\n\n';
-  const rest = headerMatch ? existing.slice(headerMatch[0].length) : existing;
+  /** The previous marker goes with the header it sat under - there is one per file, rewritten
+   *  each time, never accumulated. */
+  const rest = (headerMatch ? existing.slice(headerMatch[0].length) : existing).replace(MARKER, '');
+  const marker = documentedUpTo ? `<!-- rman:documented-up-to ${documentedUpTo} -->\n\n` : '';
+  /** A rule **between** releases, so it is the writer's and not the template's: an entry printed
+   *  to stdout, or handed to `github-release` as a body, has nothing below it to be separated
+   *  from. Only written when there is something below. */
+  const separator = rest.trim() ? '\n---\n\n' : '';
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, header + content.trimEnd() + '\n\n' + rest);
+  fs.writeFileSync(file, header + marker + content.trimEnd() + '\n' + separator + rest);
 }
 
 export namespace ChangelogService {
@@ -345,6 +527,13 @@ export namespace ChangelogService {
      *  the number and has to say so, otherwise every entry ends up labelled with the *previous*
      *  release's version. */
     version?: string;
+    /**
+     * Set by `generateToFile`; there is no reason for a caller to pass it. It tells `getEntries`
+     * that the entries are about to be **appended to a file**, which is what makes the file's own
+     * record of where it stopped the right boundary - see `resolveBoundary`. A print run asks a
+     * different question and deliberately ignores all of it.
+     */
+    write?: boolean;
   }
 
   /** One package's (root included) generated changelog entry - what `getEntries`/`generate`

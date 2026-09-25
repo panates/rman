@@ -81,6 +81,23 @@ export namespace ChangeHashService {
    *  tagged at all (a fresh package, or one that's never been released). Shared by `changelog`
    *  (reading the last-documented version) and `version` (finding the boundary a bump measures
    *  "since"). */
+  /**
+   * **Every pattern that may name this package's releases**, in precedence order - its own, and,
+   * only where the pattern was derived, the shared `v*` a repository used before it grew a second
+   * version line. One list, because two questions need it and must not disagree: `findLatestTag`
+   * picks the boundary off it, and `changelog`'s `splitByRelease` cuts the range at the tags it
+   * matches.
+   *
+   * They *did* disagree, for one commit: the boundary fell back to the shared tag while the split
+   * still looked only for `{name}@*`, which a repository mid-transition has none of - so a backfill
+   * reaching across twelve releases found no tag to cut at and rendered all of them as one.
+   */
+  export function releaseTagPatterns(pkg: Package): string[] {
+    const { pattern, derived } = resolvePattern(pkg);
+    const expanded = pattern.replace('{name}', pkg.name);
+    return derived && expanded !== SHARED_TAG_PATTERN ? [expanded, SHARED_TAG_PATTERN] : [expanded];
+  }
+
   export async function findLatestTag(git: GitHelper, pkg: Package): Promise<string | undefined> {
     const { pattern, derived } = resolvePattern(pkg);
     const expanded = pattern.replace('{name}', pkg.name);

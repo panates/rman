@@ -961,6 +961,47 @@ saw one thing to release and it was the one thing that must never be published.
 
 - **Question A.** The boundary is auto-detected per package via `detectChangeHash` by default;
   `--from <hash>` bypasses that entirely and applies identically to every package.
+- **`--write` does not use that boundary - it uses the file's own** (`resolveBoundary` in
+  `changelog.service.ts`). An append has to start where the last one stopped, and a release *tag*
+  does not move between two writes: measured, a second `--write` re-listed every commit since the
+  tag on top of the entry already holding them, so one commit appeared twice under two headings
+  carrying the same version number. Three cases, in order: **a marker** in the file -> that commit;
+  **no file at all** -> the whole history (measured, the tag boundary documented only what came
+  *after* the last tag and the commits before it were never written anywhere); **a file with no
+  marker** -> ordinary detection, where `catchUpFile` still earns its place by widening backwards.
+  - The marker is `<!-- rman:documented-up-to <sha> -->`, one per file, **rewritten** on each write.
+    HEAD, resolved once per run rather than per package, so a commit made mid-run cannot straddle
+    two entries.
+  - **Not parsed back out of the entry headings**: `changelog.template` is the repository's, so the
+    heading is a shape rman did not choose. **Not the file's last-modifying commit** either - that
+    is `catchUpFile`, and as a *boundary* it silently drops every commit between an unrelated edit
+    (a typo, a hand-written note) and the last real write. Widening-only is safe; narrowing is not.
+  - **A print run ignores all of it**, deliberately: nothing is being appended, so the question is
+    "the notes for this release", not "what is still undocumented". `ChangelogService.Options.write`
+    exists for exactly that distinction and is set by `generateToFile`, never by a caller.
+- **`{{date}}` is the tag's date, not `new Date()`** (`resolveHeading`). The version half of a
+  heading is read back from the package's latest tag, so taking the date from the clock made the two
+  halves describe different releases - measured, `## @panates/eslint-config v2.1.6 (2026-09-25)` for
+  a v2.1.6 tagged days earlier - and made a regenerated file differ from itself every day. The
+  **committer** date, since a rebased release commit was authored before it shipped. Today's date
+  stays for `--release-version`, which is the case it was written for: that caller is describing a
+  release with no tag to read.
+- **The range is cut at every release tag inside it** (`splitByRelease`), one entry per release,
+  newest first. An ordinary run has no tag inside the range - the boundary *is* the last release -
+  so this only shows on a backfill, which is exactly where it matters: measured, a first `--write`
+  on a repository with twelve releases rendered every commit in all of them under one `v2.1.6`
+  heading.
+  - **The drop of release markers moved from the fetch to the segment**, and that is load-bearing:
+    `version` tags the `chore(release): v1.0.0` commit, which `dropVersionBumps` removes - so
+    dropping first left every tag pointing at a sha no longer in the list and every cut missed.
+    The tagged commit closes its segment and is dropped from it.
+  - **Which tags count is `ChangeHashService.releaseTagPatterns`**, shared with `findLatestTag` so
+    the boundary and the cuts cannot disagree. They did, for one commit: the boundary bridged to the
+    shared `v*` while the split still looked only for `{name}@*`, which a repository mid-transition
+    has none of - so the backfill found nothing to cut at.
+  - The `---` between releases is the **writer's**, not the template's: an entry printed to stdout
+    or handed to `github-release` as a body has nothing below it to be separated from. None is
+    written into a fresh file.
 - **Trap:** run *after* a tag has been created, auto-detection finds that new tag and reports
   nothing changed. Hence: in CI, release notes are generated **before** `version`; and any code path
   running after the tag exists (`version --changelog`, `github-release`) passes the boundary
