@@ -278,6 +278,72 @@ describe('commands/changelog', () => {
     });
   });
 
+  /**
+   * **`changelog.unreleased` defaults to `true`**, so the flag that does something is
+   * `--no-unreleased`. `auto-changelog` defaults its equivalent off; the opposite default here is
+   * deliberate - `rman changelog` exists to answer what is *not* released yet, and off by default
+   * would make the common case need a flag.
+   */
+  describe('changelog.unreleased', () => {
+    function twoReleaseFixture(): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: the released work');
+      run('tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'later.txt'), 'x');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'fix: not released yet');
+      return dir;
+    }
+
+    const written = (dir: string) => fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf-8');
+
+    it('documents the unreleased commits by default', async () => {
+      const dir = twoReleaseFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      expect(written(dir)).toContain('Unreleased');
+      expect(written(dir)).toContain('not released yet');
+    });
+
+    it('--no-unreleased leaves them out, keeping the released history', async () => {
+      const dir = twoReleaseFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write', '--no-unreleased'] }));
+      expect(written(dir)).not.toContain('Unreleased');
+      expect(written(dir)).not.toContain('not released yet');
+      expect(written(dir)).toContain('## v1.0.0');
+    });
+
+    it('reads .rmanrc changelog.unreleased', async () => {
+      const dir = twoReleaseFixture();
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { unreleased: false } }));
+      execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-q', '-m', 'chore: config'], { cwd: dir, stdio: 'pipe' });
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      expect(written(dir)).not.toContain('Unreleased');
+    });
+
+    /**
+     * **The guard that keeps `version --changelog` working.** Naming the version means the caller is
+     * describing the release it is about to cut - the segment is "unreleased" only for the seconds
+     * until it is tagged. Without this, a repository setting `unreleased: false` would find every
+     * release silently documenting nothing.
+     */
+    it('still documents a release the caller has named, even with it off', async () => {
+      const dir = twoReleaseFixture();
+      await captureLogs(() =>
+        runCli({ cwd: dir, argv: ['changelog', '--write', '--no-unreleased', '--release-version', '2.0.0'] }),
+      );
+      expect(written(dir)).toContain('## v2.0.0');
+      expect(written(dir)).toContain('not released yet');
+    });
+  });
+
   describe('--write picks up where the file left off', () => {
     /** A repository with a `v1.0.0` tag and one commit on either side of it, so "since the tag"
      *  and "the whole history" are distinguishable answers. */

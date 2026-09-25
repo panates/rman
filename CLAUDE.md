@@ -1014,6 +1014,15 @@ saw one thing to release and it was the one thing that must never be published.
     default changed. **Don't pin a heading's layout in a spec**: `toContain('## pkg-a 1.0.0')` did,
     in twenty-two places, so a presentation change turned all of them red for no defect. Both spec
     files have a `headingFor(name)` regex helper for this.
+- **`changelog.unreleased` defaults to `true`, so the flag that acts is `--no-unreleased`** -
+  the one place this deliberately parts from `auto-changelog`, which defaults its equivalent off.
+  That tool documents a finished history; `rman changelog` exists to answer what is *not* released
+  yet, down to the message it prints when there is none. Off by default would make the common case
+  need a flag.
+  - **`options.version` always wins over it** (`resolveUnreleased`). Naming the version means the
+    caller is describing the release it is about to cut - `version --changelog` writes that entry
+    *before* it commits and tags. Without the guard, a repository setting `unreleased: false` would
+    find every release silently documenting nothing; the control for it turns that spec red.
 - **`changelog.startingAt` puts a floor under how far back a backfill goes** (`resolveStartingPoint`)
   - one key taking a version/tag, a `YYYY-MM-DD` date, or a commit, where `auto-changelog` has two
   options and no commit form. Decided in that order, because the shapes overlap: date shape first,

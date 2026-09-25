@@ -22,6 +22,7 @@ Accepts [package filtering](../cli-rman.md#package-filtering) options, in additi
 | `--file-path <path>` | - | string | With `--write`, the file to prepend into, relative to each package's own directory. Default `"CHANGELOG.md"`, or `.rmanrc "changelog.filePath"`. |
 | `--from-root` | `-r` | boolean | Generate for the whole repository even when standing inside one package's own directory (which otherwise scopes it to just that package). No effect elsewhere. |
 | `--include-skipped` | - | boolean | Also generate for a package with `.rmanrc "publish.skip"` - excluded by default. |
+| `--no-unreleased` | - | boolean | Leave out the entry for commits that are not released yet - a changelog of released history only. On by default; also `.rmanrc "changelog.unreleased"`. |
 | `--starting-at <ref>` | - | string | Where this package's changelog begins - a version or release tag (inclusive), a `YYYY-MM-DD` date, or a commit. Releases older than it are left out. Also `.rmanrc "changelog.startingAt"`. See [Where a changelog begins](#where-a-changelog-begins). |
 | `--release-version <v>` | - | string | The version these notes are **for** - what the entry heading shows. Default: read back from each package's own latest release tag, which is only right once that release is tagged. Pass it when generating notes ahead of the bump (e.g. from `changed --json`), otherwise the heading shows the *previous* release. |
 
@@ -147,6 +148,23 @@ version number. And with no changelog file at all, the tag boundary documented o
 
 Running `--write` twice with no commit in between now says `No unreleased changes.` and leaves the
 file byte-identical.
+
+## Leaving the unreleased entry out
+
+The commits after the newest tag get their own entry by default. `--no-unreleased` (or `.rmanrc
+"changelog.unreleased": false`) drops it, for a changelog of released history alone - which only
+became a thing to want once `--write` started backfilling.
+
+**The default is the opposite of `auto-changelog`'s, on purpose.** That tool documents a finished
+history, so its unreleased section is the unusual thing to ask for. Here it is the ordinary one:
+`rman changelog` exists to answer what is not released yet, down to the message it prints when
+there is nothing (`No unreleased changes.`). Off by default would make the common case need a flag.
+
+**A release you have named is never dropped by it.** `--release-version` (which is how
+[`version --changelog`](version.md) writes its entry, before it commits and tags) means the caller
+is describing the release it is about to cut - the segment is "unreleased" only until the tag
+exists. Without that guard, setting `unreleased: false` would leave every release documenting
+nothing.
 
 ## Where a changelog begins
 

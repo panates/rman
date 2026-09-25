@@ -141,7 +141,9 @@ export class ChangelogService extends Service {
        */
       const floor = await resolveStartingPoint(git, pkg, options);
       const floorIndex = floor?.sha ? commitsByTarget[i].findIndex(c => c.sha === floor.sha) : -1;
+      const withUnreleased = resolveUnreleased(pkg, options);
       for (const segment of await splitByRelease(git, pkg, commitsByTarget[i])) {
+        if (!segment.tag && !withUnreleased) continue;
         if (await isBelowStartingPoint(git, pkg, segment, floor, floorIndex)) continue;
         const ownCommits = dropVersionBumps(segment.commits).filter(c => ownersOf(repository, c).has(pkg));
         if (!ownCommits.length) continue;
@@ -262,6 +264,26 @@ const DEFAULT_CHANGELOG_FILE = 'CHANGELOG.md';
  *  `optionsFilePath` (`Changelog.Options.filePath`, CLI `--file-path`) applies the same way to
  *  every package and wins over `.rmanrc changelog.filePath` (cascaded, per-package overridable),
  *  which in turn wins over the default `'CHANGELOG.md'`. */
+/**
+ * Whether the commits that are not released yet get an entry of their own - `.rmanrc
+ * changelog.unreleased`, or the flag, **defaulting to `true`**.
+ *
+ * `auto-changelog` defaults the equivalent off, and the opposite default here is not an oversight:
+ * that tool documents a finished history, while `rman changelog` exists to answer what is *not*
+ * released yet, down to the message it prints when there is none. Off by default would make the
+ * common case need a flag.
+ *
+ * **A named release is never dropped by it.** `options.version` means the caller is describing the
+ * release it is about to cut - `version --changelog` writes that entry before it commits and tags,
+ * so the segment is only "unreleased" for the few seconds until it is. Without this, a repository
+ * setting `unreleased: false` would find its releases silently documenting nothing.
+ */
+function resolveUnreleased(pkg: Package, options: ChangelogService.Options): boolean {
+  if (options.version) return true;
+  const cfg = pkg.config?.changelog?.unreleased;
+  return options.unreleased ?? (typeof cfg === 'boolean' ? cfg : true);
+}
+
 /**
  * **Where this package's changelog begins** - `.rmanrc changelog.startingAt`, or the CLI flag,
  * which wins as everywhere.
@@ -674,6 +696,10 @@ export namespace ChangelogService {
      *  commit. Releases below it are left out. `.rmanrc changelog.startingAt` when omitted; see
      *  `resolveStartingPoint` for how the three forms are told apart. */
     startingAt?: string;
+    /** Whether the not-yet-released commits get an entry - `.rmanrc changelog.unreleased` when
+     *  omitted, and `true` when neither says. A caller passing `version` always gets it, since that
+     *  names the release being cut; see `resolveUnreleased`. */
+    unreleased?: boolean;
   }
 
   /** One package's (root included) generated changelog entry - what `getEntries`/`generate`

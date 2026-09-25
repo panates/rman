@@ -86,6 +86,27 @@ const config = {
    * to every package, while this lives in `.rmanrc`, is cascaded per package, and still holds on
    * the run after next.
    */
+  /**
+   * **Default `true`, so the flag that does something is `--no-unreleased`** - and that is the one
+   * place this deliberately differs from `auto-changelog`, which defaults it off.
+   *
+   * There, a changelog is generated from a finished history and the unreleased section is the
+   * unusual thing to want. Here it is the *ordinary* one: `rman changelog` exists to answer what is
+   * not released yet, down to the message it prints when there is nothing ("No unreleased
+   * changes."), and `version --changelog` writes the entry for the release it is about to cut -
+   * which is that segment. Defaulting it off would make the common case need a flag, and make
+   * `version --changelog` silently write nothing.
+   *
+   * What it *is* for is the other direction, which only became possible once `--write` started
+   * backfilling: a changelog of released history, with the work in progress left out.
+   */
+  unreleased: {
+    target: 'both',
+    describe:
+      'Include the entry for commits that are not released yet (default true) - pass ' +
+      '--no-unreleased for a changelog of released history only',
+    type: 'boolean',
+  },
   startingAt: {
     target: 'both',
     cliName: 'starting-at',
@@ -133,6 +154,7 @@ const changelogCommand = registerCommand(app => {
         includeSkipped: args.includeSkipped,
         version: args.releaseVersion,
         startingAt: args.startingAt,
+        unreleased: args.unreleased,
       };
       const changelog = app.getService('changelog');
       const entries = write ? await changelog.generateToFile(options) : await changelog.getEntries(options);
