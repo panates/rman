@@ -469,6 +469,25 @@ describe('commands/changelog', () => {
     });
 
     /**
+     * **The marker records what the file documents, not where HEAD is**, and `unreleased: false` is
+     * what makes the difference load-bearing rather than pedantic.
+     *
+     * Measured with HEAD: the run wrote the released history and then marked the file documented up
+     * to HEAD, so the commits it had deliberately *not* written fell behind the boundary. The
+     * release that followed found nothing after the marker and produced no entry at all - the work
+     * silently gone from the changelog for good.
+     */
+    it('leaves the undocumented commits reachable, so the release that follows still names them', async () => {
+      const dir = twoReleaseFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write', '--no-unreleased'] }));
+      expect(written(dir)).not.toContain('not released yet');
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write', '--release-version', '2.0.0'] }));
+      expect(written(dir)).toContain('## v2.0.0');
+      expect(written(dir)).toContain('not released yet');
+    });
+
+    /**
      * **The guard that keeps `version --changelog` working.** Naming the version means the caller is
      * describing the release it is about to cut - the segment is "unreleased" only for the seconds
      * until it is tagged. Without this, a repository setting `unreleased: false` would find every

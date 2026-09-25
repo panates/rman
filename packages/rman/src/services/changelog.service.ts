@@ -27,12 +27,17 @@ export class ChangelogService extends Service {
      * `resolveBoundary` on the next run, which is what makes a second `--write` append the commits
      * since this one rather than re-emitting everything since the last tag.
      *
-     * HEAD, resolved **once**: every entry in this run covers the same range, and asking per
-     * package could straddle a commit made while the run was in flight.
+     * **Each entry's own last commit, not HEAD** - and that distinction is not bookkeeping.
+     * Measured with HEAD: under `changelog.unreleased: false` the run wrote the released history
+     * and then marked the file as documented up to HEAD, so the commits it had deliberately *not*
+     * written fell behind the boundary. The release that followed found nothing after the marker
+     * and produced no entry at all - the work silently gone from the changelog for good.
+     *
+     * Entries are ordered oldest first and each prepend rewrites the one marker, so the last write
+     * for a file leaves the newest documented commit behind it.
      */
-    const documentedUpTo = await new GitHelper({ cwd: this.repository.dirname }).headSha();
     for (const entry of entries) {
-      prependToChangelogFile(entry.package, entry.filePath, entry.content, documentedUpTo);
+      prependToChangelogFile(entry.package, entry.filePath, entry.content, entry.documentedUpTo);
     }
     return entries;
   }
@@ -173,6 +178,10 @@ export class ChangelogService extends Service {
           package: pkg,
           label,
           version,
+          /** The last commit this entry covers - what the file's marker records. For a tagged
+           *  segment that is the release commit itself, so everything up to and including the
+           *  release is documented and nothing after it is claimed. */
+          documentedUpTo: segment.commits[segment.commits.length - 1]!.sha,
           sections,
           ...legacyBuckets(sections, titles),
           content,
@@ -813,6 +822,9 @@ export namespace ChangelogService {
     /** `options.version` when the caller gave one, otherwise resolved from git tags rather than
      *  package.json - see `resolveVersion`. */
     version: string;
+    /** The last commit this entry covers. `generateToFile` writes it into the file as the marker
+     *  the next run starts from - see `Entry.filePath`. */
+    documentedUpTo: string;
     /** Every section this entry renders, in the order it renders them - the heading a repository
      *  chose through `.rmanrc changelog.titles`, and the lines under it. */
     sections: { title: string; lines: string[] }[];
