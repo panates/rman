@@ -1,6 +1,6 @@
 <!--
 docs-baseline
-git-commit: 16c3525
+git-commit: 4e19c2e
 package-version: 2.0.0-beta.2
 date: 2026-09-25
 
