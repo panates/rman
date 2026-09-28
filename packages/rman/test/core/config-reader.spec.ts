@@ -211,6 +211,44 @@ describe('core/ConfigReader', () => {
       fs.writeFileSync(path.join(b, '.rmanrc'), JSON.stringify({ '[/]': { platform: 'node' } }));
       await expect(reader().resolve(b)).resolves.toBeDefined();
     });
+
+    /**
+     * **A selector nested inside another reads as an intersection and is not one.** It is the shape
+     * someone reaches for first - and the cascade only looks at the *top level* of a level's config
+     * (`Workspace._matchingSelectors`), so the inner block was carried through as an ordinary key.
+     *
+     * Measured before the check: a package matching neither block resolved to
+     * `{ group: 'node', '[pkg-*]': { group: 'node-and-pkg' } }` - the outer block applied to
+     * everyone, the inner one sitting in `rman config` looking as though it had worked.
+     *
+     * Selectors do not intersect on purpose: specificity ranking was dropped because globs do not
+     * nest, and a conjunction brings that tiebreak back. A real intersection is an expression.
+     */
+    it('refuses a selector nested inside another, which reads as an intersection', async () => {
+      const dir = tmp();
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[platform:node]': { '[pkg-*]': { group: 'x' } } }));
+      await expect(reader().resolve(dir)).rejects.toThrow(/is only read at the top level/);
+    });
+
+    /** Anywhere below the top level, not only directly inside a block - the rule is where a selector
+     *  is *read*, and the message names the path so the line can be found. */
+    it('refuses one buried further down, naming where it sits', async () => {
+      const dir = tmp();
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { run: { build: { '[pkg-*]': { exec: 'x' } } } } }),
+      );
+      await expect(reader().resolve(dir)).rejects.toThrow(/nested under "\[\*\].run.build"/);
+    });
+
+    /** **`vars` is exempt, and the contribution keys with it.** Their contents are not config keys -
+     *  `vars` is free-form by contract, and `plugins`/`commands`/`publishTargets` hold objects whose
+     *  key space rman does not own. A bracketed name in either is data, not a selector. */
+    it('leaves a bracketed key inside "vars" alone', async () => {
+      const dir = tmp();
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { vars: { '[weird]': 1 } } }));
+      await expect(reader().resolve(dir)).resolves.toBeDefined();
+    });
   });
 
   describe('extends: the base first, the file on top', () => {

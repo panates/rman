@@ -192,6 +192,27 @@ below, and a `"[selector]"` narrows the audience.**
       order the author typed. What was left was already declaration order with the catch-all lifted
       out of it. The cost, stated rather than hidden: a catch-all written *below* a narrower block
       now overrides it. Writing catch-alls first is a convention, not a rule.
+  - **A selector is read at the **top level** of a level's config and nowhere else, and one written
+    deeper is refused** (`_assertNoNestedSelectors`). The shape that makes this worth a check is the
+    one everybody reaches for first, because it reads as an intersection:
+
+    ```yaml
+    "[platform:node]":
+      "[pkg-*]": { group: x }     # refused - it would never be applied
+    ```
+
+    Measured before the check: a package matching *neither* resolved to
+    `{ group: 'node', '[pkg-*]': { group: 'node-and-pkg' } }` - the outer block applied to
+    everyone and the inner one sat in `rman config` looking as though it had worked. Silence is the
+    bad half.
+    - **Selectors do not intersect, and that follows from dropping `selectorRank`.** Globs do not
+      nest, so any conjunction brings back the tiebreak question that ranking was removed for. A
+      real intersection is an expression - `if: "${{ pkg.provider === 'node' && ... }}"` - which is
+      per key and says so. Two blocks in declaration order are the other answer, and they are an
+      override rather than an AND.
+    - **`vars` and the contribution keys are exempt**: their contents are not config keys. `vars` is
+      free-form by contract and `CODE_SUBTREES` hold plugins, commands and publish targets, whose
+      key space rman does not own. A bracketed name in either is data.
   - **`"[ws:*]"` / `"[workspace:*]"` is accepted and means exactly `"[*]"`.** The qualifier said
     "not the root" back when a bare glob included it; the shape of the set says that now. Kept
     working rather than rejected because both spellings resolve to the same packages - an error

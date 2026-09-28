@@ -9,6 +9,7 @@ import type { RmanConfig } from '../../interfaces/rman-config.interface.js';
 import type { Package } from '../classes/package.js';
 import type { Repository } from '../classes/repository.js';
 import { declaredKind, isDeclared, isPlatform, type Platform, type Plugin } from '../interfaces/plugin.js';
+import { CODE_SUBTREES } from './config-paths.js';
 import { mergeConfig } from './merge-config.js';
 
 const requireConfigModule = createRequire(import.meta.url);
@@ -28,6 +29,9 @@ const PRESET_EXTENSIONS = ['.js', '.ts'];
 /** What an error about a default preset names itself as - there is no config key to quote, since
  *  these are laid down by the caller rather than written by anybody. */
 const PRESETS_LABEL = 'presets';
+
+/** Free-form by contract - see `_assertNoNestedSelectors`. */
+const VARS_KEY = 'vars';
 
 /** Keys that only an rman **config** has, for telling one from a contribution once it has already
  *  been refused - see `_assertLoaded`. `name` is not among them: a plugin has one too. */
@@ -318,6 +322,7 @@ export class ConfigReader {
   }
 
   protected _assertSelectorBlocks(config: RmanConfig, file: string): void {
+    this._assertNoNestedSelectors(config, file, []);
     for (const [key, value] of Object.entries(config)) {
       if (!ConfigReader.isSelectorKey(key) || !value || typeof value !== 'object') continue;
       if (EXTENDS_KEY in (value as Record<string, unknown>)) {
@@ -349,6 +354,50 @@ export class ConfigReader {
           );
         }
       }
+    }
+  }
+
+  /**
+   * Refuses a `"[...]"` key anywhere but the top level of a config.
+   *
+   * @param at where `node` sits, for the message.
+   */
+  /* **A selector is read at the top level of a level's config and nowhere else**
+   * (`Workspace._matchingSelectors`), so a nested one is a silent no-op - and the shape it is
+   * written in is the one someone reaches for first, because it reads as an intersection:
+   *
+   * ```yaml
+   * "[platform:node]":
+   *   "[pkg-*]": { group: x }     # never applied
+   * ```
+   *
+   * **Measured**: the inner block reached `other-lib`, which matches neither, as a literal
+   * `'[pkg-*]'` key in its resolved config - so `rman config` showed it sitting there and it read as
+   * working. Silence is the bad half: the author believes they filtered, every package gets the
+   * outer block, and nothing says otherwise.
+   *
+   * **Selectors do not intersect, and that is not an oversight.** Specificity ranking was dropped on
+   * purpose - globs do not nest, so for `pkg-dialect` neither `"[pkg-*]"` nor `"[*-dialect]"`
+   * contains the other and any tiebreak is invented. A conjunction would bring that question back in
+   * a harder form. A genuine intersection is an expression (`if: "${{ pkg.provider === 'node' && ...
+   * }}"`), which is per key and says so.
+   *
+   * **`vars` and the contribution keys are skipped**, and both are exempt for the same reason: their
+   * contents are not config keys. `vars` is free-form by contract and `CODE_SUBTREES` hold plugins,
+   * commands and publish targets - arbitrary objects rman does not own the key space of. */
+  protected _assertNoNestedSelectors(node: unknown, file: string, at: string[]): void {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+    for (const [key, value] of Object.entries(node)) {
+      if (at.length && ConfigReader.isSelectorKey(key)) {
+        throw new Error(
+          `"${key}" in "${file}" is nested under "${at.join('.')}" - a selector is only read at the ` +
+            `top level of a config, so this one would never be applied. Selectors do not intersect: ` +
+            `write it at the top level, or use an expression where you need a package to match two ` +
+            `things at once.`,
+        );
+      }
+      if (key === VARS_KEY || CODE_SUBTREES.includes(key as (typeof CODE_SUBTREES)[number])) continue;
+      this._assertNoNestedSelectors(value, file, [...at, key]);
     }
   }
 
