@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: c810d62
-package-version: 2.0.0-beta.2
-date: 2026-09-25
+git-commit: f935a28
+package-version: 2.0.0-beta.4
+date: 2026-09-28
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff f43a447..HEAD -- packages/rman/src/
+  git diff f935a28..HEAD -- packages/rman/src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -184,7 +184,7 @@ await Repository.create(undefined, { app: own });
   does nothing.
 - **One application, one repository.** A second is refused.
 - **`Registry<T>`** is the shape of a contribution list: `add` (idempotent by identity), `all`,
-  `first(ask)` for "the first that recognizes this", and it is iterable. A registry is for a
+  `size`, `first(ask)` for "the first that recognizes this", and it is iterable. A registry is for a
   question whose answer is the *sum* of what was contributed; a question with exactly one answer is
   a service instead.
 
@@ -247,15 +247,19 @@ const audit = definePlugin({
 - **Everything optional is answered by its absence**, never by a default rman invented. The core
   ships `basePlatform`, whose reader recognizes nothing: a directory no technology claimed falls
   back to it and gets a package named after its directory at `0.0.0`. No `getWorkspace` means no
-  packages below it; no `versionPlanner` means `version`/`changed` fail naming the key rather than
-  releasing a plausible but untrue set.
+  packages below it; no `versionPlanner` means `version` fails naming the key rather than releasing
+  a plausible but untrue set.
 - **`getRunSteps`, not `onBuildRunSteps`**: it is a *query*, and not build-specific - `version`
   reads the same seam for `preversion`/`version`/`postversion`.
-- **`init` is the escape hatch, not the front door.** Commands and publish targets are `.rmanrc`
-  keys, so a plugin contributing only those needs no `init`. It runs during `Repository.create`,
-  before any package is known, so `ctx.app.repository` throws there; anything wanting the
-  repository belongs in a command's factory instead.
-- `isPlatform(value)` tells the two apart, which is what the sugar above is normalized by.
+- **A stage is the escape hatch, not the front door.** Commands, platforms and publish targets are
+  all `.rmanrc` keys, so a package contributing those needs no plugin at all. `afterInitRepository`
+  exists for what the keys cannot express - a plugin that contributes no command and still wants the
+  packages - which is exactly the case the old advice ("put it in a command's factory") had no
+  answer for.
+- `declaredKind(value)` says which of the two a value is, and `isPlatform(value)` reads that mark
+  rather than testing for `manifestProvider`. The structural test was the only one available while
+  one type was both halves; as a question about an arbitrary import it gets the common mistake
+  backwards.
 
 **Which platform claims a directory** is `RmanApplication.platformFor(dir)` - the first registered
 platform whose manifest provider recognizes it, `basePlatform` when none does. A package is handed
@@ -268,7 +272,7 @@ carrying it, and the repository writes `extends`:
 ```ts
 // the package's entry point
 export default defineConfig({
-  plugins: [cargoPlatform],
+  platforms: [cargoPlatform],
   commands: [buildCommand],
   publishTargets: [new CratesPublishTarget()],
 });
@@ -360,7 +364,10 @@ class Repository extends Package {
   readonly packages: Package[]; // every package; root NOT included when monorepo
   readonly cwd: string; // the directory Repository.create() was actually invoked from
 
-  static create(root?: string, options?: { deep?: number }): Promise<Repository>;
+  static create(
+    root?: string,
+    options?: { deep?: number; app?: RmanApplication; presets?: readonly string[] },
+  ): Promise<Repository>;
 
   get currentPackage(): Package | undefined;
   getPackages(options?: { scope?: string | string[]; toposort?: boolean }): Package[];
@@ -374,10 +381,29 @@ namespace Repository {
 ```
 
 **`Repository.create(root?, options?)`** walks up from `root` (default `process.cwd()`), up to
-`options.deep` (default `10`) directory levels, looking for a `package.json` with an array
-`workspaces` field. The first one found becomes the monorepo root. If it instead hits a `.git`
-directory before finding one, that directory becomes a non-monorepo repository root. If nothing is
-found within the depth limit, you get a plain single-package `Repository` rooted at `root` itself.
+`options.deep` (default `10`) levels, stopping at the first directory holding a `.git`. The root is
+then, in order: the **outermost** directory in that chain holding an `.rmanrc*`; failing that the
+`.git` directory itself; failing that `root`.
+
+**Outermost, not nearest**, because a *package* may have an `.rmanrc` of its own - which is a
+supported thing - so from inside one the nearest is the package's and not the repository's. What
+that costs, since only one answer can win: a self-contained project nested inside a larger git
+repository *and sharing its `.git`* resolves to the outer root (measured). A nested project with a
+`.git` of its own is found correctly, because the walk stops there before the outer `.rmanrc` is
+seen.
+
+**This question is answered without knowing anything about any ecosystem**, and it has to be: the
+plugins that would know are named in the config file the walk is looking for. So a `package.json`
+with a `workspaces` array means **nothing** here - a repository is marked by an `.rmanrc*` or a
+`.git`, and `package.json#rman` is deliberately not one of the forms, since it would make the root
+question npm-shaped again. Which directories then hold packages is the technology's answer, through
+[`Workspace`](#workspace-finding-the-packages).
+
+- **`options.app`** hands over an [`RmanApplication`](#rmanapplication) instead of building one -
+  how a caller sets the log level before anything reads config, or registers its own technologies.
+- **`options.presets`** replaces the default preset list rman lays under the root (`['node']`).
+  `presets: []` is the opt-out for a caller bringing an ecosystem of its own, and the core's own
+  test fixture passes it.
 
 Async because config resolution can load a `.rmanrc.cjs`/`.rmanrc.mjs`/`.rmanrc.js` module (see
 [Configuration](#configuration-rmanrc--rmanrcyml) below), which needs a dynamic `import()` for a
@@ -433,6 +459,7 @@ class Package {
   manifestFileName: string; // absolute path to the file it was read from ('' if none)
   dependencies: Package[]; // in-repo packages this one depends on (full transitive closure)
   config: ResolvedConfig; // its own effective, cascaded .rmanrc - value functions already called
+  rawConfig: RmanConfig; // the same config before interpolation - every ${{ }} still as written
   repository: Repository; // the repository it belongs to - non-enumerable; a repository's own is itself
   children: Package[]; // the packages directly inside this one - the tree edge
   parent?: Package; // the one containing it - non-enumerable; undefined for the root
@@ -447,10 +474,18 @@ class Package {
   get provider(): string; // which ecosystem read it - 'node', ''; see Platform
   get isRoot(): boolean; // whether this is the repository's own root package
 
+  platformSelector(): string; // what its platform says addresses it, before any config is consulted
   reloadManifest(): Manifest; // re-reads from disk through its own technology's provider
   writeManifest(): void; // writes the manifest back to its own file
 }
 ```
+
+**`config` and `rawConfig` are two fields rather than two stages of one**, because they have
+different *types*: `config` is a `ResolvedConfig` by contract and is read everywhere, so holding an
+uninterpolated config there for the window between the cascade and the bake would make the type say
+something untrue at every reader. `Workspace` produces `rawConfig` when it cascades the directory
+chain, `Repository` evaluates it into `config`. Read `config` unless you specifically want the
+unevaluated text.
 
 There is no `json`/`writeJson` here: `package.json` is npm's answer to where a package's name and
 version are written, not rman's. `manifest.raw` is still the whole document for code that knows its
@@ -506,7 +541,27 @@ pkgA.writeManifest();
 **Discovery descends, asking each directory its own technology where its children are.**
 
 ```ts
+class Workspace {
+  readonly rootDir: string;
+  readonly rootPackage: Package;
+  readonly packages: Package[];    // every package below the root, the tree flattened
+  readonly platforms: Platform[];  // the technologies in play, in the order they were loaded
+  readonly plugins: Plugin[];      // everything else a level contributed
+
+  static create(rootDir: string, options: Workspace.Options): Promise<Workspace>;
+  packageAt(dirname: string): Package | undefined;
+}
+
 namespace Workspace {
+  interface Options {
+    app: RmanApplication;
+    plugins?: Plugin[];            // the application's, to start from
+    platforms?: Platform[];
+    presets?: readonly string[];   // rman's own, laid under the root level only; [] opts out
+    deep?: number;
+    reader?: ConfigReader;         // the test seam
+  }
+
   type Provider = (dir: string) => string[] | undefined; // child package dirs, or "not mine"
 
   interface Node {
@@ -520,6 +575,15 @@ namespace Workspace {
   function findRoot(from: string, deep?: number): string;
 }
 ```
+
+**`Workspace` is a class as well as a namespace**, and the class is what `Repository.create` uses:
+it runs the walk, resolves every package's selector, checks those selectors are unique, and cascades
+the directory chain into each `Package.rawConfig`. The namespace's `walk`/`flatten`/`findRoot` are
+the pieces underneath, usable on their own.
+
+**`presets` is passed to the root level only** - everything below inherits whatever the root settled
+on, and laying them again at an intermediate directory would put a preset's technology ahead of one
+that directory declared.
 
 One step, applied recursively: take the directory's **declared** platform if its `.rmanrc` names one
 and otherwise the first that recognizes it, ask **that** platform where its children are, and repeat
@@ -1324,8 +1388,11 @@ step there is mistaken for a value.
 
 | Key | Type | Default | Scope / notes |
 | --- | --- | --- | --- |
-| `plugins` | a plugin, or a glob naming modules that export one | none | Root-level only - it is read before any package exists. Always **appends** across layers. A built-in's *name* (`'node'`) is also accepted; a package name never is, and is refused telling you to write `extends`. |
-| `platform` | `string` | the first registered platform that recognizes the directory | Per-package cascaded. Which technology this package belongs to, by `Platform.name`. A declaration wins over the guess and the named platform validates it - a mismatch is an error. At the **root** it also brings the built-in it names, exactly as `plugins` would; below the root it loads the technology alone. Never an expression, and refused inside a `"[glob]"` block. |
+| `plugins` | a plugin, or a glob naming modules that export one | none | Root-level only - it is read before any package exists. Always **appends** across layers. A *name* is never accepted, built-in or package: it is refused, naming `extends` as the fix. |
+| `platforms` | a platform, or a glob naming modules that export one | none | The key a **technology** arrives through, the same shape `plugins` takes and appending the same way. Read at any level, not only the root. |
+| `commands` | a command, or a glob naming modules that export one | `['.rman/*.mjs', ...]` | Always appends. A *relative glob* is anchored to the file that declared it. Declaring a glob anywhere replaces the `.rman/` default, so a config meant to be inherited lists its commands individually. |
+| `publishTargets` | a publish target | none | Always appends. Where a package's artifact can ship - see [`PublishTarget`](#publishtarget). |
+| `platform` | `string` | the first loaded platform that recognizes the directory | Per-directory cascaded. Which technology claims this directory, by `Platform.name`. **It loads nothing** - a name no loaded technology provides is an error naming the file, and the fix is `platforms` or `extends`. A declaration is held to the directory: a platform that does not recognize it is an error naming the file it looked for. Never an expression; refused inside a `"[glob]"` block and inside a nested `"[/]"`. |
 | `name` | `string` | the platform's answer, else the manifest's name | Per-package cascaded. The selector this package answers to - what `"[glob]"` and `--scope` match. Does **not** rename the package: `pkg.name` stays what the manifest says. Must be unique; refused inside a `"[glob]"` block. |
 | `packageManager` | `'npm'\|'yarn'\|'pnpm'\|'bun'` | `'npm'` | Root-level only. Used by `ci`/`publish`. CLI flag wins when given. |
 | `logLevel` | `'silent'\|'error'\|'info'\|'verbose'` | `'info'` | Root-level only. Invalid values fall back to `'info'`. CLI `--log-level` wins when given. |
@@ -1337,7 +1404,7 @@ step there is mistaken for a value.
 | `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
 | `version.stampDockerfile` | `boolean` | `true` | Per-package cascaded. Rewrite this package's Dockerfile `org.opencontainers.image.version` label to the version being written, in the same commit as the bump. Only ever rewrites a label already declared; reads `publish.docker.dockerfile`. |
 | `version.stamp` | `string \| string[]` | none | Per-package cascaded. Source files (relative to the package's own directory) whose `version` constant is rewritten to the version being written, in the same commit. A listed file a package doesn't have is a silent no-op. |
-| `version.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). A `RunStepValue` is a shell command **or a function** - see [Function steps](#function-steps). |
+| `version.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. Hooks around a version bump's write. **The same composition rule `run` uses** - npm's `preversion`/`postversion` run *inside* the config's `before`/`after` rather than replacing them, and only `version` (the `exec` slot) is replaced by the package's own. Left **unevaluated** at load (`DEFERRED_PATHS`), which is what lets `${{ pkg.targetVersion }}` bind here and nowhere else. A `RunStepValue` is a shell command **or a function** - see [Function steps](#function-steps). |
 | `changelog.titles` | `Record<string, string>` | `{ feat: '✨ Features', fix: '🐛 Bug Fixes', '*': '🔧 Other Changes' }` | Per-package cascaded. The heading each commit type is listed under, and the order the sections come out in. **Merged over the defaults per key**, so naming one type does not cost you the others. `'*'` is the catch-all and always renders last. Two types sharing a heading share one section. |
 | `changelog.sortTitles` | `string[]` (commit types) | none | Per-package cascaded. The order the sections come out in. A sort, not a filter: an unlisted type keeps its place after the listed ones, a listed type with no heading of its own sorts nothing, and `'*'` is always last. |
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
@@ -1371,10 +1438,13 @@ step there is mistaken for a value.
 | `run.<script>.changedSince` | `string` | none | Root-level fallback, used only when CLI `--changed-since` isn't given. |
 | `run.<script>.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of running this script entirely. |
 | `run.<script>.if` | `string` (small expression grammar) \| `RunConditionFn` | none (always runs) | Per-package cascaded. See [`RunService`'s conditional execution](#conditional-execution-if) and [Function steps](#function-steps). |
-| `run.<script>.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded - supplies the step(s) to run when the package's own `package.json` doesn't define this script slot. A `RunStepValue` is a shell command **or a function** ([Function steps](#function-steps)); a list may mix them. A bare value in place of the whole `run.<script>` object is shorthand for `exec`. |
+| `run.<script>.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. **`before`/`after` compose with the package's own `pre<script>`/`post<script>`; only `exec` replaces** - the config brackets the package's own, `config.before -> prebuild -> build -> postbuild -> config.after`. A `RunStepValue` is a shell command **or a function** ([Function steps](#function-steps)); a list may mix them. A bare value in place of the whole `run.<script>` object is shorthand for `exec`. |
+| `run.<script>.changed` | `boolean` | `false` | Root-level fallback, used only when CLI `--changed` isn't given. Read since forever and declared never, which made it unreachable from a typed config. |
 | `run.<script>.override` | `boolean` | `false` | Per-package cascaded - when `true`, the config's script replaces the package's own definition even when it has one. |
 | `extends` | `string \| string[]` | none | Root of each file only. Configs to inherit from - see [above](#inheriting-a-shared-config-extends). |
-| `dependencies` | `string[] \| Record<string, string>` | none | Extra in-repo "dependencies" not present in the package's real `package.json`, purely for rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s task scheduling). Declared from the root through a selector (`"[pkg-a]": { dependencies: [...] }`) or in the package's own `.rmanrc`. |
+| `dependencies` | `string[]` | none | Extra in-repo edges not present in the package's real manifest, purely for rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s scheduling). Each entry is a **package name or a repository-relative directory**, tried in that order - the path form is what makes the key usable outside npm. Declared through a selector (`"[pkg-a]": { dependencies: [...] }`) or in the package's own `.rmanrc`. A `Record<string, string>` was also accepted once and the ranges went nowhere; the key states an **edge**, which needs two ends and nothing else. |
+| `vars` | `Record<string, unknown>` | `{}` | Declared at **any level** of the config and scoping its own subtree - `run.vars` covers every script, `run.build.vars` covers one. Merged per key over what the level above resolved to, and read as `${{ vars.x }}`. |
+| `skip` | `boolean` | `false` | Per-package cascaded. "Leave this package alone", honoured by every command that *acts* - `run`/`build`/`test`, `exec`, `clean`, `publish`, `version`, `changelog`. Applied before `--deps`/`--dependents`, so an edge cannot drag a skipped package back in. `list` is the one command that ignores it: an inventory hiding part of the repository answers a different question. |
 
 `run.<script>.bail`'s precedence is worth calling out explicitly, since it's the one exception to
 "CLI always wins": a package's own `.rmanrc bail: true/false` outranks even an explicit
@@ -1473,6 +1543,11 @@ compute a plan, print it, optionally ask for confirmation, then apply it.
 **Two things stayed plain exported functions**, and the line is whether they need the repository:
 `ChangeHashService` and `ConventionalCommitsService` are pure functions of their arguments, so
 putting an application between a caller and a parser would be ceremony.
+
+**`config` is registered and empty.** `app.getService('config')` resolves and the key is in
+`ServiceMap`, but `ConfigService` has no members yet - the reading, interpolating and cascading all
+still live in `ConfigReader`, `ConfigInterpolator` and `Workspace`. It is a reserved slot, not an
+API; nothing should be written against it until it has a shape.
 
 ### `VersionService`
 
@@ -2112,18 +2187,41 @@ pass `version` itself, or every entry ends up labelled with the previous release
 `GithubReleaseService` passes the version it's releasing.
 
 Formatting comes from `.rmanrc changelog.template` - a **path** to a template file (not the
-template text itself), supporting `{{package}}`/`{{version}}`/`{{date}}`/`{{commits}}` (the full
-grouped block) and `{{features}}`/`{{fixes}}`/`{{other}}` (their bullet lists alone, for a template
-with its own headings):
+template text itself). The default is:
 
 ```
-<!-- changelog.template.md -->
-## {{version}} - {{date}}
+## {{title}} ({{date}})
 
-{{features}}
-
-{{fixes}}
+{{commits}}
 ```
+
+**`{{title}}`, not `{{package}} {{version}}`.** An entry a release tag closes is headed by that
+**tag**, because assembling a heading from a label and a version states something untrue wherever a
+tag covers more than one package - a repository root came out as `## panates-javascript repository
+2.1.6` while the root package there was `panates-style` at `0.0.5`. An untagged segment is
+`Unreleased — <label>`, and the label has to stay in it: `rman changelog` prints every package to
+one stream, so consecutive bare `## Unreleased` blocks say nothing about which package each belongs
+to.
+
+Every placeholder:
+
+| | |
+| --- | --- |
+| `{{title}}` | the entry's heading - its tag, or `Unreleased — <label>` |
+| `{{date}}` | the **tag's committer date**, or today for an untagged segment |
+| `{{commits}}` | the full grouped block, every section with its heading |
+| `{{package}}` / `{{version}}` / `{{tag}}` | still bound, for a repository that wants to assemble its own heading |
+| `{{features}}` / `{{fixes}}` / `{{other}}` | bullet lists alone, for a template with its own headings |
+
+`{{features}}`/`{{fixes}}`/`{{other}}` are **derived** from the sections, so they keep meaning what
+they meant - whatever `feat` and `fix` are listed under, and everything else together. Since
+`changelog.titles` lets any commit type carry a heading, `Entry.sections` is the shape that does not
+lose a repository's own; prefer it in code.
+
+**`{{date}}` is the tag's date, not `new Date()`.** The version half of a heading is read back from
+the package's latest tag, so taking the date from the clock made the two halves describe different
+releases - measured, `v2.1.6 (2026-09-25)` for a tag cut days earlier - and made a regenerated file
+differ from itself every day.
 
 ```json
 { "changelog": { "template": "changelog.template.md" } }
@@ -2208,16 +2306,33 @@ run:
   test: mocha # a bare string is shorthand for { exec: mocha }
   build:
     concurrency: 2
-    before: [node ./generate.js, node ./validate.js]
+    before: [node ./generate.js, node ./validate.js] # runs BEFORE the package's own "prebuild"
     exec: tsc -b # used only if the package's own package.json has no "build" script
-    after: node ./copy-assets.js
-    override: true # use these even if the package DOES define its own build/prebuild/postbuild
+    after: node ./copy-assets.js # runs AFTER the package's own "postbuild"
+    override: true # replace the package's own instead of bracketing it
   lint:
     topo: false # lint scripts are independent - alphabetical order, no dependency waiting
     bail: false
   test:
     skip: true # this package opts out of "test" entirely
 ```
+
+**`before`/`after` compose with the package's own hooks; only `exec` replaces.** The two are not the
+same kind of key: `exec` is one answer to one question, so a package declaring `"build"` and a config
+declaring `exec` are the same build stated twice - while a hook is a *point*, and two hooks at one
+point both belong. The config brackets the package's own:
+
+```
+config.before -> prebuild -> build -> postbuild -> config.after
+```
+
+Measured, and it was a silent loss: a root declaring `"[*]" run.build.before` lost it entirely for
+any package that happened to have a `prebuild`, so adding an unrelated codegen hook to one package
+cancelled a repo-wide `rman clean` with a stale build directory as the only symptom. `version` uses
+the same function, so npm's `preversion` no longer replaces a repository's `version.before` either.
+
+`override: true` is unchanged and is the way to say "ignore what the package says it does": the
+config replaces rather than composes, per slot.
 
 `getConfig(pkg, script)` reads exactly this resolved block for one package/script pair - useful if
 you're building your own tooling on top of the same config convention.
@@ -2306,17 +2421,22 @@ namespace ListService {
     toposort?: boolean;
     changed?: boolean;
     changedSince?: string;
+    includeRoot?: boolean; // the root package is not a workspace member, so it is opt-in
   }
 
   interface Item {
     name: string;
+    selector: string; // what addresses it - "[glob]" and --scope match this, not name
     version: string;
+    platform: string; // the technology that claimed its directory; '' when none did
+    depth: number; // how deep in the package tree it sits
+    isRoot: boolean;
     location: string; // relative to the repository root
     private: boolean;
     status: Repository.PackageStatus;
     dependencies: string[]; // in-repo package names - enough to build a dependency graph
     publishTargets: string[]; // where it actually ships: its own "publish.target", or what claims it
-    docker?: RmanConfig.DockerPublishOptions; // present only when "docker" is one of publishTargets
+    docker?: DockerPublishOptions; // present only when "docker" is one of publishTargets
   }
 
 }
