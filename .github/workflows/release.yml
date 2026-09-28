@@ -124,12 +124,42 @@ jobs:
 
       # Written before anything mutates the repository: `version` below is the first step that
       # pushes, and an auth failure after it leaves a bump and a tag on main with nothing released.
+      #
+      # **The empty-credential line is the thing to remove, and it is why a release 404'd.**
+      # `registry-url` makes setup-node write
+      #
+      #   //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+      #
+      # into the file it points `NPM_CONFIG_USERCONFIG` at. With no token that reference resolves to
+      # nothing, and npm reads *having* an `_authToken` entry for the registry as being
+      # authenticated already - so it never reaches for OIDC, sends a credential that is not one,
+      # and the registry answers 404 (it returns 404 rather than 403 so nobody can probe which
+      # packages exist). Measured on a real run: `NODE_AUTH_TOKEN: unset`, the line present, and
+      # `npm publish` answering `404 Not Found - PUT https://registry.npmjs.org/rman`.
+      #
+      # Removing the line is not a workaround: an `_authToken` with nothing behind it cannot help
+      # any code path, and leaving the field empty is precisely what lets npm decide it must ask
+      # GitHub for an OIDC token instead. `registry=` stays, which is the half of `registry-url`
+      # that is actually wanted.
       - name: Configure npm auth
         run: |
+          NPMRC="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          # Stripped first and unconditionally, so a real token is never left competing with the
+          # placeholder for the same registry - npm reading two `_authToken` entries is a question
+          # nobody should have to answer.
+          #
+          # `grep -v` into a temp file rather than `sed -i`, which is not portable: BSD sed reads the
+          # next word as a backup suffix, so the same line is a silent no-op on macOS - measured,
+          # while checking this very step. `|| true` covers grep's exit 1 when it filters everything.
+          if [ -f "$NPMRC" ]; then
+            grep -v ':_authToken=' "$NPMRC" > "$NPMRC.tmp" || true
+            mv "$NPMRC.tmp" "$NPMRC"
+          fi
           if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
-            echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
+            printf '//registry.npmjs.org/:_authToken=%s\n' '${{ secrets.NPM_TOKEN }}' >> "$NPMRC"
+            echo "NPM_TOKEN is set - publishing with it rather than OIDC."
           else
-            echo "No NPM_TOKEN - falling through to npm's own OIDC Trusted Publishing."
+            echo "No NPM_TOKEN - cleared the empty auth line, so OIDC is the only credential left."
           fi
 
       # **Build 1 of 2: the bootstrap.** There is no rman to run `version` with until this finishes,
