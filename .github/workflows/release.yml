@@ -187,8 +187,16 @@ jobs:
           else
             echo "OIDC:       NO request URL - the id-token permission did not reach this job"
           fi
-          echo "user npmrc: $([ -f ~/.npmrc ] && echo 'present (NPM_TOKEN was set)' || echo 'none')"
-          echo "repo npmrc: $([ -f .npmrc ] && sed 's/_authToken=.*/_authToken=REDACTED/' .npmrc | tr '\n' ' ' || echo 'none - setup-node wrote nothing')"
+          echo "NODE_AUTH_TOKEN: ${NODE_AUTH_TOKEN:+set}${NODE_AUTH_TOKEN:-unset}"
+          echo "--- npm config (the files npm actually reads, auth values redacted)"
+          for f in "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}" ./.npmrc; do
+            if [ -f "$f" ]; then
+              echo "  $f:"
+              sed -e 's/\(_authToken=\).*/\1REDACTED/' -e 's/^/    /' "$f"
+            else
+              echo "  $f: (absent)"
+            fi
+          done
 
       # No `--target`: each package's own `.rmanrc "publish.target"` is the single source of truth.
       # Never looks at whether `version` ran - it inspects what is on disk and on the registry - so
