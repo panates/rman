@@ -1,6 +1,6 @@
 import path from 'path';
+import type { ResolvedConfig, RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { RmanApplication } from './application.js';
-import type { ResolvedConfig } from './config.js';
 import { Manifest } from './manifest.js';
 import type { Platform } from './plugin.js';
 import type { Repository } from './repository.js';
@@ -36,6 +36,22 @@ export class Package {
    * there is no second type to keep in step - see `Resolved`.
    */
   config: ResolvedConfig = {};
+  /**
+   * The same config **before** interpolation - every `${{ ... }}` and every value function still as
+   * the author wrote it.
+   *
+   * `Workspace` produces this when it cascades the directory chain; `Repository` evaluates it into
+   * {@link config}. Read `config` unless you specifically want the unevaluated text.
+   */
+  /* A second field rather than a stage of the first, because the two have different *types*:
+   * `config` is a `ResolvedConfig` by contract and is read in a hundred places, so putting a raw
+   * config there for the window between the cascade and the bake would make the type say something
+   * untrue everywhere.
+   *
+   * There was a `rawConfig` once before and it was removed as a duplicate - `version` kept one to
+   * re-read its own hooks, which `DEFERRED_PATHS` made unnecessary. This is not that: it is the
+   * handoff between two steps that genuinely produce different things. */
+  rawConfig: RmanConfig = {};
   /**
    * The repository this package belongs to - so anything holding a package can reach the whole
    * picture (its siblings, the root's config, git) without being handed it separately.

@@ -46,6 +46,8 @@ const ciCommand = declareCommand(app => {
   const repository = app.repository;
   return {
     command: COMMAND,
+    /** npm's alone: it installs through a Node package manager, from a Node lockfile. */
+    platforms: ['node'],
     describe: 'Deletes node_modules and lockfiles in every package, then reinstalls from scratch',
     /** Read, not owned: `packageManager` is a root-level key this package declares in
      *  `NodeConfigKeys`, and the `npm` publish target reads it too. */

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import panatesEslint from '@panates/eslint-config-ts';
 import globals from 'globals';
 
@@ -40,11 +41,21 @@ export default [
       'import-x/no-extraneous-dependencies': [
         'error',
         {
-          /** The repository root (dev tooling) *and* each package (its own deps and peers, which is
-           *  how a third-party plugin declares `rman`). `packageDir` replaces the default nearest-package
-           *  lookup rather than adding to it, so every root a test may legitimately import from has
-           *  to be listed - a new package gets a line here. */
-          packageDir: [import.meta.dirname, 'packages/rman'],
+          /**
+           * The repository root (dev tooling) *and* each package (its own deps and peers, which is
+           * how a third-party plugin declares `rman`). `packageDir` replaces the default
+           * nearest-package lookup rather than adding to it, so every root a test may legitimately
+           * import from has to be listed - a new package gets a line here.
+           *
+           * **Every entry absolute, resolved from this file.** A relative one is resolved against
+           * `process.cwd()`, so `'packages/rman'` was correct from the repository root and pointed
+           * at `packages/rman/packages/rman` - nothing - from inside the package. The package's own
+           * dependencies then went unseen and its tests failed on imports declared exactly where
+           * they should be: measured, `eslint .` clean from the root and
+           * `'fast-glob' should be listed in the project's dependencies` from `packages/rman`.
+           * A lint result that depends on where you are standing is the thing to rule out.
+           */
+          packageDir: [import.meta.dirname, path.join(import.meta.dirname, 'packages/rman')],
           devDependencies: true,
           peerDependencies: true,
         },

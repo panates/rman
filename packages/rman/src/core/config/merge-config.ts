@@ -1,11 +1,12 @@
 import path from 'node:path';
+import { isPlainObject } from '@jsopen/objects';
 
 /** Where a repository keeps command modules of its own, as a glob or a list of them. */
 export const COMMANDS_KEY = 'commands';
 
 /** The keys whose string entries are globs, and so have to be anchored to the file that wrote
- *  them - see `anchorContributions`. The same three that always append. */
-const GLOB_KEYS: readonly string[] = ['plugins', COMMANDS_KEY, 'publishTargets'];
+ *  them - see `anchorContributions`. The same four that always append. */
+const GLOB_KEYS: readonly string[] = ['plugins', 'platforms', COMMANDS_KEY, 'publishTargets'];
 
 /**
  * Keys that **append rather than replace**, which is the only append rman has.
@@ -37,7 +38,7 @@ const GLOB_KEYS: readonly string[] = ['plugins', COMMANDS_KEY, 'publishTargets']
  * Do not extend this list casually: a key that always appends can never be *un*-said by a closer
  * layer, which is only acceptable where the value is a set of contributions rather than a decision.
  */
-export const ALWAYS_APPEND: readonly string[] = ['plugins', COMMANDS_KEY, 'publishTargets'];
+export const ALWAYS_APPEND: readonly string[] = ['plugins', 'platforms', COMMANDS_KEY, 'publishTargets'];
 
 /**
  * Where a key keeps what it is replacing, so the replacement can be handed it back as `value`.
@@ -284,10 +285,4 @@ function anchorContributions(value: unknown, origin: string | undefined): unknow
  */
 function looksLikePackageName(entry: string): boolean {
   return /^(?:@[a-z0-9-~][\w.-]*\/)?[a-z0-9-~][\w.-]*$/i.test(entry) && !/\.[cm]?js$/i.test(entry);
-}
-
-/** A config object, as opposed to an array or anything with its own prototype - only the former
- *  merges key by key. */
-function isPlainObject(value: unknown): value is Record<string, any> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }

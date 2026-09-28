@@ -1,35 +1,26 @@
 import { execFileSync } from 'node:child_process';
-import colors from 'ansi-colors';
 import path from 'path';
 import semver from 'semver';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
-import { detectBuiltin, type DetectedBuiltin } from '../plugins/detect.js';
+import {
+  type ConfigScope,
+  type GitScope,
+  type PackageScope,
+  type RepositoryScope,
+} from '../interfaces/config-scope.interface.js';
+import type { ResolvedConfig } from '../interfaces/rman-config.interface.js';
 import { GitHelper } from '../utils/git.js';
 import { RmanApplication } from './application.js';
-import {
-  type CachedFile,
-  type ConfigScope,
-  createFileScope,
-  createReadScope,
-  DEFERRED_PATHS,
-  type GitScope,
-  interpolateConfig,
-  type PackageScope,
-  readDirConfig,
-  type RepositoryScope,
-  resolveConfig,
-} from './config.js';
+import { ConfigFileScope } from './config/config-file-scope.js';
+import { ConfigInterpolator } from './config/config-interpolator.js';
+import { DEFERRED_PATHS } from './config/config-paths.js';
 import { Manifest } from './manifest.js';
-import { ORIGINS } from './merge-config.js';
 import { Package } from './package.js';
 import type { Platform } from './plugin.js';
-import { loadPlugins, registerPlugin } from './plugin-loader.js';
+import type { PublishTarget } from './publish-target.js';
 import { Workspace } from './workspace.js';
 
 export class Repository extends Package {
   readonly rootPackage: Package;
-  /** See the `defineProperty` in the constructor - what detection supplied, when it did. */
-  readonly detectedBuiltin?: DetectedBuiltin;
   /** Commands the repository's plugins contributed, loaded during `create` because the workspace
    *  providers they bring are needed before any package can be found. `cli.ts` registers them. */
   /**
@@ -47,14 +38,15 @@ export class Repository extends Package {
    *  and because reading it is a subprocess: a deep walk of a package must not spawn one. */
   private _git?: GitScope;
   /**
-   * Files `${{ read(...) }}` has parsed, shared by every package's scope and keyed by the identity
-   * of the bytes - see `readStructuredFile`.
+   * What `${{ file... }}` and `${{ read(...) }}` answer from, for every package.
    *
-   * **On the repository rather than per scope, and that is the whole point of it**: `configScope`
-   * is built once per package, so a cache living there would re-read a repository-level file once
-   * for every package that mentions it.
+   * **One per repository rather than one per scope, and that is the whole point of it**:
+   * `configScope` is built once per package, so a parse cache living there would re-read a
+   * repository-level file once for every package that mentions it. The cache inside is keyed by the
+   * identity of the bytes (`mtimeNs:size`), because rman writes JSON while it runs - `version`
+   * rewrites every bumped manifest and then re-interpolates its deferred hooks.
    */
-  private readonly _readCache = new Map<string, CachedFile>();
+  private readonly _files = new ConfigFileScope();
 
   /**
    * The application this repository belongs to - its services, its technologies, its logger.
@@ -82,15 +74,6 @@ export class Repository extends Package {
   ) {
     super(dirname, app, platform);
     Object.defineProperty(this, 'app', { value: app, enumerable: false, writable: false });
-    /**
-     * What detection decided for this repository, or `undefined` when it declared its own
-     * technology (or when there was nothing to detect). Carried here because `_resolveConfigs` runs
-     * later and every read of the root's config has to agree with the one decision `create` made.
-     *
-     * Non-enumerable, like `app` and for the same reason: `{...repository}` and `toEqual` both walk
-     * a repository, and bookkeeping that shows up there turns spec failures into diffs about it.
-     */
-    Object.defineProperty(this, 'detectedBuiltin', { value: undefined, enumerable: false, writable: true });
     this.rootPackage = new Package(dirname, app, platform);
     if (!monorepo) this.packages = [this.rootPackage];
     // Config resolution can load a `.rmanrc.cjs`/`.mjs`/`.js` module (dynamic `import()`, always
@@ -187,10 +170,10 @@ export class Repository extends Package {
       repository: this._repositoryScope(),
       /** `pkg.dirname`, not the repository root: a `"[*]"` block asking whether
        *  `tsconfig-build.json` exists has to be answered per package. */
-      file: createFileScope(pkg.dirname),
+      file: this._files.fileScope(pkg.dirname),
       /** Same base directory as `file`, so one `"[*]"` declaration reads each package's own copy -
        *  and the cache is the repository's, so a file they *share* is parsed once. */
-      read: createReadScope(pkg.dirname, this._readCache),
+      read: this._files.readScope(pkg.dirname),
       env: { ...process.env },
       semver,
       path,
@@ -277,86 +260,26 @@ export class Repository extends Package {
   }
 
   /**
-   * Gives every package the selector a `"[glob]"` block and `--scope` match it by, and refuses two
-   * packages that would answer to the same one.
-   *
-   * **Its own step, before any config is resolved by a selector**, which is the ordering that makes
-   * the rest work: `_resolveConfigs` asks `resolveConfig` for each package *by selector*, so an
-   * address assigned afterwards would be applied to nothing.
-   *
-   * **`name` comes from the unmarked cascade only** - the same read `platform` gets, from the same
-   * cache, for the same reason. A `"[glob]"` block cannot set it (`assertSelectorBlocks` refuses
-   * one) because the glob matches the very thing the block would be setting.
-   *
-   * **Uniqueness is checked, and the cascade is the mistake it usually catches.** `name` cascades
-   * like every unmarked key, so one declaration above two packages gives both the same address -
-   * and the failure would otherwise be silent in the worst way: the config reaches both and
-   * `getPackage` returns whichever came first. The message names both directories, and says the
-   * cascade out loud when the two got it from one declaration.
+   * Bakes every package's config: the raw one the workspace cascaded, with every `${{ }}` and value
+   * function resolved against that package's scope.
    */
-  protected async _assignSelectors(rootDir: string, cache: Map<string, RmanConfig>): Promise<void> {
-    const declaredBy = new Map<Package, boolean>();
-    for (const pkg of [this.rootPackage, ...this.packages]) {
-      const config = await resolveConfig(rootDir, pkg.dirname, cache, undefined);
-      const declared = config.name;
-      if (declared !== undefined && (typeof declared !== 'string' || !declared.trim())) {
-        throw new Error(
-          `"name" takes the selector this package answers to - "${pkg.dirname}" gave ${typeof declared}.`,
-        );
-      }
-      pkg.selector = declared?.trim() || pkg.platformSelector();
-      declaredBy.set(pkg, declared !== undefined);
-    }
-    /** The root is left out: a glob never matches it and `"[/]"` needs no name, so it shares an
-     *  address with nobody - see `Package.selector`. */
-    const bySelector = new Map<string, Package>();
-    for (const pkg of this.packages) {
-      const clash = bySelector.get(pkg.selector);
-      if (clash) {
-        const cascaded = declaredBy.get(pkg) && declaredBy.get(clash);
-        throw new Error(
-          `Two packages answer to the selector "${pkg.selector}":\n  ${clash.dirname}\n  ${pkg.dirname}\n` +
-            `  A selector has to be unique - "[${pkg.selector}]" and \`--scope ${pkg.selector}\` ` +
-            `cannot mean two packages.` +
-            (cascaded
-              ? `\n  Both got it from one cascading "name" declaration above them; declare it in ` +
-                `each package's own ".rmanrc" instead.`
-              : ''),
-        );
-      }
-      bySelector.set(pkg.selector, pkg);
-    }
-  }
-
+  /* **The one step the workspace deliberately stops short of.** Resolving an expression needs
+   * `pkg`, `repository`, `file` and `git` - which belong to a repository rather than to its layout,
+   * and `configScope` is where the measured subtleties of building that scope live.
+   *
+   * `DEFERRED_PATHS` are left raw, so the resolved config is the only copy anyone needs - `version`
+   * reads its own hooks straight off it and interpolates them once `pkg.targetVersion` exists. */
   protected async _resolveConfigs(): Promise<void> {
-    const cache = new Map<string, any>();
-    /**
-     * `DEFERRED_PATHS` are left *raw* in the result (see `interpolateConfig`'s `walk`), so the
-     * resolved config is the only copy anyone needs - `version` reads its own hooks straight off
-     * `config` and interpolates them itself once `pkg.targetVersion` exists. There used to be a
-     * second `rawConfig` copy of every package's config for that one reader; measured identical.
-     */
-    /**
-     * **By selector, not by name** - `"[glob]"` matches `Package.selector`, which is the package's
-     * own `.rmanrc "name"` when it assigned one and its platform's answer otherwise. They coincide
-     * for every Node repository; they are not the same question, and `name` was the wrong one to
-     * ask, since a package having one at all is an ecosystem's promise rather than rman's.
-     *
-     * The root passes its own too, although no glob can match it: `"[/]"` is applied on the
-     * strength of the target *being* the root and needs no selector at all (see `resolveConfig`).
-     */
-    const rootRaw = await resolveConfig(
-      this.dirname,
-      this.dirname,
-      cache,
-      this.rootPackage.selector,
-      this.detectedBuiltin,
-    );
-    this.config = interpolateConfig(rootRaw, this.configScope(this.rootPackage), { skip: DEFERRED_PATHS });
-    for (const pkg of this.packages) {
-      const raw = await resolveConfig(this.dirname, pkg.dirname, cache, pkg.selector, this.detectedBuiltin);
-      pkg.config = interpolateConfig(raw, this.configScope(pkg), { skip: DEFERRED_PATHS });
-    }
+    const interpolator = new ConfigInterpolator();
+    const bake = (pkg: Package): ResolvedConfig =>
+      interpolator.interpolate({
+        config: pkg.rawConfig,
+        scope: this.configScope(pkg),
+        skip: DEFERRED_PATHS,
+      }) as ResolvedConfig;
+
+    this.config = bake(this.rootPackage);
+    for (const pkg of this.packages) pkg.config = bake(pkg);
     if (this.monorepo) this.rootPackage.config = this.config;
   }
 
@@ -530,116 +453,106 @@ export class Repository extends Package {
    * 3. **Ask the providers** for the layout. None recognizing it means a repository that is itself
    *    the one package.
    *
-   * **A repository whose `.rmanrc` names no plugin has no packages beyond itself**, and that is the
+   * **A repository no technology recognizes has no packages beyond itself**, and that is the
    * boundary working rather than failing: `workspaces` in a `package.json` is npm's idea, so it
-   * takes `plugins: ['node']` - or detection reading the directory as a Node one - for it to be
-   * read as a workspace at all.
+   * takes a platform that reads one for the directory to be a workspace at all. rman's own presets
+   * are laid under every root (see `DEFAULT_PRESETS`), so a plain Node repository needs no config
+   * file to say so; anything else arrives through `extends` or `platforms`.
    */
-  static async create(root?: string, options?: { deep?: number; app?: RmanApplication }): Promise<Repository> {
+  /* **`presets` is an opt-out, and it exists for the specs that must not have one.** rman's own
+   * presets are laid under every root, so a caller that brought its own ecosystem would otherwise
+   * get the `node` technology, `clean`, `ci` and the npm publish target beside it. That is right
+   * for a repository and wrong for a synthetic one: measured, the core's `publish` specs ran a
+   * **real `npm publish` against registry.npmjs.org**, and only a 404 stopped it - the failure
+   * `useLocalBin`'s doc already records for `docker`, arriving by a new route. `test/_fixture.ts`
+   * passes `[]`. */
+  static async create(
+    root?: string,
+    options?: { deep?: number; app?: RmanApplication; presets?: readonly string[] },
+  ): Promise<Repository> {
     const from = root || process.cwd();
     const rootDir = Workspace.findRoot(from, options?.deep ?? 10);
-
-    /**
-     * One application per repository, made here unless the caller brought one.
-     *
-     * `runCli` passes its own so that `--log-level` reaches the logger; a spec that only wants a
-     * repository lets this make one, which is also what keeps two repositories in a single process
-     * from sharing anything - the thing that used to need five `clear*()` calls before every test.
-     */
     const app = options?.app ?? new RmanApplication();
 
-    /** The root's own config, raw: `plugins` is a list of package names, so it needs neither the
-     *  package list (which does not exist yet) nor expression interpolation. */
-    const declared = await readDirConfig(rootDir);
     /**
-     * **What this repository looks like, when nothing said** - the other half of shipping the
-     * built-ins in the box. See `detectBuiltin`.
+     * **The whole of discovery and config reading is the workspace's.** It reads each level's
+     * config, loads whatever that level names, decides which technology claims each directory,
+     * assigns the selectors and cascades every package's **raw** config.
      *
-     * **Two conditions, and the second is the one that is easy to miss.** The config declaring no
-     * `plugins` is not the same as the *repository* having no technology: a programmatic caller -
-     * and every spec in this suite - registers one straight onto the application without writing a
-     * config at all. Guessing on top of that registers a second technology, and the first provider
-     * that recognizes a directory decides whether it holds a package. Measured with only the config
-     * condition: ten specs changed answer, seven of them about config cascading and three about
-     * `publish`'s flags.
-     *
-     * **`platforms`, not `plugins`, and the difference is what detection produces.** What would be
-     * added here is a *platform*, so what must not already be there is a platform - a plugin that
-     * only registers a command says nothing about which directories hold packages, and letting it
-     * suppress the guess would leave a Node repository undetected for having added a command.
-     *
-     * **A root `platform` counts as having said something**, like `plugins: []` does. Detection
-     * exists for a repository that stated nothing; one naming its technology has stated the very
-     * thing detection would be guessing at, and guessing anyway would register a *second* platform
-     * beside the declared one - which then competes for every directory the declaration did not
-     * cover.
-     *
-     * Decided **once**, here, and handed to every read that has to agree - `readDirConfig` has no
-     * business knowing about an application.
+     * Technologies already on the application are handed over: a programmatic caller - and every
+     * spec in this suite - registers one without writing a config, and the walk has to see it.
      */
-    const saidSomething = declared.plugins !== undefined || declared.platform !== undefined;
-    const detected = !saidSomething && app.platforms.size === 0 ? await detectBuiltin(rootDir) : undefined;
-    const rootConfig = detected ? await readDirConfig(rootDir, { inject: detected }) : declared;
-    /**
-     * **Said out loud, because a guess the reader cannot see is one they cannot correct.**
-     *
-     * To **stderr**, not through `app.logger`: that writes with `console.log`, and `rman list
-     * --json` has to stay a parseable document on stdout - measured, its output is pure JSON, and
-     * one line of prose in front of it breaks every `| jq`. The same reason `--help`'s degradation
-     * notice goes to stderr. Not at `silent`, where the caller asked for no narration.
-     */
-    if (detected && app.logger.level !== 'silent') {
-      const line =
-        `${detected.name} repository detected (${detected.because}) - ` +
-        `write \`plugins: ['${detected.name}']\` in .rmanrc to state it, or \`plugins: []\` for none.`;
-      console.error(process.stderr.isTTY ? colors.gray(line) : line);
-    }
-    await loadPlugins(app, rootConfig);
-
-    /**
-     * **Its own cache, deliberately not shared with `_resolveConfigs`'.**
-     *
-     * Both cache `readDirConfig` per directory, and the two reads of the *root* are not the same
-     * read: `_resolveConfigs` passes `detectedBuiltin` as `inject` and this one passes nothing,
-     * since a built-in's contribution has no bearing on which platform a directory declares. The
-     * cache is keyed by directory alone, so one shared map would hand whichever ran first to the
-     * other - and for the root that is a config with or without the whole node built-in merged in.
-     *
-     * The cost is one extra read per directory in the chain, on a repository that is about to read
-     * every one of them again per package anyway.
-     */
-    const platformCache = new Map<string, RmanConfig>();
-
-    /**
-     * **The walk**, which is where the package list comes from now - descending from the root,
-     * asking each directory's own technology where its children are. `Workspace.resolve` asked the
-     * root once, through whichever platform recognized it first; the tree is the shape discovery
-     * actually has, and it is what makes a nested package of another technology findable at all.
-     */
-    const tree = await Workspace.walk(app, rootDir, {
+    const workspace = await Workspace.create(rootDir, {
+      app,
       deep: options?.deep,
-      declared: dir => declaredPlatformAt(app, rootDir, dir, platformCache),
+      platforms: [...app.platforms],
+      presets: options?.presets,
     });
-    const nodes = Workspace.flatten(tree);
-    const packages = nodes.map(node => new Package(node.dirname, app, node.platform));
-    const repo = new Repository(app, tree.dirname, packages.length > 0, packages, from, tree.platform);
-    repo._linkPackages(tree, nodes, packages);
-    /** Before `_resolveConfigs`, because a `"[glob]"` block is matched against the selector - so
-     *  the addresses have to be settled before anything is resolved by them. */
-    await repo._assignSelectors(rootDir, platformCache);
-    /** The application is what the plugins registered into a moment ago; from here on it can hand
-     *  out services, which need the repository to work on. */
-    (repo as { detectedBuiltin?: DetectedBuiltin }).detectedBuiltin = detected;
+
+    /** What the configs named, onto the application the commands read from. */
+    for (const platform of workspace.platforms) app.platforms.add(platform);
+    for (const plugin of workspace.plugins) {
+      app.plugins.add(plugin);
+      await plugin.afterInitApplication?.({ app });
+    }
+    /** One loop, because `workspace.platforms` already holds every technology in play whatever
+     *  route it arrived by. There used to be a second one over each plugin's own `platforms`, and
+     *  by the end it was pure duplication of this. */
+    for (const platform of workspace.platforms) {
+      if (platform.versionPlanner) app.versionPlanner = platform.versionPlanner;
+    }
+
+    /** **Publish targets the root config declared.** `publish` builds its `--target` choices from
+     *  `app.publishTargets` when its factory runs, so they have to be there before the commands
+     *  are. Read off the root's own level rather than a package's: a target is the repository's. */
+    for (const target of toList(workspace.rootPackage.rawConfig.publishTargets)) {
+      if (!target || typeof target !== 'object' || typeof (target as PublishTarget).name !== 'string') {
+        throw new Error(
+          `"publishTargets" takes a target or a glob naming modules that export one - got ` +
+            `${target === null ? 'null' : typeof target}.`,
+        );
+      }
+      app.publishTargets.add(target as PublishTarget);
+    }
+
+    const packages = workspace.packages;
+    const repo = new Repository(app, rootDir, packages.length > 0, packages, from, workspace.rootPackage.platform);
+    repo._adopt(workspace);
     app.attachRepository(repo);
     return Repository._init(repo);
   }
 
-  /** Finishes constructing `repo` with the async work a constructor can't do itself - resolving
-   *  `.rmanrc`/`.rmanrc.yml`/`.rmanrc.cjs`/`.mjs`/`.js` config (which may need a dynamic `import()`)
-   *  before the dependency graph is built from it. */
+  /**
+   * Takes the workspace's packages as this repository's own - the back-references a `Package` needs
+   * and the parent/child edges the walk established.
+   */
+  /* `Repository extends Package` while the workspace built its own root package for the same
+   * directory, so both are, truthfully, the root. This keeps the workspace's - it is the one the
+   * walk handed a platform and a selector - and leaves `Repository` itself pointing at the same
+   * children. */
+  protected _adopt(workspace: Workspace): void {
+    const link = (pkg: Package): void =>
+      void Object.defineProperty(pkg, 'repository', {
+        value: this,
+        enumerable: false,
+        configurable: true,
+        writable: true,
+      });
+    link(this);
+    (this as { rootPackage: Package }).rootPackage = workspace.rootPackage;
+    link(this.rootPackage);
+    for (const pkg of this.packages) link(pkg);
+    if (!this.monorepo) (this as { packages: Package[] }).packages = [this.rootPackage];
+    Object.defineProperty(this, 'children', { value: this.rootPackage.children, enumerable: true });
+  }
+
   private static async _init(repo: Repository): Promise<Repository> {
     await repo._resolveConfigs();
     repo._updateDependencies();
+    /** **Last, and that is the whole point of the second stage.** Every package is found, every
+     *  config is baked and the dependency graph is linked - so a plugin handed this repository can
+     *  read it rather than being told to wait for a command it may not contribute. */
+    for (const plugin of repo.app.plugins) await plugin.afterInitRepository?.({ app: repo.app, repository: repo });
     return repo;
   }
 }
@@ -648,75 +561,7 @@ export namespace Repository {
   export type PackageStatus = 'dirty' | 'committed' | 'changed' | 'clean';
 }
 
-/**
- * The platform `dir` declares in its cascaded `.rmanrc "platform"`, loaded if it has to be -
- * `undefined` when the directory declares none, so the walk falls back to its guess.
- *
- * **The unmarked cascade only**, which is what `resolveConfig` gives with no package name: a
- * selector matches a package *name*, and this runs while the packages are still being found - the
- * name is not known yet, and it is read *from* a manifest whose reader this key decides. So
- * `"[/]"` reaches the root (its directory is the repository root, which needs no name) and a glob
- * block contributes nothing here, which is the honest answer rather than a half-applied one.
- */
-async function declaredPlatformAt(
-  app: RmanApplication,
-  rootDir: string,
-  dir: string,
-  cache: Map<string, RmanConfig>,
-): Promise<Platform | undefined> {
-  const config = await resolveConfig(rootDir, dir, cache);
-  const declared = config.platform;
-  if (declared === undefined) return undefined;
-  if (typeof declared !== 'string' || !declared.trim()) {
-    throw new Error(`"platform" takes a platform's name - ${originOf(config)} gave ${typeof declared}.`);
-  }
-  /**
-   * **An expression is refused rather than read as a literal.** `platform` is consulted before any
-   * package exists - it is what decides what a package *is* - so there is no `pkg` for an
-   * expression to be about, and `interpolateConfig` runs long afterwards. Passed through, a
-   * `${{ }}` here reached the lookup below as the raw text and failed as an unknown platform name,
-   * which sends the reader to check their `plugins`.
-   */
-  if (declared.includes('${{')) {
-    throw new Error(
-      `"platform" cannot be an expression (${originOf(config)}) - it is read while ` +
-        `the packages are still being found, so there is no package for one to be about. Write the ` +
-        `name, and use a package's own ".rmanrc" where the answer differs.`,
-    );
-  }
-
-  const registered = [...app.platforms].find(p => p.name === declared);
-  if (registered) return registered;
-
-  /**
-   * **A built-in is loaded on the strength of being named**, from any level - `platform: 'node'` is
-   * enough, and it is what a repository holding one Node package among others writes.
-   *
-   * `platform()` and not `contribute()`, and that split is why the two halves exist: what arrives
-   * is the technology alone. Commands and publish targets come from root `plugins`, because they
-   * are repository-wide - a Node package inside a Cargo repository wants npm's manifest read, not
-   * an `rman clean` that would sweep the whole tree.
-   */
-  const { BUILTIN_PLUGINS, builtinPluginNames } = await import('../plugins/builtins.js');
-  const builtin = BUILTIN_PLUGINS[declared];
-  if (builtin) {
-    const platform = builtin.platform();
-    registerPlugin(app, platform);
-    return platform;
-  }
-
-  const have = [...app.platforms].map(p => p.name).filter(Boolean);
-  throw new Error(
-    `"platform" names "${declared}" (${originOf(config)}), which is not a platform ` +
-      `this repository has. ${have.length ? `Registered: ${have.join(', ')}. ` : 'None is registered. '}` +
-      `rman ships ${builtinPluginNames().join(', ')}; anything else arrives through "plugins".`,
-  );
-}
-
-/** Which file the `platform` key came from, for an error that can be acted on - `mergeConfig`
- *  records one per key under `ORIGINS`, and a config is merged from a directory's own four forms,
- *  an `extends` base and one layer per directory before anything reads it. */
-function originOf(config: RmanConfig): string {
-  const origins = (config as Record<symbol, unknown>)[ORIGINS] as Record<string, string> | undefined;
-  return origins?.platform ? `in "${origins.platform}"` : 'the "platform" key';
+/** A key that takes one value or a list of them, as a list. */
+function toList<T>(value: T | T[] | undefined): T[] {
+  return value === undefined ? [] : Array.isArray(value) ? value : [value];
 }

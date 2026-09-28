@@ -3,6 +3,7 @@ import type { VersionPlanService } from '../services/version-plan.service.js';
 import type { BinPath } from '../utils/bin-path.js';
 import type { RmanApplication } from './application.js';
 import type { Manifest, ManifestProvider } from './manifest.js';
+import type { Repository } from './repository.js';
 import type { Workspace } from './workspace.js';
 
 /**
@@ -100,59 +101,126 @@ export interface Platform {
  */
 export interface Plugin {
   /** How this plugin is named in messages, and the de-duplication key: registering twice under one
-   *  name is refused. A platform contributed by it keeps its *own* name, which is what a package
-   *  reports as `pkg.platform`. */
+   *  name is refused. */
   name: string;
 
-  /** The technologies this plugin provides, if any. */
-  platforms?: Platform[];
+  /**
+   * Run once the application exists and this plugin is on it, **before anything has been
+   * discovered** - no packages, no configs, no repository.
+   *
+   * This is where a plugin registers what the config keys have no word for: a service, a seam the
+   * core does not name yet. Reached through `ctx.app`.
+   */
+  /* **The front door is the config, not this.** Technologies, commands and publish targets are
+   * `platforms`, `commands` and `publishTargets` keys - a plugin contributing any of those declares
+   * them in its own config and needs no hook at all. What is left here is the remainder. */
+  afterInitApplication?(ctx: PluginContext): void | Promise<void>;
 
   /**
-   * Anything this plugin contributes that is not a platform, run once when it is registered.
+   * Run once the repository is **resolved** - every package found, every config baked, the
+   * dependency graph linked.
    *
-   * **The escape hatch, not the front door.** Commands and publish targets are `.rmanrc` keys
-   * (`commands`, `publishTargets`), so a plugin contributing only those declares them in its own
-   * config and needs no `init` at all. What is left for `init` is whatever the seams do not name
-   * yet, reached through `ctx.app`.
-   *
-   * **It runs inside `Repository.create`**, before any package is known, so `ctx.app.repository`
-   * throws there. Anything wanting the repository belongs in a command's factory instead, which
-   * runs once there is one.
+   * The stage `afterInitApplication` cannot reach: that one runs inside `Repository.create` before
+   * any package is known, so `ctx.app.repository` throws there.
    */
-  init?(ctx: PluginContext): void | Promise<void>;
+  /* **`afterInit…`, because the name has to answer *when*.** `initRepository` was the first
+   * spelling and it reads as *initialize the repository*, which is not what a plugin does here -
+   * the core has already done that, and this is the plugin's turn. Both are spelled the same way so
+   * neither has to be read twice. The `on` prefix was the alternative (`onRepositoryReady`) and is
+   * the repository's own convention for a hook - `getRunSteps` is deliberately not `on*` because it
+   * is a query - but it names a *state* where this names the core operation you can go and read.
+   *
+   * **This exists because the workaround did not cover everybody.** The advice used to be "anything
+   * wanting the repository belongs in a command's factory, which runs once there is one" - true,
+   * and no help at all to a plugin that contributes no command. There was nowhere to put it.
+   *
+   * **Two moments, and deliberately not a hook bus.** Every later point a plugin might want already
+   * has a mechanism it would compete with - `run.<script>.before`/`.after`, `version.<slot>`,
+   * `publishTargets` - and a second way in means a precedence rule between them that nothing can
+   * make obvious. These two are the only boundaries the core itself has. */
+  afterInitRepository?(ctx: PluginRepositoryContext): void | Promise<void>;
+}
+
+export namespace Plugin {
+  /** What a value was declared as - see {@link declaredKind}. */
+  export type DeclaredKind = 'platform' | 'plugin';
 }
 
 /**
- * What `Plugin.init` is handed.
+ * What {@link Plugin.afterInitApplication} is handed.
  *
- * Only the application today. An object rather than a bare parameter so a member added later
- * breaks nothing already written against it - the same reason `CommandContext` is one, which has
- * already paid for itself twice.
+ * An object rather than a bare parameter so a member added later breaks nothing already written
+ * against it - the same reason `CommandContext` is one, which has already paid for itself twice.
  */
 export interface PluginContext {
   app: RmanApplication;
 }
 
+/** What {@link Plugin.afterInitRepository} is handed - the application, plus the repository that now
+ *  exists. */
+export interface PluginRepositoryContext extends PluginContext {
+  repository: Repository;
+}
+
+/**
+ * **What `value` was declared as**, or `undefined` for anything that was not - a plain object, an
+ * arbitrary module export, a config.
+ */
+/* **One mark carrying the kind, rather than one mark per type.** The mark used to be `true`, so it
+ * could answer *whether* something was declared and never *what* - which left `isPlatform` testing
+ * for `manifestProvider`, a structural guess, and left the loader unable to say the one useful
+ * thing about the commonest mistake: that a platform was put in `plugins`.
+ *
+ * A symbol per type was the alternative and this is the same information for less machinery. The
+ * key has to be a **hoisted function** (see `declaredKey`), which is a trap every additional key
+ * would repeat; `isDeclared` stays one lookup instead of an OR someone has to remember to extend;
+ * and a third declarable slots in as a new string - `publishTargets` is checked structurally today
+ * (`typeof target.name === 'string'`) and is the obvious next one, though nothing is being built
+ * for it here.
+ *
+ * **The value was `true` before this**, and `Symbol.for` is shared - so an object marked by an
+ * older copy of rman in the same process now reads as undeclared. 2.0 is unreleased and the mark
+ * is 2.x's own, so there is nothing in the field to be compatible with. */
+export function declaredKind(value: unknown): Plugin.DeclaredKind | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const kind = (value as Record<symbol, unknown>)[declaredKey()];
+  return kind === 'platform' || kind === 'plugin' ? kind : undefined;
+}
+
 /** Whether `value` came from `definePlatform` or `definePlugin`. */
 export function isDeclared(value: unknown): boolean {
-  return !!value && typeof value === 'object' && (value as Record<symbol, unknown>)[declaredKey()] === true;
+  return declaredKind(value) !== undefined;
 }
 
 /** Declares a **platform** - one technology, whole. Returns it unchanged apart from the mark. */
 export function definePlatform(platform: Platform): Platform {
-  return brand(platform);
+  return brand(platform, 'platform');
 }
 
-/** Declares a **plugin** - whatever a package contributes, platforms included. Returns it unchanged
- *  apart from the mark. */
+/** Declares a **plugin** - a name and whatever it wants to do at one of the two stages. Returns
+ *  it unchanged apart from the mark. */
 export function definePlugin(plugin: Plugin): Plugin {
-  return brand(plugin);
+  return brand(plugin, 'plugin');
 }
 
-/** Whether `value` is a platform rather than the broader plugin - `manifestProvider` is what makes
- *  one, and it is the only required member either type has beyond `name`. */
-export function isPlatform(value: Plugin | Platform): value is Platform {
-  return !!(value as Platform).manifestProvider;
+/**
+ * Whether `value` is a platform - **what it was declared as**, not what it looks like.
+ */
+/* It used to ask whether `manifestProvider` was present, which was the only test available while
+ * one type was both halves. As a question about an arbitrary import that is a guess, and it gets
+ * the commonest mistake exactly backwards: a config object carrying a `manifestProvider`-shaped key
+ * would pass, and a platform someone forgot to declare would be reported as an rman 1.x plugin.
+ *
+ * The cost, stated: an undeclared platform-shaped object is no longer a platform. Everything
+ * arriving through a config has to be declared anyway, and every `registerPlugin` caller in the
+ * tree passes a `definePlatform(...)` result. */
+export function isPlatform(value: unknown): value is Platform {
+  return declaredKind(value) === 'platform';
+}
+
+/** Whether `value` is a plugin - again by declaration, so a platform is not one. */
+export function isPlugin(value: unknown): value is Plugin {
+  return declaredKind(value) === 'plugin';
 }
 
 /**
@@ -221,7 +289,7 @@ function declaredKey(): symbol {
 }
 
 /** Stamps the mark, non-enumerably, and hands the object back. */
-function brand<T extends object>(value: T): T {
-  Object.defineProperty(value, declaredKey(), { value: true, enumerable: false, configurable: true });
+function brand<T extends object>(value: T, kind: Plugin.DeclaredKind): T {
+  Object.defineProperty(value, declaredKey(), { value: kind, enumerable: false, configurable: true });
   return value;
 }

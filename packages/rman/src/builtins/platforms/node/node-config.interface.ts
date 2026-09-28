@@ -1,5 +1,4 @@
-import type { ConfigValue } from '../../core/config.js';
-import type { RmanConfig, ScopedVars } from '../../interfaces/rman-config.interface.js';
+import type { ConfigValue, RmanConfig, ScopedVars } from '../../interfaces/rman-config.interface.js';
 import type { CiService } from './services/ci.service.js';
 
 /**

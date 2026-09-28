@@ -1,7 +1,6 @@
-import type { Package } from '../../core/package.js';
 import type { PublishTarget } from '../../core/publish-target.js';
-import { CiService } from './services/ci.service.js';
-import { PublishService } from './services/publish.service.js';
+import { CiService } from '../platforms/node/services/ci.service.js';
+import { PublishService } from '../platforms/node/services/publish.service.js';
 
 /** The name this target answers to in `publish.target` and `--target`. */
 export const NPM_TARGET = 'npm';
@@ -30,9 +29,8 @@ export class NpmPublishTarget implements PublishTarget {
   name = NPM_TARGET;
   describe = 'Publish to an npm registry (npm/yarn/pnpm/bun publish)';
 
-  claims(pkg: Package): boolean {
-    return pkg.provider === 'node';
-  }
+  /** npm's alone: a package rman read through the `node` platform. */
+  platforms = ['node'];
 
   options = {
     packageManager: {

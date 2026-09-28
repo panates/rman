@@ -43,14 +43,37 @@ export interface PublishTarget {
    */
   readonly options?: Record<string, RmanConfig.CommandOption>;
   /**
+   * The technologies this target is for, by `Platform.name` - `['node']` for `npm`. Absent means
+   * every platform, which is what a technology-agnostic target says: any package can carry a
+   * Dockerfile, so `docker` declares none.
+   *
+   * On its own it is the whole of `claims`: a package of one of these platforms that declares no
+   * `publish.target` ships here. With `claims` beside it, this narrows first and `claims` decides
+   * within.
+   *
+   * The same word `CommandMetadata.platforms` uses, and the same question.
+   */
+  /* It does **not** override a package's own `publish.target` - see `shipsTo`. A Cargo package
+   * writing `publish: { target: 'npm' }` still ships to npm, deliberately: this is the default for
+   * a package that said nothing, not a rule about who may say what. That is the one place it parts
+   * from `CommandMetadata.platforms`, which is a hard limit. */
+  readonly platforms?: string[];
+  /**
    * Whether a package that declares **no** `publish.target` at all ships here.
    *
-   * Absent means never - the target is opt-in, which is what `docker` is. `npm`'s answer is
-   * `pkg.provider === 'node'`, and that is the fix for a real bug rather than a nicety: the default
-   * used to be a hardcoded `['npm']` in the core, so `rman list --json` reported
-   * `publishTargets: ["npm"]` for a Cargo package and `publish` treated it as an npm candidate.
-   * A default only the ecosystem can state had been written down by someone who could not know it.
+   * Absent means never - the target is opt-in, which is what `docker` is - unless `platforms` says
+   * otherwise, in which case that is the answer. Present, it decides for the packages `platforms`
+   * let through.
    */
+  /* `npm`'s used to be `pkg.provider === 'node'` written out, and `platforms: ['node']` says it
+   * now. Either way it is the fix for a real bug rather than a nicety: the default used to be a
+   * hardcoded `['npm']` in the core, so `rman list --json` reported `publishTargets: ["npm"]` for a
+   * Cargo package and `publish` treated it as an npm candidate. A default only the ecosystem can
+   * state had been written down by someone who could not know it.
+   *
+   * It stays beside `platforms` because a target may claim on something else entirely - a package
+   * holding a Dockerfile, a package that is not private - which a list of platform names cannot
+   * say. */
   claims?(pkg: Package): boolean;
   /** What this target *would* do - never publishes. Called even under `--dry-run`, which is the
    *  whole point of the split. */
@@ -124,11 +147,21 @@ export function declaredTargets(pkg: Package): string[] | undefined {
   return Array.isArray(declared) ? [...declared] : [declared];
 }
 
-/** Whether `pkg` ships to `target`: its own `publish.target` decides when it has one, and the
- *  target's own `claims` decides when it does not. */
+/**
+ * Whether `pkg` ships to `target`: its own `publish.target` decides when it has one, and the
+ * target's `platforms`/`claims` decide when it does not.
+ */
+/* **A declared `publish.target` is the last word**, and neither `platforms` nor `claims` is asked
+ * after it - a package naming a target has said where it goes, whatever ecosystem it is. Narrowing
+ * that would turn a default into a rule about who may say what. */
 export function shipsTo(pkg: Package, target: PublishTarget): boolean {
   const declared = declaredTargets(pkg);
-  return declared ? declared.includes(target.name) : !!target.claims?.(pkg);
+  if (declared) return declared.includes(target.name);
+  /** `platforms` narrows first; `claims` decides within what it let through. With only `platforms`,
+   *  belonging to one of them *is* the claim; with neither, the target is opt-in. */
+  if (target.platforms?.length && !target.platforms.includes(pkg.provider)) return false;
+  if (target.claims) return target.claims(pkg);
+  return !!target.platforms?.length;
 }
 
 /** Every registered target `pkg` ships to, in registration order. The single answer to "where does

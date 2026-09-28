@@ -1,5 +1,5 @@
-import type { ConfigValue } from '../../../core/config.js';
 import type { ArgsOf, CommandOption } from '../../../index.js';
+import type { ConfigValue } from '../../../interfaces/rman-config.interface.js';
 import { declareCommand } from '../../../interfaces/rman-config.interface.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../../../utils/branch-guard.js';
 import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from '../../../utils/package-filter.js';
@@ -64,6 +64,8 @@ const cleanCommand = declareCommand(app => {
   const repository = app.repository;
   return {
     command: COMMAND,
+    /** npm's alone: it deletes TypeScript build output, which no other ecosystem has. */
+    platforms: ['node'],
     describe: 'Removes compiled TypeScript output and any extra files/dirs configured via .rmanrc "clean"',
     /**
      * **No `configKeys`, because `clean` is this command's *own* key now** - derived from the

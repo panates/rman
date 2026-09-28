@@ -17,7 +17,7 @@ import type { CiService } from '../services/ci.service.js';
  * (`augmentSystemInfo()`, `augmentManifest()`, ...); this file is imported by the plugin's entry
  * point purely so a consumer's compiler loads it.
  */
-declare module '../../../interfaces/rman-config.interface.js' {
+declare module '../../../../interfaces/rman-config.interface.js' {
   /**
    * The `.rmanrc` keys that only mean something in a Node repository - merged into the core's own
    * key list, so `pkg.config.clean` is typed wherever it is read (`CleanService` included) without
@@ -50,7 +50,7 @@ declare module '../../../interfaces/rman-config.interface.js' {
  * declared in `publish.command.ts` was reachable only by re-declaring it - which now reads as two
  * interfaces of one name and is refused. Each interface is augmented where it lives.
  */
-declare module '../../../commands/publish.command.js' {
+declare module '../../../../commands/publish.command.js' {
   /**
    * The `npm` publish target's own `publish.*` block, declared the way the core's `docker` target
    * declares `publish.docker` - through the slot `publish` contributes, rather than into a central
@@ -70,7 +70,7 @@ declare module '../../../commands/publish.command.js' {
  * runtime half is `augmentSystemInfo()` in the file beside this one, called when the built-in is
  * registered rather than at import, so a repository that never named it reports no npm.
  */
-declare module '../../../services/system-info.js' {
+declare module '../../../../services/system-info.js' {
   namespace SystemInfo {
     type PackageManager = CiService.PackageManager;
 
