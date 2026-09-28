@@ -350,7 +350,26 @@ export class Workspace {
    *
    * **A matching block is contributed *stripped*, not whole.** Merging it as it stands put its
    * nested keys into the resolved config as literal `'[pkg-*]'` entries, which is precisely how the
-   * old no-op showed up in `rman config` looking as though it had worked. */
+   * old no-op showed up in `rman config` looking as though it had worked.
+   *
+   * **A platform block speaks for the root too, and only a glob is held off it.** `"[platform:node]"`
+   * asks `pkg.platform.name` and the root is a package with a platform, so
+   * `"[platform:node]" > "[/]"` is *the root, when the root is a node package* and
+   * `"[platform:node]" > "[*]"` is *its packages* - which is the whole of a technology's shared
+   * config in one block, `vars` included.
+   *
+   * A narrower rule was tried first and measured wrong: let a chain reach the root only where it
+   * *names* `"[/]"`, keeping a plain `"[platform:node]"` off the root as before. It answers the pair
+   * correctly and still breaks the case it was written for - the nested `"[/]"` could not read the
+   * `vars` its parent declared (`vars is not defined`), because those are the parent's own keys.
+   * Narrowing an audience and hiding the enclosing block's settings from it are different things,
+   * and only the first is what nesting means.
+   *
+   * The cost, stated rather than hidden: a package-shaped setting written **directly** under a
+   * platform block now reaches the root as well - the trap that keeps globs off it. It is not the
+   * same trap, because neither half of that one applies here: `platform:node` is not a name and
+   * cannot match by accident, and it is not a catch-all. And with nesting the spelling for
+   * package-shaped settings is `"[platform:node]" > "[*]"`, which says so. */
   protected _matchingSelectors(config: RmanConfig, audience: Workspace.Audience): RmanConfig[] {
     const matches: RmanConfig[] = [];
     for (const [key, value] of Object.entries(config)) {
@@ -372,8 +391,12 @@ export class Workspace {
    */
   /* **A glob never matching the root removes two traps at once**: `"[my-*]"` cannot quietly pick up
    * a repository whose root package is called `my-repo`, and `"[*]"` cannot hand a package-shaped
-   * setting to a root with no build directory to apply it to. A platform block is held to the same
-   * line for consistency - the root has a platform, but it also has `"[/]"`.
+   * setting to a root with no build directory to apply it to. Neither trap exists for a platform
+   * block - `platform:node` is not a name and cannot match by accident, and it is not a catch-all -
+   * so **a platform link answers about the root like any other package**, and what keeps a plain
+   * `"[platform:node]"` off the root is `_matchingSelectors`' chain rule rather than a refusal here.
+   * Asking `isRoot` first was what made `"[platform:node]" > "[/]"` unanswerable: the pair says *the
+   * root, when it is a node package*, and the short-circuit never let the platform question be put.
    *
    * A package no technology claimed carries `basePlatform`, whose name is `''`, so it matches no
    * platform block at all - `parseSelector`'s test refuses an empty name rather than letting an
@@ -384,9 +407,8 @@ export class Workspace {
     audience: Workspace.Audience,
   ): boolean {
     if (scope === 'root') return audience.isRoot;
-    if (audience.isRoot) return false;
     if (scope === 'platform') return test(audience.platform);
-    return audience.selector !== undefined && test(audience.selector);
+    return !audience.isRoot && audience.selector !== undefined && test(audience.selector);
   }
 
   /**

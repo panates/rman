@@ -409,7 +409,21 @@ export class ConfigReader {
      * `"[/]"` is exempt and keeps working: the root is addressed structurally - its directory *is*
      * the repository root - so a root block needs no selector and is applied during the walk.
      */
-    if (ConfigReader.parseSelector(key).scope === 'root') return;
+    if (ConfigReader.parseSelector(key).scope === 'root') {
+      /** **Except for `platform` in a *nested* `"[/]"`, which is read nowhere.**
+       *  `Workspace._declaredPlatformName` looks at a level's own `platform` and at a **top-level**
+       *  `"[/]"`, because which technology claims a directory has to be settled before any block is
+       *  matched. Inside `"[platform:node]"` it is also circular - the answer decides whether the
+       *  block that declares it applies at all. */
+      if (outer !== undefined && 'platform' in (value as Record<string, unknown>)) {
+        throw new Error(
+          `"${key}" in "${file}" is nested inside "${outer}" and cannot set "platform" - which ` +
+            `technology claims a directory is settled before any selector is matched, so it is ` +
+            `read from the level's own keys or a top-level "[/]" and nowhere else. Write it there.`,
+        );
+      }
+      return;
+    }
     for (const identity of IDENTITY_KEYS) {
       if (identity in (value as Record<string, unknown>)) {
         throw new Error(
@@ -429,16 +443,22 @@ export class ConfigReader {
    * @param inner the key written inside it.
    */
   /* **Nesting is an AND, so a pair naming disjoint sets is a block that runs for nobody** - which is
-   * the silence the old blanket refusal was really about, and the only part of it worth keeping.
-   * Two pairs are decidable here and both are refused:
+   * the silence worth refusing. Two pairs are decidable and both are:
    *
-   * - **`"[/]"` on either side.** The root is addressed structurally and every other selector
-   *   deliberately never reaches it, so `"[/]"` inside a glob is empty and a glob inside `"[/]"` is
-   *   empty. `"[/]"` inside `"[/]"` is merely redundant, and one rule covering all three beats an
-   *   exemption nobody would remember.
+   * - **`"[/]"` paired with a glob**, either way round. A glob matches a package's name and the root
+   *   is nobody's child, so it never matches the root whatever it is written beside;  `"[/]"`
+   *   matches nothing else. The pair is empty in both directions.
    * - **Two platform blocks naming nothing in common.** A package carries one `platform.name`, so
    *   `"[platform:node]" > "[platform:cargo]"` is empty; `"[platform:node,cargo]" > "[platform:node]"`
    *   narrows and is fine.
+   *
+   * **`"[/]"` inside a platform block is the pair this deliberately allows**, and getting that wrong
+   * once is why the reasoning is written out. It reads as *the root, when the root is a node
+   * package*, which is a perfectly well-defined audience - it was unreachable only because
+   * `_speaksFor` asked `isRoot` before it asked the platform question. Refusing it took the natural
+   * shape of a technology's shared config away: a preset wanting `vars` over a whole node
+   * repository, the root's own settings, and the packages' settings had to hoist `vars` to the top
+   * level, where they also reach packages of every other technology.
    *
    * **A glob pair is deliberately not checked**, and the asymmetry is the point rather than an
    * omission: whether two globs intersect is a real computation with a wrong answer available in
@@ -448,12 +468,14 @@ export class ConfigReader {
   protected _assertNestable(outer: string, inner: string, file: string): void {
     const a = ConfigReader.parseSelector(outer);
     const b = ConfigReader.parseSelector(inner);
-    if (a.scope === 'root' || b.scope === 'root') {
+    const [root, glob] =
+      a.scope === 'root' ? [outer, b.scope === 'package' && inner] : [inner, a.scope === 'package' && outer];
+    if ((a.scope === 'root' || b.scope === 'root') && glob) {
       throw new Error(
-        `"${inner}" in "${file}" is nested inside "${outer}", and "[/]" takes part in no nesting - ` +
-          `the root is addressed structurally and every other selector deliberately never reaches ` +
-          `it, so one side of this pair always refuses the other and the block could never be ` +
-          `applied. Write the root's settings under a top-level "[/]".`,
+        `"${inner}" in "${file}" is nested inside "${outer}", and "${glob}" can never match the ` +
+          `same package "${root}" does - a glob matches a package's name and the root is nobody's ` +
+          `child, so the pair is empty. A platform block nests with "[/]" ("the root, when it is ` +
+          `of that technology"); a glob does not.`,
       );
     }
     if (a.scope === 'platform' && b.scope === 'platform' && !b.names?.some(name => a.test(name))) {

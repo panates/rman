@@ -166,8 +166,15 @@ below, and a `"[selector]"` narrows the audience.**
   | | | matched against |
   | --- | --- | --- |
   | `"[/]"` | the **root package** alone, structurally | - |
-  | `"[platform:node]"`, `"[platform:node,cargo]"` | the packages of those **technologies** | `pkg.platform.name` |
+  | `"[platform:node]"`, `"[platform:node,cargo]"` | every package of those **technologies**, the root included | `pkg.platform.name` |
   | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches | `pkg.selector` |
+
+  - **Only a glob is held off the root, and the two reasons are both about names**: `"[my-*]"` must
+    not pick up a repository whose root package happens to be called `my-repo`, and a catch-all must
+    not hand a package-shaped setting to a root with no build directory. Neither applies to
+    `platform:node`, which is not a name and is not a catch-all - so a platform block answers about
+    the root like any other package. It read the other way "for consistency with a glob" until
+    nesting arrived, and that made `"[platform:node]" > "[/]"` unanswerable.
 
   - `/` for the root because that is what a repository root is called everywhere else, and no
     package can be named it.
@@ -226,16 +233,29 @@ below, and a `"[selector]"` narrows the audience.**
       `"[*]" > run > build > "[pkg-*]"` could never be applied. One walk does both jobs
       (`_assertSelectorKeys`), and `at.length > enclosing.length` is the whole test: the two arrays
       stay equal while every ancestor is a selector and `at` runs ahead the moment one is not.
+    - **`"[platform:node]" > "[/]"` is the pair the whole thing is for**, and getting it wrong once
+      is why this is written out. It means *the root, when the root is a node package*, and it plus
+      `"[platform:node]" > "[*]"` is a technology's entire shared config in one block - `vars`
+      included, since those are the parent's own keys and reach both. It was refused at first on a
+      misdiagnosis: the audience is not empty, `_speaksFor` merely asked `isRoot` before it asked
+      the platform question. **A narrower repair was tried and measured wrong** - let a chain reach
+      the root only where it *names* `"[/]"`, keeping a plain `"[platform:node]"` off it. That
+      answers the pair and still breaks the case: the nested block came back `vars is not defined`,
+      because `vars` is the parent's key. Narrowing an audience and hiding the enclosing block's
+      settings from it are different things.
     - **A nested pair that could never match together is refused** (`_assertNestable`), rather than
-      loading and matching nobody. Two are decidable: **`"[/]"` on either side** (the root is
-      addressed structurally and every other selector deliberately never reaches it, so both
-      directions are empty and `"[/]" > "[/]"` is redundant - one rule beats an exemption), and
-      **two platform blocks naming nothing in common** (a package carries one `platform.name`;
+      loading and matching nobody. Two are decidable: **`"[/]"` paired with a glob**, either way
+      round (a glob matches a name and the root is nobody's child), and **two platform blocks naming
+      nothing in common** (a package carries one `platform.name`;
       `"[platform:node,cargo]" > "[platform:node]"` narrows and is fine). `ParsedSelector.names`
       exists for that intersection - `test` alone answers "does this one match", not "can anything".
       **A glob pair is deliberately not checked**: glob intersection is a real computation with a
       wrong answer available both ways, where a platform set is `includes`, and `"[pkg-*]" >
       "[lib-*]"` matching nothing is what a top-level `"[lib-*]"` already does unreported.
+    - **`platform` is the one key a nested `"[/]"` cannot carry.** Which technology claims a
+      directory is settled before any block is matched, so `Workspace._declaredPlatformName` reads
+      the level's own key or a **top-level** `"[/]"` and nothing deeper - and inside a platform
+      block it would be deciding whether its own block applies.
     - **`vars` and the contribution keys are exempt**: their contents are not config keys. `vars` is
       free-form by contract and `CODE_SUBTREES` hold plugins, commands and publish targets, whose
       key space rman does not own. A bracketed name in either is data.

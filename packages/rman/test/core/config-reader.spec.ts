@@ -236,8 +236,8 @@ describe('core/ConfigReader', () => {
      *  decidable pairs are refused; a glob pair deliberately is not - see `_assertNestable`. */
     it('refuses a nested pair that could never match together', async () => {
       const cases: [Record<string, unknown>, RegExp][] = [
-        [{ '[*]': { '[/]': { group: 'x' } } }, /takes part in no nesting/],
-        [{ '[/]': { '[pkg-*]': { group: 'x' } } }, /takes part in no nesting/],
+        [{ '[*]': { '[/]': { group: 'x' } } }, /can never match the same package/],
+        [{ '[/]': { '[pkg-*]': { group: 'x' } } }, /can never match the same package/],
         [{ '[platform:node]': { '[platform:cargo]': { group: 'x' } } }, /names no technology in common/],
       ];
       for (const [config, message] of cases) {
@@ -247,16 +247,40 @@ describe('core/ConfigReader', () => {
       }
     });
 
-    /** The control for the case above: naming a technology the outer block already speaks for
-     *  narrows rather than contradicting, and is the reason the check is an intersection test
-     *  rather than an equality one. */
-    it('accepts a platform block nested inside one that names it too', async () => {
+    /**
+     * The controls for the case above, and the second is the one that matters: `"[/]"` is refused
+     * beside a **glob**, not in nesting generally. Inside a platform block it is *the root, when the
+     * root is of that technology* - a perfectly ordinary audience, and the shape a technology's
+     * shared config is written in.
+     */
+    it('accepts the nested pairs that do narrow', async () => {
+      for (const config of [
+        { '[platform:node,cargo]': { '[platform:node]': { group: 'x' } } },
+        { '[platform:node]': { '[/]': { group: 'x' } } },
+        { '[/]': { '[platform:node]': { group: 'x' } } },
+      ]) {
+        const dir = tmp();
+        fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(config));
+        await expect(reader().resolve(dir)).resolves.toBeDefined();
+      }
+    });
+
+    /** **`platform` is the one key a nested `"[/]"` still cannot carry.** Which technology claims a
+     *  directory is settled before any block is matched - `Workspace._declaredPlatformName` reads
+     *  the level's own key or a *top-level* `"[/]"` - so one written deeper is never read, and
+     *  inside a platform block it would also be deciding whether its own block applies. */
+    it('refuses "platform" inside a nested "[/]", where nothing reads it', async () => {
       const dir = tmp();
       fs.writeFileSync(
         path.join(dir, '.rmanrc'),
-        JSON.stringify({ '[platform:node,cargo]': { '[platform:node]': { group: 'x' } } }),
+        JSON.stringify({ '[platform:node]': { '[/]': { platform: 'node' } } }),
       );
-      await expect(reader().resolve(dir)).resolves.toBeDefined();
+      await expect(reader().resolve(dir)).rejects.toThrow(/cannot set "platform"/);
+
+      /** A top-level one is how it is written, and keeps working. */
+      const top = tmp();
+      fs.writeFileSync(path.join(top, '.rmanrc'), JSON.stringify({ '[/]': { platform: 'node' } }));
+      await expect(reader().resolve(top)).resolves.toBeDefined();
     });
 
     /** The `extends` and identity refusals reach a nested block too - they are about what a

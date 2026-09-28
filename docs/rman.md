@@ -573,18 +573,18 @@ Selector details:
   | | speaks for | matched against |
   | --- | --- | --- |
   | `"[/]"` | the **root package** alone, structurally | - |
-  | `"[platform:node]"`, `"[platform:node,cargo]"` | the packages of those **technologies** | `pkg.platform.name` |
+  | `"[platform:node]"`, `"[platform:node,cargo]"` | every package of those **technologies**, the root included | `pkg.platform.name` |
   | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches | `pkg.selector` |
 
   `/` for the root because that is what a repository root is called everywhere else, and no package
   can be named it.
 
-  **The root is never selected by name, and a platform block does not reach it either.** A glob
-  matches package names and the root is nobody's child, so `"[my-*]"` cannot quietly reach a
-  repository whose root package is called `my-repo`, and `"[*]"` cannot hand a package-shaped
-  setting to a root with no build directory to apply it to. `"[platform:node]"` is held to the same
-  line even though the root has a platform - it is addressed structurally, which is the whole reason
-  it is `/`.
+  **The root is never selected by name, and only a glob is held off it.** A glob matches package
+  names and the root is nobody's child, so `"[my-*]"` cannot quietly reach a repository whose root
+  package is called `my-repo`, and `"[*]"` cannot hand a package-shaped setting to a root with no
+  build directory to apply it to. Neither reason touches `"[platform:node]"` - it is not a name and
+  it is not a catch-all - so a platform block answers about the root like any other package, and
+  `"[platform:node]" > "[/]"` is how you say *the root, when it is a node repository*.
 
   A package **no technology claimed** carries a platform whose name is `''`, so it matches no
   platform block at all rather than quietly falling into one.
@@ -641,13 +641,31 @@ Selector details:
           "[pkg-*]": { exec: tsc }   # refused - naming where it sits
     ```
 
+  - **`"[platform:node]" > "[/]"` is the root, when the root is a node package.** A platform block
+    asks `pkg.platform.name` and the root is a package with a platform, so a technology's whole
+    shared config fits in one block - the `vars` beside the nested blocks reach the root and the
+    packages alike:
+
+    ```yaml
+    "[platform:node]":
+      vars: { coverage: coverage }
+      "[/]": { clean: { include: "${{ [...value, vars.coverage] }}" } }
+      "[*]": { publish: { npm: { directory: build } } }
+    ```
+
+    Only a **glob** is held off the root, and for two reasons that are both about names: `"[my-*]"`
+    must not pick up a repository whose root package happens to be called `my-repo`, and a catch-all
+    must not hand a package-shaped setting to a root with no build directory. Neither applies to
+    `platform:node`.
   - **A nested pair that could never match together is refused**, rather than loading and matching
-    nothing. Two are decidable and both are checked: `"[/]"` on either side of a nesting (the root is
-    addressed structurally and every other selector deliberately never reaches it), and two
-    `"[platform:...]"` blocks naming nothing in common (a package carries one platform).
-    `"[platform:node,cargo]" > "[platform:node]"` narrows and is fine. A glob pair is deliberately
-    *not* checked - whether two globs intersect is a real computation, where a platform set is a
-    membership test.
+    nothing. Two are decidable and both are checked: `"[/]"` paired with a **glob**, either way round
+    (a glob never matches the root, so the pair is empty), and two `"[platform:...]"` blocks naming
+    nothing in common (a package carries one platform). `"[platform:node,cargo]" > "[platform:node]"`
+    narrows and is fine. A glob pair is deliberately *not* checked - whether two globs intersect is a
+    real computation, where a platform set is a membership test.
+  - **`platform` cannot sit in a nested `"[/]"`.** Which technology claims a directory is settled
+    before any block is matched, so it is read from a level's own keys or a top-level `"[/]"` and
+    nowhere deeper.
   - `vars` and the contribution keys (`plugins`, `commands`, `publishTargets`) are exempt from all of
     this - their contents are not config keys, so a bracketed name in either is data.
 
