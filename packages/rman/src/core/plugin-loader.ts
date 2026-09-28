@@ -40,21 +40,25 @@ export function registerPlugin(app: RmanApplication, entry: Plugin | Platform): 
   app.plugins.add(entry);
 }
 
+/* **`source` is where the command came from, already worded for a message** - a file in quotes, or
+ * `.rmanrc "commands"` - and `describeCommandSource` is what produces it. It was called
+ * `pluginName` and the messages said `Plugin "..."`, which neither caller ever passed: both hand
+ * over a command's *origin*, so a repository's own `.rman/deploy.mjs` was announced as a plugin and
+ * a config entry came out as `Plugin """commands"""`. */
 export function checkCustomCommand<T extends { command?: string; describe?: unknown; handler?: unknown }>(
   command: T,
-  pluginName: string,
+  source: string,
 ): T & { command: string } {
   const declared = command?.command?.trim();
   if (!declared) {
-    throw new Error(`Plugin "${pluginName}" has a command with no "command" name - it cannot be registered.`);
+    throw new Error(`${source} has a command with no "command" name - it cannot be registered.`);
   }
   if (typeof command.handler !== 'function') {
-    throw new Error(`Plugin "${pluginName}" command "${declared}" has no "handler" function.`);
+    throw new Error(`${source} command "${declared}" has no "handler" function.`);
   }
   if (typeof command.describe !== 'string' || !command.describe) {
     throw new Error(
-      `Plugin "${pluginName}" command "${declared}" has no "describe" - \`rman --help\` would have ` +
-        `nothing to list it by.`,
+      `${source} command "${declared}" has no "describe" - \`rman --help\` would have nothing to ` + `list it by.`,
     );
   }
   return { ...command, command: declared };

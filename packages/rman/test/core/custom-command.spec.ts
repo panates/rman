@@ -6,6 +6,7 @@ import { expect } from 'expect';
 import {
   assertNoBuiltinShadowing,
   defaultCommandGlobs,
+  describeCommandSource,
   loadCustomCommands,
 } from '../../src/core/interfaces/custom-command.js';
 
@@ -145,6 +146,51 @@ describe('core/custom-command', () => {
     it('allows every other name', () => {
       const commands = [{ name: 'deploy', file: '/x/.rman/deploy.mjs', describe: 'x', handler() {} }];
       expect(() => assertNoBuiltinShadowing(commands, ['publish', 'run'])).not.toThrow();
+    });
+
+    /**
+     * **A command contributed through `.rmanrc "commands"` has no file**, and the message has to
+     * say that rather than invent one. `file` used to be the literal string `'"commands"'` - not a
+     * path, and carrying its own quotes - so the error came out as `""commands""`, having also been
+     * through `path.relative`.
+     *
+     * The remedy differs with it: "rename the file" is no answer where there is no file.
+     */
+    it('names a config-contributed command by its key, with a remedy that applies to it', () => {
+      const commands = [{ name: 'publish', file: '' }];
+      let message = '';
+      try {
+        assertNoBuiltinShadowing(commands, ['publish']);
+      } catch (e: any) {
+        message = e.message;
+      }
+      expect(message).toContain('.rmanrc "commands" would shadow');
+      expect(message).not.toContain('""');
+      expect(message).toContain("Give it its own name with `command: '<name>'`");
+      expect(message).not.toContain('Rename the file');
+    });
+
+    /** The control: a real file keeps the file wording, quoted once and made relative. */
+    it('keeps the file wording for a command that has one', () => {
+      const file = path.join(process.cwd(), '.rman', 'publish.mjs');
+      let message = '';
+      try {
+        assertNoBuiltinShadowing([{ name: 'publish', file }], ['publish']);
+      } catch (e: any) {
+        message = e.message;
+      }
+      expect(message).toContain('".rman/publish.mjs" would shadow');
+      expect(message).toContain('Rename the file');
+    });
+  });
+
+  describe('describeCommandSource()', () => {
+    it('names the config key when there is no file, and never doubles its quotes', () => {
+      expect(describeCommandSource('')).toBe('.rmanrc "commands"');
+    });
+
+    it('quotes a file once, relative to the cwd', () => {
+      expect(describeCommandSource(path.join(process.cwd(), '.rman', 'deploy.mjs'))).toBe('".rman/deploy.mjs"');
     });
   });
 

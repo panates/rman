@@ -253,8 +253,11 @@ describe('cli: global --config', () => {
     const verbose = (await captureLogs(() => runCli({ cwd: dir, argv: ['deploy', '--log-level', 'verbose'] }))).join(
       '\n',
     );
-    expect(verbose).toContain('"deploy" from "commands" is overridden by');
+    expect(verbose).toContain('"deploy" from .rmanrc "commands" is overridden by');
     expect(verbose).toContain('deploy.mjs');
+    /** The loser came from a config key, not a file, and the note says so - it read
+     *  `from "commands"` while `file` held the literal string `'"commands"'`. */
+    expect(verbose).not.toContain('""');
 
     const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['deploy'] }))).join('\n');
     expect(out).toContain('ran repo');

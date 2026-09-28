@@ -19,6 +19,7 @@ import {
   type CommandContext,
   type CustomCommand,
   defaultCommandGlobs,
+  describeCommandSource,
   loadCustomCommands,
   type LoadedCommand,
 } from './core/interfaces/custom-command.js';
@@ -166,7 +167,10 @@ export async function runCli(options?: {
     const localModules = [...direct, ...loaded].map(c => {
       if (!c.register) return { name: c.name, file: c.file, module: toCustomModule(c.custom!, repository, app) };
       const declared = c.register(app);
-      const meta = checkCustomCommand({ ...declared, command: declared.command?.trim() || c.name }, c.file);
+      const meta = checkCustomCommand(
+        { ...declared, command: declared.command?.trim() || c.name },
+        describeCommandSource(c.file),
+      );
       return { name: commandName(meta.command), file: c.file, module: toYargsCommand(meta) };
     });
     /**
@@ -203,7 +207,10 @@ export async function runCli(options?: {
       const survivors = new Set(commands);
       for (const lost of localModules.filter(c => !survivors.has(c))) {
         const winner = byName.get(lost.name)!;
-        logger.verbose(`"${lost.name}" from ${lost.file} is overridden by ${winner.file}.`);
+        logger.verbose(
+          `"${lost.name}" from ${describeCommandSource(lost.file)} is overridden by ` +
+            `${describeCommandSource(winner.file)}.`,
+        );
       }
     }
     assertNoBuiltinShadowing(commands, builtInNames(builtIns));
@@ -286,16 +293,20 @@ function commandEntries(repository: Repository): { globs: string[]; direct: Load
       }
       if (!entry || seen.has(entry)) continue;
       seen.add(entry);
-      /** No file to fall back on, so the metadata has to name itself - `checkCustomCommand` says
-       *  so when it does not. `"commands"` stands in for the file in that message. */
+      /** **No file, and `file: ''` says so** - `describeCommandSource` turns that into
+       *  `.rmanrc "commands"` wherever a message needs to name the origin. It used to be the
+       *  literal string `'"commands"'`, which is not a path: `path.relative` mangled it and its
+       *  own quotes doubled in every message that added a pair.
+       *
+       *  The metadata therefore has to name itself, since there is no basename to fall back on,
+       *  and `checkCustomCommand` is what says so when it does not. */
       if (typeof entry === 'function') {
-        direct.push({ name: '', file: '"commands"', register: entry });
+        direct.push({ name: '', file: '', register: entry });
       } else {
-        /** `checkCustomCommand` is what refuses a nameless one, with the message that names the
-         *  omission - reached here rather than at registration so an inline command is checked
-         *  the same way a plugin's used to be. */
-        const custom = checkCustomCommand(entry, '"commands"');
-        direct.push({ name: commandName(custom.command), file: '"commands"', custom });
+        /** Reached here rather than at registration, so an inline command is checked the same way
+         *  one loaded from a file is. */
+        const custom = checkCustomCommand(entry, describeCommandSource(''));
+        direct.push({ name: commandName(custom.command), file: '', custom });
       }
     }
   }
