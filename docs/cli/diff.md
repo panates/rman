@@ -1,4 +1,4 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 16c3525 - see ../cli-rman.md for the baseline convention -->
 
 # `rman diff [package]`
 
@@ -29,5 +29,5 @@ has changed since it, prints `No changes since <tag>.`.
 
 ## See also
 
-- [`rman changed`](changed.md) - a version-bump-level summary instead of a raw diff.
+- [`rman version --show`](version.md) - a version-bump-level summary instead of a raw diff.
 - [`rman changelog`](changelog.md) - a formatted, grouped changelog instead of a raw diff.

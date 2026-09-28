@@ -137,14 +137,21 @@ describe('docs/rman.md: the documented API surface', () => {
       undefined,
       {} as ServiceMap,
     ];
-    /** **Both halves of the split, in the relationship the page describes**: a platform is one
-     *  technology, a plugin is what a package contributes, and a bare platform is accepted wherever
-     *  a plugin is. Each assignment is a claim the compiler checks. */
-    const umbrella: Plugin = definePlugin({ name: 'demo', platforms: [basePlatform] });
-    const sugar: Plugin = basePlatform;
-    expect(umbrella.platforms).toEqual([basePlatform]);
-    expect(isPlatform(sugar)).toBe(true);
-    expect(isPlatform(umbrella)).toBe(false);
+    /**
+     * **Both halves of the split, in the relationship the page describes.** A platform is one
+     * technology and reaches a repository through the `platforms` key; a plugin is a name and
+     * whatever it does at a stage. Each assignment is a claim the compiler checks.
+     *
+     * **A plugin no longer carries platforms**, which is what `Plugin.platforms` was for - and by
+     * the time it went, nothing in rman produced one: the `node` preset declares
+     * `platforms: [nodePlatform]` as a *config key*, the same route `commands` and `publishTargets`
+     * already took. `isPlatform` is still what tells the two apart, and `manifestProvider` is still
+     * what it asks.
+     */
+    const plain: Plugin = definePlugin({ name: 'demo' });
+    const technology: Platform = basePlatform;
+    expect(isPlatform(technology)).toBe(true);
+    expect(isPlatform(plain)).toBe(false);
     /** `PositionalOption` beside `CommandOption`, because `positionals` is the other half of a
      *  command's surface - and the half that could not be typed without importing yargs until it
      *  was exported. */

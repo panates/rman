@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { PublishService } from '../../../../src/plugins/node/services/publish.service.js';
+import { PublishService } from '../../../../src/builtins/platforms/node/services/publish.service.js';
 import { createRepository, useNodeEcosystem } from '../_fixture.js';
 
 /** What one package looks like on the fake registry - see `registry()`. */

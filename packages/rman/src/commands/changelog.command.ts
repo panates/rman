@@ -1,5 +1,6 @@
 import colors from 'ansi-colors';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
+import type { ConfigValue, RmanConfig } from '../interfaces/rman-config.interface.js';
+import { registerCommand } from '../interfaces/rman-config.interface.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
 import { Logger, resolveRootLogLevel } from '../utils/logger.js';
 import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
@@ -76,7 +77,82 @@ const config = {
       'Default "v*", one repo-wide tag resolved through git describe.',
     type: 'string',
   },
+  /**
+   * **Where a package's history starts being worth documenting**, as one key taking whichever form
+   * the answer naturally has - a version or tag, a date, or a commit.
+   *
+   * `'both'`, because it is a lasting fact about the package ("we do not publish what happened
+   * before 2.0"), not a decision per run. That is also what separates it from `--from`, which those
+   * three forms would otherwise duplicate: `--from` is this run's boundary and applies identically
+   * to every package, while this lives in `.rmanrc`, is cascaded per package, and still holds on
+   * the run after next.
+   */
+  /**
+   * **Default `true`, so the flag that does something is `--no-unreleased`** - and that is the one
+   * place this deliberately differs from `auto-changelog`, which defaults it off.
+   *
+   * There, a changelog is generated from a finished history and the unreleased section is the
+   * unusual thing to want. Here it is the *ordinary* one: `rman changelog` exists to answer what is
+   * not released yet, down to the message it prints when there is nothing ("No unreleased
+   * changes."), and `version --changelog` writes the entry for the release it is about to cut -
+   * which is that segment. Defaulting it off would make the common case need a flag, and make
+   * `version --changelog` silently write nothing.
+   *
+   * What it *is* for is the other direction, which only became possible once `--write` started
+   * backfilling: a changelog of released history, with the work in progress left out.
+   */
+  unreleased: {
+    target: 'both',
+    describe:
+      'Include the entry for commits that are not released yet (default true) - pass ' +
+      '--no-unreleased for a changelog of released history only',
+    type: 'boolean',
+  },
+  startingAt: {
+    target: 'both',
+    cliName: 'starting-at',
+    describe:
+      "Where this package's changelog begins: a version or release tag (inclusive), a YYYY-MM-DD " +
+      'date, or a commit. Releases older than it are left out - for a package whose early ' +
+      'development does not belong in its changelog',
+    type: 'string',
+  },
 } satisfies Record<string, RmanConfig.CommandOption>;
+
+/**
+ * **What a `CommandOption` cannot say**, which is the only thing `Extra` is for: `titles` is a map
+ * from commit type to section heading, and an option says `type: 'string'`.
+ */
+export interface ChangelogExtraKeys {
+  /**
+   * The heading each Conventional Commits type is listed under - `{ feat: 'New Features', dev:
+   * 'Development Changes' }`. Per-package cascaded.
+   *
+   * **Merged over the defaults per key, not replacing them**, the way `vars` merges: naming `dev`
+   * adds a section without silently costing you `feat` and `fix`, and renaming `feat` leaves it
+   * where it was in the order. The cost, stated rather than hidden - you cannot *remove* a default
+   * section by leaving it out; `changelog.ignoreTypes` is the key that drops a type entirely.
+   *
+   * Two types sharing a heading share one section. `'*'` is the heading for every type that is not
+   * named here, and is always rendered last; a subject that is not Conventional Commits at all has
+   * no type to key off and lands there too.
+   *
+   * Sections come out in the order the types were declared, defaults first - so a repository
+   * chooses both the wording and the running order.
+   */
+  titles?: ConfigValue<Record<string, string>>;
+  /**
+   * The order the sections come out in, as a list of commit **types** - `['fix', 'feat', 'docs']`.
+   * Per-package cascaded.
+   *
+   * Separate from `titles` because they are separate decisions, and letting one key do both was
+   * the wrong shape: `titles` patches a heading's *wording*, so a repository renaming `feat` would
+   * otherwise also be silently re-deciding where it sits. A type left out keeps its place after the
+   * listed ones; `'*'` is always last whatever this says, since a catch-all in the middle swallows
+   * the sections after it.
+   */
+  sortTitles?: ConfigValue<string[]>;
+}
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 
@@ -113,6 +189,8 @@ const changelogCommand = registerCommand(app => {
         fromRoot: args.fromRoot,
         includeSkipped: args.includeSkipped,
         version: args.releaseVersion,
+        startingAt: args.startingAt,
+        unreleased: args.unreleased,
       };
       const changelog = app.getService('changelog');
       const entries = write ? await changelog.generateToFile(options) : await changelog.getEntries(options);
@@ -133,6 +211,9 @@ export default changelogCommand;
 
 declare module '../interfaces/rman-config.interface.js' {
   namespace RmanConfig {
-    interface CommandConfigs extends RmanConfig.CommandContribution<ReturnType<typeof changelogCommand>> {}
+    interface CommandConfigs extends RmanConfig.CommandContribution<
+      ReturnType<typeof changelogCommand>,
+      ChangelogExtraKeys
+    > {}
   }
 }

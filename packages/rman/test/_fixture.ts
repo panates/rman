@@ -2,20 +2,25 @@ import fs from 'node:fs';
 import path from 'node:path';
 import glob from 'fast-glob';
 import { runCli as cliRunCli } from '../src/cli.js';
-import { RmanApplication } from '../src/core/application.js';
-import type { ManifestProvider } from '../src/core/manifest.js';
-import type { Package } from '../src/core/package.js';
-import { basePlatform, definePlatform, definePlugin, type Platform } from '../src/core/plugin.js';
 import { registerPlugin } from '../src/core/plugin-loader.js';
-import type { PublishTarget } from '../src/core/publish-target.js';
-import { Repository } from '../src/core/repository.js';
-import type { ServiceMap } from '../src/core/service.js';
-import { Workspace } from '../src/core/workspace.js';
-import { ChangeHashService } from '../src/services/change-hash.service.js';
-import { RunService } from '../src/services/run.service.js';
-import { VersionPlanService } from '../src/services/version-plan.service.js';
-import type { GitHelper } from '../src/utils/git.js';
-import { stampVersionConstant } from '../src/utils/version-stamp.js';
+import {
+  basePlatform,
+  ChangeHashService,
+  definePlatform,
+  definePlugin,
+  type GitHelper,
+  type ManifestProvider,
+  type Package,
+  type Platform,
+  type PublishTarget,
+  Repository,
+  RmanApplication,
+  RunService,
+  type ServiceMap,
+  stampVersionConstant,
+  VersionPlanService,
+  Workspace,
+} from '../src/index.js';
 
 /**
  * **The declaration factories, reachable from a config module written into a temp directory.**
@@ -273,9 +278,20 @@ export function usePlugin(platform: Platform): void {
  * failure: registries were module-global, so whichever spec ran first decided the answer for the
  * rest, and the core appeared to work in tests that had set nothing up.
  */
-export function createRepository(root?: string, options?: { deep?: number }): Promise<Repository> {
+/* **`presets: []`, because this fixture *is* the ecosystem.** rman's own presets go under every
+ * repository root, so without this the core's specs would carry the `node` technology, `clean`,
+ * `ci` and the npm publish target beside the synthetic ones they set up - and the core must not
+ * need a real ecosystem to test itself. Measured, and it is the `useLocalBin` failure by another
+ * route: with the presets in, `publish.command.spec.ts` ran a **real `npm publish` against
+ * registry.npmjs.org** and only a 404 stopped it. A spec that wants the shipped preset asks for it
+ * - `plugins/node/_fixture.ts` writes `extends: ['rman:node']`, and the cases about the default
+ * itself call `Repository.create` directly. */
+export function createRepository(
+  root?: string,
+  options?: { deep?: number; presets?: readonly string[] },
+): Promise<Repository> {
   const app = createApp();
-  return Repository.create(root, { ...options, app });
+  return Repository.create(root, { presets: [], ...options, app });
 }
 
 /**
@@ -317,8 +333,9 @@ export function planner(): VersionPlanService {
  * same reason `createRepository` does: a technology is registered *into* an application, and there
  * is no longer anywhere else for one to be.
  */
-export function runCli(options?: { argv?: string[]; cwd?: string }): Promise<void> {
-  return cliRunCli({ ...options, app: createApp() });
+export function runCli(options?: { argv?: string[]; cwd?: string; presets?: readonly string[] }): Promise<void> {
+  /** `presets: []` for the same reason `createRepository` passes it - see there. */
+  return cliRunCli({ presets: [], ...options, app: createApp() });
 }
 
 /** The service a spec is exercising, from the application the last `createRepository()` built. */

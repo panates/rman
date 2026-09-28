@@ -164,6 +164,36 @@ export class GitHelper {
   }
 
   /** Whether `tag` exists as an exact git tag name (not a glob - a literal ref check). */
+  /**
+   * Every tag matching `pattern`, paired with the **commit** it points at - newest version first,
+   * the same order `listTags` returns.
+   *
+   * `%(*objectname)` is the dereferenced target and is empty for a lightweight tag, so the commit
+   * is that or `%(objectname)`. rman's own tags are lightweight; a repository's existing ones may
+   * not be, and an annotated tag's `objectname` is the *tag object*, which matches no commit and
+   * would make the tag silently invisible to anything comparing shas.
+   */
+  async listTagCommits(pattern: string): Promise<{ tag: string; sha: string }[]> {
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['tag', '--list', pattern, '--sort=-v:refname', '--format=%(refname:short)%09%(objectname)%09%(*objectname)'],
+        { cwd: this.cwd },
+      );
+      return stdout
+        .trim()
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(line => {
+          const [tag, objectname, deref] = line.split('\t');
+          return { tag, sha: deref || objectname };
+        })
+        .filter(t => t.tag && t.sha);
+    } catch {
+      return [];
+    }
+  }
+
   async tagExists(tag: string): Promise<boolean> {
     try {
       await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `refs/tags/${tag}`], { cwd: this.cwd });
@@ -213,6 +243,45 @@ export class GitHelper {
   /** The repository's very first commit (the oldest root commit, for a history with several) -
    *  `undefined` for a repository with no commits at all. The "since the beginning" boundary for
    *  a package being released for the first time, with no earlier tag to measure from. */
+  /** HEAD's own sha, or `undefined` in a repository with no commits yet (or none at all) - the
+   *  same "answer nothing rather than throw" shape `rootCommit` and `describeTag` take, because
+   *  every caller here already has a "nothing to go on" branch. */
+  /** The date a ref points at, as `YYYY-MM-DD`. The **committer** date, not the author's: a
+   *  rebased or cherry-picked release commit was authored earlier than it shipped, and what a
+   *  changelog heading states is when the release happened. `undefined` for a ref that resolves to
+   *  nothing. */
+  async commitDate(ref: string): Promise<string | undefined> {
+    try {
+      const { stdout } = await execFileAsync('git', ['log', '-1', '--format=%cI', ref], { cwd: this.cwd });
+      return stdout.trim().slice(0, 10) || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** The commit `ref` names - a sha, a tag, a branch - or `undefined` when git does not recognize
+   *  it. `^{commit}` so an annotated tag answers with the commit rather than the tag object, and
+   *  so a tree or blob answers with nothing rather than a sha that matches no commit. */
+  async resolveCommit(ref: string): Promise<string | undefined> {
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+        cwd: this.cwd,
+      });
+      return stdout.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async headSha(): Promise<string | undefined> {
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: this.cwd });
+      return stdout.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async rootCommit(): Promise<string | undefined> {
     try {
       const { stdout } = await execFileAsync('git', ['rev-list', '--max-parents=0', 'HEAD'], { cwd: this.cwd });

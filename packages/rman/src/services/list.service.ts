@@ -1,9 +1,9 @@
 import path from 'path';
-import type { Package } from '../core/package.js';
-import { type PublishTargetName, targetsOf } from '../core/publish-target.js';
-import type { Repository } from '../core/repository.js';
-import { Service } from '../core/service.js';
-import type { DockerPublishOptions } from '../targets/docker.target.js';
+import type { DockerPublishOptions } from '../builtins/publish-targets/docker/docker.target.js';
+import type { Package } from '../core/classes/package.js';
+import type { Repository } from '../core/classes/repository.js';
+import { Service } from '../core/classes/service.js';
+import { type PublishTargetName, targetsOf } from '../core/interfaces/publish-target.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 
 /**
@@ -86,8 +86,10 @@ export namespace ListService {
      * what it saw before.
      */
     includeRoot?: boolean;
-    /** Only include packages that have changed since the last publish (dirty or committed but
-     *  not yet published) - or, with `changedSince`, since that specific commit/hash. */
+    /** Only include packages the developer has touched but not pushed (dirty, or committed and not
+     *  yet on the upstream branch) - or, with `changedSince`, since that specific commit/hash.
+     *  **Question C, never a release question**: after a push `git cherry` is empty and everything
+     *  reads `clean`, which does not mean there is nothing left to release. */
     changed?: boolean;
     changedSince?: string;
   }
@@ -128,7 +130,7 @@ export namespace ListService {
   }
 }
 
-declare module '../core/service.js' {
+declare module '../core/classes/service.js' {
   interface ServiceMap {
     list: ListService;
   }

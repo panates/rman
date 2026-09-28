@@ -1,8 +1,8 @@
 <!--
 docs-baseline
-git-commit: f43a447
+git-commit: c810d62
 package-version: 2.0.0-beta.2
-date: 2026-09-24
+date: 2026-09-25
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
@@ -1255,17 +1255,21 @@ step there is mistaken for a value.
 | `version.stampDockerfile` | `boolean` | `true` | Per-package cascaded. Rewrite this package's Dockerfile `org.opencontainers.image.version` label to the version being written, in the same commit as the bump. Only ever rewrites a label already declared; reads `publish.docker.dockerfile`. |
 | `version.stamp` | `string \| string[]` | none | Per-package cascaded. Source files (relative to the package's own directory) whose `version` constant is rewritten to the version being written, in the same commit. A listed file a package doesn't have is a silent no-op. |
 | `version.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. Hooks around a version bump's write (real npm `preversion`/`version`/`postversion` scripts still win if the package defines them). A `RunStepValue` is a shell command **or a function** - see [Function steps](#function-steps). |
+| `changelog.titles` | `Record<string, string>` | `{ feat: '✨ Features', fix: '🐛 Bug Fixes', '*': '🔧 Other Changes' }` | Per-package cascaded. The heading each commit type is listed under, and the order the sections come out in. **Merged over the defaults per key**, so naming one type does not cost you the others. `'*'` is the catch-all and always renders last. Two types sharing a heading share one section. |
+| `changelog.sortTitles` | `string[]` (commit types) | none | Per-package cascaded. The order the sections come out in. A sort, not a filter: an unlisted type keeps its place after the listed ones, a listed type with no heading of its own sorts nothing, and `'*'` is always last. |
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
 | `changelog.template` | `string` (a file **path**, relative to repo root) | built-in template | Per-package cascaded. Throws if the path doesn't exist. |
+| `changelog.unreleased` | `boolean` | `true` | Per-package cascaded. Whether the not-yet-released commits get an entry of their own. `false` gives a changelog of released history alone - but a release named through `--release-version` is still documented, so `version --changelog` keeps working. |
+| `changelog.startingAt` | `string` (a version/tag, a `YYYY-MM-DD` date, or a commit) | none | Per-package cascaded. Where this package's changelog begins - releases older than it are left out, inclusive of the one named. The unreleased entry is never dropped by it. A value matching none of the three forms is an error. |
 | `changelog.filePath` | `string` | `'CHANGELOG.md'` | Per-package cascaded, relative to that package's own directory. CLI `--file-path` wins when given. |
-| `changelog.tagPattern` | `string` (glob, may contain `{name}`) | `'v*'` | Per-package cascaded. `{name}` → independent per-package tags (`{name}@*`); no `{name}` → one shared repo-wide tag scheme. |
+| `changelog.tagPattern` | `string` (glob, may contain `{name}`) | **derived** - `'v*'` with one version line, `'{name}@*'` with several | Per-package cascaded. `{name}` → independent per-package tags (`{name}@*`); no `{name}` → one shared repo-wide tag scheme. See below. |
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |
 | `clean.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of `clean` entirely. |
 | `publish.target` | `string` or an array of them | whichever installed targets *claim* the package | Per-package cascaded. Which **registry** `publish` ships this package to - a name from the installed [publish targets](#publishtarget), never a fixed list. Each has its own "already published?" check: npm via `npm view`, docker via `docker manifest inspect`. A name nothing implements is an error naming the ones this repository has. The repository's GitHub Release is not a target here - see `githubRelease`. |
 | `publish.npm.directory` | `string` | none (the package's own directory) | Per-package cascaded. Where the publishable output lives, relative to the package's own directory. A package's own `publishConfig.directory` wins over it; `--contents` is the last fallback. Publishing from such a directory means **`publish` generates the manifest there** - see below. |
 | `publish.docker.image` | `string` | none (required once `"docker"` is a target) | A bare name is prefixed with `--docker-namespace`/`DOCKERHUB_NAMESPACE`; one already containing `/` is used verbatim. |
 | `publish.docker.dockerfile` | `string` | `'Dockerfile'` | Relative to the package's own directory. |
-| `publish.docker.platforms` | `string[]` | `['linux/amd64']` | `docker buildx build --platform` targets. |
+| `publish.docker.architectures` | `string[]` | `['linux/amd64']` | `docker buildx build --platform` targets. |
 | `publish.docker.cwd` | `string` | that package's own directory | Relative to the repository root. |
 | `publish.docker.buildContexts` | `Record<string, string>` | `{}` | Named `--build-context <name>=<path>` entries, each path relative to the package's own directory. |
 | `publish.docker.buildArgs` | `Record<string, string>` | `{}` | `--build-arg <name>=<value>` entries. A value of exactly `"$NAME"` expands from `process.env.NAME`. |
@@ -1569,6 +1573,32 @@ Across groups, a package depending on another group's bumped package always rece
 **patch** bump of its own (never the source's severity) - this can itself ripple into a third
 group, and so on, but a patch never re-triggers its own group's minor/major cascade.
 
+#### Grouping decides how release tags are named
+
+`changelog.tagPattern` has **no fixed default**. It is derived from how many version lines the
+repository has, the same way the root's own versioning scheme is (see
+[The repository's own version](#the-repositorys-own-version-monorepo-root)):
+
+| Version lines | Default pattern | Tags |
+| --- | --- | --- |
+| one | `v*` | `v1.2.3`, shared by every package |
+| several | `{name}@*` | `pkg-a@1.2.3`, one per package |
+
+**This is not a preference.** A pattern without `{name}` is resolved with `git describe --match` -
+the nearest tag HEAD descends from, whichever package it belongs to - which is exactly right while
+every package releases together and silently wrong the moment they do not. Measured on a two-line
+repository: releasing `pkg-a` put `v1.1.0` on HEAD, and `pkg-b`, which had a committed but
+unreleased `fix:` of its own sitting behind that tag, reported `no-change` and shipped nothing. Each
+group member still gets its own tag at the group's shared version, so every package is findable by
+name.
+
+**Growing a second version line needs no migration.** While a package has no tag under its own name
+yet, the boundary falls back to the repository-wide `v*` tag - the one that *was* correct, since
+before the split every package genuinely shared it. So the first run after grouping reads the same
+commits it would have read before, and writes a `{name}` tag that every run after it finds
+directly. Declaring `changelog.tagPattern` yourself turns that fallback off: a repository that has
+said what names its tags is not handed a boundary from a tag it never asked about.
+
 #### Severity auto-detection from commits
 
 With no explicit `bump`, each changed package's severity comes from its own commits since its last
@@ -1832,7 +1862,7 @@ side.
 
 `applyPlan` logs in once (`DOCKERHUB_USERNAME`/`DOCKERHUB_PASSWORD` environment variables) and runs
 `docker buildx create --use` once, then for each `'publish'` entry a single `docker buildx build
---push`, using that package's own `publish.docker` config: `platforms` (default `["linux/amd64"]`),
+--push`, using that package's own `publish.docker` config: `architectures` (default `["linux/amd64"]`),
 named `buildContexts` (`--build-context <name>=<path>`, each path relative to the package's own
 directory), `buildArgs` (`--build-arg <name>=<value>` - a value of exactly `"$NAME"` expands from
 `process.env.NAME`), an optional `cwd` override (relative to the repository root, for a Dockerfile
@@ -2068,7 +2098,7 @@ const app = repository.app;
 // Runs "build" in every package, dependency order, CPU-count concurrency.
 await app.getService('run').runScript('build');
 
-// Only in packages changed since the last publish, serially, never bailing on a single failure:
+// Only in packages touched but not pushed, serially, never bailing on a single failure:
 await app.getService('run').runScript('test', { changed: true, parallel: false, bail: false });
 ```
 
@@ -2124,7 +2154,7 @@ each optionally `= <hash-or-{ENV}>`) combined with `and`/`or`/`not`/`(...)` (`an
 ```yaml
 run:
   build:
-    if: changed # changed since the last publish
+    if: changed # touched but not pushed
   test:
     if: changed = a1b2c3d # changed since a specific commit
   deploy:

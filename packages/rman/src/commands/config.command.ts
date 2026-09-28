@@ -1,11 +1,13 @@
 import path from 'node:path';
 import colors from 'ansi-colors';
 import * as yaml from 'js-yaml';
-import { DEFERRED_PATHS } from '../core/config.js';
-import type { Package } from '../core/package.js';
+import type { Package } from '../core/classes/package.js';
+import { DEFERRED_PATHS } from '../core/config/config-paths.js';
+import { ConfigReader } from '../core/config/config-reader.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
+import { colorYaml } from '../utils/color-yaml.js';
 import { fromRootOption, readFromRootOption } from '../utils/package-filter.js';
-import { printableConfig } from '../utils/printable-config.js';
+import { printableConfig, withoutContributions } from '../utils/printable-config.js';
 
 const COMMAND = 'config' as const;
 
@@ -36,8 +38,10 @@ const configCommand = registerCommand(app => {
     handler: (args: Args) => {
       const target = (!readFromRootOption(args) && repository.currentPackage) || repository.rootPackage;
 
+      const settings = withoutContributions(target.config);
+
       if (args.json) {
-        console.log(JSON.stringify(printableConfig(target.config), undefined, 2));
+        console.log(JSON.stringify(printableConfig(settings), undefined, 2));
         return;
       }
 
@@ -49,14 +53,29 @@ const configCommand = registerCommand(app => {
        * itself off for a pipe here). The repository's own convention for this is
        * `process.stdout.isTTY`, as `run`/`exec`'s progress panel uses.
        */
-      const comment = (text: string) => (process.stdout.isTTY ? colors.gray(text) : text);
+      const tty = !!process.stdout.isTTY;
+      const comment = (text: string) => (tty ? colors.gray(text) : text);
       const relativeDir = path.relative(repository.dirname, target.dirname) || '.';
+
+      /**
+       * **The file you would open to change this**, headed first because that is the next thing a
+       * reader wants. Omitted for a directory that declares none - naming a file that is not there
+       * would send them to create one when the answer is a level above.
+       *
+       * It is the package's **own** file and the printed config is more than it: the directory
+       * chain above, every `extends` base and each `"[selector]"` block are all in there. The
+       * per-key answer is `ORIGINS`, which is what a failing expression's message already names -
+       * this line is the starting point, not the whole provenance.
+       */
+      const source = new ConfigReader().findConfigSource(target.dirname);
+      if (source) console.log(comment(`# ${path.basename(source)}`));
       console.log(comment(`# ${target.name} (${relativeDir})`));
       for (const note of deferredNotes(target)) console.log(comment(`# ${note}`));
       /** `noRefs`: a value appearing twice in the config is the *same object* after merging, and
        *  js-yaml would otherwise emit the second as an `*anchor` reference - valid YAML that reads
        *  as a mistake in something meant to be looked at. */
-      console.log(yaml.dump(printableConfig(target.config), { noRefs: true, lineWidth: 100 }).trimEnd());
+      const body = yaml.dump(printableConfig(settings), { noRefs: true, lineWidth: 100 }).trimEnd();
+      console.log(tty ? colorYaml(body) : body);
     },
   };
 });

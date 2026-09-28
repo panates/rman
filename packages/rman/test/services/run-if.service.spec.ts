@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Repository } from '../../src/core/repository.js';
+import { Repository } from '../../src/core/classes/repository.js';
 import { RunService } from '../../src/services/run.service.js';
 import { createRepository, useTestEcosystem } from '../_fixture.js';
 

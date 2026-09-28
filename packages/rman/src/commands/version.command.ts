@@ -1,9 +1,9 @@
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
 import EasyTable from 'easy-table';
-import type { ConfigValue } from '../core/config.js';
-import type { RunStepValue } from '../core/run-step.js';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
+import type { RunStepValue } from '../core/interfaces/run-step.js';
+import type { ConfigValue, RmanConfig } from '../interfaces/rman-config.interface.js';
+import { registerCommand } from '../interfaces/rman-config.interface.js';
 import type { VersionService } from '../services/version.service.js';
 import { VersionPlanService } from '../services/version-plan.service.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
@@ -48,6 +48,15 @@ const config = {
       'bump included, no explicit bump keyword required (same idea as "publish --yes").',
     type: 'boolean',
     conflicts: 'interactive',
+  },
+  json: {
+    target: 'cli',
+    alias: 'j',
+    describe:
+      'Print the plan as JSON and write nothing - the machine-readable form of --show, and what ' +
+      'the removed "changed" command was for.',
+    type: 'boolean',
+    conflicts: ['interactive', 'yes'],
   },
   ignoreDirty: {
     target: 'cli',
@@ -235,6 +244,45 @@ const versionCommand = registerCommand(app => {
         ignoreDirty: args.ignoreDirty,
         preid: args.preid,
       });
+      /**
+       * **The machine-readable plan, and the whole of it.** This replaced `rman changed`, which
+       * was `getPlan` filtered to `status === 'bump'` - and that one-line filter produced two
+       * silent wrongs at once, measured together on a dirty tree: the entry it returned was the
+       * repository **root** (`buildRootEntry` reports `'bump'`, and the fact that it is
+       * informational lived only in `reason`), while `pkg-a`, the package that had actually
+       * changed, was dropped because a package with uncommitted changes is `'error'`. A CI script
+       * reading that array saw one name to release and it was the one name that must never be
+       * published.
+       *
+       * So nothing is filtered here. Every entry carries its own `status`, and `isRoot` is stated
+       * rather than left to be inferred from `group === "root"` - a consumer selects what it wants
+       * and can see what it is leaving out. Printed **before** the table and before the
+       * dirty-package throw, so stdout holds one JSON document and nothing else.
+       *
+       * **Exit 0 either way, deliberately.** `--show` exits 1 on a dirty package because a person
+       * needs stopping; here the same fact is in the data, and overloading the exit code would
+       * make a pipeline bail before it could read the very rows that explain why.
+       */
+      if (args.json) {
+        console.log(
+          JSON.stringify(
+            plan.map(e => ({
+              name: e.package.name,
+              selector: e.package.selector,
+              isRoot: e.package.isRoot,
+              group: e.group,
+              status: e.status,
+              from: e.from,
+              to: e.to,
+              reason: e.reason,
+            })),
+            undefined,
+            2,
+          ),
+        );
+        return;
+      }
+
       printPlan(plan);
 
       const errors = plan.filter(e => e.status === 'error');
@@ -333,17 +381,119 @@ function printApplied(result: VersionService.ApplyResult): void {
 
 function printPlan(entries: VersionPlanService.Entry[]): void {
   const table = new EasyTable();
-  for (const e of entries) {
-    table.cell('Status', statusLabel(e.status));
-    table.cell('Package', colors.cyan(e.package.name));
-    table.cell('Group', colors.gray(`(${e.group})`));
-    table.cell('From', e.from);
-    table.cell('', e.status === 'bump' ? '->' : '');
-    table.cell('To', e.status === 'bump' ? colors.yellow(e.to!) : '');
-    table.cell('Reason', e.status === 'error' ? colors.red(e.reason ?? '') : colors.gray(e.reason ?? ''));
-    table.newRow();
+  let first = true;
+  for (const { members, shared } of planBlocks(entries)) {
+    if (!first) table.pushDelimeter(PLAN_COLUMNS);
+    first = false;
+    for (const e of members) printPlanRow(table, e, shared);
   }
   console.log(table.toString().trim());
+}
+
+/**
+ * The plan, split into the blocks a delimiter is drawn between: the **repository root** first, then
+ * every shared version line with its members together, then the packages that share a line with
+ * nobody.
+ *
+ * `getPlan` returns entries in *package* order, which is the order the workspace found them in -
+ * so two members of one group are adjacent only by luck. That matters more than it looks: a group
+ * releases as one version line, so "these four numbers move together" is the single fact the table
+ * exists to convey, and scattering the members leaves the `Group` column as the only thing saying
+ * so. Read top to bottom instead, each block now *is* a release.
+ *
+ * **The root is first, and it is the one row that is not a release.** Its number is the
+ * repository's identity - what the GitHub Release is named after, and on a calendar version a
+ * number no package shares - so it is the heading the rest of the table sits under rather than a
+ * footnote to it. `buildRootEntry` appends it, which is why it is pulled out by hand here; leaving
+ * it where the plan put it made it the last singleton, indistinguishable from a package that
+ * happens to be grouped with no one.
+ *
+ * **Solo packages are one block, not one block each.** `group: false` makes every package its own
+ * group of one, so a delimiter per group would draw a line between every row in exactly the
+ * repository that has nothing to group - noise standing in for structure. They share a block
+ * because what they have in common is real: none of them is tied to anyone else.
+ *
+ * `shared` travels with each block because it is also what decides whether the `Group` column is
+ * written at all - see `printPlanRow`. One partition, asked once, answering both questions; working
+ * it out again at the cell would be a second rule that could disagree with the blocks beside it.
+ */
+function planBlocks(entries: VersionPlanService.Entry[]): PlanBlock[] {
+  /**
+   * `package.isRoot` is by **directory**, which is the only reliable test - `Repository extends
+   * Package` while holding a separate `rootPackage` instance for the same directory, so an identity
+   * check answers `false` for one of the two objects that are both the root.
+   *
+   * In a single-package repository that one package *is* the root and `getPlan` pushes no root
+   * entry of its own, so it lands here and prints alone - one row, and no delimiter to draw.
+   */
+  const root = entries.filter(e => e.package.isRoot);
+  const members = entries.filter(e => !e.package.isRoot);
+
+  const byGroup = new Map<string, VersionPlanService.Entry[]>();
+  for (const e of members) {
+    const group = byGroup.get(e.groupKey);
+    if (group) group.push(e);
+    else byGroup.set(e.groupKey, [e]);
+  }
+
+  const shared: PlanBlock[] = [];
+  const solo: VersionPlanService.Entry[] = [];
+  for (const group of byGroup.values()) {
+    if (group.length > 1) shared.push({ members: group, shared: true });
+    else solo.push(group[0]);
+  }
+
+  return [
+    ...(root.length ? [{ members: root, shared: false }] : []),
+    ...shared,
+    ...(solo.length ? [{ members: solo, shared: false }] : []),
+  ];
+}
+
+interface PlanBlock {
+  members: VersionPlanService.Entry[];
+  /** Whether these entries share a version line with each other - a real group, rather than the
+   *  collection of packages that belong to none. */
+  shared: boolean;
+}
+
+/** `buildRootEntry`'s display label. Named here because `printPlanRow` has to recognize the one
+ *  singleton whose group is worth printing, and a bare `'root'` in a condition reads as a guess. */
+const ROOT_GROUP = 'root';
+
+/** The column names in the order `printPlanRow` writes them - `pushDelimeter` has to be handed the
+ *  same set, or the dashes appear under a column that does not exist yet. */
+const PLAN_COLUMNS = ['Status', 'Package', 'Group', 'From', '', 'To', 'Reason'];
+
+function printPlanRow(table: EasyTable, e: VersionPlanService.Entry, shared: boolean): void {
+  table.cell('Status', statusLabel(e.status));
+  table.cell('Package', colors.cyan(e.package.name));
+  /**
+   * **Blank for a package that shares its version line with nobody.** `resolveGroupKey` gives an
+   * ungrouped package a group of one named after the package, so the cell printed the Package
+   * column again, one column to the right - a word that looks like information and carries none.
+   * Worse, it made `(default)` and `(@panates/tsconfig)` read as the same *kind* of answer when one
+   * names a line four packages move along and the other names nothing at all.
+   *
+   * The root keeps its label: `root` is not its package name but what the row *is*, and it is the
+   * only thing on the line saying that the number below is the repository's identity rather than a
+   * release. So the test is `shared`, plus that one entry - not "does this string repeat the name",
+   * which would blank a genuine group that happened to be called after one of its members.
+   */
+  table.cell('Group', shared || e.group === ROOT_GROUP ? colors.gray(`(${e.group})`) : '');
+  table.cell('From', e.from);
+  /**
+   * Gated on `to`, not on `status === 'bump'`, which is what kept the column blank on the one
+   * command whose whole job is to fill it: a dirty package aborts the run, and "you cannot
+   * release this" is only half of what the reader came for - the other half is which version it
+   * would have got. `getPlan` sets `to` on exactly the entries that earned one, so asking whether
+   * there is a version to show is the honest test. Dimmed rather than yellow when the entry is
+   * not a bump, because that number is a hypothetical and nothing is going to write it.
+   */
+  table.cell('', e.to ? '->' : '');
+  table.cell('To', e.to ? (e.status === 'bump' ? colors.yellow(e.to) : colors.gray(e.to)) : '');
+  table.cell('Reason', e.status === 'error' ? colors.red(e.reason ?? '') : colors.gray(e.reason ?? ''));
+  table.newRow();
 }
 
 function statusLabel(status: VersionPlanService.Entry['status']): string {

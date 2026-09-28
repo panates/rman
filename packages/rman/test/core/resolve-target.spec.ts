@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect } from 'expect';
-import { resolveBesideRman, resolveConfigTarget } from '../../src/core/resolve-target.js';
+import { resolveBesideRman, resolveConfigTarget } from '../../src/core/config/resolve-config-target.js';
 
 /** `realpath` because macOS's `/var` is a symlink to `/private/var`, and Node's resolver returns
  *  the real path - so a raw `mkdtemp` result never equals what `resolveConfigTarget` hands back. */

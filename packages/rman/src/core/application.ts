@@ -1,12 +1,19 @@
+import { DockerPublishService, dockerPublishTarget } from '../builtins/publish-targets/docker/index.js';
+import { ChangelogService } from '../services/changelog.service.js';
+import { ConfigService } from '../services/config-service.js';
+import { ExecService } from '../services/exec.service.js';
+import { GithubReleaseService } from '../services/github-release.service.js';
+import { ImportService } from '../services/import.service.js';
+import { ListService } from '../services/list.service.js';
+import { RunService } from '../services/run.service.js';
+import { VersionService } from '../services/version.service.js';
 import type { VersionPlanService } from '../services/version-plan.service.js';
 import { Logger, type LogLevel } from '../utils/logger.js';
-import { registerCoreServices } from './core-services.js';
-import { registerCoreTargets } from './core-targets.js';
-import { basePlatform, type Platform, type Plugin } from './plugin.js';
-import type { PublishTarget } from './publish-target.js';
-import { Registry } from './registry.js';
-import type { Repository } from './repository.js';
-import type { ServiceFactory, ServiceMap } from './service.js';
+import { Registry } from './classes/registry.js';
+import type { Repository } from './classes/repository.js';
+import type { ServiceFactory, ServiceMap } from './classes/service.js';
+import { basePlatform, type Platform, type Plugin } from './interfaces/plugin.js';
+import type { PublishTarget } from './interfaces/publish-target.js';
 
 /**
  * **One rman invocation, and everything it holds.** Created before anything else, handed to every
@@ -70,6 +77,24 @@ export class RmanApplication {
 
   readonly logger: Logger;
 
+  /** `info` until `--log-level` or `.rmanrc "logLevel"` is resolved - which cannot happen here,
+   *  since reading the config is itself work the application does. */
+  constructor(options?: { logLevel?: LogLevel }) {
+    this.logger = new Logger(options?.logLevel ?? 'info');
+    // Register core services.
+    this.setService('config', a => new ConfigService(a));
+    this.setService('changelog', a => new ChangelogService(a));
+    this.setService('dockerPublish', a => new DockerPublishService(a));
+    this.setService('githubRelease', a => new GithubReleaseService(a));
+    this.setService('exec', a => new ExecService(a));
+    this.setService('import', a => new ImportService(a));
+    this.setService('list', a => new ListService(a));
+    this.setService('run', a => new RunService(a));
+    this.setService('version', a => new VersionService(a));
+    // Register core targets.
+    this.publishTargets.add(dockerPublishTarget);
+  }
+
   /** Which platform claims a directory - the first whose manifest provider recognizes it, because
    *  before a package is read there is nothing else to go on. `basePlatform` when none does, so the
    *  caller needs no guard. */
@@ -94,14 +119,6 @@ export class RmanApplication {
       );
     }
     return this._repository;
-  }
-
-  /** `info` until `--log-level` or `.rmanrc "logLevel"` is resolved - which cannot happen here,
-   *  since reading the config is itself work the application does. */
-  constructor(options?: { logLevel?: LogLevel }) {
-    this.logger = new Logger(options?.logLevel ?? 'info');
-    registerCoreServices(this);
-    registerCoreTargets(this);
   }
 
   /**

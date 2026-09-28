@@ -23,7 +23,7 @@ const runCommand = registerCommand(app => {
     },
     examples: [
       { command: '$0 run build' },
-      { command: '$0 run build --changed', description: '# Only in packages changed since the last publish' },
+      { command: '$0 run build --changed', description: '# Only in packages you have touched but not pushed' },
     ],
     handler: async (args: Args) => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));

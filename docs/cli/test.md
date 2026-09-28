@@ -1,4 +1,4 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 16c3525 - see ../cli-rman.md for the baseline convention -->
 
 # `rman test`
 
@@ -20,7 +20,7 @@ for the full table.
 ```bash
 rman test
 rman test --topo=false            # test packages are usually independent of each other
-rman test --changed               # only packages changed since the last publish
+rman test --changed               # only packages you have touched but not pushed
 ```
 
 A common setup: since tests are typically independent of the build dependency graph, disable

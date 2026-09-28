@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Package } from '../../src/core/package.js';
+import { Package } from '../../src/core/classes/package.js';
 import { ChangeHashService } from '../../src/services/change-hash.service.js';
 import { GitHelper } from '../../src/utils/git.js';
 import { createApp, registryCalls, registryVersions, useTestEcosystem } from '../_fixture.js';

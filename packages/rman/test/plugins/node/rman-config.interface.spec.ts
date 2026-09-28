@@ -1,6 +1,6 @@
 import { expect } from 'expect';
+import { defineConfig, type RmanNodeConfig } from '../../../src/builtins/platforms/node/node-config.interface.js';
 import type { RmanConfig } from '../../../src/index.js';
-import { defineConfig, type RmanNodeConfig } from '../../../src/plugins/node/node-config.interface.js';
 
 /**
  * **What this package adds to `.rmanrc`, pinned at the type level.**

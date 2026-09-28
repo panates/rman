@@ -29,10 +29,10 @@
  * Type-only, so the emitted module is empty - imported for what it declares, not for what it does.
  * Pinned in `docs-api.spec.ts`, which imports only from this file.
  */
-import './plugins/node/augmentation/rman.augmentation.js';
+import './builtins/platforms/node/augmentation/rmanrc.augmentation.js';
 import type { RmanConfig as CommandDeclaration } from './interfaces/rman-config.interface.js';
 
-export { defineConfig } from './core/config.js';
+export { defineConfig } from './interfaces/rman-config.interface.js';
 /**
  * **A config value written as a function**, and the scope it is handed. Exported because a config
  * author could not name either: `interpolateConfig` calls a function wherever a `${{ }}` could
@@ -43,33 +43,32 @@ export { defineConfig } from './core/config.js';
  * `value`, i.e. what an expression sees. Not to be confused with `RunStepContext`, which is what a
  * step gets, later, with a working directory and a `runBin`.
  */
-export type {
-  ConfigScope,
-  ConfigValue,
-  ConfigValueContext,
-  FileScope,
-  PackageScope,
-  Resolved,
-  ResolvedConfig,
-} from './core/config.js';
-export type { CommandContext, CustomCommand } from './core/custom-command.js';
-export { defineCommand } from './core/custom-command.js';
+export type { CommandContext, CustomCommand } from './core/interfaces/custom-command.js';
+export { defineCommand } from './core/interfaces/custom-command.js';
+export type { ConfigScope, ConfigValueContext, FileScope, PackageScope } from './interfaces/config-scope.interface.js';
+export type { ConfigValue, Resolved, ResolvedConfig } from './interfaces/rman-config.interface.js';
 /** Both the shape and the registry: `const m: Manifest` and `Manifest.read(dir)` - merged onto one
  *  name so a plugin can augment it the way it augments `SystemInfo`. */
 export { RmanApplication } from './core/application.js';
 /** The manifest seam, grouped on a plugin as `Plugin.manifestProvider`: where a package's name and
  *  version are written, what it declares, and how it is numbered and stamped. The core has none -
  *  `package.json` is npm's answer, and belongs to the `node` built-in. */
-export type { ManifestProvider } from './core/manifest.js';
-export { Manifest } from './core/manifest.js';
-export { Package } from './core/package.js';
+export { Package } from './core/classes/package.js';
+export type { ManifestProvider } from './core/interfaces/manifest.js';
+export { Manifest } from './core/interfaces/manifest.js';
 /** The publish seam: where a package's artifact ships. The core brings `docker` (nobody's
  *  ecosystem); npm's target is the `node` built-in's, and any other technology's is its own plugin's. */
-export { declaredTargets, type PublishTarget, shipsTo, targetsOf, unknownTargets } from './core/publish-target.js';
-export { Registry } from './core/registry.js';
-export { Repository } from './core/repository.js';
-export type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from './core/run-step.js';
-export { Service, type ServiceFactory, type ServiceMap } from './core/service.js';
+export { Registry } from './core/classes/registry.js';
+export { Repository } from './core/classes/repository.js';
+export { Service, type ServiceFactory, type ServiceMap } from './core/classes/service.js';
+export {
+  declaredTargets,
+  type PublishTarget,
+  shipsTo,
+  targetsOf,
+  unknownTargets,
+} from './core/interfaces/publish-target.js';
+export type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from './core/interfaces/run-step.js';
 /**
  * **`Platform` is one technology, whole**; **`Plugin` is whatever a package contributes**, platforms
  * among them.
@@ -83,6 +82,7 @@ export { Service, type ServiceFactory, type ServiceMap } from './core/service.js
  * rman 1.x plugin was `{ name, init }` and so is a 2.x plugin contributing nothing but an `init` -
  * no shape test can tell them apart.
  */
+export type { ChangeKind } from './core/classes/version-scheme.js';
 export {
   basePlatform,
   definePlatform,
@@ -91,18 +91,17 @@ export {
   type Platform,
   type Plugin,
   type PluginContext,
-} from './core/plugin.js';
-export type { ChangeKind } from './core/version-scheme.js';
+} from './core/interfaces/plugin.js';
 /** The numbering seam. `VersionScheme` is abstract - `highestVersion`/`highestBump`/`smallestBump`
  *  are implemented from the members around them, so a scheme states only what it must and still
  *  overrides any of the three. `SemverScheme` is exported to subclass rather than restate. */
-export { assertOneScheme, SemverScheme, semverScheme, VersionScheme } from './core/version-scheme.js';
+export { assertOneScheme, SemverScheme, semverScheme, VersionScheme } from './core/classes/version-scheme.js';
 /** The workspace seam: how a repository's packages are found. A plugin contributes a provider
  *  (see `Plugin.workspace`); the core has none, so `workspaces` is npm's idea and belongs to the
  *  `node` built-in. */
 /** `Workspace.Layout`, `Workspace.Provider`, `Workspace.addProvider`, `Workspace.resolve`,
  *  `Workspace.findRoot` - one namespace, so a plugin can augment it. */
-export { Workspace } from './core/workspace.js';
+export { Workspace } from './core/classes/workspace.js';
 /**
  * **How a command is declared** - the same API the built-ins use, so a plugin's command is declared
  * rather than built: options as data (checked for typos), positionals named against the command
@@ -184,21 +183,21 @@ export {
  *  does, and so must a publish target deciding whether a version needs its own dist-tag. Exported
  *  because that second caller lives in a plugin. */
 /**
- * **The `node` built-in's own surface.** It ships inside rman rather than as `rman-node`, so its
- * services and target are named from here - a repository asks for the technology with
- * `plugins: ['node']` (or lets detection find it) and never constructs any of this by hand.
+ * **The `node` preset's own surface.** It ships inside rman rather than as `rman-node`, so its
+ * services and target are named from here - a repository gets the technology from
+ * `DEFAULT_PRESETS`, or names it with `extends: "rman:node"`, and never constructs any of this by
+ * hand.
  *
  * Its `.rmanrc` *keys* arrive separately, through the bare import at the top of this file - see
  * there for why that import is not tidiness.
  */
-export { BUILTIN_PLUGINS, builtinPluginNames, isBuiltinPlugin } from './plugins/builtins.js';
-export type { NodeConfigKeys, RmanNodeConfig } from './plugins/node/node-config.interface.js';
-export { NPM_TARGET, NpmPublishTarget } from './plugins/node/npm-publish-target.js';
-export { CiService } from './plugins/node/services/ci.service.js';
-export { CleanService } from './plugins/node/services/clean.service.js';
-export { PublishService } from './plugins/node/services/publish.service.js';
-export { NodeVersionPlanService } from './plugins/node/services/version-plan.service.js';
-export type { ParsedWorkspaceRange } from './plugins/node/utils/workspace-range.js';
+export type { NodeConfigKeys, RmanNodeConfig } from './builtins/platforms/node/node-config.interface.js';
+export { CiService } from './builtins/platforms/node/services/ci.service.js';
+export { CleanService } from './builtins/platforms/node/services/clean.service.js';
+export { PublishService } from './builtins/platforms/node/services/publish.service.js';
+export { NodeVersionPlanService } from './builtins/platforms/node/services/version-plan.service.js';
+export type { ParsedWorkspaceRange } from './builtins/platforms/node/utils/workspace-range.js';
+export { NPM_TARGET, NpmPublishTarget } from './builtins/publish-targets/npm/npm-publish-target.js';
 export { isCalendarVersion } from './utils/release-version.js';
 export type { RunBinOptions, RunBinResult } from './utils/run-bin.js';
 export { runBin } from './utils/run-bin.js';

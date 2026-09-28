@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import fastGlob from 'fast-glob';
-import { Package } from '../core/package.js';
-import { Repository } from '../core/repository.js';
-import { Service } from '../core/service.js';
+import { Package } from '../core/classes/package.js';
+import { Repository } from '../core/classes/repository.js';
+import { Service } from '../core/classes/service.js';
 import { GitHelper } from '../utils/git.js';
 import { expandReleaseTag, isCalendarVersion, releaseTagPattern } from '../utils/release-version.js';
 import { ChangeHashService } from './change-hash.service.js';
@@ -319,7 +319,7 @@ export namespace GithubReleaseService {
   }
 }
 
-declare module '../core/service.js' {
+declare module '../core/classes/service.js' {
   interface ServiceMap {
     githubRelease: GithubReleaseService;
   }

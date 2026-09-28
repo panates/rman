@@ -1,10 +1,11 @@
 import type * as yargs from 'yargs';
 import type { RmanApplication } from '../core/application.js';
-import type { ConfigValue } from '../core/config.js';
-import type { CustomCommand } from '../core/custom-command.js';
-import type { Plugin } from '../core/plugin.js';
-import type { PublishTarget } from '../core/publish-target.js';
-import type { RunConditionFn, RunStepValue } from '../core/run-step.js';
+import type { CodeSubtree } from '../core/config/config-paths.js';
+import type { CustomCommand } from '../core/interfaces/custom-command.js';
+import type { Platform, Plugin } from '../core/interfaces/plugin.js';
+import type { PublishTarget } from '../core/interfaces/publish-target.js';
+import type { RunConditionFn, RunStepFn, RunStepValue } from '../core/interfaces/run-step.js';
+import type { ConfigValueContext } from './config-scope.interface.js';
 
 /**
  * The shape of `.rmanrc`/`.rmanrc.yml`/`.rmanrc.cjs`/`.mjs`/`.js` (and `package.json`'s own
@@ -131,6 +132,30 @@ export interface RmanConfigKeys {
    * package's own `.rmanrc` is never seen.
    */
   plugins?: string | Plugin | (string | Plugin)[];
+
+  /**
+   * **The technologies available here** - how a directory's packages are recognized, where they
+   * are, how their versions are planned.
+   *
+   * Each entry is a `Platform`, or a **glob** naming `.js` modules that `export default` one - the
+   * same two forms `plugins`, `commands` and `publishTargets` take. It **appends**: naming one
+   * never means "and drop the ones my preset brought", so a polyglot repository writes
+   * `extends: ['node', 'cargo']` and holds both.
+   *
+   * ```js
+   * // presets/node.js
+   * export default defineConfig({ platforms: [new NodePlatform()], commands, publishTargets });
+   * ```
+   *
+   * **Not the same key as `platform`** (singular), which *selects* one for a directory rather than
+   * contributing it: this says what is available, that says which one a package is. A package-level
+   * setting meant for one technology goes under `"[platform:node]"`.
+   */
+  /* It is a key of its own rather than a member of `Plugin` because `commands` and `publishTargets`
+   * already are - a technology was the one contribution that needed a wrapper, and the wrapper is
+   * what made `plugins` carry two shapes (`Plugin | Platform`) and a built-in name look like a
+   * glob. All three arrive the same way now. */
+  platforms?: string | Platform | (string | Platform)[];
 
   /**
    * **Which technology a package belongs to**, by `Platform.name`.
@@ -474,6 +499,23 @@ export namespace RmanConfig {
     command: string;
     /** Other names the command answers to - `list` is also `ls`. */
     aliases?: string[];
+    /**
+     * The technologies this command is for, by `Platform.name` - `['node']` for `clean` and `ci`,
+     * which only mean anything in an npm package. Absent means **every** platform, which is what a
+     * command that speaks for no one in particular says.
+     *
+     * It narrows what the command acts on: in a polyglot repository `rman clean` sweeps the node
+     * packages and leaves the Cargo ones alone, with no `--platform` and no check inside the
+     * command.
+     */
+    /* The declarative half of the escape hatch a technology-specific command already had -
+     * `if (pkg.provider === 'node')`, written by hand in every such command and forgettable in
+     * every one of them. `PublishTarget.claims` is the same idea for publish targets, and there was
+     * no equivalent for commands.
+     *
+     * Carried into argv by `toYargsCommand` and read back by `readPackageFilterOptions`, because
+     * `filterPackages` is called by services that do not know which command is running. */
+    platforms?: string[];
     /**
      * yargs parser switches this command needs. `exec` is the only one so far and needs two:
      * `populate--` to keep everything after `--` out of its own options, and
@@ -942,3 +984,78 @@ type RequiredPositionalsOf<C extends string> = C extends `${string}<${infer N}>$
 type PositionalValue<Cmd extends string, N extends string> = Cmd extends `${string}${'<' | '['}${N}..${string}`
   ? string[]
   : string;
+
+/**
+ * Identity helper for authoring a `.rmanrc.cjs`/`.mjs`/`.js` config with full type-checking and
+ * autocomplete - the same `defineConfig` pattern Vite/Vitest use. Returns `config` completely
+ * unchanged; this exists purely so TypeScript can infer/check against `RmanConfig`, not for any
+ * runtime behavior:
+ *
+ *   // .rmanrc.mjs
+ *   import { defineConfig } from 'rman';
+ *   export default defineConfig({ packageManager: 'pnpm' });
+ *
+ *   // .rmanrc.cjs
+ *   const { defineConfig } = require('rman');
+ *   module.exports = defineConfig({ packageManager: 'pnpm' });
+ */
+export function defineConfig(config: RmanConfig): RmanConfig {
+  return config;
+}
+
+/**
+ * A config value that may be **written as a function instead**, computed per package at the moment
+ * the config resolves.
+ *
+ * `T` is what the function has to return, so the same checking applies either way - measured, with
+ * a control: a typo inside a wrapped object is still caught, and so is one inside an object a value
+ * function *returns*.
+ *
+ * **Not for a step key.** `run.<script>.before`/`.exec`/`.after`, `run.<script>.if` and
+ * `version.<slot>` already take a function, and it means something else there - code for `run` to
+ * call in its own time, with its own context. Wrapping one of those would produce a type that
+ * accepts a value function where a step is what actually runs. The key path decides which a
+ * function is (`STEP_PATHS`, `CODE_SUBTREES`), and the type can only follow that split by hand.
+ */
+export type ConfigValue<T> = T | ((ctx: ConfigValueContext) => T);
+
+/**
+ * The same config **after** it resolves: every `ConfigValue<T>` is just `T`, because
+ * `interpolateConfig` has already called it.
+ *
+ * **This is the half that lets `RmanConfig` be the author's type.** One type cannot answer both
+ * "what may I write?" (a function is fine - rman calls it) and "what do I get?" (never a function -
+ * it was already called), so it used to answer only the second, and writing a value function was a
+ * compile error the docs themselves committed. Widening `RmanConfig` alone just moves the problem:
+ * measured, six read sites needed a cast. The author's type widens and the *reader's* is computed
+ * from it - one derived type, applied at `Package.config`, rather than a second one to keep in step
+ * by hand.
+ *
+ * **Two guards, and each was measured by leaving it out.**
+ *
+ * - **Steps are named first.** A value function is recognised by its parameter, and
+ *   `ConfigValueContext` carries an index signature - so `RunStepFn` is assignable to it and a
+ *   `run.build.exec` function collapsed to its *return type*, leaving `RunService` nothing to call.
+ * - **`CODE_SUBTREES` is skipped, at every level.** `plugins`/`commands`/`publishTargets` hold code
+ *   all the way down, and the selector index (`[selector]: RmanConfig`) re-enters the config, so a
+ *   top-level-only guard misses the copy inside a `"[*]"` block. Left out, the walk reached
+ *   `Plugin.manifestProvider.versionScheme` and rewrote its **methods**: `smallestBump(): string`
+ *   became `string`, `bumpFor`/`isValid`/`compare`/`next` became `{}`. A function with *fewer*
+ *   parameters is assignable to one with more, so a zero-argument method matches the value-function
+ *   pattern - which makes this transform unsafe over any object carrying methods, and the guard the
+ *   only thing keeping one out of its way.
+ *
+ * Both lists are the runtime's own (`STEP_PATHS`' function types, `CODE_SUBTREES` itself), so the
+ * type follows the rule rather than restating it - the drift `ScopedVars` already demonstrated is
+ * not available here.
+ */
+export type Resolved<T> = T extends RunStepFn | RunConditionFn
+  ? T
+  : T extends (ctx: ConfigValueContext) => infer R
+    ? R
+    : T extends object
+      ? { [K in keyof T]: K extends CodeSubtree ? T[K] : Resolved<T[K]> }
+      : T;
+
+/** `pkg.config`'s type: what every command reads, with the value functions already called. */
+export type ResolvedConfig = Resolved<RmanConfig>;

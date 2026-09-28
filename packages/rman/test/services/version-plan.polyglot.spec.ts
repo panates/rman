@@ -3,9 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import type { ManifestProvider } from '../../src/core/manifest.js';
-import type { Package } from '../../src/core/package.js';
-import { definePlatform, type Platform } from '../../src/core/plugin.js';
+import type { Package } from '../../src/core/classes/package.js';
+import type { ManifestProvider } from '../../src/core/interfaces/manifest.js';
+import { definePlatform, type Platform } from '../../src/core/interfaces/plugin.js';
 import { VersionPlanService } from '../../src/services/version-plan.service.js';
 import { createRepository, planner, usePlugin, useTestEcosystem } from '../_fixture.js';
 

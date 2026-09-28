@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { definePlatform, type Platform } from '../../src/core/plugin.js';
+import { definePlatform, type Platform } from '../../src/core/interfaces/plugin.js';
 import { runCli, usePlugin, useTestEcosystem } from '../_fixture.js';
 
 /**

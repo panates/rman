@@ -86,7 +86,6 @@ worked examples of every single command, see **[docs/cli-rman.md](https://github
 | [`test`](#rman-test) | Alias for `run test`. |
 | [`exec <command..>`](#rman-exec-command) | Runs an arbitrary shell command in each package. |
 | [`config`](#rman-config) | Prints the effective `.rmanrc` config for the current directory's package. |
-| [`changed`](#rman-changed) | Shows which packages the next `version` run would bump. |
 | [`diff [package]`](#rman-diff-package) | Shows the git diff since a package's (or the repo's) last release tag. |
 | [`changelog`](#rman-changelog) | Generates a changelog per package from unreleased commits. |
 | [`version [bump]`](#rman-version-bump) | Bumps versions of changed packages (and their dependents). |
@@ -141,7 +140,7 @@ rman list --json                # full detail as JSON
 rman list --parseable           # location::name::version::PRIVATE::STATUS lines, for scripting
 rman list --toposort            # dependencies before dependents, instead of directory order
 rman list --graph               # dependency graph as a JSON adjacency list
-rman list --changed             # only packages changed since the last publish
+rman list --changed             # only packages you have touched but not pushed
 rman list --changed-since HEAD~5
 rman list --scope '@myorg/*' --ignore '*-internal'
 ```
@@ -165,7 +164,7 @@ Runs an npm script in each package, in dependency order by default.
 ```bash
 rman run build
 rman run lint --topo=false          # independent packages, alphabetical order, no dependency waiting
-rman run test --changed             # only in packages changed since the last publish
+rman run test --changed             # only in packages you have touched but not pushed
 rman run build --changed-since v1.2.0
 rman run build --parallel 4         # at most 4 packages at once
 rman run build --parallel false     # serially, one at a time
@@ -214,15 +213,6 @@ applied. What rman actually sees there, which no single file shows.
 rman config                  # the package you are standing in
 rman config --from-root           # the repository root's own config instead
 rman config --json | jq .run
-```
-
-### `rman changed`
-
-Shows which packages the next `rman version` run would bump, without changing anything.
-
-```bash
-rman changed
-rman changed --json
 ```
 
 ### `rman diff [package]`

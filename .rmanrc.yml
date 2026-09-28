@@ -1,30 +1,6 @@
-# This repository is a Node one, and says so by name.
-#
-# It used to be `extends: './packages/node/build/index.js'` - a path into a second published
-# package, which is exactly the cost the 2.0 split was charging every Node repository and which
-# folding the built-ins into `rman` removed. That package is gone, and the line pointing at it
-# outlived it: measured, every command in this checkout exited 1 with
-# `"extends" target "./packages/node/build/index.js" was not found`.
-#
-# `platform`, and it is now the same statement as `plugins: ['node']` - a root declaration naming a
-# built-in puts it at the front of `plugins`, so `clean` and `ci` arrive with the technology. It was
-# not, for one commit, and this file is where that showed: `rman list` worked with a `node` column
-# and `rman clean` answered `Unknown arguments`.
-#
-# It also no longer needs a bootstrap step: there is nothing to build before `rman clean` exists.
 platform: 'node'
 
-# One version line for the whole repository (rman's default) - `rman` and `rman-node` release
-# together, so a config written for one can never name a version of the other that does not exist.
-
-# `[*]`, not an unmarked block: both packages, and *not* the repository root, which has no build
-# directory of its own and nothing to publish. A glob names the packages below; the root is nobody's
-# child, so it is reached only by an unmarked key or by `[/]`.
 '[*]':
-  # `publish` ships the build directory, and generates the manifest there itself.
-  #
-  # `publish.npm.*`, not `publish.directory`: a target's block is named after the target, the way
-  # `publish.docker.*` always was. The key is the `npm` target's, contributed by `rman-node`.
   publish:
     npm:
       directory: build

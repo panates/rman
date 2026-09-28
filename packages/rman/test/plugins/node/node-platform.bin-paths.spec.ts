@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { NodePlatform } from '../../../src/plugins/node/node.platform.js';
+import { NodePlatform } from '../../../src/builtins/platforms/node/node.platform.js';
 
 /** The method under test, as a free function - it reads nothing off `this`, and naming it here
  *  keeps the assertions below reading the way they did when it was one. */

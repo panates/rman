@@ -1,4 +1,4 @@
-<!-- verified against commit 0e33a0a - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 16c3525 - see ../cli-rman.md for the baseline convention -->
 
 # `rman publish`
 
@@ -19,7 +19,7 @@ sequentially, in topological order (dependencies before dependents).
 Release is not one of these - it isn't a place anything ships to, it's the repository's record that
 a version shipped - and it is not opt-in either: see [`rman github-release`](github-release.md).
 
-This is deliberately **not** the same question [`rman changed`](changed.md)/[`version`](version.md)
+This is deliberately **not** the same question [`version`](version.md)
 answer ("what commits landed since the last release, and how big a bump do they imply") - that one is
 commit-driven, because a registry can only say *older/newer*, never *how much* or *why*. The two
 are independent on purpose: a failed publish leaves the registry behind with no new commits to show
@@ -186,7 +186,7 @@ rewritten by [`version`](version.md) itself and need no attention.
 rman publish --dry-run --json | jq '[.[] | select(.status == "publish")] | length'
 ```
 
-This is the right gate for a release pipeline - not [`rman changed`](changed.md), which answers the
+This is the right gate for a release pipeline - not [`rman version --json`](version.md#--json-the-plan-for-a-script), which answers the
 *other* question ("does anything need a new version number?") and correctly reports nothing when a
 version was bumped in an earlier run, or bumped locally and merged in, or when a previous publish
 failed after the tag was already pushed.
@@ -214,7 +214,7 @@ missing it is a clear `'error'` in the plan, not a silent skip:
     "target": ["docker"],
     "docker": {
       "image": "my-app", // bare - prefixed with --docker-namespace/DOCKERHUB_NAMESPACE
-      "platforms": ["linux/amd64", "linux/arm64"], // default ["linux/amd64"]
+      "architectures": ["linux/amd64", "linux/arm64"], // default ["linux/amd64"]
       "buildContexts": { "root": "../.." }, // docker buildx build --build-context root=<path>
       "buildArgs": { "GITHUB_TOKEN": "$GITHUB_TOKEN" } // "$NAME" expands from the environment
     }

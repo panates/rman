@@ -33,6 +33,16 @@ async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
   return lines;
 }
 
+/**
+ * **A heading naming `name`**, whatever shape the heading happens to take - `## v1.2.0`,
+ * `## Unreleased — pkg-a`, or a repository's own `changelog.template`. Asserting the literal
+ * `'## pkg-a 1.0.0'` pinned the default template's layout in twenty-two places, so changing the
+ * heading - which is a presentation decision - turned every one of them red for no defect.
+ */
+function headingFor(name: string): RegExp {
+  return new RegExp(`^## .*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'm');
+}
+
 describe('commands/changelog', () => {
   useTestEcosystem();
 
@@ -92,7 +102,7 @@ describe('commands/changelog', () => {
       const { dir, baseHash } = fixtureWithOneFeature();
       const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--from', baseHash] }));
       const joined = lines.join('\n');
-      expect(joined).toContain('## pkg-a');
+      expect(joined).toMatch(headingFor('pkg-a'));
       expect(joined).toContain('a shiny new feature');
       expect(lines.some(l => l.includes('updated'))).toBe(false);
       expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
@@ -136,6 +146,605 @@ describe('commands/changelog', () => {
     });
   });
 
+  /**
+   * **`--write` is an append, so where the file stopped is the boundary.** It was the package's
+   * last release *tag*, which does not move between two writes - so a second run re-listed every
+   * commit since that tag on top of the entry that already held them. Measured before the fix: one
+   * commit appeared twice, under two headings carrying the same version number.
+   */
+  /**
+   * **A floor on how far back the changelog goes.** A first `--write` reaches through every release
+   * there has ever been, and for a package that has shipped for years most of that is not what a
+   * changelog is for. One key rather than `auto-changelog`'s two, taking whichever form the answer
+   * has - and a third neither of those covers, a commit.
+   */
+  describe('changelog.startingAt', () => {
+    /** Three releases, each dated years apart, plus one unreleased commit - so a version floor, a
+     *  date floor and a commit floor all have different right answers. */
+    function historyFixture(): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '3.0.0' });
+      const at = (date: string, ...args: string[]) =>
+        execFileSync('git', args, {
+          cwd: dir,
+          stdio: 'pipe',
+          env: { ...process.env, GIT_COMMITTER_DATE: date, GIT_AUTHOR_DATE: date },
+        });
+      at('2019-01-01T00:00:00+00:00', 'init', '-q');
+      execFileSync('git', ['config', 'user.email', 't@t.com'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: dir, stdio: 'pipe' });
+      at('2019-01-01T00:00:00+00:00', 'add', '-A');
+      at('2019-01-01T00:00:00+00:00', 'commit', '-q', '-m', 'feat: earliest work');
+      at('2019-01-01T00:00:00+00:00', 'tag', 'v1.0.0');
+      for (const [file, date, version] of [
+        ['a.txt', '2021-05-05T00:00:00+00:00', 'v2.0.0'],
+        ['b.txt', '2024-09-09T00:00:00+00:00', 'v3.0.0'],
+      ]) {
+        fs.writeFileSync(path.join(dir, file), 'x');
+        at(date, 'add', '-A');
+        at(date, 'commit', '-q', '-m', `feat: work for ${version}`);
+        at(date, 'tag', version);
+      }
+      fs.writeFileSync(path.join(dir, 'c.txt'), 'x');
+      execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-q', '-m', 'fix: unreleased'], { cwd: dir, stdio: 'pipe' });
+      return dir;
+    }
+
+    async function headingsWith(dir: string, ...argv: string[]): Promise<string[]> {
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write', ...argv] }));
+      const written = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf-8');
+      return written.split('\n').filter(l => l.startsWith('## '));
+    }
+
+    it('documents every release when nothing sets a floor', async () => {
+      const headings = await headingsWith(historyFixture());
+      expect(headings.filter(h => h.includes('v'))).toHaveLength(3);
+    });
+
+    it('takes a version, inclusively', async () => {
+      const headings = await headingsWith(historyFixture(), '--starting-at', '2.0.0');
+      expect(headings.some(h => h.includes('v2.0.0'))).toBe(true);
+      expect(headings.some(h => h.includes('v1.0.0'))).toBe(false);
+    });
+
+    /** The same floor written as the tag - a repository should not have to know which spelling the
+     *  key wants. */
+    it('takes the release tag just as well', async () => {
+      const headings = await headingsWith(historyFixture(), '--starting-at', 'v2.0.0');
+      expect(headings.some(h => h.includes('v2.0.0'))).toBe(true);
+      expect(headings.some(h => h.includes('v1.0.0'))).toBe(false);
+    });
+
+    it('takes a date, against each release’s own day', async () => {
+      const headings = await headingsWith(historyFixture(), '--starting-at', '2024-01-01');
+      expect(headings.some(h => h.includes('v3.0.0'))).toBe(true);
+      expect(headings.some(h => h.includes('v2.0.0'))).toBe(false);
+    });
+
+    it('takes a commit, keeping the release that commit belongs to', async () => {
+      const dir = historyFixture();
+      const sha = execFileSync('git', ['rev-list', '-n1', 'v2.0.0'], { cwd: dir }).toString().trim();
+
+      const headings = await headingsWith(dir, '--starting-at', sha);
+      expect(headings.some(h => h.includes('v2.0.0'))).toBe(true);
+      expect(headings.some(h => h.includes('v1.0.0'))).toBe(false);
+    });
+
+    /** The floor is about history. Dropping the commits that are not released yet would hide the
+     *  very thing most runs are asking about. */
+    it('never drops the unreleased entry, whatever the floor', async () => {
+      for (const floor of ['3.0.0', '2026-01-01']) {
+        const headings = await headingsWith(historyFixture(), '--starting-at', floor);
+        expect(headings.some(h => h.includes('Unreleased'))).toBe(true);
+      }
+    });
+
+    it('reads .rmanrc changelog.startingAt, and the flag wins over it', async () => {
+      const dir = historyFixture();
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { startingAt: '3.0.0' } }));
+      execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-q', '-m', 'chore: floor'], { cwd: dir, stdio: 'pipe' });
+
+      expect((await headingsWith(dir)).some(h => h.includes('v2.0.0'))).toBe(false);
+      fs.rmSync(path.join(dir, 'CHANGELOG.md'));
+      expect((await headingsWith(dir, '--starting-at', '1.0.0')).some(h => h.includes('v1.0.0'))).toBe(true);
+    });
+
+    /** A value matching none of the three forms is a configuration mistake, and silence is the bad
+     *  outcome either way: read as "never below" it leaves the changelog looking complete, read as
+     *  "always below" it empties it. */
+    it('refuses a value that is none of the three forms, naming all of them', async () => {
+      const dir = historyFixture();
+      const error = console.error;
+      console.error = () => {};
+      try {
+        const failure = await captureLogs(() =>
+          runCli({ cwd: dir, argv: ['changelog', '--starting-at', 'banana'] }),
+        ).then(
+          () => {
+            throw new Error('expected the command to fail, but it resolved');
+          },
+          (e: unknown) => e as Error,
+        );
+        const message = failure.message;
+        expect(message).toContain('changelog.startingAt');
+        expect(message).toContain('version or release tag');
+        expect(message).toContain('date');
+        expect(message).toContain('commit');
+      } finally {
+        console.error = error;
+      }
+    });
+  });
+
+  /**
+   * **`changelog.unreleased` defaults to `true`**, so the flag that does something is
+   * `--no-unreleased`. `auto-changelog` defaults its equivalent off; the opposite default here is
+   * deliberate - `rman changelog` exists to answer what is *not* released yet, and off by default
+   * would make the common case need a flag.
+   */
+  /**
+   * **The section headings were three hardcoded strings**, so a repository writing `dev:` commits
+   * had nowhere to put them but "Other Changes". `changelog.titles` maps a Conventional Commits
+   * type to the heading it is listed under, and with it the order sections come out in.
+   */
+  describe('changelog.titles', () => {
+    function commitsFixture(rc?: unknown): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      if (rc) fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(rc));
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: a new capability');
+      for (const message of ['fix(parser): handle empty input', 'dev: rework the harness', 'chore: bump deps']) {
+        fs.writeFileSync(path.join(dir, `${message.length}.txt`), 'x');
+        run('add', '-A');
+        run('commit', '-q', '-m', message);
+      }
+      return dir;
+    }
+
+    const output = async (dir: string) =>
+      (await captureLogs(() => runCli({ cwd: dir, argv: ['changelog'] }))).join('\n');
+    const headings = (out: string) => out.split('\n').filter(l => l.startsWith('### '));
+
+    it('defaults to what rman shipped, wording and order alike', async () => {
+      expect(headings(await output(commitsFixture()))).toEqual([
+        '### ✨ Features',
+        '### 🐛 Bug Fixes',
+        '### 🔧 Other Changes',
+      ]);
+    });
+
+    /** The key the user asked for, verbatim - and `fix` keeps its default rather than being lost
+     *  to a wholesale replace, which is what makes naming one type safe. */
+    it('renames a type’s heading and adds one, keeping the defaults it did not name', async () => {
+      const dir = commitsFixture({ changelog: { titles: { feat: 'New Features', dev: 'Development Changes' } } });
+      expect(headings(await output(dir))).toEqual([
+        '### New Features',
+        '### 🐛 Bug Fixes',
+        '### Development Changes',
+        '### 🔧 Other Changes',
+      ]);
+    });
+
+    it('keeps a renamed type where it was in the order', async () => {
+      const dir = commitsFixture({ changelog: { titles: { feat: 'Zzz Renamed Last Alphabetically' } } });
+      expect(headings(await output(dir))[0]).toBe('### Zzz Renamed Last Alphabetically');
+    });
+
+    it('puts two types sharing a heading in one section', async () => {
+      const dir = commitsFixture({ changelog: { titles: { dev: 'Internal', chore: 'Internal' } } });
+      const out = await output(dir);
+
+      expect(headings(out).filter(h => h === '### Internal')).toHaveLength(1);
+      expect(out).toContain('rework the harness');
+      expect(out).toContain('bump deps');
+    });
+
+    /**
+     * **`sortTitles` orders, `titles` words** - two keys because they are two decisions. Order used
+     * to fall out of the order `titles` was written in, which quietly meant renaming `feat` was
+     * also re-deciding where it sits.
+     */
+    it('sortTitles puts the sections in the order it lists, whatever titles said', async () => {
+      const dir = commitsFixture({
+        changelog: { titles: { feat: 'New Features', dev: 'Development Changes' }, sortTitles: ['dev', 'fix', 'feat'] },
+      });
+      expect(headings(await output(dir))).toEqual([
+        '### Development Changes',
+        '### 🐛 Bug Fixes',
+        '### New Features',
+        '### 🔧 Other Changes',
+      ]);
+    });
+
+    /** A sort, not a filter - and the catch-all stays last however it is listed. */
+    it('leaves an unlisted type after the ones it listed, and still ends with the catch-all', async () => {
+      const dir = commitsFixture({
+        changelog: { titles: { dev: 'Development Changes' }, sortTitles: ['dev', '*'] },
+      });
+      const rows = headings(await output(dir));
+
+      expect(rows[0]).toBe('### Development Changes');
+      expect(rows).toContain('### ✨ Features');
+      expect(rows[rows.length - 1]).toBe('### 🔧 Other Changes');
+    });
+
+    /** Naming a type nobody gave a heading sorts nothing, because there is no section to sort -
+     *  `sortTitles` orders sections, it does not create them. */
+    it('is a no-op for a type with no heading of its own', async () => {
+      const dir = commitsFixture({ changelog: { sortTitles: ['docs', 'fix', 'feat'] } });
+      expect(headings(await output(dir))).toEqual(['### 🐛 Bug Fixes', '### ✨ Features', '### 🔧 Other Changes']);
+    });
+
+    /** A catch-all in the middle of the order would silently swallow the sections after it. */
+    it('renames the catch-all through "*", and still renders it last', async () => {
+      const dir = commitsFixture({ changelog: { titles: { '*': 'Everything Else', dev: 'Development Changes' } } });
+      const rows = headings(await output(dir));
+
+      expect(rows).toContain('### Everything Else');
+      expect(rows[rows.length - 1]).toBe('### Everything Else');
+    });
+
+    /**
+     * **The type prefix is stripped in every section now.** It used to be stripped for `feat`/`fix`
+     * and kept everywhere else, so Features read `- a new capability` while Other Changes read
+     * `- chore: bump deps` - the heading naming the type and the bullet repeating it. With every
+     * type able to have a heading of its own, that asymmetry has no defence left.
+     */
+    it('strips the type from every bullet, not just the two it used to', async () => {
+      const out = await output(commitsFixture());
+      expect(out).toContain('- bump deps');
+      expect(out).not.toContain('- chore: bump deps');
+    });
+
+    it('leaves a subject that is not Conventional Commits whole - there is no prefix to strip', async () => {
+      const dir = commitsFixture();
+      fs.writeFileSync(path.join(dir, 'plain.txt'), 'x');
+      execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-q', '-m', 'just a plain message'], { cwd: dir, stdio: 'pipe' });
+
+      expect(await output(dir)).toContain('- just a plain message');
+    });
+
+    /** Naming a heading is not a way to drop a type - `ignoreTypes` is, and it still wins. */
+    it('renders no heading for a type that ignoreTypes dropped', async () => {
+      const dir = commitsFixture({
+        changelog: { titles: { dev: 'Development Changes' }, ignoreTypes: ['dev'] },
+      });
+      const out = await output(dir);
+
+      expect(headings(out)).not.toContain('### Development Changes');
+      expect(out).not.toContain('rework the harness');
+    });
+  });
+
+  describe('changelog.unreleased', () => {
+    function twoReleaseFixture(): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: the released work');
+      run('tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'later.txt'), 'x');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'fix: not released yet');
+      return dir;
+    }
+
+    const written = (dir: string) => fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf-8');
+
+    it('documents the unreleased commits by default', async () => {
+      const dir = twoReleaseFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      expect(written(dir)).toContain('Unreleased');
+      expect(written(dir)).toContain('not released yet');
+    });
+
+    it('--no-unreleased leaves them out, keeping the released history', async () => {
+      const dir = twoReleaseFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write', '--no-unreleased'] }));
+      expect(written(dir)).not.toContain('Unreleased');
+      expect(written(dir)).not.toContain('not released yet');
+      expect(written(dir)).toContain('## v1.0.0');
+    });
+
+    it('reads .rmanrc changelog.unreleased', async () => {
+      const dir = twoReleaseFixture();
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ changelog: { unreleased: false } }));
+      execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-q', '-m', 'chore: config'], { cwd: dir, stdio: 'pipe' });
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      expect(written(dir)).not.toContain('Unreleased');
+    });
+
+    /**
+     * **The marker records what the file documents, not where HEAD is**, and `unreleased: false` is
+     * what makes the difference load-bearing rather than pedantic.
+     *
+     * Measured with HEAD: the run wrote the released history and then marked the file documented up
+     * to HEAD, so the commits it had deliberately *not* written fell behind the boundary. The
+     * release that followed found nothing after the marker and produced no entry at all - the work
+     * silently gone from the changelog for good.
+     */
+    it('leaves the undocumented commits reachable, so the release that follows still names them', async () => {
+      const dir = twoReleaseFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write', '--no-unreleased'] }));
+      expect(written(dir)).not.toContain('not released yet');
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write', '--release-version', '2.0.0'] }));
+      expect(written(dir)).toContain('## v2.0.0');
+      expect(written(dir)).toContain('not released yet');
+    });
+
+    /**
+     * **The guard that keeps `version --changelog` working.** Naming the version means the caller is
+     * describing the release it is about to cut - the segment is "unreleased" only for the seconds
+     * until it is tagged. Without this, a repository setting `unreleased: false` would find every
+     * release silently documenting nothing.
+     */
+    it('still documents a release the caller has named, even with it off', async () => {
+      const dir = twoReleaseFixture();
+      await captureLogs(() =>
+        runCli({ cwd: dir, argv: ['changelog', '--write', '--no-unreleased', '--release-version', '2.0.0'] }),
+      );
+      expect(written(dir)).toContain('## v2.0.0');
+      expect(written(dir)).toContain('not released yet');
+    });
+  });
+
+  describe('--write picks up where the file left off', () => {
+    /** A repository with a `v1.0.0` tag and one commit on either side of it, so "since the tag"
+     *  and "the whole history" are distinguishable answers. */
+    function taggedFixture(): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: before the tag');
+      run('tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'packages/a/after.txt'), 'x');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: after the tag');
+      return dir;
+    }
+
+    function commit(dir: string, message: string, file: string) {
+      fs.writeFileSync(path.join(dir, file), 'x');
+      execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-q', '-m', message], { cwd: dir, stdio: 'pipe' });
+    }
+
+    const read = (dir: string) => fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf-8');
+
+    it('documents the whole history when there is no changelog file yet', async () => {
+      const dir = taggedFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+
+      /** The commit *before* the tag is the one the tag boundary silently dropped - it was never
+       *  written anywhere, and on the next run it would be older still. */
+      expect(read(dir)).toContain('before the tag');
+      expect(read(dir)).toContain('after the tag');
+    });
+
+    /**
+     * **A range is cut at every release tag inside it.** Backfilling the whole history is only
+     * useful if it comes out as the releases it was - measured on a real repository before this,
+     * a first `--write` reached back through twelve tags and rendered every commit in all of them
+     * under one `v2.1.6` heading.
+     *
+     * Each heading also carries **that** release's date, which is what makes the entries readable
+     * as history rather than as one thing generated today.
+     */
+    it('cuts the backfill at each release inside the range, dated by that release', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '2.0.0' });
+      const at = (date: string, ...args: string[]) =>
+        execFileSync('git', args, {
+          cwd: dir,
+          stdio: 'pipe',
+          env: { ...process.env, GIT_COMMITTER_DATE: date, GIT_AUTHOR_DATE: date },
+        });
+      at('2020-01-01T00:00:00+00:00', 'init', '-q');
+      execFileSync('git', ['config', 'user.email', 't@t.com'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['config', 'user.name', 't'], { cwd: dir, stdio: 'pipe' });
+      at('2020-01-01T00:00:00+00:00', 'add', '-A');
+      at('2020-01-01T00:00:00+00:00', 'commit', '-q', '-m', 'feat: the first release');
+      at('2020-01-01T00:00:00+00:00', 'tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'two.txt'), 'x');
+      at('2021-06-15T00:00:00+00:00', 'add', '-A');
+      at('2021-06-15T00:00:00+00:00', 'commit', '-q', '-m', 'feat: the second release');
+      at('2021-06-15T00:00:00+00:00', 'tag', 'v2.0.0');
+      fs.writeFileSync(path.join(dir, 'three.txt'), 'x');
+      execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-q', '-m', 'fix: not released yet'], { cwd: dir, stdio: 'pipe' });
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      const written = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf-8');
+
+      /** Three segments: the two tagged releases, plus what is not released yet. */
+      expect(written.match(/^## /gm)).toHaveLength(3);
+      expect(written).toContain('1.0.0 (2020-01-01)');
+      expect(written).toContain('2.0.0 (2021-06-15)');
+      /** Newest first, so the file reads top-down as history. */
+      expect(written.indexOf('not released yet')).toBeLessThan(written.indexOf('the second release'));
+      expect(written.indexOf('the second release')).toBeLessThan(written.indexOf('the first release'));
+      /** Each release's commits under its own heading, not pooled into one. */
+      expect(written.match(/^---$/gm)).toHaveLength(2);
+    });
+
+    it('starts from the marker on the next run, so nothing is written twice', async () => {
+      const dir = taggedFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      commit(dir, 'fix: later still', 'packages/a/later.txt');
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+
+      const written = read(dir);
+      expect(written).toContain('later still');
+      /** The claim: the tag boundary would have re-listed this one under the new heading too. */
+      expect(written.match(/after the tag/g)).toHaveLength(1);
+      expect(written.match(/before the tag/g)).toHaveLength(1);
+    });
+
+    it('rewrites the one marker rather than accumulating them', async () => {
+      const dir = taggedFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      commit(dir, 'fix: later still', 'packages/a/later.txt');
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+
+      expect(read(dir).match(/rman:documented-up-to/g)).toHaveLength(1);
+    });
+
+    it('writes nothing at all when the file is already up to date', async () => {
+      const dir = taggedFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      const before = read(dir);
+
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      expect(lines.some(l => l.includes('No unreleased changes.'))).toBe(true);
+      expect(read(dir)).toBe(before);
+    });
+
+    it('rules one release off from the next, and adds none above a lone entry', async () => {
+      /**
+       * A repository with **no** release tag, so the backfill is one segment - which is what makes
+       * "no rule above the first entry" observable at all. `taggedFixture` would give two here,
+       * one per side of its tag, and a rule between them; that is the split working, not a stray
+       * separator.
+       */
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: the only thing so far');
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      expect(read(dir)).not.toContain('\n---\n');
+
+      commit(dir, 'fix: later still', 'packages/a/later.txt');
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      expect(read(dir)).toContain('\n---\n');
+    });
+
+    /** A print run is not appending to anything, so answering "the notes for this release" with
+     *  "nothing, it is all documented" would be the wrong question answered. */
+    it('a print run ignores the marker entirely', async () => {
+      const dir = taggedFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['changelog'] }));
+      expect(lines.join('\n')).toContain('after the tag');
+    });
+
+    /**
+     * **The realistic shape, and the one that broke while this was written.** `rman version` makes
+     * a `chore(release): v1.0.0` commit and tags *that* - and a release marker is exactly what
+     * `dropVersionBumps` removes. Dropping before the split therefore leaves every tag pointing at
+     * a sha no longer in the list, every cut missed, and the whole range rendered as one release.
+     * So the drop happens per segment, after the cut.
+     */
+    it('still cuts at a tag sitting on the release commit it drops', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: the released work');
+      fs.writeFileSync(path.join(dir, 'bump.txt'), 'x');
+      run('add', '-A');
+      /** What `version` writes, and what `isReleaseCommit` drops. */
+      run('commit', '-q', '-m', 'chore(release): v1.0.0');
+      run('tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'after.txt'), 'x');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'fix: after the release');
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      const written = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf-8');
+
+      expect(written.match(/^## /gm)).toHaveLength(2);
+      /** The release commit heads its segment without appearing in it. */
+      expect(written).not.toContain('chore(release)');
+      expect(written.indexOf('after the release')).toBeLessThan(written.indexOf('the released work'));
+    });
+
+    /**
+     * **The heading's two halves have to describe the same release.** The version is read back from
+     * the package's latest tag; the date used to be `new Date()`, so regenerating notes for an
+     * already-tagged release headed them with that release's number and today's date. Measured on a
+     * real repository: `## @panates/eslint-config v2.1.6 (2026-09-25)` for a v2.1.6 tagged days
+     * earlier.
+     */
+    it('dates an entry by the release it names, not by the day it was generated', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      const run = (...args: string[]) =>
+        execFileSync('git', args, {
+          cwd: dir,
+          stdio: 'pipe',
+          env: { ...process.env, GIT_COMMITTER_DATE: '2020-03-04T10:00:00+00:00' },
+        });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: the released feature');
+      run('tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'later.txt'), 'x');
+      execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-q', '-m', 'fix: after the release'], { cwd: dir, stdio: 'pipe' });
+
+      /** `--write`, because only a backfill reaches back *through* the tag - a print run's boundary
+       *  is that tag, so the range holds no tagged segment to date. */
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+      expect(fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf-8')).toContain('## v1.0.0 (2020-03-04)');
+    });
+
+    /** The case today's date was written for, and it stays: a caller passing the version is
+     *  describing a release that does not exist yet, so there is no tag to read a date off. */
+    it('dates it today when the version is one that has not been tagged yet', async () => {
+      const dir = taggedFixture();
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--release-version', '9.9.9'] }));
+      expect(lines.join('\n')).toContain(`9.9.9 (${new Date().toISOString().slice(0, 10)})`);
+    });
+
+    /** One rman did not write, or wrote before markers existed. Ordinary detection, which is where
+     *  `catchUpFile` still earns its place - not the whole history, which would re-document
+     *  everything the file already holds. */
+    it('falls back to detection for a changelog file carrying no marker', async () => {
+      const dir = taggedFixture();
+      fs.writeFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), '# Changelog\n\n## pkg-a 1.0.0\n\n- hand written\n');
+      await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--write'] }));
+
+      const written = read(dir);
+      expect(written).toContain('after the tag');
+      expect(written).not.toContain('before the tag');
+      expect(written).toContain('hand written');
+    });
+  });
+
   describe('--from-root', () => {
     it('generates for the whole repository even when run from inside a single package', async () => {
       const dir = tmp();
@@ -163,8 +772,8 @@ describe('commands/changelog', () => {
         runCli({ cwd: path.join(dir, 'packages/a'), argv: ['changelog', '--from', baseHash, '--from-root'] }),
       );
       const joined = lines.join('\n');
-      expect(joined).toContain('## pkg-a');
-      expect(joined).toContain('## pkg-b');
+      expect(joined).toMatch(headingFor('pkg-a'));
+      expect(joined).toMatch(headingFor('pkg-b'));
     });
   });
 
@@ -209,8 +818,8 @@ describe('commands/changelog', () => {
       );
       const joined = lines.join('\n');
       expect(joined).toContain('something at the root');
-      expect(joined).not.toContain('## pkg-a');
-      expect(joined).not.toContain('## pkg-b');
+      expect(joined).not.toMatch(headingFor('pkg-a'));
+      expect(joined).not.toMatch(headingFor('pkg-b'));
     });
 
     /**
@@ -233,7 +842,7 @@ describe('commands/changelog', () => {
         runCli({ cwd: dir, argv: ['changelog', '--from', baseHash, '--ignore', '/'] }),
       );
       const joined = lines.join('\n');
-      expect(joined).toContain('## pkg-a');
+      expect(joined).toMatch(headingFor('pkg-a'));
       expect(joined).not.toContain('something at the root');
     });
   });

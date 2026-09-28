@@ -1,6 +1,7 @@
-import { Manifest } from '../core/manifest.js';
-import type { Package } from '../core/package.js';
+import type { Package } from '../core/classes/package.js';
+import { Manifest } from '../core/interfaces/manifest.js';
 import type { GitHelper } from '../utils/git.js';
+import { versionLineCount } from '../utils/version-group.js';
 
 /**
  * Release boundaries and the tag names that mark them - **the single source for both directions**.
@@ -43,14 +44,35 @@ export namespace ChangeHashService {
     catchUpFile?: string;
   }
 
-  /** `.rmanrc changelog.tagPattern` (cascaded, per-package overridable) - a glob for this package's
-   *  release tags. `{name}` (if present) is replaced with the package's own name, e.g. `{name}@*`
-   *  for independent per-package versioning (`@scope/pkg@1.2.3`, the same scheme lerna/changesets
-   *  use - `@`/`/` are both fine in a git tag name). Without `{name}`, it's a single repo-wide tag
-   *  shared by every package (e.g. the default `v*`). */
+  /**
+   * `.rmanrc changelog.tagPattern` (cascaded, per-package overridable) - a glob for this package's
+   * release tags. `{name}` (if present) is replaced with the package's own name, e.g. `{name}@*`
+   * for independent per-package versioning (`@scope/pkg@1.2.3`, the same scheme lerna/changesets
+   * use - `@`/`/` are both fine in a git tag name). Without `{name}`, it's a single repo-wide tag
+   * shared by every package (`v*`).
+   *
+   * **Undeclared, the default is derived from how many version lines the repository has**, not
+   * fixed at `v*`. A repo-wide pattern has no `{name}`, so `findLatestTag` resolves it with `git
+   * describe --match` - the nearest tag HEAD descends from, whichever package it belongs to. That
+   * is exactly right while every package shares one line and **silently wrong** the moment they do
+   * not: measured on a two-line repository, releasing `pkg-a` put `v1.1.0` on HEAD, and `pkg-b` -
+   * which had a committed, unreleased `fix:` of its own sitting behind that tag - reported
+   * `no-change` and shipped nothing. Under `{name}@*` the same repository answers `bump 1.0.0 ->
+   * 1.0.1, changed since pkg-b@1.0.0`.
+   *
+   * So the choice is not a preference and should never have been one to remember: a repo-wide tag
+   * can only name a release that the whole repository shares. rman already decides the root's
+   * versioning scheme structurally from the same group count (`usesCalendarVersion`) - this is that
+   * rule applied to the other half of a release.
+   *
+   * **The root keeps `v*`.** It is never a member of any group, so the count says nothing about
+   * it, and the one caller that asks (`github-release`'s `releaseTagGlob`) only does so when the
+   * root is *not* on a calendar version - which is the single-line case, where `v*` is the answer
+   * anyway. With several lines the repository's release carries its own `version.releaseTagPattern`
+   * instead.
+   */
   export function tagPattern(pkg: Package): string {
-    const cfg = pkg.config?.changelog;
-    return typeof cfg?.tagPattern === 'string' && cfg.tagPattern ? cfg.tagPattern : DEFAULT_TAG_PATTERN;
+    return resolvePattern(pkg).pattern;
   }
 
   /** This package's most recent release tag - the `{name}`-bearing pattern looks up that package's
@@ -59,10 +81,48 @@ export namespace ChangeHashService {
    *  tagged at all (a fresh package, or one that's never been released). Shared by `changelog`
    *  (reading the last-documented version) and `version` (finding the boundary a bump measures
    *  "since"). */
-  export async function findLatestTag(git: GitHelper, pkg: Package): Promise<string | undefined> {
-    const pattern = tagPattern(pkg);
+  /**
+   * **Every pattern that may name this package's releases**, in precedence order - its own, and,
+   * only where the pattern was derived, the shared `v*` a repository used before it grew a second
+   * version line. One list, because two questions need it and must not disagree: `findLatestTag`
+   * picks the boundary off it, and `changelog`'s `splitByRelease` cuts the range at the tags it
+   * matches.
+   *
+   * They *did* disagree, for one commit: the boundary fell back to the shared tag while the split
+   * still looked only for `{name}@*`, which a repository mid-transition has none of - so a backfill
+   * reaching across twelve releases found no tag to cut at and rendered all of them as one.
+   */
+  export function releaseTagPatterns(pkg: Package): string[] {
+    const { pattern, derived } = resolvePattern(pkg);
     const expanded = pattern.replace('{name}', pkg.name);
-    return pattern.includes('{name}') ? (await git.listTags(expanded))[0] : await git.describeTag(expanded);
+    return derived && expanded !== SHARED_TAG_PATTERN ? [expanded, SHARED_TAG_PATTERN] : [expanded];
+  }
+
+  export async function findLatestTag(git: GitHelper, pkg: Package): Promise<string | undefined> {
+    const { pattern, derived } = resolvePattern(pkg);
+    const expanded = pattern.replace('{name}', pkg.name);
+    if (!pattern.includes('{name}')) return git.describeTag(expanded);
+
+    const own = (await git.listTags(expanded))[0];
+    if (own || !derived) return own;
+    /**
+     * **The bridge across the default changing.** A repository that released under `v*` and has
+     * since grown a second version line has no `{name}` tag for this package yet - and reading the
+     * whole history instead would re-propose everything ever committed. Measured on a real
+     * four-package repository: every package came back on `unreleased commits` and three of them
+     * jumped a major, because some commit in the full history said `feat!:`.
+     *
+     * Falling back to the repo-wide tag gives exactly the boundary that *was* correct - before the
+     * split, every package genuinely shared it - so the first run after the split reads the same
+     * commits it would have read yesterday, and writes a `{name}` tag that every run after it
+     * finds directly. One transition, no manual tagging, no invented release.
+     *
+     * **Only when the pattern was derived.** A repository that asked for `{name}@*` in its own
+     * `.rmanrc` has said what names its tags; borrowing a `v*` tag it never asked about could hand
+     * a package a boundary belonging to something else entirely, and reading too little is the
+     * failure that ships nothing and says nothing.
+     */
+    return git.describeTag(SHARED_TAG_PATTERN);
   }
 
   /** The forward direction of `findLatestTag`: expands `pkg`'s (cascaded) `.rmanrc
@@ -134,4 +194,22 @@ export namespace ChangeHashService {
   }
 }
 
-const DEFAULT_TAG_PATTERN = 'v*';
+/** One tag for the whole repository - right while every package releases on one line. */
+const SHARED_TAG_PATTERN = 'v*';
+
+/** One tag per package - the scheme lerna and changesets use, and the only one that can name a
+ *  release when a repository has more than one version line. */
+const PER_PACKAGE_TAG_PATTERN = '{name}@*';
+
+/**
+ * The pattern plus **where it came from**, which `findLatestTag` needs and callers do not: the
+ * bridge to a repo-wide tag applies only where rman changed the answer itself, never over a
+ * repository's own declaration.
+ */
+function resolvePattern(pkg: Package): { pattern: string; derived: boolean } {
+  const configured = pkg.config?.changelog?.tagPattern;
+  if (typeof configured === 'string' && configured) return { pattern: configured, derived: false };
+  if (pkg.isRoot) return { pattern: SHARED_TAG_PATTERN, derived: true };
+  const several = versionLineCount(pkg) > 1;
+  return { pattern: several ? PER_PACKAGE_TAG_PATTERN : SHARED_TAG_PATTERN, derived: true };
+}

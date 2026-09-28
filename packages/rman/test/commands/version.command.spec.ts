@@ -205,6 +205,264 @@ describe('commands/version', () => {
     });
   });
 
+  /**
+   * **A repo-wide tag cannot name a release the repository does not share**, so which pattern is
+   * the default is derived from how many version lines there are rather than left to be remembered.
+   *
+   * Every spec here builds a real repository and reads the tags a run *creates*, end to end. The
+   * seam these exercise is invisible to `change-hash.service.spec.ts`, which builds a bare
+   * `new Package(dir, createApp())` - no repository, so no version lines to count, so `v*` for
+   * everything. That is why the whole file stayed green when this default changed.
+   */
+  describe('which pattern names a release tag', () => {
+    function twoLineFixture(rc: Record<string, unknown> = { group: false }): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(rc));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+      /** The repository's history so far: one shared `v*` tag, which is what every repository that
+       *  predates its own second version line actually has. */
+      git(dir, 'tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      commitAll(dir, 'fix: a bug in pkg-a');
+      return dir;
+    }
+
+    async function planOf(dir: string): Promise<string> {
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--show'] }));
+      return lines.join('\n');
+    }
+
+    it('one version line keeps the shared v* tag', async () => {
+      const dir = fixture(); // a single package, so a single line
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+      expect(git(dir, 'tag', '--list').split('\n')).toContain('v1.0.1');
+    });
+
+    it('several version lines name the tag after the package', async () => {
+      const dir = twoLineFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--scope', 'pkg-a'] }));
+
+      const tags = git(dir, 'tag', '--list').split('\n');
+      expect(tags).toContain('pkg-a@1.0.1');
+      expect(tags).not.toContain('v1.0.1');
+    });
+
+    /**
+     * **The bridge across the default changing.** The repository has only `v1.0.0`, so `pkg-a` has
+     * no tag under its own name yet - and reading the whole history instead would re-propose
+     * everything ever committed. The boundary that *was* correct is the shared tag, because before
+     * the split every package genuinely shared it.
+     */
+    it('measures from the old shared tag while a package has no tag of its own yet', async () => {
+      expect(await planOf(twoLineFixture())).toContain('changed since v1.0.0');
+    });
+
+    it('reads its own tag once one exists, not the shared one', async () => {
+      const dir = twoLineFixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--scope', 'pkg-a'] }));
+      fs.writeFileSync(path.join(dir, 'packages/a/y.txt'), 'y');
+      commitAll(dir, 'fix: another bug in pkg-a');
+
+      expect(await planOf(dir)).toContain('changed since pkg-a@1.0.1');
+    });
+
+    /**
+     * **The bridge is only for a pattern rman chose.** A repository that declared `{name}@*` itself
+     * has said what names its tags; borrowing a `v*` tag it never asked about could hand a package
+     * a boundary belonging to something else. So the same repository, with the same tags, answers
+     * differently depending on whether the pattern was derived - which is the whole distinction.
+     */
+    it('never borrows the shared tag when the pattern was declared, not derived', async () => {
+      const dir = twoLineFixture({ group: false, changelog: { tagPattern: '{name}@*' } });
+      const out = await planOf(dir);
+
+      expect(out).toContain('unreleased commits');
+      expect(out).not.toContain('changed since v1.0.0');
+    });
+  });
+
+  /**
+   * **`--json` replaced `rman changed`**, which was this same plan filtered to `status === 'bump'`.
+   * That one-line filter produced two silent wrongs at once, and the specs here are the two of
+   * them: the root reports `'bump'` (it is informational, and that fact lived only in `reason`), so
+   * it was the one entry a consumer saw; and a package with uncommitted changes is `'error'`, so
+   * the package that had actually changed was dropped. On a dirty tree the array came back holding
+   * exactly one name - the repository root, which must never be published.
+   */
+  describe('--json', () => {
+    async function planJson(dir: string, argv: string[] = []): Promise<any[]> {
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--json', ...argv] }));
+      return JSON.parse(lines.join('\n'));
+    }
+
+    it('prints the plan as JSON and nothing else - no table beside it', async () => {
+      const dir = fixture();
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--json'] }));
+
+      expect(() => JSON.parse(lines.join('\n'))).not.toThrow();
+      /** The table's own header would be the giveaway, and it would also break `jq`. */
+      expect(lines.join('\n')).not.toContain('Reason');
+    });
+
+    it('states isRoot rather than leaving it to be inferred from the group label', async () => {
+      const entries = await planJson(fixture());
+      const root = entries.find(e => e.isRoot);
+
+      expect(root).toBeDefined();
+      expect(root.name).toBe('root');
+      /** The reason the root has to be *identifiable*: it reports a bump like any other entry. */
+      expect(root.status).toBe('bump');
+      expect(entries.filter(e => !e.isRoot).map(e => e.name)).toEqual(['pkg-a']);
+    });
+
+    it('keeps a dirty package in the output, with its status, instead of dropping it', async () => {
+      const dir = fixture();
+      fs.writeFileSync(path.join(dir, 'packages/a/dirty.txt'), 'uncommitted');
+      const entries = await planJson(dir);
+      const a = entries.find(e => e.name === 'pkg-a');
+
+      expect(a).toBeDefined();
+      expect(a.status).toBe('error');
+      expect(a.to).toBe('1.0.1');
+      expect(a.reason).toContain('uncommitted local changes');
+    });
+
+    /** `--show` exits 1 on a dirty package because a person needs stopping. Here the same fact is
+     *  in the data, and a non-zero exit would make a pipeline bail before reading the rows that
+     *  explain it - so the run has to resolve. */
+    it('does not fail the run over a dirty package, since the data says so', async () => {
+      const dir = fixture();
+      fs.writeFileSync(path.join(dir, 'packages/a/dirty.txt'), 'uncommitted');
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--json'] }));
+    });
+
+    it('writes nothing, even with an explicit bump', async () => {
+      const dir = fixture();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'major', '--json'] }));
+
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
+      expect(pkg.version).toBe('1.0.0');
+    });
+
+    it('the "changed" command it replaced is gone', async () => {
+      const dir = fixture();
+      /**
+       * yargs prints its own "Unknown argument" through `console.error`, which `captureLogs` does
+       * not patch - left through, the reporter and the stray write race for the same stream and a
+       * line comes out spliced. Silenced here rather than tolerated.
+       */
+      const error = console.error;
+      console.error = () => {};
+      try {
+        await expectCliFailure(() => runCli({ cwd: dir, argv: ['changed'] }));
+      } finally {
+        console.error = error;
+      }
+    });
+  });
+
+  describe('the plan table', () => {
+    /**
+     * `pkg-a` and `pkg-c` share a version line; `pkg-b` sits between them in *package* order, which
+     * is the order `getPlan` returns and the order the table used to print. A group releases as one
+     * number, so the members being adjacent is the one thing the table is for.
+     *
+     * The fixture is built so the claim is observable: with the blocks removed the rows come back
+     * as a-b-c, which is the same set in the same table - only `printPlan`'s ordering differs. A
+     * repository whose groups happen to be contiguous would pass either way.
+     */
+    function groupedFixture(): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      /** Selectors match **package names**, never directory names - `"[a]"` would match nothing. */
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[pkg-a]': { group: 'shared' }, '[pkg-c]': { group: 'shared' }, '[pkg-b]': { group: false } }),
+      );
+      for (const [d, name] of [
+        ['a', 'pkg-a'],
+        ['b', 'pkg-b'],
+        ['c', 'pkg-c'],
+      ]) {
+        writeJson(dir, `packages/${d}/package.json`, { name, version: '1.0.0' });
+      }
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      for (const d of ['a', 'b', 'c']) fs.writeFileSync(path.join(dir, `packages/${d}/x.txt`), 'x');
+      commitAll(dir, 'fix: touches all three');
+      return dir;
+    }
+
+    async function rows(dir: string): Promise<string[]> {
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--show'] }));
+      return lines.flatMap(l => l.split('\n'));
+    }
+
+    it('prints a group’s members together, however the packages were ordered', async () => {
+      const order = (await rows(groupedFixture()))
+        .map(l => ['pkg-a', 'pkg-b', 'pkg-c'].find(n => l.includes(n)))
+        .filter(Boolean);
+      expect(order).toEqual(['pkg-a', 'pkg-c', 'pkg-b']);
+    });
+
+    it('draws a delimiter between the shared line and the packages that share none', async () => {
+      const lines = await rows(groupedFixture());
+      const at = (name: string) => lines.findIndex(l => l.includes(name));
+      /** A rule of dashes, not the header's own - there is one of those above every table. */
+      const delimiters = lines.map((l, i) => (/^[-\s]+$/.test(l) && l.includes('-') ? i : -1)).filter(i => i >= 0);
+
+      /** The header's, one below the root, and one between the shared group and the solo package. */
+      expect(delimiters.length).toBe(3);
+      expect(delimiters[2]).toBeGreaterThan(at('pkg-c'));
+      expect(delimiters[2]).toBeLessThan(at('pkg-b'));
+    });
+
+    /**
+     * **The root heads the table.** Its number is the repository's release identity - what a GitHub
+     * Release is named after, and on a calendar version one no package shares - so it is what the
+     * rest of the table sits under, not a footnote below it.
+     *
+     * `getPlan` appends that entry, so this only holds because `planBlocks` pulls it out: reverting
+     * that leaves it the last singleton, and this spec goes red (control run).
+     */
+    it('prints the repository root first, above every package', async () => {
+      const lines = await rows(groupedFixture());
+      const at = (name: string) => lines.findIndex(l => l.includes(name));
+      for (const pkg of ['pkg-a', 'pkg-b', 'pkg-c']) expect(at('root')).toBeLessThan(at(pkg));
+    });
+
+    /**
+     * A package that shares its line with nobody gets a group of one named after itself, so the
+     * cell used to repeat the Package column. Asserted on the row rather than on the whole output,
+     * because `pkg-b` appears in the Package column of that same line either way.
+     */
+    it('leaves the Group column blank for a package that shares its line with nobody', async () => {
+      const lines = await rows(groupedFixture());
+      const row = (name: string) => lines.find(l => l.includes(name))!;
+
+      expect(row('pkg-b')).not.toContain('(pkg-b)');
+      /** The genuine group still names itself - this is the half that must not be lost. */
+      expect(row('pkg-a')).toContain('(shared)');
+      /** `root` is what the row *is*, not the package's name, and it is the only thing saying the
+       *  number beside it is the repository's identity rather than a release. */
+      expect(row('root')).toContain('(root)');
+    });
+
+    /**
+     * There was a spec here reading "the root prints last", back when it did, and it is worth
+     * recording why it went rather than simply being inverted: it passed with the block order
+     * reversed *and* with the sort that was supposed to guarantee it deleted. `buildRootEntry`
+     * appends and a `Map` preserves insertion order, so the root was last whatever `planBlocks`
+     * did - the spec green-lit every answer and the sort was dead code wearing a guarantee. The
+     * replacement above pins the opposite arrangement, and a control confirms it can fail.
+     */
+  });
+
   describe('--ignore-dirty', () => {
     it('without it, a dirty package aborts the whole run', async () => {
       const dir = fixture();
@@ -215,6 +473,49 @@ describe('commands/version', () => {
       expect(lines.some(l => l.includes('uncommitted local changes'))).toBe(true);
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8'));
       expect(pkg.version).toBe('1.0.0'); // aborted before any write
+    });
+
+    /**
+     * The abort still names the version. `--show` exists to answer "what would I get", and
+     * answering it only for the packages that happen to be committed is answering it for the
+     * uninteresting half - the dirty package is the one being worked on.
+     *
+     * Asserted on the **row**, not merely on the output containing `1.0.1` somewhere: the root's
+     * own informational entry carries that number too, so `out.includes('1.0.1')` passes with the
+     * fix reverted (measured - that is the vacuous form of this spec).
+     */
+    it('without it, the aborted row still says which version the package would have got', async () => {
+      const dir = fixture();
+      fs.writeFileSync(path.join(dir, 'packages/a/dirty.txt'), 'uncommitted');
+
+      const lines = await captureLogs(() => expectCliFailure(() => runCli({ cwd: dir, argv: ['version', '--show'] })));
+      const row = lines.flatMap(l => l.split('\n')).find(l => l.includes('pkg-a'));
+
+      expect(row).toBeDefined();
+      expect(row).toContain('error');
+      expect(row).toContain('1.0.1');
+      /** The boundary survives the overwrite - the status column already says why it failed, so
+       *  the reason is where the number is explained. */
+      expect(row).toContain('uncommitted local changes');
+      expect(row).toContain('changed since v1.0.0');
+    });
+
+    /**
+     * The other half, and the reason the two cases are not one: `--ignore-dirty` **writes**. A
+     * version printed beside `skip` would name one that package is not getting, and the entry must
+     * stay out of its group so no sibling inherits a number from commits nobody is releasing.
+     */
+    it('with it, the skipped package is given no version at all', async () => {
+      const dir = fixture();
+      fs.writeFileSync(path.join(dir, 'packages/a/dirty.txt'), 'uncommitted');
+
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--show', '--ignore-dirty'] }));
+      const row = lines.flatMap(l => l.split('\n')).find(l => l.includes('pkg-a'));
+
+      expect(row).toBeDefined();
+      expect(row).toContain('skip');
+      expect(row).not.toContain('1.0.1');
+      expect(row).not.toContain('->');
     });
 
     it('with it, the dirty package is excluded instead of aborting the run', async () => {

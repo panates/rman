@@ -31,7 +31,7 @@ function mkTmp(): string {
 function writeFixture(
   dir: string,
   packages: Record<string, PackageDef>,
-  root?: { scripts?: Record<string, string>; rmanrc?: unknown },
+  root?: { scripts?: Record<string, string>; rmanrc?: unknown; rmanrcJs?: string },
 ) {
   fs.writeFileSync(
     path.join(dir, 'package.json'),
@@ -45,8 +45,14 @@ function writeFixture(
   );
   /** Always written, even when empty: `Workspace.findRoot` marks the repository root by an
    *  `.rmanrc*` or a `.git`, and it has to - it runs *before* the plugins that would know what a
-   *  package is. Without a marker, creating a repository from a nested directory roots there. */
-  fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(root?.rmanrc ?? {}));
+   *  package is. Without a marker, creating a repository from a nested directory roots there.
+   *
+   *  **One file, never both.** A directory may declare a single config, so a case wanting a
+   *  function at the root asks for `rmanrcJs` and gets a `.rmanrc.cjs` *instead of* the marker -
+   *  which still marks the root, since `findRoot` looks for any `.rmanrc*`. Writing the JSON one
+   *  too is what several cases used to do, and the reader refuses it by design. */
+  if (root?.rmanrcJs) fs.writeFileSync(path.join(dir, '.rmanrc.cjs'), `module.exports = ${root.rmanrcJs};\n`);
+  else fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(root?.rmanrc ?? {}));
   for (const [name, def] of Object.entries(packages)) {
     const pkgDir = path.join(dir, 'packages', name);
     fs.mkdirSync(pkgDir, { recursive: true });
@@ -54,8 +60,9 @@ function writeFixture(
       path.join(pkgDir, 'package.json'),
       JSON.stringify({ name, version: '1.0.0', dependencies: def.dependencies, scripts: def.scripts }),
     );
-    if (def.rmanrc) fs.writeFileSync(path.join(pkgDir, '.rmanrc'), JSON.stringify(def.rmanrc));
+    /** The same rule per package: one config file or the other, never both. */
     if (def.rmanrcJs) fs.writeFileSync(path.join(pkgDir, '.rmanrc.cjs'), `module.exports = ${def.rmanrcJs};\n`);
+    else if (def.rmanrc) fs.writeFileSync(path.join(pkgDir, '.rmanrc'), JSON.stringify(def.rmanrc));
   }
 }
 
@@ -198,7 +205,7 @@ describe('run: Run.runScript() integration', () => {
   const dirs: string[] = [];
   function fixture(
     packages: Record<string, PackageDef>,
-    root?: { scripts?: Record<string, string>; rmanrc?: unknown },
+    root?: { scripts?: Record<string, string>; rmanrc?: unknown; rmanrcJs?: string },
   ) {
     const dir = mkTmp();
     dirs.push(dir);
@@ -418,6 +425,57 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('pre-ran'))).toBe(true);
       expect(lines.some(l => l.includes('main-ran'))).toBe(true);
       expect(lines.some(l => l.includes('post-ran'))).toBe(true);
+    });
+
+    /**
+     * **`before`/`after` compose; only `exec` replaces.** A package's `prebuild` used to drop the
+     * config's `before` outright, and the report that found it is the shape to keep in mind: a root
+     * declaring a repo-wide `before` lost it for any package that later added a codegen
+     * `prebuild` - silently, with a stale build directory as the only symptom.
+     *
+     * They are not the same kind of key. `exec` is one answer to one question, so a package
+     * declaring `"build"` and a config declaring `exec` are the same build stated twice. A hook is
+     * a point, and two hooks at one point both belong.
+     */
+    it("composes the config's before/after around the package's own pre/post hooks", async () => {
+      await fixture({
+        'pkg-a': {
+          scripts: {
+            prebuild: quiet('echo OWN-PRE'),
+            build: quiet('echo OWN-MAIN'),
+            postbuild: quiet('echo OWN-POST'),
+          },
+          rmanrc: { run: { build: { before: quiet('echo CONFIG-PRE'), after: quiet('echo CONFIG-POST') } } },
+        },
+      });
+      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      /** **The order is the claim, not merely that all five ran.** The config's statement is the
+       *  wider one - "before this script, for every package" - so it brackets the package's own,
+       *  which is the shape a bookend already has here. */
+      const order = ['CONFIG-PRE', 'OWN-PRE', 'OWN-MAIN', 'OWN-POST', 'CONFIG-POST'];
+      const at = order.map(tag => lines.findIndex(l => l.includes(tag)));
+      expect(at.filter(i => i === -1)).toEqual([]);
+      expect([...at].sort((a, b) => a - b)).toEqual(at);
+    });
+
+    /** The control for the one above, and the half that must not change: `exec` is a single answer,
+     *  so the package's own still replaces the config's rather than running both. */
+    it("still lets the package's own script replace the config's exec while the hooks compose", async () => {
+      await fixture({
+        'pkg-a': {
+          scripts: { prebuild: quiet('echo OWN-PRE'), build: quiet('echo OWN-MAIN') },
+          rmanrc: {
+            run: {
+              build: { before: quiet('echo CONFIG-PRE'), exec: quiet('echo CONFIG-MAIN') },
+            },
+          },
+        },
+      });
+      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      expect(lines.some(l => l.includes('CONFIG-PRE'))).toBe(true);
+      expect(lines.some(l => l.includes('OWN-PRE'))).toBe(true);
+      expect(lines.some(l => l.includes('OWN-MAIN'))).toBe(true);
+      expect(lines.some(l => l.includes('CONFIG-MAIN'))).toBe(false);
     });
 
     it("override: true replaces the package's own pre/post hooks too, not just the main script", async () => {
@@ -833,12 +891,14 @@ describe('run: Run.runScript() integration', () => {
     it('runs as a root bookend as well, from the repository root', async () => {
       const dir = mkTmp();
       dirs.push(dir);
-      writeFixture(dir, { 'pkg-a': { scripts: { build: quiet('echo pkg-a-ran') } } });
-      fs.writeFileSync(
-        path.join(dir, '.rmanrc.cjs'),
-        `module.exports = { run: { build: { before: function rootBookend(ctx) {
-          console.log('ROOT-BOOKEND for', ctx.pkg.name, ctx.cwd === ctx.repository.dirname ? 'at root' : 'ELSEWHERE');
-        } } } };\n`,
+      writeFixture(
+        dir,
+        { 'pkg-a': { scripts: { build: quiet('echo pkg-a-ran') } } },
+        {
+          rmanrcJs: `{ run: { build: { before: function rootBookend(ctx) {
+            console.log('ROOT-BOOKEND for', ctx.pkg.name, ctx.cwd === ctx.repository.dirname ? 'at root' : 'ELSEWHERE');
+          } } } }`,
+        },
       );
       await createRepository(dir);
       const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));

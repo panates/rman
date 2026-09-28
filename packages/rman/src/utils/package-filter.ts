@@ -1,6 +1,6 @@
 import micromatch from 'micromatch';
 import type { Argv } from 'yargs';
-import type { Package } from '../core/package.js';
+import type { Package } from '../core/classes/package.js';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 
 /** Shared by every command that iterates packages (`run`/`build`/`test`/`exec`, `list`, `ci`,
@@ -9,6 +9,21 @@ import type { RmanConfig } from '../interfaces/rman-config.interface.js';
  *  `.rmanrc "skip"`, is applied by `filterPackages` itself rather than being an option here: it is
  *  the repository's statement, not the caller's. */
 export interface PackageFilterOptions {
+  /**
+   * The technologies the **command itself** is for - `clean` and `ci` are npm's alone. Absent means
+   * every platform, which is what a command that speaks for no one in particular says.
+   *
+   * Declared as `CommandMetadata.platforms` and carried here; a repository never writes it.
+   */
+  /* **Separate from `platform`, and the difference is who is speaking.** `--platform cargo` is a
+   * request, so a name matching no package is a typo and an error listing what is there. This is a
+   * *fact about the command*, so a repository holding none of its technologies is not a mistake -
+   * the command simply has nothing to act on, and says `0 packages` rather than throwing.
+   *
+   * It narrows on top of `--platform` rather than replacing it: the declaration is the hard limit,
+   * the flag narrows further. Asking for `--platform cargo` from a node-only command is an empty
+   * set, which is the truthful answer. */
+  commandPlatforms?: string[];
   /** Only include packages whose name matches at least one of these globs (e.g. `@scope/*`), or
    *  **`"/"`** for the repository's own root package - see `ROOT_SELECTOR`. */
   scope?: string | string[];
@@ -177,6 +192,7 @@ export function readPackageFilterOptions(args: any): PackageFilterOptions {
     scope: args.scope as string[] | undefined,
     ignore: args.ignore as string[] | undefined,
     platform: args.platform as string[] | undefined,
+    commandPlatforms: args.commandPlatforms as string[] | undefined,
     deps: args.deps as boolean | undefined,
     dependents: args.dependents as boolean | undefined,
   };
@@ -218,6 +234,12 @@ export function filterPackages(
   if (options.ignore) {
     const selects = selector(options.ignore);
     matched = matched.filter(p => !selects(p));
+  }
+  /** The command's own technologies, before the user's `--platform`: a declaration is the hard
+   *  limit and the flag narrows inside it. Silent where `--platform` is loud - see the field. */
+  if (options.commandPlatforms?.length) {
+    const wanted = new Set(options.commandPlatforms.map(n => n.toLowerCase()));
+    matched = matched.filter(p => wanted.has(p.provider.toLowerCase()));
   }
   if (options.platform !== undefined) {
     const wanted = platformNames(options.platform, packages);

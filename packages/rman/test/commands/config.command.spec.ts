@@ -23,6 +23,14 @@ function stripColor(text: string): string {
   return text.replace(ANSI, '');
 }
 
+/** The `# <name> (<dir>)` line, found rather than indexed: the header grew a config-file line above
+ *  it, and three cases asserting `lines[0]` all broke on a change that was about something else. */
+function headerOf(lines: string[]): string {
+  const header = lines.map(stripColor).find(line => /^# \S+ \(/.test(line));
+  if (!header) throw new Error(`no package header in:\n${lines.join('\n')}`);
+  return header;
+}
+
 async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
   const original = console.log;
   const lines: string[] = [];
@@ -94,8 +102,8 @@ describe('commands/config', () => {
     const dir = fixture();
     const lines = await captureLogs(() => runCli({ argv: ['config'], cwd: path.join(dir, 'packages/a') }));
 
-    expect(lines[0]).toContain('pkg-a');
-    expect(lines[0]).toContain(path.join('packages', 'a'));
+    expect(headerOf(lines)).toContain('pkg-a');
+    expect(headerOf(lines)).toContain(path.join('packages', 'a'));
 
     const config = parsed(lines);
     /** The package's own statement wins over `"[*]"`, and `[...value]` *adds* to it rather than
@@ -126,7 +134,7 @@ describe('commands/config', () => {
       runCli({ argv: ['config', '--from-root'], cwd: path.join(dir, 'packages/a') }),
     );
 
-    expect(lines[0]).toContain('root');
+    expect(headerOf(lines)).toContain('root');
     const config = parsed(lines);
     expect(config.allowBranch).toEqual(['main']);
     /** `"[*]"` names the packages *below*, so the root does not carry their build block - which is
@@ -137,7 +145,7 @@ describe('commands/config', () => {
   it('falls back to the root in a directory that holds no package', async () => {
     const dir = fixture();
     const lines = await captureLogs(() => runCli({ argv: ['config'], cwd: path.join(dir, 'packages') }));
-    expect(lines[0]).toContain('root');
+    expect(headerOf(lines)).toContain('root');
   });
 
   it('--json prints nothing but JSON, so it can be piped', async () => {
@@ -210,5 +218,91 @@ describe('commands/config', () => {
     // JSON.stringify omits a function-valued key entirely, so `exec` would simply have vanished -
     // a quieter wrong answer than the YAML crash, and a worse one.
     expect(JSON.parse(lines.join('\n')).run.build.exec).toBe('[Function: copyDocs]');
+  });
+  /**
+   * **The output is a repository's settings, not a record of how they were assembled.**
+   *
+   * `plugins`, `platforms`, `commands` and `publishTargets` are `CODE_SUBTREES` - code - and every
+   * repository now carries them, because rman's own presets go under every root. Printed, they bury
+   * the answer: measured on this repository, `rman config` emitted the whole npm publish target's
+   * option table and `commands: ['[Function]', '[Function]']` above the two keys the `.rmanrc`
+   * actually set.
+   *
+   * The fixture declares one of each **by hand**, so the case does not depend on the preset default
+   * (this suite passes `presets: []`) and still proves the key is dropped wherever it came from.
+   */
+  it('leaves out the contribution keys - they are code, not settings', async () => {
+    const dir = tmp();
+    writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+    writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+    fs.writeFileSync(
+      path.join(dir, '.rmanrc.cjs'),
+      `module.exports = {
+         commands: [{ command: 'x', describe: 'a command', builder: c => c, handler() {} }],
+         '[*]': { run: { build: { exec: 'tsc -b' } } },
+       };\n`,
+    );
+
+    const lines = await captureLogs(() => runCli({ argv: ['config'], cwd: path.join(dir, 'packages/a') }));
+    const text = stripColor(lines.join('\n'));
+    const body = text.replace(/^#.*$/gm, '');
+    expect(body).not.toContain('commands');
+    /** The setting it was burying is still there - this drops four names, not the config. */
+    expect(body).toContain('tsc -b');
+
+    /** **And no note about it.** That was tried: the announcement read as the sibling of the
+     *  deferred-paths one, and it is not - that explains a visible oddity, this announced an
+     *  absence. Presets go under every root, so every config carries all four and the line was
+     *  printed every time; at this repository's root it was one of three. */
+    expect(text).not.toContain('omitted');
+  });
+
+  /** `--json` is what a pipeline reads, so it drops them too - the two spellings cannot disagree
+   *  about what the config is. */
+  it('leaves them out of --json as well', async () => {
+    const dir = tmp();
+    writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+    writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+    fs.writeFileSync(
+      path.join(dir, '.rmanrc.cjs'),
+      `module.exports = {
+         commands: [{ command: 'x', describe: 'a command', builder: c => c, handler() {} }],
+         '[*]': { group: true },
+       };\n`,
+    );
+
+    const lines = await captureLogs(() => runCli({ argv: ['config', '--json'], cwd: path.join(dir, 'packages/a') }));
+    const printed = JSON.parse(lines.join('\n'));
+    expect(printed.commands).toBeUndefined();
+    expect(printed.group).toBe(true);
+  });
+  /**
+   * **The file you would open to change this**, headed first because that is a reader's next
+   * question. The package's *own* file - the printed config is more than it (the directory chain
+   * above, every `extends` base, each `"[selector]"` block), and the per-key answer is `ORIGINS`;
+   * this line is the starting point rather than the whole provenance.
+   */
+  it('heads the output with the config file the directory declares', async () => {
+    const dir = tmp();
+    writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+    writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { group: true } }));
+    fs.writeFileSync(path.join(dir, 'packages/a/.rmanrc.yml'), 'skip: true\n');
+
+    const lines = await captureLogs(() => runCli({ argv: ['config'], cwd: path.join(dir, 'packages/a') }));
+    expect(stripColor(lines[0]!)).toBe('# .rmanrc.yml');
+  });
+
+  /** **Nothing where the directory declares none**, rather than a name that is not there: a package
+   *  configured entirely from above would otherwise send the reader to create a file when the
+   *  answer is a level up. */
+  it('says nothing about a file for a package that declares none', async () => {
+    const dir = tmp();
+    writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+    writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { group: true } }));
+
+    const lines = await captureLogs(() => runCli({ argv: ['config'], cwd: path.join(dir, 'packages/a') }));
+    expect(stripColor(lines[0]!)).toBe(`# pkg-a (${path.join('packages', 'a')})`);
   });
 });

@@ -213,12 +213,10 @@ describe('commands/publish', () => {
 
     it('--target npm never considers a package configured only for "docker"', async () => {
       const dir = tmp();
-      writeJson(dir, 'package.json', {
-        name: 'pkg-a',
-        version: '1.0.0',
-        private: true,
-        rman: { publish: { target: ['docker'], docker: { image: 'org/pkg-a' } } },
-      });
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0', private: true });
+      /** An `.rmanrc`, not `package.json`'s own `"rman"` key: a directory may declare **one**
+       *  config, and this fixture's `runCli` writes an `.rmanrc` to declare the preset. */
+      writeJson(dir, '.rmanrc', { publish: { target: ['docker'], docker: { image: 'org/pkg-a' } } });
 
       await withStubbedNpm(dir, async logFile => {
         const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--target', 'npm', '--yes'] }));
@@ -229,12 +227,10 @@ describe('commands/publish', () => {
 
     it('--target docker shows a "[docker]"-labeled plan entry, without touching npm at all', async () => {
       const dir = tmp();
-      writeJson(dir, 'package.json', {
-        name: 'pkg-a',
-        version: '1.0.0',
-        private: true,
-        rman: { publish: { target: ['docker'], docker: { image: 'org/pkg-a' } } },
-      });
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0', private: true });
+      /** An `.rmanrc`, not `package.json`'s own `"rman"` key: a directory may declare **one**
+       *  config, and this fixture's `runCli` writes an `.rmanrc` to declare the preset. */
+      writeJson(dir, '.rmanrc', { publish: { target: ['docker'], docker: { image: 'org/pkg-a' } } });
 
       await withStubbedNpm(dir, async logFile => {
         const lines = await captureLogs(() =>

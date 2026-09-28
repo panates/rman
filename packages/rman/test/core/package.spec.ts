@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Package } from '../../src/core/package.js';
+import { Package } from '../../src/core/classes/package.js';
 import { createApp, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {

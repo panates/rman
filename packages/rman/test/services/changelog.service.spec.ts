@@ -20,6 +20,16 @@ function content(entries: ChangelogService.Entry[]): string {
  *  fixtures are actually published, but without this the default "npm" auto-detect would still
  *  make a real `npm view` network call before falling back to the unpushed-commits default. */
 
+/**
+ * **A heading naming `name`**, whatever shape the heading happens to take - `## v1.2.0`,
+ * `## Unreleased — pkg-a`, or a repository's own `changelog.template`. Asserting the literal
+ * `'## pkg-a 1.0.0'` pinned the default template's layout in twenty-two places, so changing the
+ * heading - which is a presentation decision - turned every one of them red for no defect.
+ */
+function headingFor(name: string): RegExp {
+  return new RegExp(`^## .*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'm');
+}
+
 describe('services/changelog', () => {
   useTestEcosystem();
 
@@ -88,16 +98,17 @@ describe('services/changelog', () => {
 
     const output = content(await service('changelog').getEntries({}));
 
-    expect(output).toContain('## pkg-a 1.0.0');
+    expect(output).toMatch(headingFor('pkg-a'));
     expect(output).toContain('### ✨ Features');
     expect(output).toContain('- **pkg-a:** add a feature');
-    expect(output).toContain('## pkg-b 2.0.0');
+    expect(output).toMatch(headingFor('pkg-b'));
     expect(output).toContain('### 🐛 Bug Fixes');
     expect(output).toContain('- **pkg-b:** correct a bug');
     // the docs commit only touched a root-level file - it belongs to root's own entry.
-    expect(output).toContain(`## ${path.basename(dir)} repository`);
+    expect(output).toMatch(headingFor(`${path.basename(dir)} repository`));
     expect(output).toContain('### 🔧 Other Changes');
-    expect(output).toContain('- docs: update readme');
+    /** The bullet no longer repeats the type its heading already names - see `changelog.titles`. */
+    expect(output).toContain('- update readme');
   });
 
   it('labels the root entry "<repo dir name> repository", not the root package.json\'s own (often private, non-published) name', async () => {
@@ -123,7 +134,7 @@ describe('services/changelog', () => {
 
     await createRepository(dir);
     const output = content(await service('changelog').getEntries({ from: baseHash }));
-    expect(output).toContain(`## ${path.basename(dir)} repository`);
+    expect(output).toMatch(headingFor(`${path.basename(dir)} repository`));
     expect(output).not.toContain('sqb.v4');
   });
 
@@ -154,11 +165,11 @@ describe('services/changelog', () => {
     await createRepository(dir);
     const output = content(await service('changelog').getEntries({ from: baseHash }));
 
-    expect(output).toContain(`## ${path.basename(dir)} repository`);
-    expect(output).toContain('- docs: refresh every README');
-    expect(output).not.toContain('## pkg-a');
-    expect(output).not.toContain('## pkg-b');
-    expect(output).not.toContain('## pkg-c');
+    expect(output).toMatch(headingFor(`${path.basename(dir)} repository`));
+    expect(output).toContain('- refresh every README');
+    expect(output).not.toMatch(headingFor('pkg-a'));
+    expect(output).not.toMatch(headingFor('pkg-b'));
+    expect(output).not.toMatch(headingFor('pkg-c'));
   });
 
   it('a commit touching only a minority of packages is still attributed to each of them normally', async () => {
@@ -186,8 +197,8 @@ describe('services/changelog', () => {
 
     await createRepository(dir);
     const output = content(await service('changelog').getEntries({ from: baseHash }));
-    expect(output).toContain('## pkg-a');
-    expect(output).not.toContain('## root');
+    expect(output).toMatch(headingFor('pkg-a'));
+    expect(output).not.toMatch(headingFor('root'));
   });
 
   it('a repo with very few packages never treats a normal commit as "broad" just because it is most of them', async () => {
@@ -214,8 +225,8 @@ describe('services/changelog', () => {
 
     await createRepository(dir);
     const output = content(await service('changelog').getEntries({ from: baseHash }));
-    expect(output).toContain('## pkg-a');
-    expect(output).not.toContain('## root');
+    expect(output).toMatch(headingFor('pkg-a'));
+    expect(output).not.toMatch(headingFor('root'));
   });
 
   it('a commit for a non-conventional subject still lands in Other Changes, not dropped', async () => {
@@ -323,9 +334,9 @@ describe('services/changelog', () => {
       const { dir, baseHash } = fixtureWithSkippedPackage();
       await createRepository(dir);
       const output = content(await service('changelog').getEntries({ from: baseHash }));
-      expect(output).not.toContain('## pkg-a');
+      expect(output).not.toMatch(headingFor('pkg-a'));
       expect(output).not.toContain('a feature in the skipped package');
-      expect(output).toContain('## pkg-b');
+      expect(output).toMatch(headingFor('pkg-b'));
       expect(output).toContain('a feature in the normal package');
     });
 
@@ -333,7 +344,7 @@ describe('services/changelog', () => {
       const { dir, baseHash } = fixtureWithSkippedPackage();
       await createRepository(dir);
       const output = content(await service('changelog').getEntries({ from: baseHash, includeSkipped: true }));
-      expect(output).toContain('## pkg-a');
+      expect(output).toMatch(headingFor('pkg-a'));
       expect(output).toContain('a feature in the skipped package');
     });
   });
@@ -427,9 +438,10 @@ describe('services/changelog', () => {
 
       await createRepository(dir);
       const output = content(await service('changelog').getEntries({ from: baseHash }));
-      expect(output).not.toContain('## pkg-a'); // its only commit was ignored -> no entry
-      expect(output).toContain('## pkg-b');
-      expect(output).toContain('chore(pkg-b): tidy up');
+      expect(output).not.toMatch(headingFor('pkg-a')); // its only commit was ignored -> no entry
+      expect(output).toMatch(headingFor('pkg-b'));
+      /** The scope survives as `**pkg-b:**`; the type does not, the heading having said it. */
+      expect(output).toContain('**pkg-b:** tidy up');
     });
   });
 
@@ -475,7 +487,7 @@ describe('services/changelog', () => {
 
       const fileContent = fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf-8');
       expect(fileContent.startsWith('# Changelog\n')).toBe(true);
-      expect(fileContent).toContain('## pkg-a 1.0.0');
+      expect(fileContent).toMatch(headingFor('pkg-a'));
     });
 
     it('a second run prepends above the first entry, leaving it intact below', async () => {
@@ -526,7 +538,7 @@ describe('services/changelog', () => {
       expect(fs.existsSync(path.join(dir, 'packages/a/HISTORY.md'))).toBe(true);
       expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
       const fileContent = fs.readFileSync(path.join(dir, 'packages/a/HISTORY.md'), 'utf-8');
-      expect(fileContent).toContain('## pkg-a 1.0.0');
+      expect(fileContent).toMatch(headingFor('pkg-a'));
     });
 
     it('a nested filePath (e.g. "docs/CHANGELOG.md") creates any missing parent directory', async () => {
@@ -580,7 +592,7 @@ describe('services/changelog', () => {
       expect(output).toContain('Release notes for pkg-a v1.0.0');
       expect(output).toContain('- **pkg-a:** add a feature');
       // the default template's own heading shouldn't appear when a custom one is used.
-      expect(output).not.toContain('## pkg-a 1.0.0');
+      expect(output).not.toMatch(headingFor('pkg-a'));
     });
 
     it('throws a clear error when the referenced template file does not exist', async () => {
@@ -599,16 +611,16 @@ describe('services/changelog', () => {
       const { dir } = fixtureWithUnpushedCommits();
       await createRepository(path.join(dir, 'packages/a'));
       const output = content(await service('changelog').getEntries({}));
-      expect(output).toContain('## pkg-a');
-      expect(output).not.toContain('## pkg-b');
+      expect(output).toMatch(headingFor('pkg-a'));
+      expect(output).not.toMatch(headingFor('pkg-b'));
     });
 
     it('--from-root generates for the whole repository even from inside a single package', async () => {
       const { dir } = fixtureWithUnpushedCommits();
       await createRepository(path.join(dir, 'packages/a'));
       const output = content(await service('changelog').getEntries({ fromRoot: true }));
-      expect(output).toContain('## pkg-a');
-      expect(output).toContain('## pkg-b');
+      expect(output).toMatch(headingFor('pkg-a'));
+      expect(output).toMatch(headingFor('pkg-b'));
     });
   });
 
@@ -617,7 +629,7 @@ describe('services/changelog', () => {
       const { dir } = fixtureWithUnpushedCommits();
       await createRepository(dir);
       const output = content(await service('changelog').getEntries({}));
-      expect(output).toContain('## pkg-a 1.0.0');
+      expect(output).toMatch(headingFor('pkg-a'));
     });
 
     it('the default "v*" pattern uses the nearest repo-wide tag for every package, ignoring a stale package.json version', async () => {
@@ -632,8 +644,10 @@ describe('services/changelog', () => {
 
       await createRepository(dir);
       const output = content(await service('changelog').getEntries({ from: baseHash }));
-      expect(output).toContain('## pkg-a 6.0.8');
-      expect(output).toContain('## pkg-b 6.0.8');
+      /** A tagged segment is headed by its tag, so the tag *is* the version on display - which is
+       *  what this spec is about. The package name is no longer in that heading; see the note on
+       *  `{{title}}` in `changelog.service.ts`. */
+      expect(output).toContain('## v6.0.8');
       expect(output).not.toContain('1.0.0');
       expect(output).not.toContain('2.0.0');
     });
@@ -647,8 +661,10 @@ describe('services/changelog', () => {
 
       await createRepository(dir);
       const output = content(await service('changelog').getEntries({ from: baseHash }));
-      expect(output).toContain('## pkg-a 3.1.0');
-      expect(output).toContain('## pkg-b 2.0.0');
+      /** pkg-a's segment is closed by its own tag, so that tag heads it. pkg-b has none, so its
+       *  entry is the unreleased one - which is where the package label still shows. */
+      expect(output).toContain('## pkg-a@3.1.0');
+      expect(output).toMatch(headingFor('pkg-b'));
     });
 
     it('"{name}@*" resolves a scoped package name (e.g. "@scope/name") correctly', async () => {
@@ -673,7 +689,7 @@ describe('services/changelog', () => {
 
       await createRepository(dir);
       const output = content(await service('changelog').getEntries({ from: baseHash }));
-      expect(output).toContain('## @sqb/builder 1.2.3');
+      expect(output).toMatch(headingFor('@sqb/builder'));
     });
 
     it('a package can override the tag pattern for just itself, cascading from the root default', async () => {
@@ -685,8 +701,17 @@ describe('services/changelog', () => {
 
       await createRepository(dir);
       const output = content(await service('changelog').getEntries({ from: baseHash }));
-      expect(output).toContain('## pkg-a 9.9.9');
-      expect(output).toContain('## pkg-b 6.0.8');
+      /**
+       * Each package is headed by the tag its **own** pattern resolved - `pkg-a@9.9.9` for the one
+       * that overrode it, the repo-wide `v6.0.8` for the one that did not. Which is also the
+       * clearest demonstration of what tag headings cost on the *print* path: the root's entry and
+       * pkg-b's are both `## v6.0.8`, and only their contents tell them apart. In a changelog
+       * **file** there is no ambiguity - the file is the package's - but `rman changelog` writes
+       * every package to one stream.
+       */
+      expect(output).toContain('## pkg-a@9.9.9');
+      expect(output.match(/^## v6\.0\.8/gm)).toHaveLength(2);
+      expect(output).toContain('**pkg-b:** correct a bug');
     });
   });
 
@@ -911,14 +936,14 @@ describe('services/changelog', () => {
       expect(pkgA).toBeDefined();
       expect(pkgA!.version).toBe('1.0.0');
       expect(pkgA!.features).toEqual(['**pkg-a:** add a feature']);
-      expect(pkgA!.content).toContain('## pkg-a 1.0.0');
+      expect(pkgA!.content).toMatch(headingFor('pkg-a'));
       expect(pkgA!.filePath).toBe('CHANGELOG.md');
 
       const root = entries.find(e => e.label === `${path.basename(dir)} repository`);
       expect(root).toBeDefined();
       // nothing has ever been released here (no tag, nothing on npm), so the boundary-free view
       // reaches all the way back to the first commit.
-      expect(root!.other).toEqual(['init', 'docs: update readme']);
+      expect(root!.other).toEqual(['init', 'update readme']);
     });
 
     it('returns [] when there is nothing unreleased', async () => {

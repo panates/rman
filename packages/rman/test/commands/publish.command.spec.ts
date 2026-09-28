@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import publishCommand from '../../src/commands/publish.command.js';
-import { type PublishTarget, shipsTo } from '../../src/core/publish-target.js';
+import { type PublishTarget, shipsTo } from '../../src/core/interfaces/publish-target.js';
 import { filterPackages } from '../../src/utils/package-filter.js';
 import { createRepository, runCli, service, useTarget, useTestEcosystem } from '../_fixture.js';
 
@@ -181,7 +181,12 @@ describe('commands/publish', () => {
     /** And the contributed one beside it: the same mechanism, seen from the other side. */
     expect(keys).toContain('fixtureTag');
     /** `--target`'s choices can only come from the registry now - `'npm' | 'docker'` was written
-     *  down by a core that could not know what a repository installed. */
+     *  down by a core that could not know what a repository installed.
+     *
+     *  **No `npm` here, and that is this fixture opting out rather than the target being absent.**
+     *  rman's own presets go under every real repository root (`DEFAULT_PRESETS`) and the `node`
+     *  preset contributes it; `test/_fixture.ts` passes `presets: []` because the core brings its
+     *  own ecosystem - see there for what happened when it did not. */
     expect(meta.config?.target?.choices).toEqual(['docker', 'fixture', 'optin']);
   });
 

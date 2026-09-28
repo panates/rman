@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { expect } from 'expect';
 import { RmanApplication } from '../../src/core/application.js';
-import { basePlatform, definePlatform } from '../../src/core/plugin.js';
+import { basePlatform, definePlatform } from '../../src/core/interfaces/plugin.js';
 import type { BinPath as BinPathTypes } from '../../src/utils/bin-path.js';
 import { BinPath } from '../../src/utils/bin-path.js';
 
