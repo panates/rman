@@ -94,17 +94,30 @@ worked examples of every single command, see **[docs/cli-rman.md](https://github
 | [`import <path>`](#rman-import-path) | Imports an external git repository as a new package, with history. |
 
 **`ci` and `clean` come from the `node` built-in**, which ships inside this package - each is about
-npm or TypeScript rather than about repositories, so nothing it contributes exists until a
-repository asks for it:
+npm or TypeScript rather than about repositories. It needs no declaration: rman lays its own `node`
+preset under every repository, so a clone with no `.rmanrc` at all already has them, plus the `node`
+technology itself and the npm publish target. It used to take a second package (`rman-node`) and a
+`.rmanrc` before anything worked.
+
+A preset is an ordinary rman config rather than a type of its own, so another technology arrives the
+same way and a polyglot repository asks for both:
 
 ```yaml
-plugins: ['node']   # by name
-platform: node      # the same statement at a repository root, plus which technology its packages are
+extends: ['rman:node', 'rman:cargo']
 ```
 
-Or say nothing: a repository that declares no technology gets the one its own files imply, announced
-on stderr rather than guessed silently. It used to take a second package (`rman-node`) and a
-`.rmanrc` before anything worked at all.
+**`plugins: ['node']` is not a way to name a technology and is refused**, with a message saying so.
+That key takes a plugin instance or a glob naming modules that export one; a name is what `extends`
+resolves. The keys that do exist:
+
+```yaml
+platform: node      # which technology claims *this directory* - it does not load anything
+platforms: [...]    # contributes technologies: an instance, or a glob naming modules exporting one
+```
+
+Whatever a repository declares is asked about a directory **before** the default preset, so
+`extends: 'rman:cargo'` in a root holding both a `Cargo.toml` and a tooling `package.json` resolves
+to what it declared.
 
 **`publish` is here, but *where* a package ships is a plugin's to say.** A **publish target** is
 one answer to "is this version on the registry, and how do I push it" - rman ships `docker`

@@ -207,37 +207,43 @@ interface Platform {
 
 interface Plugin {
   name: string;
-  platforms?: Platform[];
-  init?(ctx: PluginContext): void | Promise<void>;
-}
-
-interface PluginContext {
-  app: RmanApplication;
+  afterInitApplication?(ctx: { app: RmanApplication }): void | Promise<void>;
+  afterInitRepository?(ctx: { app: RmanApplication; repository: Repository }): void | Promise<void>;
 }
 ```
 
-**This narrow type was called `Plugin`, and the name was a lie.** `manifestProvider` is required,
-which makes it a *platform* by definition - a package shipping only commands never touches it,
-because commands are a config key. So the narrow thing took the narrow name, and `Plugin` became
-the broad one that may carry platforms. A plugin *provides* platforms and may provide more than one:
-a package shipping both `maven` and `gradle` is one plugin, two platforms.
+**`Platform` and `Plugin` are two unrelated things, not a narrow type and a broad one.** A platform
+is **one technology** - `manifestProvider` is what makes it one - and it reaches a repository
+through the `platforms` config key, the same route `commands` and `publishTargets` already take. A
+plugin is a name and whatever it wants to do at a stage.
 
 ```ts
 import { definePlatform, definePlugin } from 'rman';
 
-// almost every entry is this: one technology and nothing else
+// a technology: contributed through `platforms`, and this is almost every entry
 const cargo = definePlatform({ name: 'cargo', manifestProvider: cargoManifest });
 
-// the umbrella, when a package contributes more than a single technology
-const jvm = definePlugin({ name: 'jvm-tools', platforms: [maven, gradle] });
+// a plugin: a name, and something to do once the core has finished a stage
+const audit = definePlugin({
+  name: 'audit',
+  afterInitRepository({ repository }) { /* every package is known here */ },
+});
 ```
 
-- **A bare `Platform` is accepted wherever a `Plugin` is**, as sugar for the plugin that provides
-  only it. `plugins: [cargo]` needs no wrapper.
-- **Both must be declared through their factory**, and `loadPlugins` checks for the mark. There is
-  no structural check that could replace it: an rman **1.x plugin was `{ name, init }`**, and under
-  this split a 2.x plugin contributing nothing but an `init` is *also* `{ name, init }`. A plain
-  object literal is refused with a message naming the fix.
+- **`Plugin.platforms` is gone**, and nothing produced one: no built-in shipped a technology through
+  a plugin, and the field's only two readers were plumbing. A technology is a `platforms` config
+  key now. `init` went with it - every occurrence in the tree was a test fixture.
+- **Two stages, named for *when* they run.** `afterInitApplication` runs inside `Repository.create`,
+  before any package is known, so `ctx.app.repository` throws there; `afterInitRepository` is the
+  one to use for anything that needs the packages. Deliberately not a hook bus: every later point a
+  plugin might want already has a mechanism it would compete with (`run.<script>.before`/`.after`,
+  `version.<slot>`, `publishTargets`), and a second way in means a precedence rule nothing can make
+  obvious.
+- **Both must be declared through their factory**, and the mark says *which*: one non-enumerable
+  `Symbol.for('rman.declared')` whose value is `'platform' | 'plugin'`. No structural check could
+  replace it - an rman **1.x plugin was `{ name, init }`**, and a 2.x plugin doing nothing but
+  `afterInitApplication` is a plain object too. The kind is what lets a refusal state a fact: a
+  platform found in `plugins` is told which key it belongs in, and the mirror holds for `platforms`.
 - **Everything optional is answered by its absence**, never by a default rman invented. The core
   ships `basePlatform`, whose reader recognizes nothing: a directory no technology claimed falls
   back to it and gets a package named after its directory at `0.0.0`. No `getWorkspace` means no
@@ -838,7 +844,7 @@ describes the working tree all of them happen to be in.
 
 Read from git **only if an expression asks**, then remembered for the whole run: every command
 resolves config, so a repository that never mentions git spawns none (measured - and the same
-measurement is why `interpolateConfig` builds its context from property descriptors rather than
+measurement is why `ConfigInterpolator` builds its context from property descriptors rather than
 spreading the scope, since a spread reads every getter). All four are `undefined` outside a
 checkout, which is a state rather than an error.
 
@@ -1311,7 +1317,7 @@ names would be a guess, and guessing wrong means either running build-time code 
 *loading* the repository, or silently never running it.
 
 A command interpolating a fragment of the config on its own must say where that fragment sits
-(`interpolateConfig(value, scope, { at: ['version', slot] })`), or the path matches nothing and a
+(`interpolate({ config: value, scope, at: ['version', slot] })`), or the path matches nothing and a
 step there is mistaken for a value.
 
 ### Config keys reference
@@ -1860,14 +1866,14 @@ namespace PublishTarget {
 }
 ```
 
-Registered on the application, in `plugins` declaration order:
+Contributed through the config key, in declaration order - a publish target is a contribution like
+a command or a platform, not something a plugin registers by hand:
 
-```ts
-export const cargoPlugin = definePlugin({
-  name: 'rman-cargo',
-  init(ctx) {
-    ctx.app.publishTargets.add(cratesIoTarget);
-  },
+```js
+import { defineConfig } from 'rman';
+
+export default defineConfig({
+  publishTargets: [cratesIoTarget],
 });
 ```
 
@@ -2495,26 +2501,43 @@ logger.error('Something failed'); // shown unless logLevel is 'silent'
 ## The `node` built-in
 
 **The `node` platform ships inside rman.** It was `rman-node`, a second package every Node
-repository had to install before anything worked - which is the cost this removed. Nothing it
-contributes exists until a repository asks for it, so the core still assumes no ecosystem and
-`rman clean` is still `Unknown argument` in a repository that is not a Node one.
+repository had to install before anything worked - which is the cost this removed.
 
-Three ways to ask, and the first two are the same statement:
-
-```yaml
-plugins: ['node']   # the repository has this technology
-platform: node      # ...and its packages belong to it. At the root, brings the built-in too.
-```
+**It needs no declaration at all.** rman lays its own `node` preset under every repository root
+(`DEFAULT_PRESETS`), so a clone with no `.rmanrc` already has the `node` technology, `clean`, `ci`
+and the `npm` publish target. A preset is an ordinary rman config - `platforms`, `commands`,
+`publishTargets`, keys that already existed - so another technology arrives the same way:
 
 ```yaml
-# or say nothing at all: a repository that declares no technology gets the one its files imply,
-# and the guess is announced on stderr rather than made silently.
+extends: ['rman:node', 'rman:cargo']   # a polyglot repository gets both
 ```
 
-Detection runs only when the config declares neither `plugins` nor `platform` **and** the
-application carries no platform already - a programmatic caller registers one without writing a
-config, and guessing on top of that would register a second technology competing for every
-directory. `plugins: []` is a repository saying "none", and is heard as one.
+**The default preset is merged *last*, underneath whatever the config declared**, and that is the
+whole safety of it: `platformFor` takes the first technology that recognizes a directory, so a root
+holding both a `Cargo.toml` and a tooling `package.json` resolves to the one the repository asked
+for. `presets: []` on `Repository.create`/`runCli`/`Workspace.create` is the opt-out for a caller
+that brings an ecosystem of its own.
+
+**`plugins: ['node']` is not one of the forms and is refused**, naming the fix. That key takes a
+plugin instance or a glob naming modules that export one; a *name* is what `extends` resolves, and
+the two are different statements - `extends` inherits everything a config declares, while `plugins`
+names the technologies themselves. The keys that do exist:
+
+```yaml
+platform: node      # which technology claims *this directory*; it loads nothing on its own
+platforms: [...]    # contributes technologies - an instance, or a glob naming modules exporting one
+```
+
+A declared `platform` that no loaded technology provides is an error naming the file, and the fix is
+`platforms` or `extends`.
+
+**This replaced detection**, which asked each built-in "is this directory yours?" without turning
+anything on. What that bought was a repository not growing a technology's commands unasked; what it
+cost was a catalogue module, a `Builtin` type, a per-directory memo, a symbol and a gate with three
+conditions. The platform answers the same question now, from the ordinary registry, once loaded.
+The cost, stated rather than hidden: a repository of another technology carries node's `clean` and
+`ci` in `rman --help`, `rman info` reports npm's tooling, and every package's `rman config` shows
+the preset's contribution keys. rman ships one preset, so none of that is visible today.
 
 ### What it contributes
 

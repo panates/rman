@@ -10,7 +10,7 @@ examples). There is no second index: `rman-node` was folded into rman, so every 
 repository can run is listed here. Before trusting/updating this file (or any page under
 `docs/cli/`) in a later session, run:
 
-  git diff f43a447..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/ packages/rman/src/plugins/node/commands/
+  git diff 16c3525..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/ packages/rman/src/builtins/
 
 and update only the pages touched by what that diff actually shows - don't regenerate everything
 unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -95,16 +95,23 @@ extends: 'rman-cargo'
 `extends`, not `plugins` - `plugins` takes the technologies themselves, not a package name, and
 writing one there is refused naming this as the fix.
 
-**A built-in needs neither**, because rman already has it:
+**A built-in needs neither**, because rman lays its own `node` preset under every repository root.
+`clean` and `ci` are there in a clone with no `.rmanrc` at all, and so is the `npm` publish target.
+`extends: 'rman:node'` is the explicit spelling, and only matters for saying it *again* beside
+another technology:
 
 ```yaml
-plugins: ['node']   # by name
-platform: node      # the same statement at a repository root, plus which technology its packages are
+extends: ['rman:node', 'rman:cargo']
 ```
 
-Without one of those, `rman clean` is `Unknown argument: clean` - unless the repository declared no
-technology at all, in which case detection finds the one its files imply and says so on stderr. A
-plugin that cannot be *loaded* is an error rather than a skip: silently losing a command the
+`plugins: ['node']` is **not** that spelling and is refused - see above. The key that names a
+technology for a *directory* is `platform:`, and it loads nothing on its own:
+
+```yaml
+platform: node      # which technology claims this directory, overriding the manifest question
+```
+
+A plugin that cannot be *loaded* is an error rather than a skip: silently losing a command the
 repository is built around is worse than not starting.
 
 **A package declares a command the way a built-in does** - `declareCommand(app => ({ ... }))`, with
@@ -177,13 +184,24 @@ toolchain - the plugin *and* the settings for it - and a repository writes one l
 { "extends": "@myorg/rman-config" }
 ```
 
-```json
-// node_modules/@myorg/rman-config/index.json
-{ "plugins": ["rman-node"], "[*]": { "clean": { "include": "build" } } }
+```js
+// node_modules/@myorg/rman-config/index.js - a JS config, so it can hold the instance itself
+import { defineConfig } from 'rman';
+import { CargoPlatform } from './cargo-platform.js';
+
+export default defineConfig({
+  platforms: [new CargoPlatform()],
+  '[*]': { clean: { include: 'build' } },
+});
 ```
 
+A shared config holds the technology **itself**, not a package name - `platforms` and `plugins` both
+take an instance or a glob naming modules that export one, which is why the package above is a JS
+config rather than JSON. (`{ "plugins": ["rman-node"] }` is the shape this used to show, and it is
+refused: a name is `extends`'s job.)
+
 Measured end to end: with only that `extends`, `rman clean --dry-run` runs and `rman list` finds the
-workspace packages - so an inherited `plugins` brings the commands **and** the seams (the manifest
+workspace packages - so an inherited config brings the commands **and** the seams (the manifest
 reader, the workspace provider) with it. `plugins` is read off the root's config once, before the
 packages are known, which is why it is a root-level key and why a `plugins` entry in a package's own
 `.rmanrc` is never read.
