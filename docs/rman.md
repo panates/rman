@@ -558,6 +558,8 @@ packageManager: pnpm                          # every package, and the root
   run:
     build:
       after: node ../../support/postbuild.cjs # run in each package's own directory
+"[platform:node]":                            # the packages of a technology
+  clean: { include: [build] }
 "[*-dialect]":                                # a glob over package names
   publish: { skip: true }
 "[pkg-a]":                                    # exactly one
@@ -566,19 +568,26 @@ packageManager: pnpm                          # every package, and the root
 
 Selector details:
 
-- **Two audiences, and the second is a glob:**
+- **Three audiences**, and what each is matched against:
 
-  | | |
-  | --- | --- |
-  | `"[/]"` | the **root package** alone |
-  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches |
+  | | speaks for | matched against |
+  | --- | --- | --- |
+  | `"[/]"` | the **root package** alone, structurally | - |
+  | `"[platform:node]"`, `"[platform:node,cargo]"` | the packages of those **technologies** | `pkg.platform.name` |
+  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches | `pkg.selector` |
 
   `/` for the root because that is what a repository root is called everywhere else, and no package
   can be named it.
 
-  **The root is never selected by name.** A glob matches package names and the root is nobody's
-  child, so `"[my-*]"` cannot quietly reach a repository whose root package is called `my-repo`, and
-  `"[*]"` cannot hand a package-shaped setting to a root with no build directory to apply it to.
+  **The root is never selected by name, and a platform block does not reach it either.** A glob
+  matches package names and the root is nobody's child, so `"[my-*]"` cannot quietly reach a
+  repository whose root package is called `my-repo`, and `"[*]"` cannot hand a package-shaped
+  setting to a root with no build directory to apply it to. `"[platform:node]"` is held to the same
+  line even though the root has a platform - it is addressed structurally, which is the whole reason
+  it is `/`.
+
+  A package **no technology claimed** carries a platform whose name is `''`, so it matches no
+  platform block at all rather than quietly falling into one.
 
   In a **single-package repository the root is the one package**, so `"[/]"` reaches it and `"[*]"`
   reaches nothing.
@@ -598,6 +607,34 @@ Selector details:
   The unmarked keys are the level's floor **wherever they sit in the file** - written after a
   selector block they still lose to it. They are not a third selector but the layer that also feeds
   the directories below.
+- **A selector is read at the top level of a config and nowhere else, and one written deeper is
+  refused.** The shape that makes this worth an error is the one most people try first, because it
+  reads as an intersection:
+
+  ```yaml
+  "[platform:node]":
+    "[pkg-*]": { group: x }     # refused - it would never be applied
+  ```
+
+  Before the check it was a silent no-op: a package matching *neither* resolved to
+  `{ group: 'node', '[pkg-*]': { group: 'node-and-pkg' } }` - the outer block applied to everyone,
+  and the inner one sat in `rman config` output looking as though it had worked.
+
+  **Selectors do not intersect**, and that follows from there being no specificity ranking (above):
+  globs do not nest, so a conjunction would bring back the tiebreak that ranking was dropped for.
+  Two blocks in declaration order are an override rather than an AND; a real intersection is an
+  expression, which is per key and says so:
+
+  ```yaml
+  "[*]":
+    run:
+      build:
+        if: "${{ pkg.provider === 'node' && pkg.selector.startsWith('pkg-') }}"
+        exec: tsc -b
+  ```
+
+  `vars` and the contribution keys (`plugins`, `commands`, `publishTargets`) are exempt - their
+  contents are not config keys, so a bracketed name in either is data.
 - `"[ws:*]"` / `"[workspace:*]"` still works and means exactly `"[*]"`. The qualifier said "not the
   root" back when a bare glob included it; the shape of the set says that now. Don't write it in new
   configs.
