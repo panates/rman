@@ -73,7 +73,7 @@ jobs:
       contents: write   # `version --push`, the tags it creates, and the GitHub Release itself
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # rman resolves each package's release boundary from its own last tag and reads the
           # commits after it, so a shallow clone silently reports the wrong thing rather than
@@ -93,7 +93,7 @@ jobs:
 
       # The highest version `test.yml`'s matrix covers, which is the one to cut a release on: the
       # published artifact should be built by a runtime the suite actually ran against.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
