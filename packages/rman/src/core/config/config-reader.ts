@@ -30,7 +30,7 @@ const PRESET_EXTENSIONS = ['.js', '.ts'];
  *  these are laid down by the caller rather than written by anybody. */
 const PRESETS_LABEL = 'presets';
 
-/** Free-form by contract - see `_assertNoNestedSelectors`. */
+/** Free-form by contract - see `_assertSelectorKeys`. */
 const VARS_KEY = 'vars';
 
 /** Keys that only an rman **config** has, for telling one from a contribution once it has already
@@ -61,7 +61,8 @@ export class ConfigReader {
   }
 
   /**
-   * **Which packages a selector key speaks for.** Two audiences, and the second is a glob:
+   * **Which packages a selector key speaks for.** Three audiences, and what each is matched
+   * against:
    *
    * | | matches | `test` is given |
    * | --- | --- | --- |
@@ -96,7 +97,7 @@ export class ConfigReader {
         .split(',')
         .map(n => n.trim())
         .filter(Boolean);
-      return { scope: 'platform', test: (name: string) => !!name && names.includes(name) };
+      return { scope: 'platform', test: (name: string) => !!name && names.includes(name), names };
     }
     const re = globToRegExp(stripWorkspacePrefix(inner));
     return { scope: 'package', test: (name: string) => re.test(name) };
@@ -321,83 +322,146 @@ export class ConfigReader {
     return mod?.default ?? mod;
   }
 
+  /**
+   * Checks every `"[...]"` key in a config: where it sits, what it carries, and - for a nested one -
+   * whether the pair could ever match a package.
+   */
   protected _assertSelectorBlocks(config: RmanConfig, file: string): void {
-    this._assertNoNestedSelectors(config, file, []);
-    for (const [key, value] of Object.entries(config)) {
-      if (!ConfigReader.isSelectorKey(key) || !value || typeof value !== 'object') continue;
-      if (EXTENDS_KEY in (value as Record<string, unknown>)) {
-        throw new Error(
-          `"${key}" in "${file}" cannot use "extends" - it belongs at the top level, where it is a ` +
-            `statement about this config rather than about the packages the selector names.`,
-        );
-      }
-      /**
-       * **The two keys a selector cannot carry, because the selector is downstream of them.**
-       *
-       * A `"[glob]"` matches `Package.selector`, which comes from `name` - and which package a
-       * directory even holds comes from `platform`. Both are read from the *unmarked* cascade, while
-       * the packages are still being found, so a glob block setting either would need its own answer
-       * in order to be matched at all. Typed as a whole `RmanConfig`, both look valid there and both
-       * would simply never be read.
-       *
-       * `"[/]"` is exempt and keeps working: the root is addressed structurally - its directory *is*
-       * the repository root - so a root block needs no selector and is applied during the walk.
-       */
-      if (ConfigReader.parseSelector(key).scope === 'root') continue;
-      for (const identity of IDENTITY_KEYS) {
-        if (identity in (value as Record<string, unknown>)) {
+    this._assertSelectorKeys(config, file, [], []);
+  }
+
+  /**
+   * One walk, refusing a selector key under a *setting* and checking each legal one's contents.
+   *
+   * @param at the key path to `node`.
+   * @param enclosing the selector keys `node` sits inside, outermost first.
+   */
+  /* **A selector key is legal at the top level of a config and directly inside another selector
+   * key, and nowhere else** - which is the whole of the placement rule, and `at.length >
+   * enclosing.length` is the whole of the test: the two arrays stay equal for as long as every
+   * ancestor is a selector, and `at` runs ahead the moment one is not.
+   *
+   * ```yaml
+   * "[platform:node]":
+   *   "[pkg-*]": { group: x }     # an intersection
+   *   run:
+   *     "[pkg-*]": { ... }        # refused - a setting is not an audience
+   * ```
+   *
+   * **The nested form used to be refused outright and that was the wrong call**, on a reason that
+   * does not survive being written out: "selectors do not intersect, because specificity ranking was
+   * dropped". Ranking answers which of two *siblings* wins, and nesting asks nothing of the sort -
+   * a nested block is resolved depth-first in declaration order, which is the rule already in force
+   * one level up (`Workspace._matchingSelectors`). What the refusal cost was the only way to say
+   * "these packages, but only the ones that are also X" for a whole block: `if:` is per key and
+   * reaches neither `vars` nor any key that is not a run step.
+   *
+   * What the refusal *did* get right was that silence is unacceptable - before it, the inner block
+   * reached every package the outer one did, as a literal `'[pkg-*]'` key sitting in the resolved
+   * config where `rman config` showed it looking as though it had worked. Both halves are answered
+   * now: the shape works, and the shapes that could never work are refused here rather than
+   * quietly matching nothing.
+   *
+   * **`vars` and the contribution keys are skipped**, and both for the same reason: their contents
+   * are not config keys. `vars` is free-form by contract and `CODE_SUBTREES` hold plugins, commands
+   * and publish targets - arbitrary objects whose key space rman does not own. A bracketed name in
+   * either is data. */
+  protected _assertSelectorKeys(node: unknown, file: string, at: string[], enclosing: string[]): void {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+    for (const [key, value] of Object.entries(node)) {
+      if (ConfigReader.isSelectorKey(key)) {
+        if (at.length > enclosing.length) {
           throw new Error(
-            `"${key}" in "${file}" cannot set "${identity}" - a glob matches a package's selector, ` +
-              `and "${identity}" is what the selector is derived from, so the block could never be ` +
-              `matched in order to apply it. Write it unmarked, in the package's own ".rmanrc", or ` +
-              `under "[/]" for the root package.`,
+            `"${key}" in "${file}" is nested under "${at.join('.')}", which is a setting rather ` +
+              `than an audience - a selector is read at the top level of a config and inside ` +
+              `another selector, so this one would never be applied. Move it out, or use an ` +
+              `expression where the value itself depends on the package.`,
           );
         }
+        this._assertSelectorBlock(key, value, file, enclosing.at(-1));
+        this._assertSelectorKeys(value, file, [...at, key], [...enclosing, key]);
+        continue;
+      }
+      if (key === VARS_KEY || CODE_SUBTREES.includes(key as (typeof CODE_SUBTREES)[number])) continue;
+      this._assertSelectorKeys(value, file, [...at, key], enclosing);
+    }
+  }
+
+  /** What one selector block may carry, and - given `outer` - whether it can match anything. */
+  protected _assertSelectorBlock(key: string, value: unknown, file: string, outer: string | undefined): void {
+    if (!value || typeof value !== 'object') return;
+    if (outer !== undefined) this._assertNestable(outer, key, file);
+    if (EXTENDS_KEY in (value as Record<string, unknown>)) {
+      throw new Error(
+        `"${key}" in "${file}" cannot use "extends" - it belongs at the top level, where it is a ` +
+          `statement about this config rather than about the packages the selector names.`,
+      );
+    }
+    /**
+     * **The two keys a selector cannot carry, because the selector is downstream of them.**
+     *
+     * A `"[glob]"` matches `Package.selector`, which comes from `name` - and which package a
+     * directory even holds comes from `platform`. Both are read from the *unmarked* cascade, while
+     * the packages are still being found, so a glob block setting either would need its own answer
+     * in order to be matched at all. Typed as a whole `RmanConfig`, both look valid there and both
+     * would simply never be read.
+     *
+     * `"[/]"` is exempt and keeps working: the root is addressed structurally - its directory *is*
+     * the repository root - so a root block needs no selector and is applied during the walk.
+     */
+    if (ConfigReader.parseSelector(key).scope === 'root') return;
+    for (const identity of IDENTITY_KEYS) {
+      if (identity in (value as Record<string, unknown>)) {
+        throw new Error(
+          `"${key}" in "${file}" cannot set "${identity}" - a glob matches a package's selector, ` +
+            `and "${identity}" is what the selector is derived from, so the block could never be ` +
+            `matched in order to apply it. Write it unmarked, in the package's own ".rmanrc", or ` +
+            `under "[/]" for the root package.`,
+        );
       }
     }
   }
 
   /**
-   * Refuses a `"[...]"` key anywhere but the top level of a config.
+   * Refuses a nested pair that could never match a package together.
    *
-   * @param at where `node` sits, for the message.
+   * @param outer the enclosing selector key.
+   * @param inner the key written inside it.
    */
-  /* **A selector is read at the top level of a level's config and nowhere else**
-   * (`Workspace._matchingSelectors`), so a nested one is a silent no-op - and the shape it is
-   * written in is the one someone reaches for first, because it reads as an intersection:
+  /* **Nesting is an AND, so a pair naming disjoint sets is a block that runs for nobody** - which is
+   * the silence the old blanket refusal was really about, and the only part of it worth keeping.
+   * Two pairs are decidable here and both are refused:
    *
-   * ```yaml
-   * "[platform:node]":
-   *   "[pkg-*]": { group: x }     # never applied
-   * ```
+   * - **`"[/]"` on either side.** The root is addressed structurally and every other selector
+   *   deliberately never reaches it, so `"[/]"` inside a glob is empty and a glob inside `"[/]"` is
+   *   empty. `"[/]"` inside `"[/]"` is merely redundant, and one rule covering all three beats an
+   *   exemption nobody would remember.
+   * - **Two platform blocks naming nothing in common.** A package carries one `platform.name`, so
+   *   `"[platform:node]" > "[platform:cargo]"` is empty; `"[platform:node,cargo]" > "[platform:node]"`
+   *   narrows and is fine.
    *
-   * **Measured**: the inner block reached `other-lib`, which matches neither, as a literal
-   * `'[pkg-*]'` key in its resolved config - so `rman config` showed it sitting there and it read as
-   * working. Silence is the bad half: the author believes they filtered, every package gets the
-   * outer block, and nothing says otherwise.
-   *
-   * **Selectors do not intersect, and that is not an oversight.** Specificity ranking was dropped on
-   * purpose - globs do not nest, so for `pkg-dialect` neither `"[pkg-*]"` nor `"[*-dialect]"`
-   * contains the other and any tiebreak is invented. A conjunction would bring that question back in
-   * a harder form. A genuine intersection is an expression (`if: "${{ pkg.provider === 'node' && ...
-   * }}"`), which is per key and says so.
-   *
-   * **`vars` and the contribution keys are skipped**, and both are exempt for the same reason: their
-   * contents are not config keys. `vars` is free-form by contract and `CODE_SUBTREES` hold plugins,
-   * commands and publish targets - arbitrary objects rman does not own the key space of. */
-  protected _assertNoNestedSelectors(node: unknown, file: string, at: string[]): void {
-    if (!node || typeof node !== 'object' || Array.isArray(node)) return;
-    for (const [key, value] of Object.entries(node)) {
-      if (at.length && ConfigReader.isSelectorKey(key)) {
-        throw new Error(
-          `"${key}" in "${file}" is nested under "${at.join('.')}" - a selector is only read at the ` +
-            `top level of a config, so this one would never be applied. Selectors do not intersect: ` +
-            `write it at the top level, or use an expression where you need a package to match two ` +
-            `things at once.`,
-        );
-      }
-      if (key === VARS_KEY || CODE_SUBTREES.includes(key as (typeof CODE_SUBTREES)[number])) continue;
-      this._assertNoNestedSelectors(value, file, [...at, key]);
+   * **A glob pair is deliberately not checked**, and the asymmetry is the point rather than an
+   * omission: whether two globs intersect is a real computation with a wrong answer available in
+   * both directions, while a platform set is `includes`. `"[pkg-*]" > "[lib-*]"` therefore loads and
+   * matches nothing - the same thing a top-level `"[lib-*]"` does in a repository with no such
+   * package, which nothing reports either. */
+  protected _assertNestable(outer: string, inner: string, file: string): void {
+    const a = ConfigReader.parseSelector(outer);
+    const b = ConfigReader.parseSelector(inner);
+    if (a.scope === 'root' || b.scope === 'root') {
+      throw new Error(
+        `"${inner}" in "${file}" is nested inside "${outer}", and "[/]" takes part in no nesting - ` +
+          `the root is addressed structurally and every other selector deliberately never reaches ` +
+          `it, so one side of this pair always refuses the other and the block could never be ` +
+          `applied. Write the root's settings under a top-level "[/]".`,
+      );
+    }
+    if (a.scope === 'platform' && b.scope === 'platform' && !b.names?.some(name => a.test(name))) {
+      throw new Error(
+        `"${inner}" in "${file}" is nested inside "${outer}", which names no technology in common ` +
+          `with it - a package carries one platform, so this block could never be applied. Nesting ` +
+          `narrows: name a technology the outer block already speaks for.`,
+      );
     }
   }
 
@@ -817,6 +881,11 @@ export namespace ConfigReader {
     /** Whether a package's selector is one this key speaks for. Always `true` for a root key, which
      *  is matched by *being* the root rather than by name. */
     test(name: string): boolean;
+    /** The technologies a `"[platform:...]"` key names, and nothing for the other two scopes. */
+    /* Exposed because `test` alone answers only "does this one match", and nesting has to ask
+     * whether an inner block *can* match at all - which for two platform blocks is set
+     * intersection, and needs the inner key's names to intersect with. */
+    names?: readonly string[];
   }
 
   export interface Options {

@@ -212,33 +212,66 @@ describe('core/ConfigReader', () => {
       await expect(reader().resolve(b)).resolves.toBeDefined();
     });
 
-    /**
-     * **A selector nested inside another reads as an intersection and is not one.** It is the shape
-     * someone reaches for first - and the cascade only looks at the *top level* of a level's config
-     * (`Workspace._matchingSelectors`), so the inner block was carried through as an ordinary key.
-     *
-     * Measured before the check: a package matching neither block resolved to
-     * `{ group: 'node', '[pkg-*]': { group: 'node-and-pkg' } }` - the outer block applied to
-     * everyone, the inner one sitting in `rman config` looking as though it had worked.
-     *
-     * Selectors do not intersect on purpose: specificity ranking was dropped because globs do not
-     * nest, and a conjunction brings that tiebreak back. A real intersection is an expression.
-     */
-    it('refuses a selector nested inside another, which reads as an intersection', async () => {
+    /** **A selector inside another is an intersection and is read as one** - the audience of the
+     *  inner block narrowed to the packages the outer one also speaks for. Where it *resolves* to is
+     *  `workspace.spec.ts`; this is only that the reader accepts it. */
+    it('accepts a selector nested inside another', async () => {
       const dir = tmp();
       fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[platform:node]': { '[pkg-*]': { group: 'x' } } }));
-      await expect(reader().resolve(dir)).rejects.toThrow(/is only read at the top level/);
+      await expect(reader().resolve(dir)).resolves.toBeDefined();
     });
 
-    /** Anywhere below the top level, not only directly inside a block - the rule is where a selector
-     *  is *read*, and the message names the path so the line can be found. */
-    it('refuses one buried further down, naming where it sits', async () => {
+    /** **A setting is not an audience**, so a block under one would never be applied - the half of
+     *  the old blanket refusal that was right. The message names the path so the line can be found. */
+    it('refuses a selector under a setting, naming where it sits', async () => {
       const dir = tmp();
       fs.writeFileSync(
         path.join(dir, '.rmanrc'),
         JSON.stringify({ '[*]': { run: { build: { '[pkg-*]': { exec: 'x' } } } } }),
       );
       await expect(reader().resolve(dir)).rejects.toThrow(/nested under "\[\*\].run.build"/);
+    });
+
+    /** Nesting is an AND, so a pair naming disjoint sets is a block that runs for nobody. Both
+     *  decidable pairs are refused; a glob pair deliberately is not - see `_assertNestable`. */
+    it('refuses a nested pair that could never match together', async () => {
+      const cases: [Record<string, unknown>, RegExp][] = [
+        [{ '[*]': { '[/]': { group: 'x' } } }, /takes part in no nesting/],
+        [{ '[/]': { '[pkg-*]': { group: 'x' } } }, /takes part in no nesting/],
+        [{ '[platform:node]': { '[platform:cargo]': { group: 'x' } } }, /names no technology in common/],
+      ];
+      for (const [config, message] of cases) {
+        const dir = tmp();
+        fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(config));
+        await expect(reader().resolve(dir)).rejects.toThrow(message);
+      }
+    });
+
+    /** The control for the case above: naming a technology the outer block already speaks for
+     *  narrows rather than contradicting, and is the reason the check is an intersection test
+     *  rather than an equality one. */
+    it('accepts a platform block nested inside one that names it too', async () => {
+      const dir = tmp();
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[platform:node,cargo]': { '[platform:node]': { group: 'x' } } }),
+      );
+      await expect(reader().resolve(dir)).resolves.toBeDefined();
+    });
+
+    /** The `extends` and identity refusals reach a nested block too - they are about what a
+     *  selector may carry, and depth does not change that. */
+    it('checks a nested block for "extends" and the identity keys as well', async () => {
+      const a = tmp();
+      fs.writeFileSync(
+        path.join(a, '.rmanrc'),
+        JSON.stringify({ '[platform:node]': { '[pkg-*]': { extends: './base.yml' } } }),
+      );
+      await expect(reader().resolve(a)).rejects.toThrow(/cannot use "extends"/);
+
+      const b = tmp();
+      fs.writeFileSync(path.join(b, '.rmanrc'), JSON.stringify({ '[platform:node]': { '[pkg-*]': { name: 'x' } } }));
+      await expect(reader().resolve(b)).rejects.toThrow(/cannot set "name"/);
     });
 
     /** **`vars` is exempt, and the contribution keys with it.** Their contents are not config keys -

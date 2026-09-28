@@ -514,6 +514,100 @@ describe('core/Repository', () => {
     });
 
     /**
+     * **A selector inside another is an intersection**: the inner block reaches the packages both it
+     * and every block it sits inside speak for, and nothing else. It is the shape everyone reaches
+     * for, and until 2.0.0-beta.4 it was refused - `if:` is per key and reaches neither `vars` nor
+     * any key that is not a run step, so there was no way to say "these, but only the ones that are
+     * also X" for a whole block.
+     *
+     * Both packages are asserted, because a block that simply applied to everyone - which is what
+     * the shape did before it was refused - passes the first assertion alone.
+     */
+    it('applies a nested selector only where both audiences match', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({
+          '[platform:test]': {
+            group: 'outer',
+            vars: { tier: 'base', keep: 'me' },
+            '[pkg-*]': { group: 'inner', vars: { tier: 'narrowed' } },
+          },
+        }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'lib-b', version: '1.0.0' });
+
+      const repo = await createRepository(dir);
+      const a = repo.getPackage('pkg-a')!;
+      const b = repo.getPackage('lib-b')!;
+      expect(a.config.group).toBe('inner');
+      expect(b.config.group).toBe('outer');
+      /** `vars` merges **per key** through a nested block like any other layer, so narrowing one
+       *  does not cost the rest. This is the case `if:` could not express at all. */
+      expect(a.config.vars).toEqual({ tier: 'narrowed', keep: 'me' });
+      expect(b.config.vars).toEqual({ tier: 'base', keep: 'me' });
+      /** **The inner key is consumed, not carried through.** Merging a matching block whole is what
+       *  put a literal `'[pkg-*]'` entry into the resolved config, where `rman config` showed it
+       *  looking as though it had worked - the silence the old refusal existed for. */
+      expect(Object.keys(b.config).filter(k => k.startsWith('['))).toEqual([]);
+    });
+
+    /**
+     * **Nesting does not make a block win; declaration order still does.** Depth-first pre-order is
+     * the level's own rule applied again, so a nested block is merged where its parent sits and a
+     * catch-all written *after* that parent still overrides it. Stated rather than hidden, for the
+     * same reason the dropped specificity ranking is: the alternative is an invented tiebreak.
+     */
+    it('merges a nested block at its parent position, so a later catch-all still wins', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({
+          '[platform:test]': { group: 'outer', '[pkg-*]': { group: 'inner' } },
+          '[*]': { group: 'last' },
+        }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      expect((await createRepository(dir)).getPackage('pkg-a')?.config.group).toBe('last');
+    });
+
+    /**
+     * **A failing expression names its file whichever layer it was written in.** `mergeConfig` reads
+     * a key's origin off the source object under `ORIGINS`, and the cascade hands it a copy with the
+     * selector keys removed - so a copy carrying only string keys arrived with no origin at all.
+     *
+     * Measured before the fix, on the same repository: an unmarked key reported
+     * `Invalid expression in "group"` with no file, while the identical expression inside `"[*]"`
+     * named `.rmanrc` - because a block was merged as itself and only the unmarked layer was copied.
+     * Both are asserted, or the half that always worked would carry the test.
+     */
+    it('names the file a failing expression came from, in every layer', async () => {
+      async function messageFor(config: object): Promise<string> {
+        const dir = tmp();
+        writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+        fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(config));
+        writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+        /** Every config is baked in `Repository.create`, so this is where the expression fails. */
+        try {
+          await createRepository(dir);
+          return '';
+        } catch (e: any) {
+          return e.message;
+        }
+      }
+
+      const expression = '${{ nope.boom }}';
+      const named = /Invalid expression in "group" \(.*\.rmanrc\)/;
+      expect(await messageFor({ group: expression })).toMatch(named);
+      expect(await messageFor({ '[*]': { group: expression } })).toMatch(named);
+      expect(await messageFor({ '[platform:test]': { '[pkg-*]': { group: expression } } })).toMatch(named);
+    });
+
+    /**
      * **The unmarked block is the level's floor, not a fourth selector**, so where it sits in the
      * file changes nothing - written below a selector block, it still loses to it. Anything else
      * would make a directory's cascade to the levels below depend on key order.

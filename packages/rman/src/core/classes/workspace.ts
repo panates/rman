@@ -309,30 +309,57 @@ export class Workspace {
     return dirs;
   }
 
-  /** A level's own settings - everything that is not a `"[...]"` block. */
+  /** One config object's own settings - everything that is not a `"[...]"` block. Shallow: a block
+   *  is dropped whole, and what is inside it is the caller's business. */
+  /* **The symbols travel with it, and leaving them behind was a measured loss.** `mergeConfig` reads
+   * a key's origin and its `value` chain off the *source* object under `ORIGINS` / `PREVIOUS_VALUES`,
+   * so a copy that carries only string keys arrives with neither. Measured on one repository before
+   * this line existed: a bad expression in an unmarked key reported `Invalid expression in "group"`
+   * with no file, while the identical expression inside a `"[*]"` block reported
+   * `... ("group" (.rmanrc.yml))` - because a selector block was merged as itself and only the
+   * unmarked layer came through here. Nesting would have spread that to the blocks too. */
   protected _stripSelectors(config: RmanConfig): RmanConfig {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(config)) if (!ConfigReader.isSelectorKey(key)) result[key] = value;
+    for (const symbol of Object.getOwnPropertySymbols(config)) {
+      Object.defineProperty(result, symbol, Object.getOwnPropertyDescriptor(config, symbol)!);
+    }
     return result as RmanConfig;
   }
 
   /**
-   * The blocks in `config` that speak for this package, in declaration order.
+   * The layers in `config` that speak for this package, in the order they are merged.
    *
    * `"[/]"` matches the root and nothing else; a glob matches a package's selector and never the
-   * root.
+   * root. **A block may hold further selector blocks**, which narrow it: a nested one applies only
+   * where its own audience and every audience it sits inside all match.
    */
   /* **A glob never matching the root removes two traps at once**: `"[my-*]"` cannot quietly pick up
    * a repository whose root package is called `my-repo`, and `"[*]"` cannot hand a package-shaped
    * setting to a root with no build directory to apply it to. A root block needs no selector, which
-   * is what makes `/` structural. */
+   * is what makes `/` structural.
+   *
+   * **Nesting is depth-first pre-order, which is the level's own rule applied again rather than a
+   * new one**: a block's own keys are its floor, then the blocks written inside it in declaration
+   * order, then the next block beside it. So the layer order for
+   * `"[platform:node]" { a, "[pkg-*]" { b } }, "[*]" { c }` is `a, b, c` - and the last word is
+   * still whatever was written last, *not* whatever is most specific. That is the same cost the
+   * dropped specificity ranking already documents (a catch-all written below a narrower block
+   * overrides it), and nesting neither adds to it nor asks the tiebreak question again: two blocks
+   * that both match are siblings whatever depth they sit at, and declaration order answers them.
+   *
+   * **A matching block is contributed *stripped*, not whole.** Merging it as it stands put its
+   * nested keys into the resolved config as literal `'[pkg-*]'` entries, which is precisely how the
+   * old no-op showed up in `rman config` looking as though it had worked. */
   protected _matchingSelectors(config: RmanConfig, audience: Workspace.Audience): RmanConfig[] {
     const matches: RmanConfig[] = [];
     for (const [key, value] of Object.entries(config)) {
       if (!ConfigReader.isSelectorKey(key) || !value || typeof value !== 'object') continue;
       const { scope, test } = ConfigReader.parseSelector(key);
       if (!this._speaksFor(scope, test, audience)) continue;
-      matches.push(value as RmanConfig);
+      const block = value as RmanConfig;
+      matches.push(this._stripSelectors(block));
+      matches.push(...this._matchingSelectors(block, audience));
     }
     return matches;
   }

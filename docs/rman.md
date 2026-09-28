@@ -607,34 +607,56 @@ Selector details:
   The unmarked keys are the level's floor **wherever they sit in the file** - written after a
   selector block they still lose to it. They are not a third selector but the layer that also feeds
   the directories below.
-- **A selector is read at the top level of a config and nowhere else, and one written deeper is
-  refused.** The shape that makes this worth an error is the one most people try first, because it
-  reads as an intersection:
+- **A selector block may hold further selector blocks, and nesting is an AND.** A nested block
+  applies where its own audience *and* every audience it sits inside all match - which is how you
+  say "these packages, but only the ones that are also X" for a whole block:
 
   ```yaml
   "[platform:node]":
-    "[pkg-*]": { group: x }     # refused - it would never be applied
+    group: node
+    vars: { tier: base }
+
+    "[pkg-*]":                   # node packages whose selector starts with pkg-
+      group: node-and-pkg
+      vars: { tier: narrowed }   # merges per key: `base` is replaced, the rest is kept
   ```
 
-  Before the check it was a silent no-op: a package matching *neither* resolved to
-  `{ group: 'node', '[pkg-*]': { group: 'node-and-pkg' } }` - the outer block applied to everyone,
-  and the inner one sat in `rman config` output looking as though it had worked.
+  Nest as deep as the question needs. The alternative for a single key is an `if:` expression, and
+  it does not reach far enough on its own - `if` exists on run steps, not on `vars`, `clean.include`
+  or `publish.npm.directory`, so a block is the only way to narrow more than one key at once.
 
-  **Selectors do not intersect**, and that follows from there being no specificity ranking (above):
-  globs do not nest, so a conjunction would bring back the tiebreak that ranking was dropped for.
-  Two blocks in declaration order are an override rather than an AND; a real intersection is an
-  expression, which is per key and says so:
+  - **Nesting narrows the audience; it does not raise precedence.** A nested block is merged where
+    its parent sits, depth-first in declaration order, so the layers for
+    `"[platform:node]" { a, "[pkg-*]" { b } }` followed by `"[*]" { c }` are `a`, `b`, `c` - and `c`
+    still wins. That is the same cost the missing specificity ranking has above, and for the same
+    reason: two blocks that both match are siblings whatever depth they sit at, and the order they
+    were written in is the one answer nobody has to invent.
+  - **A selector under a *setting* is refused**, because a setting is not an audience and the block
+    could never be applied:
 
-  ```yaml
-  "[*]":
-    run:
-      build:
-        if: "${{ pkg.provider === 'node' && pkg.selector.startsWith('pkg-') }}"
-        exec: tsc -b
-  ```
+    ```yaml
+    "[*]":
+      run:
+        build:
+          "[pkg-*]": { exec: tsc }   # refused - naming where it sits
+    ```
 
-  `vars` and the contribution keys (`plugins`, `commands`, `publishTargets`) are exempt - their
-  contents are not config keys, so a bracketed name in either is data.
+  - **A nested pair that could never match together is refused**, rather than loading and matching
+    nothing. Two are decidable and both are checked: `"[/]"` on either side of a nesting (the root is
+    addressed structurally and every other selector deliberately never reaches it), and two
+    `"[platform:...]"` blocks naming nothing in common (a package carries one platform).
+    `"[platform:node,cargo]" > "[platform:node]"` narrows and is fine. A glob pair is deliberately
+    *not* checked - whether two globs intersect is a real computation, where a platform set is a
+    membership test.
+  - `vars` and the contribution keys (`plugins`, `commands`, `publishTargets`) are exempt from all of
+    this - their contents are not config keys, so a bracketed name in either is data.
+
+  Nesting was refused outright until 2.0.0-beta.4, on the reasoning that selectors do not intersect
+  because specificity ranking was dropped. That conflated two questions: ranking answers which of
+  two *siblings* wins, and nesting asks nothing of the sort. What the refusal got right, and what
+  the checks above keep, is that the shape must never be silent - before it, the inner block reached
+  every package the outer one did and sat in `rman config` output as a literal `'[pkg-*]'` key,
+  looking as though it had worked.
 - `"[ws:*]"` / `"[workspace:*]"` still works and means exactly `"[*]"`. The qualifier said "not the
   root" back when a bare glob included it; the shape of the set says that now. Don't write it in new
   configs.

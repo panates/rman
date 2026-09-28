@@ -161,12 +161,13 @@ below, and a `"[selector]"` narrows the audience.**
 
 - **An unmarked key configures that directory and every package under it.** The repository root's
   own `.rmanrc` is therefore the baseline for the whole repository, the root package included.
-- **A `"[selector]"` block narrows it.** Two audiences, and the second is a glob:
+- **A `"[selector]"` block narrows it.** Three audiences, and what each is matched against:
 
-  | | |
-  | --- | --- |
-  | `"[/]"` | the **root package** alone |
-  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches |
+  | | | matched against |
+  | --- | --- | --- |
+  | `"[/]"` | the **root package** alone, structurally | - |
+  | `"[platform:node]"`, `"[platform:node,cargo]"` | the packages of those **technologies** | `pkg.platform.name` |
+  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches | `pkg.selector` |
 
   - `/` for the root because that is what a repository root is called everywhere else, and no
     package can be named it.
@@ -192,27 +193,59 @@ below, and a `"[selector]"` narrows the audience.**
       order the author typed. What was left was already declaration order with the catch-all lifted
       out of it. The cost, stated rather than hidden: a catch-all written *below* a narrower block
       now overrides it. Writing catch-alls first is a convention, not a rule.
-  - **A selector is read at the **top level** of a level's config and nowhere else, and one written
-    deeper is refused** (`_assertNoNestedSelectors`). The shape that makes this worth a check is the
-    one everybody reaches for first, because it reads as an intersection:
+  - **A selector block may hold further selector blocks, and nesting is an AND**
+    (`Workspace._matchingSelectors`, `ConfigReader._assertSelectorKeys`). A nested block applies
+    where its own audience *and* every audience it sits inside all match:
 
     ```yaml
     "[platform:node]":
-      "[pkg-*]": { group: x }     # refused - it would never be applied
+      group: node
+      vars: { tier: base }
+      "[pkg-*]": { group: node-and-pkg, vars: { tier: narrowed } }
     ```
 
-    Measured before the check: a package matching *neither* resolved to
-    `{ group: 'node', '[pkg-*]': { group: 'node-and-pkg' } }` - the outer block applied to
-    everyone and the inner one sat in `rman config` looking as though it had worked. Silence is the
-    bad half.
-    - **Selectors do not intersect, and that follows from dropping `selectorRank`.** Globs do not
-      nest, so any conjunction brings back the tiebreak question that ranking was removed for. A
-      real intersection is an expression - `if: "${{ pkg.provider === 'node' && ... }}"` - which is
-      per key and says so. Two blocks in declaration order are the other answer, and they are an
-      override rather than an AND.
+    - **It was refused outright until 2.0.0-beta.4, and the reason given does not survive being
+      written out.** "Selectors do not intersect, because `selectorRank` was dropped" answers a
+      different question: ranking orders two *siblings*, and nesting asks nothing of the sort - a
+      nested block is resolved depth-first in declaration order, which is the rule already in force
+      one level up. What it cost was the only way to narrow a whole block; `if:` is per key and
+      exists on run steps alone, so `vars`, `clean.include` and `publish.npm.directory` were out of
+      reach. The user asked for it directly ("her şeyin başına if koyamayız, özellikle variables
+      lara") and was right.
+    - **Nesting narrows the audience; it does not raise precedence.** Depth-first **pre-order**: a
+      block's own keys, then the blocks inside it, then the next block beside it. So
+      `"[platform:node]" { a, "[pkg-*]" { b } }` then `"[*]" { c }` layers `a, b, c` and the
+      catch-all still wins - the same cost the dropped ranking already documents, not a new one.
+    - **A matching block is merged *stripped*** (`_stripSelectors` on the block, then recurse), or
+      its nested keys land in the resolved config as literal `'[pkg-*]'` entries. That is exactly
+      how the old no-op showed up: measured, a package matching *neither* resolved to
+      `{ group: 'node', '[pkg-*]': { group: 'node-and-pkg' } }`, so the outer block applied to
+      everyone and `rman config` showed the inner one looking as though it had worked. **Silence is
+      the half of the old refusal worth keeping**, and the two checks below are what keep it.
+    - **A selector under a *setting* is refused** - a setting is not an audience, so
+      `"[*]" > run > build > "[pkg-*]"` could never be applied. One walk does both jobs
+      (`_assertSelectorKeys`), and `at.length > enclosing.length` is the whole test: the two arrays
+      stay equal while every ancestor is a selector and `at` runs ahead the moment one is not.
+    - **A nested pair that could never match together is refused** (`_assertNestable`), rather than
+      loading and matching nobody. Two are decidable: **`"[/]"` on either side** (the root is
+      addressed structurally and every other selector deliberately never reaches it, so both
+      directions are empty and `"[/]" > "[/]"` is redundant - one rule beats an exemption), and
+      **two platform blocks naming nothing in common** (a package carries one `platform.name`;
+      `"[platform:node,cargo]" > "[platform:node]"` narrows and is fine). `ParsedSelector.names`
+      exists for that intersection - `test` alone answers "does this one match", not "can anything".
+      **A glob pair is deliberately not checked**: glob intersection is a real computation with a
+      wrong answer available both ways, where a platform set is `includes`, and `"[pkg-*]" >
+      "[lib-*]"` matching nothing is what a top-level `"[lib-*]"` already does unreported.
     - **`vars` and the contribution keys are exempt**: their contents are not config keys. `vars` is
       free-form by contract and `CODE_SUBTREES` hold plugins, commands and publish targets, whose
       key space rman does not own. A bracketed name in either is data.
+    - **`_stripSelectors` carries the object's own symbols, and leaving them behind was a measured
+      loss that predated nesting.** `mergeConfig` reads a key's `ORIGINS` and `PREVIOUS_VALUES` off
+      the *source*, so a copy holding only string keys arrives with neither. Measured on one
+      repository: an unmarked `group: "${{ nope.boom }}"` reported `Invalid expression in "group"`
+      with **no file**, while the identical expression inside `"[*]"` named `.rmanrc` - because a
+      block was merged as itself and only the unmarked layer went through the copy. Nesting would
+      have spread that to the blocks too. Pinned in `repository.spec.ts` across all three layers.
   - **`"[ws:*]"` / `"[workspace:*]"` is accepted and means exactly `"[*]"`.** The qualifier said
     "not the root" back when a bare glob included it; the shape of the set says that now. Kept
     working rather than rejected because both spellings resolve to the same packages - an error
