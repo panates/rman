@@ -145,6 +145,41 @@ jobs:
       - name: Rebuild at the version that was just cut
         run: npm run build
 
+      # **A publish failing with ENEEDAUTH has two possible causes and they need different fixes**,
+      # so this prints the three facts that tell them apart rather than leaving the next reader to
+      # guess. It is deliberately not conditional: the run that needs it is the one nobody expected
+      # to fail, and five lines of output cost nothing.
+      #
+      # npm Trusted Publishing exchanges a GitHub OIDC token for a short-lived npm one *before*
+      # publishing, and attempts that only when it is running in a supported CI, the id-token
+      # permission reached this job, and npm is new enough (>= 11.5.1). Miss any one and npm falls
+      # back to looking for a token it does not have - the message is the same either way.
+      #
+      #   npm too old, or OIDC vars absent  -> the cause is here, in the workflow
+      #   both fine                         -> the cause is the trusted-publisher connection on npm
+      #                                        (org/repo/workflow filename/environment must match
+      #                                        exactly: panates / rman / release.yml / none)
+      #
+      # The candidate directories are printed rather than a child's `npm --version`, because
+      # `rman publish` spawns its own child and `BinPath` puts every `node_modules/.bin` from the
+      # package upward, plus the running node's own directory, ahead of the inherited PATH - so an
+      # `npm` in any of those is what publishes, not the one this step resolves. Listing them is
+      # deterministic; asking rman to exec `npm --version` is not (`exec` runs per package, and
+      # `--scope /` selects nothing there - the repository's package list holds the members only).
+      - name: Diagnose npm auth
+        run: |
+          echo "step npm:   $(npm --version)  at $(command -v npm)"
+          echo "node bin:   $(dirname "$(command -v node)")"
+          ls -l "$(dirname "$(command -v node)")/npm" 2>/dev/null || echo "            (no npm shim beside node)"
+          ls -l node_modules/.bin/npm packages/rman/node_modules/.bin/npm 2>/dev/null \
+            || echo "            (no npm in any node_modules/.bin - nothing shadows the global one)"
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
+            echo "OIDC:       request URL present"
+          else
+            echo "OIDC:       NO request URL - the id-token permission did not reach this job"
+          fi
+          echo "npmrc:      $([ -f ~/.npmrc ] && echo 'present (a token is configured)' || echo 'none (OIDC is the only route)')"
+
       # No `--target`: each package's own `.rmanrc "publish.target"` is the single source of truth.
       # Never looks at whether `version` ran - it inspects what is on disk and on the registry - so
       # a version cut locally and merged in releases exactly the same way, and re-running is safe.
