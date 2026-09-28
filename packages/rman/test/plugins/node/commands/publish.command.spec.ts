@@ -138,6 +138,84 @@ describe('commands/publish', () => {
     });
   });
 
+  /**
+   * **Staged publishing puts the version in npm's queue instead of on the registry**, pending an
+   * `npm stage approve` that carries the 2FA challenge. The command is `npm stage publish` - npm's
+   * own spelling, not a flag - so what has to be pinned is the *command line*, which is the only
+   * place the difference exists. A plan saying "staged" while the command published directly is the
+   * one disagreement with no undo, since a live version cannot be unpublished after 72 hours.
+   */
+  describe('--staged', () => {
+    it('runs "npm stage publish" rather than "npm publish"', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      await withStubbedNpm(dir, async logFile => {
+        await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes', '--staged'] }));
+        const calls = fs.readFileSync(logFile, 'utf-8');
+        expect(calledWith(calls, 'stage publish')).toBe(true);
+        expect(calledWith(calls, 'publish')).toBe(false);
+      });
+    });
+
+    /** The control, and it is what makes the case above mean anything: without the flag the command
+     *  is unchanged, so the spec is about staging rather than about the stub. */
+    it('without it, the command is the plain one', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      await withStubbedNpm(dir, async logFile => {
+        await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes'] }));
+        const calls = fs.readFileSync(logFile, 'utf-8');
+        expect(calledWith(calls, 'publish')).toBe(true);
+        expect(calledWith(calls, 'stage')).toBe(false);
+      });
+    });
+
+    /** Per package, through the cascade, like `publish.npm.directory` beside it - a repository can
+     *  hold the one package that matters and publish the rest directly. */
+    it('is read from .rmanrc "publish.npm.staged" as well', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ publish: { npm: { staged: true } } }));
+
+      await withStubbedNpm(dir, async logFile => {
+        await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes'] }));
+        expect(calledWith(fs.readFileSync(logFile, 'utf-8'), 'stage publish')).toBe(true);
+      });
+    });
+
+    /** `--no-staged` is the escape hatch, and it has to beat the config rather than merge with it:
+     *  the flag is this run's decision and the config is the repository's standing one. */
+    it('--no-staged overrules a config that asks for staging', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ publish: { npm: { staged: true } } }));
+
+      await withStubbedNpm(dir, async logFile => {
+        await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes', '--no-staged'] }));
+        const calls = fs.readFileSync(logFile, 'utf-8');
+        expect(calledWith(calls, 'publish')).toBe(true);
+        expect(calledWith(calls, 'stage')).toBe(false);
+      });
+    });
+
+    /** Said in the plan, not only done: a reader confirming a run has to see that it will not leave
+     *  anything live. `detail` is the field the core prints and puts in `--dry-run --json`, which is
+     *  how the dist-tag already travels without the core knowing anything about npm. */
+    it('says so in the plan the reader confirms', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      await withStubbedNpm(dir, async () => {
+        const lines = await captureLogs(() =>
+          runCli({ cwd: dir, argv: ['publish', '--dry-run', '--yes', '--staged'] }),
+        );
+        expect(lines.some(l => l.includes('staged for approval'))).toBe(true);
+      });
+    });
+  });
+
   describe('"Nothing to publish."', () => {
     it('prints it when every package is private (never a candidate at all)', async () => {
       const dir = tmp();

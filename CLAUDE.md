@@ -1557,6 +1557,33 @@ saw one thing to release and it was the one thing that must never be published.
     plus the *scheme*'s `isPrerelease`, never `semver.prerelease` directly - and they agree
     deliberately. `isCalendarVersion` is exported from `rman` for this caller, which is in a plugin.
     Pinned with a negative control: dropping the calendar clause turns the calendar spec red.
+- **Staged publishing: `npm stage publish`, through `--staged` / `.rmanrc "publish.npm.staged"`.**
+  The version goes into npm's queue instead of onto the registry and waits for a maintainer's
+  `npm stage approve`, which is where the 2FA challenge lives - so a stolen automation token can
+  stage and cannot approve.
+  - **rman drives the first step and must never grow the rest.** `stage list`/`view`/`download`/
+    `approve`/`reject` belong at a terminal with a 2FA prompt; wrapping `approve` would put the
+    approval back inside the automation that staging exists to protect against.
+  - **`stage publish`, not a `--staged` flag on `publish`** - that is npm's own spelling, and
+    `buildPublishCommand` swaps the subcommand rather than appending a flag. The publish flags pass
+    through unchanged; `--otp` reads oddly beside it (staging is what *defers* 2FA) and is passed
+    anyway rather than refused, because whether npm accepts it there is npm's to answer.
+  - **Decided in the plan, read back by `applyPlan`** (`Entry.staged`), exactly as `distTag` is, and
+    the stake is higher: a plan saying "staged" while the command published directly is the one
+    disagreement with no undo, since npm will not unpublish after 72 hours.
+  - **Reported through `detail`**, which is how the dist-tag already travels - so `--dry-run --json`
+    shows it without the core knowing anything about npm. The core's JSON shape is fixed
+    (`name`, `target`, `status`, `version`, `detail`, `reason`) and that is deliberate.
+  - **A staged entry still reads `publish`, and that is a limitation rather than a decision.**
+    Question B is "is this version on the registry", and a pending one is not - `npm view` does not
+    report the queue - so a second run before an approval proposes the same package again. Whether
+    npm accepts a duplicate stage is npm's answer to give.
+  - **No version check.** Staging needs npm ≥ 11.15.0 and Node ≥ 22.14.0, and the version that
+    matters is the *runner's*, not the one resolving the config. npm's own `Unknown command:
+    "stage"` beats a guess made somewhere else.
+  - **It is the other half of npm Trusted Publishing's checkbox.** `npm stage publish` is always
+    permitted for a trusted publisher; direct `npm publish` needs **Allow `npm publish`** ticked on
+    the package's connection. A repository that leaves it unticked has to pass `--staged`.
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
 - In CI, gate the release pipeline on **this** plan, not on `version --json`.

@@ -228,19 +228,39 @@ export async function loadCustomCommands(
 }
 
 /**
+ * How to name a command's origin in a message: the file it came from, or the config key that
+ * declared it.
+ *
+ * @param file a `LoadedCommand.file` - `''` for a command written into `.rmanrc "commands"`.
+ */
+/* **A command loaded from a config key has no file, and saying so beats inventing one.** `file` was
+ * `'"commands"'` for those - a string that is not a path, carrying its own quotes - and every
+ * message that formatted it got something wrong: `path.relative` mangled it, the quotes doubled
+ * (`""commands""` in the shadowing error), and `checkCustomCommand` announced it as a plugin name.
+ * One empty string and one helper is the whole fix. */
+export function describeCommandSource(file: string): string {
+  return file ? `"${path.relative(process.cwd(), file)}"` : '.rmanrc "commands"';
+}
+
+/**
  * Refuses a command that would take a built-in's name. Unlike a module that simply fails to load,
- * this one is thrown: the file is fine, the *name* is the mistake, and there is no reading of
+ * this one is thrown: the source is fine, the *name* is the mistake, and there is no reading of
  * `rman publish` that is safe to guess at. Silently preferring either one would leave whoever typed
  * it unable to tell which ran.
  */
+/* The remedy differs by where the command came from, which is the other half of why the origin has
+ * to be honest: "rename the file" is the answer for a `.rman/*.mjs` and no answer at all for an
+ * entry in a config, where there is no file to rename. */
 export function assertNoBuiltinShadowing(
   commands: readonly { name: string; file: string }[],
   builtins: readonly string[],
 ): void {
   const clash = commands.find(c => builtins.includes(c.name));
   if (!clash) return;
+  const remedy = clash.file
+    ? `Rename the file, or give it its own name with \`command: '<name>'\`.`
+    : `Give it its own name with \`command: '<name>'\`.`;
   throw new Error(
-    `"${path.relative(process.cwd(), clash.file)}" would shadow rman's built-in "${clash.name}" command.\n` +
-      `  Rename the file, or give it its own name with \`command: '<name>'\`.`,
+    `${describeCommandSource(clash.file)} would shadow rman's built-in "${clash.name}" command.\n  ${remedy}`,
   );
 }

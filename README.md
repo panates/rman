@@ -12,11 +12,18 @@ technology - so being a Node repository is one option rather than the assumption
 what is true of any repository, and everything npm- or `package.json`-specific belongs to the
 **`node` built-in**.
 
-That built-in ships *inside* `rman` rather than as a second package to install, and shipping it is
-not the same as turning it on: it registers when a repository names it (`plugins: ['node']`) or when
-detection reads the directory as a Node one, and in any other repository `rman clean` is still
-`Unknown argument`. It was its own package, `rman-node`, through the 2.0 betas; the `1.x` line of
-that name stays on npm and nothing 2.x was ever published under it.
+That built-in ships *inside* `rman` rather than as a second package to install, and it is **laid
+under every repository by default** - so a fresh clone with no `.rmanrc` at all already has the
+`node` technology, `clean`, `ci` and the npm publish target, and a repository declaring another
+technology (`extends: 'rman:cargo'`) has its own asked about each directory first. It was its own
+package, `rman-node`, through the 2.0 betas; the `1.x` line of that name stays on npm and nothing
+2.x was ever published under it.
+
+The cost of a default is stated rather than hidden: a repository of some other technology carries
+node's `clean` and `ci` in `rman --help` whether or not they mean anything to it. rman ships one
+preset, so nothing else is visible today. The thing this replaced was *detection* - asking each
+built-in "is this directory yours?" before turning anything on - which cost a catalogue, a memo, a
+symbol and a three-condition gate, and answered the same question the platform registry answers now.
 
 See [`packages/rman/README.md`](packages/rman/README.md) for what rman does and how to use it.
 Reference docs follow the same split as the code:

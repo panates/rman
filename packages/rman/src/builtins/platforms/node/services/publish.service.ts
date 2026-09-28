@@ -160,6 +160,17 @@ export namespace PublishService {
      * a release pipeline gates on both show where a version is going.
      */
     tag?: string;
+    /**
+     * `npm stage publish` instead of `npm publish` - the version goes into npm's staging queue and
+     * is not on the registry until a maintainer runs `npm stage approve`, which is where the 2FA
+     * challenge moves to. `false` forces a direct publish even where the config asks for staging;
+     * `undefined` leaves the decision to each package's `.rmanrc "publish.npm.staged"`.
+     *
+     * **A plan option, for the same reason `tag` is one**: what a run is about to do is the thing a
+     * reader confirms and a pipeline gates on, and "this release will not be live when the workflow
+     * goes green" is the most important sentence in the plan when it applies.
+     */
+    staged?: boolean;
   }
 
   export interface ApplyOptions extends Options {
@@ -193,6 +204,21 @@ export namespace PublishService {
      * says; recomputing at publish time would let the two disagree about where a package is going.
      */
     distTag?: string;
+    /**
+     * Whether this entry goes into npm's staging queue rather than straight to the registry -
+     * `--staged`, or the package's own `.rmanrc "publish.npm.staged"`.
+     *
+     * Decided in the plan and read back by `applyPlan`, exactly as `distTag` is: a plan that said
+     * "staged" while the command published directly would be the one disagreement that cannot be
+     * undone, since a live version cannot be unpublished after 72 hours.
+     *
+     * **A staged entry still reads `publish`, not a status of its own**, and that is a limitation
+     * rather than a decision: rman's question is "is this version on the registry", and a pending
+     * version is not - `npm view` does not report the queue. So a second run proposes the same
+     * package again, and whether npm accepts a duplicate stage is npm's answer to give, not rman's
+     * to guess. Watch this if a run is ever repeated before an approval.
+     */
+    staged?: boolean;
     /** `PublishTarget.Entry`'s own field - what the core's `publish` prints beside the package
      *  name. Carries the dist-tag, so where a version is going is visible in the plan and in
      *  `--dry-run --json` without the core knowing anything about npm. */
@@ -283,14 +309,21 @@ export namespace PublishService {
          *  out. Asking it kept proposing an already-published version until npm answered 403. */
         const published = !!view?.versions.includes(pkg.version);
         const distTag = distTagFor(pkg, options.tag).tag;
+        const staged = resolveStaged(pkg, options.staged);
         entries.set(pkg.name, {
           package: pkg,
           version: pkg.version,
           registryVersion,
           distTag,
+          staged,
           /** Printed beside the package in the plan, so where a version is going is something the
-           *  reader confirms rather than something they have to infer from the version string. */
-          detail: distTag ? `-> dist-tag "${distTag}"` : undefined,
+           *  reader confirms rather than something they have to infer from the version string.
+           *  Staging is named first because it changes what the run *does* - a reader who reads
+           *  only the dist-tag would take a staged entry for one that goes live. */
+          detail:
+            [staged ? 'staged for approval' : undefined, distTag ? `-> dist-tag "${distTag}"` : undefined]
+              .filter(Boolean)
+              .join(', ') || undefined,
           status: published ? 'up-to-date' : 'publish',
           reason: published
             ? `registry already has ${pkg.version}`
@@ -341,14 +374,21 @@ export namespace PublishService {
       const publishDir = resolvePublishDir(pkg, options.contents);
       const restore = preparePublishManifest(pkg, publishDir, packagesByName);
       try {
-        /** The plan's own tag, not a recomputed one: `getPlan` decided where this package goes,
-         *  the reader confirmed that, and `applyPlan` is here to carry it out. `options.tag` is
-         *  the fallback only for a plan built by something other than `getPlan`. */
-        await exec(buildPublishCommand(packageManager, { ...options, tag: entry.distTag ?? options.tag }), {
-          cwd: publishDir,
-          app: pkg.repository.app,
-          stdio: 'inherit',
-        });
+        /** The plan's own tag and staging decision, not recomputed ones: `getPlan` decided where
+         *  this package goes, the reader confirmed that, and `applyPlan` is here to carry it out.
+         *  `options.*` is the fallback only for a plan built by something other than `getPlan`. */
+        await exec(
+          buildPublishCommand(packageManager, {
+            ...options,
+            tag: entry.distTag ?? options.tag,
+            staged: entry.staged ?? options.staged,
+          }),
+          {
+            cwd: publishDir,
+            app: pkg.repository.app,
+            stdio: 'inherit',
+          },
+        );
         result.push(entry);
       } catch (e: any) {
         failed.add(pkg.name);
@@ -440,12 +480,31 @@ function distTagFor(pkg: Package, tag: string | undefined): { tag?: string; erro
   };
 }
 
+/* **`stage publish`, not a `--staged` flag**, because that is npm's own spelling: `npm stage` is a
+ * command with `publish`/`list`/`view`/`download`/`approve`/`reject` under it, and rman only ever
+ * drives the first. The rest is a maintainer's, at a terminal with a 2FA prompt - which is the whole
+ * point of staging, and the reason rman must not grow an `approve`.
+ *
+ * The publish flags are passed through unchanged. `--otp` is the one that reads oddly beside it,
+ * since staging is what *defers* the 2FA challenge to approval time - it is passed anyway rather
+ * than refused, because whether npm accepts it there is npm's to answer and a guess here would be a
+ * rule rman invented. */
 function buildPublishCommand(packageManager: CiService.PackageManager, options: PublishService.ApplyOptions): string {
-  const args = ['publish'];
+  const args = options.staged ? ['stage', 'publish'] : ['publish'];
   if (options.access) args.push('--access', options.access);
   if (options.tag) args.push('--tag', options.tag);
   if (options.otp) args.push('--otp', options.otp);
   if (options.registry) args.push('--registry', options.registry);
   if (options.userconfig) args.push('--userconfig', options.userconfig);
   return `${packageManager} ${args.join(' ')}`;
+}
+
+/** Whether this package stages: `--staged`/`--no-staged` when given, else its own
+ *  `.rmanrc "publish.npm.staged"`. */
+/* Per package rather than per run, like `directory` beside it - a repository may well want its one
+ * widely-depended-on package held for approval and the rest published directly, and the cascade
+ * already makes "all of them" a single `"[*]"` line. */
+function resolveStaged(pkg: Package, override: boolean | undefined): boolean {
+  if (override !== undefined) return override;
+  return !!pkg.config?.publish?.npm?.staged;
 }

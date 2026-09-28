@@ -75,6 +75,7 @@ options, in addition to:
 | `--access <level>` | string | `public`, `restricted` | `npm publish --access <level>` - required by the registry for a *new* scoped package. |
 | `--tag <name>` | string | - | `npm publish --tag <name>` - the dist-tag this version is published under (default `latest`). |
 | `--otp <code>` | string | - | `npm publish --otp <code>` - a 2FA one-time password, for registries that require it. |
+| `--staged` | boolean | - | `npm stage publish` - hold each version in npm's staging queue instead of publishing it. `--no-staged` forces a direct publish over `.rmanrc "publish.npm.staged"`. See [Staged publishing](#staged-publishing). |
 | `--registry <url>` | string | - | Registry to check against **and** publish to (default: whatever `.npmrc` already configures). |
 | `--userconfig <path>` | string | - | Path to a custom `.npmrc` for both the registry check and the actual publish. |
 | `--contents <dir>` | string | - | Subdirectory to publish from, relative to each package's own directory - the lowest-precedence way to say it, after `publishConfig.directory` and `.rmanrc "publish.npm.directory"`. |
@@ -97,6 +98,7 @@ rman publish --dry-run                    # only show the plan, never publish
 rman publish --access public              # required for a brand-new scoped package
 rman publish --tag beta                   # a prerelease goes under its own dist-tag, never latest
 rman publish --otp 123456
+rman publish --staged                      # queue for approval instead of going live
 rman publish --registry https://registry.example.com --userconfig ./ci.npmrc
 rman publish --package-manager pnpm
 rman publish --scope '@myorg/*'
@@ -190,6 +192,48 @@ This is the right gate for a release pipeline - not [`rman version --json`](vers
 *other* question ("does anything need a new version number?") and correctly reports nothing when a
 version was bumped in an earlier run, or bumped locally and merged in, or when a previous publish
 failed after the tag was already pushed.
+
+## Staged publishing
+
+`--staged`, or `.rmanrc "publish.npm.staged": true`, runs **`npm stage publish`** instead of
+`npm publish`. The version goes into npm's staging queue rather than onto the registry, and stays
+there until a maintainer approves it:
+
+| step | who | command |
+| --- | --- | --- |
+| stage | CI, with any token, no 2FA | `rman publish --staged` |
+| review | a maintainer | `npm stage list`, `npm stage view <id>`, `npm stage download <id>` |
+| decide | a maintainer, **with 2FA** | `npm stage approve <id>` / `npm stage reject <id>` |
+
+The point is where the 2FA challenge lives: a stolen automation token can stage a version, and
+cannot approve one. It also gives a human a look at the tarball before anyone can install it.
+
+rman drives the first step and nothing else. `list`/`view`/`approve`/`reject` belong at a terminal
+with a 2FA prompt, which is the whole reason staging exists - wrapping them would put the approval
+back in the automation that staging is protecting you from.
+
+**The plan says so**, so a run that leaves nothing live is something the reader confirms rather than
+discovers:
+
+```
+publish [npm] pkg-a 1.0.0 staged for approval never published
+```
+
+It is carried in `detail`, so `--dry-run --json` shows it too.
+
+**Requires npm ≥ 11.15.0 and Node ≥ 22.14.0** on whatever runs the publish. rman checks neither -
+the version that matters is the runner's, and npm's own `Unknown command: "stage"` says it better
+than a guess made elsewhere would.
+
+**Known limitation: a staged version is invisible to the plan's own question.** `publish` asks the
+registry whether a version is published, and a pending one is not - `npm view` does not report the
+queue. So a second run before an approval proposes the same package again; whether npm accepts a
+duplicate stage is npm's answer, not rman's.
+
+**npm Trusted Publishing:** `npm stage publish` is always permitted for a trusted publisher. Direct
+`npm publish` is the one that needs **Allow `npm publish`** ticked on the package's trusted-publisher
+connection - so a repository that leaves it unticked has to pass `--staged`, and one that publishes
+directly has to tick it.
 
 ## `"workspace:"` protocol at publish time
 
