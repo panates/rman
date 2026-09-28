@@ -29,5 +29,9 @@ platform: 'node'
     npm:
       directory: build
 
+    publish:
+      npm:
+        directory: build
+
   clean:
-    include: ['build', '*.tsbuildinfo']
+     include: ['build', '*.tsbuildinfo']
