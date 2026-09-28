@@ -106,11 +106,16 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      # npm Trusted Publishing (OIDC) arrived in npm 11.5.1. Node 24 ships a new enough npm today,
-      # so this is insurance against a runner image moving rather than a known gap - and it is
-      # unnecessary altogether when NPM_TOKEN is set.
-      - name: Ensure npm supports Trusted Publishing (OIDC)
-        run: npm install -g npm@latest
+      # **No `npm install -g npm@latest`, deliberately.** It was here as insurance against a runner
+      # image moving, and it moved the runner instead: Node 24.21.0 ships npm 11.19.0, comfortably
+      # past the 11.5.1 that Trusted Publishing needs, and the upgrade took the job to npm **12.1.0**
+      # - a major the documented recipe never contemplates, since that recipe has no upgrade step at
+      # all and says Node 24 is recommended precisely because its bundled npm is new enough.
+      #
+      # With OIDC never engaging on 12.1.0 whether the npmrc carried an empty auth line (404) or
+      # nothing at all (ENEEDAUTH), the npm version is the one variable in this job that is both
+      # ours and untested. Removing it is not a fix claimed - it is a deviation withdrawn, so what
+      # runs is the shape the recipe describes.
 
       - name: Install dependencies
         run: npm ci
@@ -212,11 +217,21 @@ jobs:
           ls -l "$(dirname "$(command -v node)")/npm" 2>/dev/null || echo "            (no npm shim beside node)"
           ls -l node_modules/.bin/npm packages/rman/node_modules/.bin/npm 2>/dev/null \
             || echo "            (no npm in any node_modules/.bin - nothing shadows the global one)"
-          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
-            echo "OIDC:       request URL present"
-          else
-            echo "OIDC:       NO request URL - the id-token permission did not reach this job"
-          fi
+          # **`present`/`ABSENT` only, never the value.** `${VAR:+present}${VAR:-ABSENT}` reads as a
+          # tidy one-liner and prints `present<the value>` when the variable is set - and
+          # ACTIONS_ID_TOKEN_REQUEST_TOKEN is a live credential that GitHub does not mask, because it
+          # is not a registered secret. Caught while checking this step locally.
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then echo "OIDC url:   present"; else echo "OIDC url:   ABSENT"; fi
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then echo "OIDC token: present"; else echo "OIDC token: ABSENT"; fi
+          # **As rman's child sees them**, which is the one difference left between this workflow and
+          # every working report of trusted publishing: `npm publish` here is a *grandchild*, spawned
+          # by `rman publish` through `exec`, which rebuilds the environment via `BinPath.env`. That
+          # starts from `{ ...process.env }` and should carry both variables - reading them back from
+          # an actual child is what turns "should" into "does", and it publishes nothing.
+          echo "--- through rman's own spawn path:"
+          node packages/rman/build/cli.js exec --scope rman -- \
+            sh -c 'u=ABSENT; t=ABSENT; [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && u=present; [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ] && t=present; echo "child OIDC url: $u, child OIDC token: $t, child npm: $(npm --version)"' \
+            || echo "  (rman exec failed - inconclusive)"
           echo "NODE_AUTH_TOKEN: ${NODE_AUTH_TOKEN:+set}${NODE_AUTH_TOKEN:-unset}"
           echo "--- npm config (the files npm actually reads, auth values redacted)"
           for f in "${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}" ./.npmrc; do
