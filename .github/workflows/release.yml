@@ -93,9 +93,18 @@ jobs:
 
       # The highest version `test.yml`'s matrix covers, which is the one to cut a release on: the
       # published artifact should be built by a runtime the suite actually ran against.
+      #
+      # **`registry-url` is required, and leaving it out is what broke the first real release.**
+      # It was dropped on purpose and on reasoning that was correct for v4 and is explicitly wrong
+      # for v7: with `registry-url` set, v4 wrote an `.npmrc` whose `_authToken` was a dummy
+      # `NODE_AUTH_TOKEN` fallback, and the worry was that a placeholder token would stop npm ever
+      # reaching for OIDC. v7 removed that fallback, and says so - "npm Trusted Publishing (OIDC) is
+      # not affected, since it does not use NODE_AUTH_TOKEN". The official recipe sets it, and
+      # `npm publish` answered `ENEEDAUTH` without it.
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
 
       # npm Trusted Publishing (OIDC) arrived in npm 11.5.1. Node 24 ships a new enough npm today,
       # so this is insurance against a runner image moving rather than a known gap - and it is
@@ -178,7 +187,8 @@ jobs:
           else
             echo "OIDC:       NO request URL - the id-token permission did not reach this job"
           fi
-          echo "npmrc:      $([ -f ~/.npmrc ] && echo 'present (a token is configured)' || echo 'none (OIDC is the only route)')"
+          echo "user npmrc: $([ -f ~/.npmrc ] && echo 'present (NPM_TOKEN was set)' || echo 'none')"
+          echo "repo npmrc: $([ -f .npmrc ] && sed 's/_authToken=.*/_authToken=REDACTED/' .npmrc | tr '\n' ' ' || echo 'none - setup-node wrote nothing')"
 
       # No `--target`: each package's own `.rmanrc "publish.target"` is the single source of truth.
       # Never looks at whether `version` ran - it inspects what is on disk and on the registry - so
