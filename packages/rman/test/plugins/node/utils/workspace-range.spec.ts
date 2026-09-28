@@ -1,5 +1,8 @@
 import { expect } from 'expect';
-import { parseWorkspaceRange, resolveWorkspaceRange } from '../../../../src/plugins/node/utils/workspace-range.js';
+import {
+  parseWorkspaceRange,
+  resolveWorkspaceRange,
+} from '../../../../src/builtins/platforms/node/utils/workspace-range.js';
 
 describe('utils/workspace-range', () => {
   describe('parseWorkspaceRange()', () => {

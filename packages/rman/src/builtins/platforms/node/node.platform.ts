@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import parseNpmScript from '@netlify/parse-npm-script';
 import glob from 'fast-glob';
-import type { Package } from '../../core/package.js';
-import type { Platform } from '../../core/plugin.js';
-import type { RunService } from '../../services/run.service.js';
+import type { Package } from '../../../core/classes/package.js';
+import type { Platform } from '../../../core/interfaces/plugin.js';
+import type { RunService } from '../../../services/run.service.js';
 import { NodeManifestProvider } from './node-manifest.provider.js';
 import { NodeVersionPlanService } from './services/version-plan.service.js';
 

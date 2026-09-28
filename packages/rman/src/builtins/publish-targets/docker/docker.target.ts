@@ -1,7 +1,6 @@
-import type { ConfigValue } from '../core/config.js';
-import type { PublishTarget } from '../core/publish-target.js';
-import type { ScopedVars } from '../interfaces/rman-config.interface.js';
-import { DOCKER_TARGET, type DockerPublishService } from '../services/docker-publish.service.js';
+import type { PublishTarget } from '../../../core/interfaces/publish-target.js';
+import type { ConfigValue, ScopedVars } from '../../../interfaces/rman-config.interface.js';
+import { DOCKER_TARGET, type DockerPublishService } from './docker-publish.service.js';
 
 /**
  * **`publish.docker.*`** - this target's own config block, declared here rather than centrally.
@@ -25,8 +24,17 @@ export interface DockerPublishOptionsKeys {
   image: ConfigValue<string>;
   /** Relative to the package's own directory. Default `"Dockerfile"`. */
   dockerfile?: ConfigValue<string>;
-  /** Default `["linux/amd64"]`. */
-  platforms?: ConfigValue<string[]>;
+  /**
+   * The architectures to build for - `docker buildx build --platform`. Default `["linux/amd64"]`.
+   */
+  /* **Named `architectures` rather than `platforms`, and that is a collision rather than a
+   * preference.** `platforms` is a top-level config key - the technologies a repository holds - and
+   * `CODE_SUBTREES` skips that name **at every level** of `Resolved<T>`, so a nested key sharing it
+   * came back typed as its own unresolved `ConfigValue`. Measured: `Property 'join' does not exist
+   * on type 'ConfigValue<string[]>'`, while the *runtime* resolved it perfectly well - it matches
+   * only the first path segment. The type and the runtime disagreeing is the defect; renaming the
+   * nested key is the contained half of the fix. Docker's own flag is still `--platform`. */
+  architectures?: ConfigValue<string[]>;
   /** Build `cwd` override, relative to the repository root - only needed when the Dockerfile's
    *  own `COPY`/`ADD` paths expect something other than the package's own directory (rare). */
   cwd?: ConfigValue<string>;

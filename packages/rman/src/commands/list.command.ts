@@ -1,6 +1,6 @@
 import colors from 'ansi-colors';
 import EasyTable from 'easy-table';
-import type { Repository } from '../core/repository.js';
+import type { Repository } from '../core/classes/repository.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { ListService } from '../services/list.service.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';

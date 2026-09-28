@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Package } from '../core/package.js';
-import type { Repository } from '../core/repository.js';
-import { Service } from '../core/service.js';
+import type { Package } from '../core/classes/package.js';
+import type { Repository } from '../core/classes/repository.js';
+import { Service } from '../core/classes/service.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { ChangeHashService } from './change-hash.service.js';
@@ -843,7 +843,7 @@ export namespace ChangelogService {
   }
 }
 
-declare module '../core/service.js' {
+declare module '../core/classes/service.js' {
   interface ServiceMap {
     changelog: ChangelogService;
   }

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { CiService } from '../../../../src/plugins/node/services/ci.service.js';
+import { CiService } from '../../../../src/builtins/platforms/node/services/ci.service.js';
 import { createRepository, useNodeEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {

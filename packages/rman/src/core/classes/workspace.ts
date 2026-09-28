@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_PRESETS } from '../builtins/presets/index.js';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
-import type { RmanApplication } from './application.js';
-import { ConfigReader } from './config/config-reader.js';
-import { mergeConfig, ORIGINS } from './config/merge-config.js';
+import { DEFAULT_PRESETS } from '../../builtins/presets/index.js';
+import type { RmanConfig } from '../../interfaces/rman-config.interface.js';
+import type { RmanApplication } from '../application.js';
+import { ConfigReader } from '../config/config-reader.js';
+import { mergeConfig, ORIGINS } from '../config/merge-config.js';
+import { basePlatform, type Platform, type Plugin } from '../interfaces/plugin.js';
 import { Package } from './package.js';
-import { basePlatform, type Platform, type Plugin } from './plugin.js';
 
 /**
  * A repository's layout, resolved: which directories hold packages, which technology claims each of

@@ -35,10 +35,17 @@ describe('commands/info - the package-manager augmentation reaching a core comma
     for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
   });
 
-  function fixture(manifest: unknown): string {
+  /**
+   * @param rmanrc written as an `.rmanrc`, not as `package.json`'s own `"rman"` key - a directory
+   *   may declare **one** config, and this fixture's `runCli` writes an `.rmanrc` of its own to
+   *   declare the preset. Both is refused by the reader, which is the rule working rather than
+   *   getting in the way: `declarePlugin` merges into whatever is already there.
+   */
+  function fixture(manifest: unknown, rmanrc?: unknown): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-node-info-test-'));
     dirs.push(dir);
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(manifest));
+    if (rmanrc) fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(rmanrc));
     return dir;
   }
 
@@ -51,7 +58,7 @@ describe('commands/info - the package-manager augmentation reaching a core comma
   });
 
   it("reports the configured package manager's own Binaries key instead of npm's", async () => {
-    const dir = fixture({ name: 'my-pkg', version: '1.0.0', rman: { packageManager: 'pnpm' } });
+    const dir = fixture({ name: 'my-pkg', version: '1.0.0' }, { packageManager: 'pnpm' });
     const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['info', '--json'] }));
     const parsed = JSON.parse(lines[0]);
     expect(Object.keys(parsed.Binaries)).toContain('pnpm');

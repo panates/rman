@@ -45,7 +45,23 @@ export function toYargsCommand(meta: RmanConfig.CommandMetadata): CommandModule 
      * narrower one is the useful one, and this is the single place the widening is admitted -
      * previously it was an `as` per option read, in every handler.
      */
-    handler: meta.handler as CommandModule['handler'],
+    handler: withCommandPlatforms(meta) as CommandModule['handler'],
+  };
+}
+
+/**
+ * Carries `CommandMetadata.platforms` into argv, where `readPackageFilterOptions` picks it up.
+ *
+ * Through argv rather than a parameter because `filterPackages` is called by ten *services*, none
+ * of which knows which command is running - `options` is all they see. One wrap here reaches every
+ * one of them and changes none.
+ */
+function withCommandPlatforms(meta: RmanConfig.CommandMetadata): CommandModule['handler'] {
+  const handler = meta.handler as CommandModule['handler'];
+  if (!meta.platforms?.length) return handler;
+  return (args: any) => {
+    args.commandPlatforms = meta.platforms;
+    return handler(args);
   };
 }
 

@@ -3,10 +3,10 @@ import { inspect } from 'node:util';
 import colors from 'ansi-colors';
 import { tokenize } from 'fast-tokenizer';
 import { Task } from 'power-tasks';
-import type { Package } from '../core/package.js';
-import type { Repository } from '../core/repository.js';
-import type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from '../core/run-step.js';
-import { Service } from '../core/service.js';
+import type { Package } from '../core/classes/package.js';
+import type { Repository } from '../core/classes/repository.js';
+import { Service } from '../core/classes/service.js';
+import type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from '../core/interfaces/run-step.js';
 import { exec } from '../utils/exec.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
@@ -402,11 +402,15 @@ export namespace RunService {
    * Runs one slot of a lifecycle belonging to some operation other than `run` itself - `version`'s
    * hooks around the version write are the only one so far.
    *
-   * **Here rather than in `VersionService`, because the rule it applies is this service's**: the
-   * package's own declaration for `script` wins over the caller's `fallback`, slot by slot, exactly
-   * as `getScriptSteps` decides it for `run`. Kept in two places that rule would drift, and one of
-   * the copies would sit in the file that writes versions - which now runs no command of its own at
-   * all.
+   * **Here rather than in `VersionService`, because the rule it applies is this service's**: how a
+   * package's own declaration for `script` and the caller's `fallback` combine, slot by slot -
+   * `slotValues`, the same function `getScriptSteps` decides it with. Kept in two places that rule
+   * would drift, and one of the copies would sit in the file that writes versions, which now runs
+   * no command of its own at all.
+   *
+   * So npm's `preversion` does **not** replace a repository's `.rmanrc version.before` any more;
+   * both run, the config's first. Only `version.exec` is a single answer, and there the package's
+   * own still wins.
    *
    * `fallback` is the caller's own configured step(s), **already evaluated**: `version`'s three
    * paths are in `DEFERRED_PATHS` precisely because only the caller can bind
@@ -423,8 +427,7 @@ export namespace RunService {
     slot: keyof ScriptSlots,
     fallback?: RunStepValue[],
   ): Promise<void> {
-    const own = contributedSlots(pkg, script)?.[slot] ?? [];
-    const values = own.length ? own : (fallback ?? []);
+    const values = slotValues(slot, contributedSlots(pkg, script)?.[slot] ?? [], fallback ?? [], false);
     for (const value of values) {
       if (typeof value === 'function') {
         await value(createStepContext(pkg, pkg.dirname));
@@ -765,12 +768,14 @@ async function passesIf(
  *
  * 1. `run.<script>.override: true` -> the config, always. The escape hatch for "ignore what the
  *    package says it does".
- * 2. a **contributed** source - `package.json#scripts` via `rman-node`. It wins over the config
- *    because it is the *package's own* declaration, while a config value typically arrives
- *    cascaded from the root or an `extends` base; the more specific statement wins, as everywhere
- *    else in rman.
- * 3. the config's own `before`/`exec`/`after`, letting a package run a script it never declared.
- * 4. nothing - and an empty result is what tells `runScript` this package defines no such script.
+ * 2. for `exec`, a **contributed** source - `package.json#scripts` via `rman-node` - wins over the
+ *    config, because the two are one answer to one question and the more specific statement wins.
+ * 3. for `before`/`after`, the two **compose**: they are hooks at a point rather than answers, so
+ *    the config's bracket the package's own (`config.before -> prebuild -> build -> postbuild ->
+ *    config.after`). See `slotValues` for the measurement behind that.
+ * 4. the config's own `before`/`exec`/`after` alone, letting a package run a script it never
+ *    declared.
+ * 5. nothing - and an empty result is what tells `runScript` this package defines no such script.
  */
 function getScriptSteps(pkg: Package, script: string): RunService.ScriptStep[] {
   const cfg = RunService.getConfig(pkg, script);
@@ -785,12 +790,50 @@ function getScriptSteps(pkg: Package, script: string): RunService.ScriptStep[] {
 
   const steps: RunService.ScriptStep[] = [];
   for (const slot of SCRIPT_SLOTS) {
-    const own = contributed?.[slot] ?? [];
-    const configured = fromConfig[slot] ?? [];
-    const values = override ? (configured.length ? configured : own) : own.length ? own : configured;
-    for (const value of values) steps.push(toStep(slot, value));
+    for (const value of slotValues(slot, contributed?.[slot] ?? [], fromConfig[slot] ?? [], override)) {
+      steps.push(toStep(slot, value));
+    }
   }
   return steps;
+}
+
+/**
+ * The steps for one slot, from the package's own declaration and the config's, in the order they
+ * run.
+ *
+ * **`exec` replaces; `before` and `after` compose.** They are not the same kind of key, and
+ * treating them alike is what this function exists to stop:
+ *
+ * - `exec` is *one answer to one question* - what this script does. A package declaring
+ *   `"build": "tsc -b"` and a config declaring `exec: 'tsc -b'` are the same build stated twice,
+ *   so the more specific statement wins and the other is dropped.
+ * - `before`/`after` are *hooks at a point*, and two of them at one point both belong. npm's
+ *   `prebuild` means "immediately before my own build"; `run.build.before` means "before this
+ *   script, for every package". Neither answers the other.
+ *
+ * **Measured, on a two-line repository**: a root declaring
+ * `"[*]": { run: { build: { before: 'echo CONFIG-BEFORE', after: 'echo CONFIG-AFTER' } } }` and a
+ * package declaring `prebuild`/`build`/`postbuild` ran the package's three and **neither of the
+ * root's** - while the identical repository with `prebuild` deleted ran both. So adding an
+ * unrelated codegen hook to one package silently cancelled a repo-wide `rman clean`, with a stale
+ * build directory as the only symptom.
+ *
+ * **The config brackets the package's own**, which is what the wider statement means and the shape
+ * a bookend already has here: `config.before -> prebuild -> build -> postbuild -> config.after`.
+ *
+ * `override: true` is unchanged - it is the escape hatch for "ignore what the package says it
+ * does", so the config replaces rather than composes, per slot, falling back to the package's own
+ * where the config says nothing about that slot.
+ */
+function slotValues(
+  slot: keyof RunService.ScriptSlots,
+  own: RunStepValue[],
+  configured: RunStepValue[],
+  override: boolean,
+): RunStepValue[] {
+  if (override) return configured.length ? configured : own;
+  if (slot === 'exec') return own.length ? own : configured;
+  return slot === 'before' ? [...configured, ...own] : [...own, ...configured];
 }
 
 /**
@@ -914,7 +957,7 @@ export function resolveLogLevel(
   return typeof v === 'string' && (LOG_LEVELS as string[]).includes(v) ? (v as LogLevel) : fallback;
 }
 
-declare module '../core/service.js' {
+declare module '../core/classes/service.js' {
   interface ServiceMap {
     run: RunService;
   }

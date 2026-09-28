@@ -1,5 +1,5 @@
 import { expect } from 'expect';
-import { mergeConfig } from '../../src/core/merge-config.js';
+import { mergeConfig } from '../../src/core/config/merge-config.js';
 
 describe('core/merge-config', () => {
   describe('mergeConfig()', () => {

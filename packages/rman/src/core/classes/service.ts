@@ -1,5 +1,5 @@
-import type { Logger } from '../utils/logger.js';
-import type { RmanApplication } from './application.js';
+import type { Logger } from '../../utils/logger.js';
+import type { RmanApplication } from '../application.js';
 import type { Repository } from './repository.js';
 
 /**

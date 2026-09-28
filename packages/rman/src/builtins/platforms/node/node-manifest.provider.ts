@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ManifestProvider } from '../../core/manifest.js';
-import { Manifest } from '../../core/manifest.js';
-import type { Package } from '../../core/package.js';
-import { stampVersionConstant } from '../../utils/version-stamp.js';
-import { npmViewVersion } from './utils/npm-view.js';
+import type { Package } from '../../../core/classes/package.js';
+import type { ManifestProvider } from '../../../core/interfaces/manifest.js';
+import { Manifest } from '../../../core/interfaces/manifest.js';
+import { stampVersionConstant } from '../../../utils/version-stamp.js';
+import { npmViewVersion } from '../../publish-targets/npm/npm-view.js';
 import { parseWorkspaceRange } from './utils/workspace-range.js';
 
 export class NodeManifestProvider implements ManifestProvider {

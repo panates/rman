@@ -2,20 +2,20 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import type { RmanApplication } from '../core/application.js';
-import type { Package } from '../core/package.js';
-import { type PublishTarget, targetsOf } from '../core/publish-target.js';
-import type { Repository } from '../core/repository.js';
-import { Service } from '../core/service.js';
-import { exec } from '../utils/exec.js';
-import { GitHelper } from '../utils/git.js';
-import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
+import type { RmanApplication } from '../../../core/application.js';
+import type { Package } from '../../../core/classes/package.js';
+import type { Repository } from '../../../core/classes/repository.js';
+import { Service } from '../../../core/classes/service.js';
+import { type PublishTarget, targetsOf } from '../../../core/interfaces/publish-target.js';
+import { exec } from '../../../utils/exec.js';
+import { GitHelper } from '../../../utils/git.js';
+import { filterPackages, type PackageFilterOptions } from '../../../utils/package-filter.js';
 
 /**
  * The name this target answers to in `publish.target` and `--target`.
  *
  * Declared beside the implementation rather than in `publish-target.ts`: the seam is general and
- * must not know any one target's name, and the adapter in `targets/docker.target.ts` reads it from
+ * must not know any one target's name, and the adapter in `builtins/publish-targets/docker/docker.target.ts` reads it from
  * here, which keeps the dependency pointing one way.
  */
 export const DOCKER_TARGET = 'docker';
@@ -109,7 +109,7 @@ export class DockerPublishService extends Service {
   /**
    * Publishes every `'publish'` entry in `plan`: one `docker login` and one `docker buildx create`
    * up front (each package's own build reuses them), then per package a single `docker buildx
-   * build --push` using that package's `publish.docker` config (platforms, named build-contexts,
+   * build --push` using that package's `publish.docker` config (architectures, named build-contexts,
    * build-args, an optional `cwd` override). A package's `publish.docker.readme` file (default
    * `DOCKER_README.md`), if present, updates the DockerHub repo description afterward. A package's
    * own failure doesn't stop unrelated packages elsewhere in the plan.
@@ -193,11 +193,11 @@ async function dockerLogin(app: RmanApplication, cwd: string): Promise<void> {
 async function buildAndPush(repository: Repository, entry: DockerPublishService.Entry): Promise<void> {
   const pkg = entry.package;
   const docker = pkg.config.publish!.docker!;
-  const platforms = docker.platforms?.length ? docker.platforms : ['linux/amd64'];
+  const architectures = docker.architectures?.length ? docker.architectures : ['linux/amd64'];
   const dockerfile = path.resolve(pkg.dirname, docker.dockerfile || 'Dockerfile');
   const cwd = docker.cwd ? path.resolve(repository.dirname, docker.cwd) : pkg.dirname;
 
-  const args = ['buildx', 'build', '--platform', platforms.join(',')];
+  const args = ['buildx', 'build', '--platform', architectures.join(',')];
   for (const [name, dir] of Object.entries(docker.buildContexts ?? {})) {
     args.push('--build-context', `${name}="${path.resolve(pkg.dirname, dir)}"`);
   }
@@ -278,7 +278,7 @@ export namespace DockerPublishService {
   }
 }
 
-declare module '../core/service.js' {
+declare module '../../../core/classes/service.js' {
   interface ServiceMap {
     dockerPublish: DockerPublishService;
   }

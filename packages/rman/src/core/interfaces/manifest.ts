@@ -1,8 +1,8 @@
 import path from 'node:path';
-import { RmanApplication } from './application.js';
-import type { Package } from './package.js';
+import { RmanApplication } from '../application.js';
+import type { Package } from '../classes/package.js';
+import { semverScheme, type VersionScheme } from '../classes/version-scheme.js';
 import type { Platform } from './plugin.js';
-import { semverScheme, type VersionScheme } from './version-scheme.js';
 
 /**
  * A package's identity, however its ecosystem happens to record it.

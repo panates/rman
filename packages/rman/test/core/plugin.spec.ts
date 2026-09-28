@@ -84,12 +84,10 @@ describe('core/plugin', () => {
   /** A module exporting a **platform**, which is the shape almost every `plugins` entry has - one
    *  technology, accepted wherever a plugin is. `manifestProvider` is the one required member: a
    *  platform that cannot recognize a package has nothing to apply the rest of itself to. */
+  /** A module exporting a plugin, for a `plugins` glob. It carries no technology - one is a
+   *  `platforms` entry now - so a case about *loading* needs nothing more than a name. */
   function pluginModule(name: string): string {
-    return `export default globalThis.__rmanDefinePlatform({
-      name: ${JSON.stringify(name)},
-      manifestProvider: { name: ${JSON.stringify(name)}, fileName: '${name}.json',
-        read: () => undefined, write: () => {} },
-    });`;
+    return `export default globalThis.__rmanDefinePlugin({ name: ${JSON.stringify(name)} });`;
   }
 
   /** A module exporting a command, for a `commands` glob. */
@@ -120,7 +118,10 @@ describe('core/plugin', () => {
   it('refuses a module that exports a config instead of a plugin', async () => {
     const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': `export default { plugins: [] };` });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-    expect(error.message).toContain('takes a plugin or a glob naming modules that export one');
+    /** The sentence the reader needs is about `extends`, not about shapes: a package's config is
+     *  merged underneath yours, which is what 1.x did by reading `plugins` out of it. */
+    expect(error.message).toContain('looks like an rman config rather than a plugin');
+    expect(error.message).toContain('reaches a repository through "extends"');
   });
 
   it('accepts a plugin declared inline, which only a JS config can do', async () => {
@@ -129,7 +130,7 @@ describe('core/plugin', () => {
     fs.writeFileSync(
       path.join(dir, '.rmanrc.mjs'),
       `export default {
-         plugins: [globalThis.__rmanDefinePlatform({ name: 'inline',
+         platforms: [globalThis.__rmanDefinePlatform({ name: 'inline',
            manifestProvider: { name: 'inline', fileName: 'i.json',
              read: () => undefined, write: () => {} } })],
          commands: [{ command: 'inline-cmd', describe: 'declared as an object',
@@ -145,23 +146,26 @@ describe('core/plugin', () => {
    * Everything a plugin used to register through it is a config key now, so a plugin contributing
    * only those needs none at all.
    */
-  it('calls init with the application, for whatever the seams do not name', async () => {
+  it('calls both stages - the application first, the repository once it exists', async () => {
     const dir = tmp();
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', private: true, version: '1.0.0' }));
     fs.writeFileSync(
       path.join(dir, '.rmanrc.mjs'),
       `export default { plugins: [globalThis.__rmanDefinePlugin({
          name: 'withinit',
-         platforms: [globalThis.__rmanDefinePlatform({
-           name: 'withinit',
-           manifestProvider: { name: 'withinit', fileName: 'w.json', read: () => undefined, write: () => {} },
-         })],
-         init(ctx) { globalThis.__rmanInitSawApp = !!ctx.app; },
+         afterInitApplication(ctx) { globalThis.__rmanInitSawApp = !!ctx.app; },
+         afterInitRepository(ctx) { globalThis.__rmanSawRepository = ctx.repository.name; },
        })] };`,
     );
     await captureLogs(() => runCli({ argv: ['list'], cwd: dir }));
     expect((globalThis as Record<string, unknown>).__rmanInitSawApp).toBe(true);
+    /** **The second stage, which is the one that could not be had before.** `afterInitApplication`
+     *  runs inside `Repository.create` before any package is known, so `ctx.app.repository` throws
+     *  there; the advice used to be "put it in a command's factory", which is no help at all to a
+     *  plugin contributing no command. */
+    expect((globalThis as Record<string, unknown>).__rmanSawRepository).toBe('root');
     delete (globalThis as Record<string, unknown>).__rmanInitSawApp;
+    delete (globalThis as Record<string, unknown>).__rmanSawRepository;
   });
 
   it("keeps an extended config's plugins when the repository names one of its own", async () => {
@@ -223,7 +227,7 @@ describe('core/plugin', () => {
   it('tells a package name in "plugins" to be an "extends" instead, naming the package', async () => {
     const dir = fixture({ plugins: ['rman-node'] });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-    expect(error.message).toContain('looks like a package name');
+    expect(error.message).toContain('looks like a name');
     expect(error.message).toContain('extends: "rman-node"');
   });
 
@@ -242,19 +246,19 @@ describe('core/plugin', () => {
     const dir = fixture({ plugins: ['*.mjs'] });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
     expect(error.message).toContain('matched no file');
-    expect(error.message).not.toContain('looks like a package name');
+    expect(error.message).not.toContain('looks like a name');
   });
 
   it('names the shape when a module exports something that is not an object at all', async () => {
     const dir = fixture({ plugins: ['./p.mjs'] }, { 'p.mjs': `export default 'oops';` });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-    expect(error.message).toContain('is a string');
+    expect(error.message).toContain('exports a string');
   });
 
   it('refuses an entry that is neither a glob nor a plugin', async () => {
     const dir = fixture({ plugins: [42] });
     const error = await expectCliFailure(() => runCli({ argv: ['list'], cwd: dir }));
-    expect(error.message).toContain('takes a plugin or a glob naming modules that export one');
+    expect(error.message).toContain('takes a plugin, or a glob naming modules that export one');
   });
 
   it('refuses a plugin with no name, which everything downstream is keyed by', async () => {
@@ -299,7 +303,7 @@ describe('core/plugin', () => {
       { plugins: ['./new.mjs'] },
       {
         'new.mjs': `export default globalThis.__rmanDefinePlugin({ name: 'modern',
-          init(ctx) { globalThis.__rmanModernInit = !!ctx.app; } });`,
+          afterInitApplication(ctx) { globalThis.__rmanModernInit = !!ctx.app; } });`,
       },
     );
     await captureLogs(() => runCli({ argv: ['list'], cwd: dir }));

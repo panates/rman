@@ -11,6 +11,8 @@ import yargs, { type ArgumentsCamelCase, type Argv, type CommandModule } from 'y
 import { hideBin } from 'yargs/helpers';
 import { version } from './constants.js';
 import { RmanApplication } from './core/application.js';
+import type { Package } from './core/classes/package.js';
+import { Repository } from './core/classes/repository.js';
 import { commandName, toYargsCommand } from './core/command-builder.js';
 import {
   assertNoBuiltinShadowing,
@@ -19,17 +21,23 @@ import {
   defaultCommandGlobs,
   loadCustomCommands,
   type LoadedCommand,
-} from './core/custom-command.js';
-import type { Package } from './core/package.js';
+} from './core/interfaces/custom-command.js';
 import { checkCustomCommand } from './core/plugin-loader.js';
-import { Repository } from './core/repository.js';
 import { commandRegistry, type RmanConfig } from './interfaces/rman-config.interface.js';
+import { colorYaml } from './utils/color-yaml.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/logger.js';
 import { filterPackages, readFromRootOption, readPackageFilterOptions } from './utils/package-filter.js';
-import { printableConfig } from './utils/printable-config.js';
+import { printableConfig, withoutContributions } from './utils/printable-config.js';
 import { runBin } from './utils/run-bin.js';
 
-export async function runCli(options?: { argv?: string[]; cwd?: string; app?: RmanApplication }) {
+export async function runCli(options?: {
+  argv?: string[];
+  cwd?: string;
+  app?: RmanApplication;
+  /** Forwarded to {@link Repository.create} - see its `presets`. `[]` is a caller with an
+   *  ecosystem of its own, which is what the core's own fixture is. */
+  presets?: readonly string[];
+}) {
   const _argv = options?.argv || hideBin(process.argv);
 
   /**
@@ -49,7 +57,7 @@ export async function runCli(options?: { argv?: string[]; cwd?: string; app?: Rm
     /** One application per run, made here so `--log-level` reaches its logger, and handed to
      *  `Repository.create` rather than found through a global. */
     const app = options?.app ?? new RmanApplication();
-    const repository = await Repository.create(options?.cwd, { app });
+    const repository = await Repository.create(options?.cwd, { app, presets: options?.presets });
 
     const program = yargs(_argv)
       .scriptName('rman')
@@ -356,8 +364,17 @@ function printCommandConfig(repository: Repository, spec: any, args: any): void 
   const shown = [...targets];
   if (!shown.some(p => p === repository.rootPackage)) shown.push(repository.rootPackage);
   const config: Record<string, unknown> = {};
-  for (const pkg of shown) config[pkg.name] = keys?.length ? pick(pkg.config, keys) : pkg.config;
-  console.log(indent(yaml.dump(printableConfig(config), { noRefs: true, lineWidth: 100 }).trimEnd()));
+  /** `withoutContributions` for the same reason `rman config` uses it: `plugins`, `platforms`,
+   *  `commands` and `publishTargets` are code, and a command's config section is about settings.
+   *  Only the "in full" branch needs it - `pick` already narrows to the keys the command reads. */
+  for (const pkg of shown) {
+    config[pkg.name] = keys?.length ? pick(pkg.config, keys) : withoutContributions(pkg.config);
+  }
+  /** Coloured after indenting, not before: `indent` prefixes each line, and an escape sequence
+   *  already sitting at the start of one is what it would be measuring. Gated on a terminal for the
+   *  reason `rman config` documents - the section is YAML and has to survive being redirected. */
+  const body = indent(yaml.dump(printableConfig(config), { noRefs: true, lineWidth: 100 }).trimEnd());
+  console.log(process.stdout.isTTY ? colorYaml(body) : body);
   if (!targets.includes(repository.rootPackage)) {
     console.log(
       comment(`# "${repository.rootPackage.name}" is the root - listed because repo-wide keys are read there.`),

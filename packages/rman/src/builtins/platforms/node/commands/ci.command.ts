@@ -1,7 +1,7 @@
-import type { ArgsOf, CommandOption } from '../../../index.js';
-import { declareCommand } from '../../../interfaces/rman-config.interface.js';
-import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../../../utils/branch-guard.js';
-import { packageFilterOptions, readPackageFilterOptions } from '../../../utils/package-filter.js';
+import type { ArgsOf, CommandOption } from '../../../../index.js';
+import { declareCommand } from '../../../../interfaces/rman-config.interface.js';
+import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../../../../utils/branch-guard.js';
+import { packageFilterOptions, readPackageFilterOptions } from '../../../../utils/package-filter.js';
 import { CiService } from '../services/ci.service.js';
 
 /** Hoisted out of the metadata literal so the handler can be annotated against them - see
@@ -42,7 +42,7 @@ type Args = ArgsOf<typeof config, typeof COMMAND>;
  * The repository arrives through `app` when the factory runs (in `cli.ts`, after `Repository.create`
  * has attached one), rather than through a `CommandContext` per invocation.
  */
-const ciCommand = declareCommand(app => {
+export const ciCommand = declareCommand(app => {
   const repository = app.repository;
   return {
     command: COMMAND,
@@ -65,5 +65,3 @@ const ciCommand = declareCommand(app => {
     },
   };
 });
-
-export default ciCommand;

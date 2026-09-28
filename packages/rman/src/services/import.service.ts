@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Service } from '../core/service.js';
+import { Service } from '../core/classes/service.js';
 import { GitHelper } from '../utils/git.js';
 
 /**
@@ -105,7 +105,7 @@ export namespace ImportService {
   }
 }
 
-declare module '../core/service.js' {
+declare module '../core/classes/service.js' {
   interface ServiceMap {
     import: ImportService;
   }

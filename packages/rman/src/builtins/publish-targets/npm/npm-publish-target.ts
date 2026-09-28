@@ -1,6 +1,6 @@
-import type { PublishTarget } from '../../core/publish-target.js';
-import { CiService } from '../platforms/node/services/ci.service.js';
-import { PublishService } from '../platforms/node/services/publish.service.js';
+import type { PublishTarget } from '../../../core/interfaces/publish-target.js';
+import { CiService } from '../../platforms/node/services/ci.service.js';
+import { PublishService } from '../../platforms/node/services/publish.service.js';
 
 /** The name this target answers to in `publish.target` and `--target`. */
 export const NPM_TARGET = 'npm';

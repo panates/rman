@@ -6,17 +6,17 @@ import {
   type GitScope,
   type PackageScope,
   type RepositoryScope,
-} from '../interfaces/config-scope.interface.js';
-import type { ResolvedConfig } from '../interfaces/rman-config.interface.js';
-import { GitHelper } from '../utils/git.js';
-import { RmanApplication } from './application.js';
-import { ConfigFileScope } from './config/config-file-scope.js';
-import { ConfigInterpolator } from './config/config-interpolator.js';
-import { DEFERRED_PATHS } from './config/config-paths.js';
-import { Manifest } from './manifest.js';
+} from '../../interfaces/config-scope.interface.js';
+import type { ResolvedConfig } from '../../interfaces/rman-config.interface.js';
+import { GitHelper } from '../../utils/git.js';
+import { RmanApplication } from '../application.js';
+import { ConfigFileScope } from '../config/config-file-scope.js';
+import { ConfigInterpolator } from '../config/config-interpolator.js';
+import { DEFERRED_PATHS } from '../config/config-paths.js';
+import { Manifest } from '../interfaces/manifest.js';
+import type { Platform } from '../interfaces/plugin.js';
+import type { PublishTarget } from '../interfaces/publish-target.js';
 import { Package } from './package.js';
-import type { Platform } from './plugin.js';
-import type { PublishTarget } from './publish-target.js';
 import { Workspace } from './workspace.js';
 
 export class Repository extends Package {

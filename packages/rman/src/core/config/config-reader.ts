@@ -1,14 +1,15 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import fastGlob from 'fast-glob';
 import * as yaml from 'js-yaml';
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
+import { presetNames, PRESETS_DIR } from '../../builtins/presets/index.js';
+import type { RmanConfig } from '../../interfaces/rman-config.interface.js';
+import type { Package } from '../classes/package.js';
+import type { Repository } from '../classes/repository.js';
+import { declaredKind, isDeclared, isPlatform, type Platform, type Plugin } from '../interfaces/plugin.js';
 import { mergeConfig } from './merge-config.js';
-import type { Package } from './package.js';
-import { isDeclared, isPlatform, type Platform, type Plugin } from './plugin.js';
-import type { Repository } from './repository.js';
 
 const requireConfigModule = createRequire(import.meta.url);
 const IDENTITY_KEYS = ['platform', 'name'] as const;
@@ -27,6 +28,10 @@ const PRESET_EXTENSIONS = ['.js', '.ts'];
 /** What an error about a default preset names itself as - there is no config key to quote, since
  *  these are laid down by the caller rather than written by anybody. */
 const PRESETS_LABEL = 'presets';
+
+/** Keys that only an rman **config** has, for telling one from a contribution once it has already
+ *  been refused - see `_assertLoaded`. `name` is not among them: a plugin has one too. */
+const CONFIG_SHAPED = ['extends', PLUGINS_KEY, PLATFORMS_KEY, 'commands', 'publishTargets'] as const;
 
 export class ConfigReader {
   /**
@@ -182,13 +187,21 @@ export class ConfigReader {
   }
 
   /**
-   * The one config `dirname` declares, or `undefined` for a directory that declares none.
+   * The one config file `dirname` declares, or `undefined` for a directory that declares none.
    *
    * **Several is an error**, which is the whole point of reading the directory rather than probing
    * the names in a fixed order: a probe cannot tell "this one" from "this one, and three others I
    * am quietly folding in underneath". The message lists what it found, because the fix is to
    * delete one and the reader has to know which are in play.
+   *
+   * Public because it answers a question a *reader* has and not only the resolver: `rman config`
+   * heads its output with the file you would open to change what it prints.
    */
+  findConfigSource(dirname: string): string | undefined {
+    return this._findConfigSource(dirname);
+  }
+
+  /** @see {@link ConfigReader.findConfigSource} */
   protected _findConfigSource(dirname: string): string | undefined {
     let entries: string[];
     try {
@@ -425,13 +438,7 @@ export class ConfigReader {
     for (const entry of Array.isArray(config.platforms) ? config.platforms : [config.platforms]) {
       if (typeof entry === 'string') {
         for (const { value, file } of await this._loadByGlob(entry, PLATFORMS_KEY)) {
-          if (!isPlatform(value as Platform)) {
-            throw new Error(
-              `"${PLATFORMS_KEY}" matched "${file}", whose default export is not a platform - a ` +
-                `platform is declared with definePlatform({ name, manifestProvider, ... }).`,
-            );
-          }
-          this._assertDeclaredPlugin(value as Platform as unknown as Plugin, file);
+          this._assertLoaded(value, file, 'platform');
           this._addPlatform(value as Platform, context);
         }
       } else if (entry && typeof entry === 'object' && isPlatform(entry)) {
@@ -451,16 +458,12 @@ export class ConfigReader {
     if (!context.platforms.some(p => p.name === platform.name)) context.platforms.push(platform);
   }
 
-  /** Appends a plugin, and the technologies it carries, unless one already answers to that name. */
-  /* **A plugin's platforms join the same list the `platforms` key feeds, here rather than at the
-   * caller.** `context.platforms` is what decides who claims a directory, so a technology reaching
-   * it by one route and not the other is two orders that can disagree - and the one that was
-   * missing is the one a plugin brought, which is how a platform a repository genuinely declared
-   * could lose to a preset's. Behind whatever the `platforms` key contributed directly, since
-   * naming a technology outright is the more direct statement. */
+  /** Appends a plugin unless one already answers to that name. */
+  /* A plugin carries no technologies any more - `platforms` is a config key, so a package shipping
+   * one declares it in its own config and the reader loads it through `_loadPlatforms` like any
+   * other. What is left of a plugin is a name and two stages. */
   protected _addPlugin(plugin: Plugin, context: ConfigReader.Context): void {
     if (!context.plugins.some(p => p.name === plugin.name)) context.plugins.push(plugin);
-    for (const platform of plugin.platforms ?? []) this._addPlatform(platform, context);
   }
 
   protected async _loadPlugins(config: RmanConfig, context: ConfigReader.Context) {
@@ -561,10 +564,61 @@ export class ConfigReader {
   protected async _loadPluginsByEntry(entry: string): Promise<Plugin[]> {
     const out: Plugin[] = [];
     for (const { value, file } of await this._loadByGlob(entry, PLUGINS_KEY)) {
-      this._assertDeclaredPlugin(value as Plugin, file);
+      this._assertLoaded(value, file, 'plugin');
       out.push(value as Plugin);
     }
     return out;
+  }
+
+  /**
+   * Refuses whatever a glob matched when it is not the kind the key takes, naming what it *is*.
+   *
+   * @param want which key is being loaded, so the message can point at the other one.
+   */
+  /* **Two of the three answers are facts now, and that is what the declaration kind bought.** The
+   * mark used to be a bare `true`, so the only question that could be asked was "declared at all?"
+   * - and the answer to everything else was one message about rman 1.x plugins. Measured on two
+   * exports: a module returning a *config* (`{ plugins: [] }`) and one returning the string
+   * `'oops'` both came back as `Plugin "undefined" … was not declared`, which names a type the
+   * value is not and quotes a name it does not have.
+   *
+   * The remaining guess is the last branch, and it is only about *which sentence* to write - the
+   * refusal is already decided, so a wrong guess costs a less helpful message rather than a plugin
+   * that loads as the wrong thing. That is the line `plugins` draws elsewhere too: never guess what
+   * something *is*, and it is fine to guess what the author meant once you have refused it. */
+  protected _assertLoaded(value: unknown, file: string, want: Plugin.DeclaredKind): void {
+    const kind = declaredKind(value);
+    if (kind === want) return;
+
+    /** Declared, but as the other one - the commonest mistake, and the only message that can just
+     *  say so. */
+    if (kind) {
+      const key = kind === 'platform' ? PLATFORMS_KEY : PLUGINS_KEY;
+      throw new Error(
+        `"${want === 'plugin' ? PLUGINS_KEY : PLATFORMS_KEY}" matched "${file}", whose default ` +
+          `export is a ${kind}, not a ${want}. Move it to "${key}".`,
+      );
+    }
+
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(
+        `"${want === 'plugin' ? PLUGINS_KEY : PLATFORMS_KEY}" takes a ${want} or a glob naming ` +
+          `modules that export one - "${file}" exports ${describeEntry(value)}.`,
+      );
+    }
+
+    /** A config is the near miss worth naming: a package's config reaches a repository through
+     *  `extends`, which is the key that means "merge this underneath mine" - and reading one out of
+     *  a `plugins` entry is exactly what 1.x did and what the split removed. */
+    if (CONFIG_SHAPED.some(key => key in (value as object))) {
+      throw new Error(
+        `"${want === 'plugin' ? PLUGINS_KEY : PLATFORMS_KEY}" matched "${file}", whose default ` +
+          `export looks like an rman config rather than a ${want}. A config reaches a repository ` +
+          `through "extends", which merges everything it declares underneath your own.`,
+      );
+    }
+
+    this._assertDeclaredPlugin(value as Plugin, file);
   }
 
   /**
@@ -685,10 +739,12 @@ export class ConfigReader {
     if (!/^[a-z][a-z0-9-]*$/i.test(name)) {
       throw new Error(`"${label}" preset name "${name}" is not a name - write \`${PRESET_PREFIX}node\`.`);
     }
-    /** Resolved against this module's own location, by extension: `.js` is the published layout
-     *  and `.ts` is the source tree a spec runs in. A built package never holds the second, so
-     *  trying it costs one `existsSync` and keeps one code path for both. */
-    const base = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'presets', name);
+    /** Resolved against the presets directory's own location, by extension: `.js` is the published
+     *  layout and `.ts` is the source tree a spec runs in. A built package never holds the second,
+     *  so trying it costs one `existsSync` and keeps one code path for both. The directory says
+     *  where it is (`PRESETS_DIR`) - a path computed here breaks silently when either file moves,
+     *  which is exactly what happened. */
+    const base = path.resolve(PRESETS_DIR, name);
     const found = PRESET_EXTENSIONS.map(ext => base + ext).find(f => fs.existsSync(f) && fs.statSync(f).isFile());
     if (!found) throw new Error(`"${label}" has no preset "${name}". rman ships: ${presetNames().join(', ')}.`);
     return found;
@@ -715,7 +771,9 @@ export namespace ConfigReader {
   }
 
   export interface Options {
-    plugins: Plugin[];
+    /** Plugins to start with - the application's. Optional like `platforms`, which it was not: a
+     *  plugin used to be how a technology arrived, so a caller always had one. */
+    plugins?: Plugin[];
     /**
      * rman's own presets to lay **underneath** this level's config - `['node']`, the bare names
      * `extends: "rman:node"` would have spelled. Omitted or empty, none are applied, which is what
@@ -784,12 +842,4 @@ function describeEntry(entry: unknown): string {
   if (Array.isArray(entry)) return 'an array';
   if (typeof entry === 'object') return 'an object that is not one';
   return `a ${typeof entry}`;
-}
-
-/** The presets rman ships, for the message when a name is not one of them. */
-/* A written list rather than a directory read: `presets/` is compiled output at runtime, and a
- * scan of it would answer differently from `src` during a test run. Keep it in step by hand - the
- * spec that names one is what catches a miss. */
-function presetNames(): string[] {
-  return ['node'];
 }

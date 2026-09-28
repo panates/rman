@@ -1269,7 +1269,7 @@ step there is mistaken for a value.
 | `publish.npm.directory` | `string` | none (the package's own directory) | Per-package cascaded. Where the publishable output lives, relative to the package's own directory. A package's own `publishConfig.directory` wins over it; `--contents` is the last fallback. Publishing from such a directory means **`publish` generates the manifest there** - see below. |
 | `publish.docker.image` | `string` | none (required once `"docker"` is a target) | A bare name is prefixed with `--docker-namespace`/`DOCKERHUB_NAMESPACE`; one already containing `/` is used verbatim. |
 | `publish.docker.dockerfile` | `string` | `'Dockerfile'` | Relative to the package's own directory. |
-| `publish.docker.platforms` | `string[]` | `['linux/amd64']` | `docker buildx build --platform` targets. |
+| `publish.docker.architectures` | `string[]` | `['linux/amd64']` | `docker buildx build --platform` targets. |
 | `publish.docker.cwd` | `string` | that package's own directory | Relative to the repository root. |
 | `publish.docker.buildContexts` | `Record<string, string>` | `{}` | Named `--build-context <name>=<path>` entries, each path relative to the package's own directory. |
 | `publish.docker.buildArgs` | `Record<string, string>` | `{}` | `--build-arg <name>=<value>` entries. A value of exactly `"$NAME"` expands from `process.env.NAME`. |
@@ -1862,7 +1862,7 @@ side.
 
 `applyPlan` logs in once (`DOCKERHUB_USERNAME`/`DOCKERHUB_PASSWORD` environment variables) and runs
 `docker buildx create --use` once, then for each `'publish'` entry a single `docker buildx build
---push`, using that package's own `publish.docker` config: `platforms` (default `["linux/amd64"]`),
+--push`, using that package's own `publish.docker` config: `architectures` (default `["linux/amd64"]`),
 named `buildContexts` (`--build-context <name>=<path>`, each path relative to the package's own
 directory), `buildArgs` (`--build-arg <name>=<value>` - a value of exactly `"$NAME"` expands from
 `process.env.NAME`), an optional `cwd` override (relative to the repository root, for a Dockerfile

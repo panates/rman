@@ -1,8 +1,8 @@
-import type { RmanConfig } from '../interfaces/rman-config.interface.js';
-import type { PackageFilterOptions } from '../utils/package-filter.js';
-import type { RmanApplication } from './application.js';
-import type { Package } from './package.js';
-import type { Repository } from './repository.js';
+import type { RmanConfig } from '../../interfaces/rman-config.interface.js';
+import type { PackageFilterOptions } from '../../utils/package-filter.js';
+import type { RmanApplication } from '../application.js';
+import type { Package } from '../classes/package.js';
+import type { Repository } from '../classes/repository.js';
 
 /**
  * **Where a package's artifact ships, as a contribution.**

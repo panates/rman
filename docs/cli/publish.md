@@ -214,7 +214,7 @@ missing it is a clear `'error'` in the plan, not a silent skip:
     "target": ["docker"],
     "docker": {
       "image": "my-app", // bare - prefixed with --docker-namespace/DOCKERHUB_NAMESPACE
-      "platforms": ["linux/amd64", "linux/arm64"], // default ["linux/amd64"]
+      "architectures": ["linux/amd64", "linux/arm64"], // default ["linux/amd64"]
       "buildContexts": { "root": "../.." }, // docker buildx build --build-context root=<path>
       "buildArgs": { "GITHUB_TOKEN": "$GITHUB_TOKEN" } // "$NAME" expands from the environment
     }

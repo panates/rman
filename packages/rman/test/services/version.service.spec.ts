@@ -693,7 +693,12 @@ describe('services/version', () => {
   });
 
   describe('applyPlan()', () => {
-    function fixtureWithOrigin(): { dir: string; originDir: string } {
+    /**
+     * @param rmanrcJs a root config written as `.rmanrc.cjs` **instead of** the plain marker. A
+     *   directory may declare a single config, so a case wanting a function at the root cannot add
+     *   one beside the marker - and does not need to, since `findRoot` accepts any `.rmanrc*`.
+     */
+    function fixtureWithOrigin(rmanrcJs?: string): { dir: string; originDir: string } {
       const dir = tmp();
       const originDir = tmp();
       fs.rmSync(originDir, { recursive: true, force: true });
@@ -701,7 +706,8 @@ describe('services/version', () => {
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       /** Marks the repository root: `Workspace.findRoot` looks for an `.rmanrc*` or a `.git`,
        *  since it runs before the plugins that would know what a package is. */
-      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      if (rmanrcJs) fs.writeFileSync(path.join(dir, '.rmanrc.cjs'), `module.exports = ${rmanrcJs};\n`);
+      else fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
       writeJson(dir, 'packages/b/package.json', {
         name: 'pkg-b',
@@ -820,17 +826,14 @@ describe('services/version', () => {
      * same as two steps anyway.
      */
     it('runs a function in a version hook, with the package it is versioning', async () => {
-      const { dir } = fixtureWithOrigin();
-      fs.writeFileSync(
-        path.join(dir, '.rmanrc.cjs'),
-        `module.exports = { '[*]': { version: { before: function note(ctx) {
+      const { dir } = fixtureWithOrigin(
+        `{ '[*]': { version: { before: function note(ctx) {
            require('node:fs').writeFileSync(
              require('node:path').join(ctx.pkg.dirname, 'hook.txt'),
              ctx.pkg.name + ' @ ' + ctx.pkg.version,
            );
-         } } } };\n`,
+         } } } }`,
       );
-      commitAll(dir, 'chore: add a version hook');
 
       const repo = await createRepository(dir);
       await service('version').applyPlan(await planner().getPlan(repo));
@@ -841,7 +844,6 @@ describe('services/version', () => {
     });
 
     it('runs each entry of a hook list as its own step, rather than joining them with &&', async () => {
-      const { dir } = fixtureWithOrigin();
       /**
        * The function writes through `ctx.cwd`, and that is the point of the case rather than an
        * incidental detail: a shell step is a child process and gets a real working directory, while
@@ -850,18 +852,16 @@ describe('services/version', () => {
        * bare `'steps.txt'` this landed in the repository root while the two shell steps wrote to the
        * package (measured).
        */
-      fs.writeFileSync(
-        path.join(dir, '.rmanrc.cjs'),
-        `module.exports = { '[pkg-a]': { version: { before: [
+      const { dir } = fixtureWithOrigin(
+        `{ '[pkg-a]': { version: { before: [
            'echo one >> steps.txt',
            function second(ctx) {
              const p = require('node:path').join(ctx.cwd, 'steps.txt');
              require('node:fs').appendFileSync(p, 'two\\n');
            },
            'echo three >> steps.txt',
-         ] } } };\n`,
+         ] } } }`,
       );
-      commitAll(dir, 'chore: add version hooks');
 
       const repo = await createRepository(dir);
       await service('version').applyPlan(await planner().getPlan(repo));

@@ -1,10 +1,10 @@
-import type { RunService } from '../services/run.service.js';
-import type { VersionPlanService } from '../services/version-plan.service.js';
-import type { BinPath } from '../utils/bin-path.js';
-import type { RmanApplication } from './application.js';
+import type { RunService } from '../../services/run.service.js';
+import type { VersionPlanService } from '../../services/version-plan.service.js';
+import type { BinPath } from '../../utils/bin-path.js';
+import type { RmanApplication } from '../application.js';
+import type { Repository } from '../classes/repository.js';
+import type { Workspace } from '../classes/workspace.js';
 import type { Manifest, ManifestProvider } from './manifest.js';
-import type { Repository } from './repository.js';
-import type { Workspace } from './workspace.js';
 
 /**
  * **One technology, as a whole** - Node, Cargo, Maven. Everything rman needs in order to treat a

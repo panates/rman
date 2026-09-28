@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { DockerPublishService } from '../../src/services/docker-publish.service.js';
+import { DockerPublishService } from '../../src/builtins/publish-targets/docker/docker-publish.service.js';
 import { createRepository, service, useLocalBin, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
@@ -253,7 +253,7 @@ describe('services/docker-publish', () => {
       return { logFile };
     }
 
-    it('builds and pushes with platforms/build-contexts/build-args/dockerfile/tags from .rmanrc', async () => {
+    it('builds and pushes with architectures/build-contexts/build-args/dockerfile/tags from .rmanrc', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       /** Marks the repository root: `Workspace.findRoot` looks for an `.rmanrc*` or a `.git`,
@@ -268,7 +268,7 @@ describe('services/docker-publish', () => {
             target: ['docker'],
             docker: {
               image: 'myorg/pkg-a',
-              platforms: ['linux/amd64', 'linux/arm64'],
+              architectures: ['linux/amd64', 'linux/arm64'],
               buildContexts: { root: '../..' },
               buildArgs: { GREETING: 'hello' },
             },

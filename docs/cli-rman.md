@@ -42,6 +42,7 @@ rman <command> --help   # full option list for that one command
 | `run <script>` | [`docs/cli/run.md`](cli/run.md) | Runs an npm script in each package. |
 | `build` | [`docs/cli/build.md`](cli/build.md) | Alias for `run build`. |
 | `test` | [`docs/cli/test.md`](cli/test.md) | Alias for `run test`. |
+| `lint` | [`docs/cli/lint.md`](cli/lint.md) | Alias for `run lint`. |
 | `exec [command..]` | [`docs/cli/exec.md`](cli/exec.md) | Runs an arbitrary shell command in each package. |
 | `config` | [`docs/cli/config.md`](cli/config.md) | Prints the effective `.rmanrc` config for the current directory's package. |
 | `diff [package]` | [`docs/cli/diff.md`](cli/diff.md) | Shows the git diff since a package's (or the repo's) last release tag. |
@@ -227,7 +228,7 @@ These apply to every command, before the command name:
 | --- | --- | --- |
 | `--help` | `-h` | Shows help - `--help` for the whole CLI, `<command> --help` for one command's full option list. |
 | `--version` | `-v` | Prints the installed `rman` version. |
-| `--log-level <level>` | - | Default verbosity of the per-step log for `run`/`build`/`test`/`ci` (`silent`\|`error`\|`info`\|`verbose`). Default `info`, or `.rmanrc "logLevel"`. Per-package overridable via `.rmanrc run.<script>.logLevel`. Only affects the *classic* one-line-per-step log - it has no effect on the live progress panel's own output. |
+| `--log-level <level>` | - | Default verbosity of the per-step log for `run`/`build`/`test`/`lint`/`ci` (`silent`\|`error`\|`info`\|`verbose`). Default `info`, or `.rmanrc "logLevel"`. Per-package overridable via `.rmanrc run.<script>.logLevel`. Only affects the *classic* one-line-per-step log - it has no effect on the live progress panel's own output. |
 | `--config` | - | Print what this command would run with, and **run nothing**. See below. |
 
 ### `--config`: what would this command run with?
@@ -279,7 +280,7 @@ A misspelled command name (e.g. `rman versoin`) gets a `Did you mean version?` s
 
 ## Command scope: repository root vs. current package
 
-Several commands (`run`/`build`/`test`, `exec`, `changelog`, `diff`, `config`, and `rman-node`'s
+Several commands (`run`/`build`/`test`/`lint`, `exec`, `changelog`, `diff`, `config`, and `rman-node`'s
 `clean`)
 automatically scope themselves to *just the package you're standing in* when your shell's current
 directory is inside one package's own directory (rather than the repository root) - pass
@@ -295,7 +296,7 @@ deliberately have **no** `--from-root`: a flag that does nothing reads as a prom
 > "the root alone". `-r` is unchanged; the old long spelling is gone rather than aliased, so
 > `rman run build --root` now fails with `Unknown argument: root`.
 >
-> There is deliberately no `--root-only` beside it. It would do nothing on `run`/`build`/`test` (the
+> There is deliberately no `--root-only` beside it. It would do nothing on `run`/`build`/`test`/`lint` (the
 > repository's package list holds the members only, and the root contributes just its `pre`/`post`
 > bookends), mean the same thing as `--from-root` on `diff`, already be what `--from-root` does on
 > `config`, and on `clean` it would be actively misleading - the root's own sweep recurses through
@@ -311,14 +312,14 @@ too.
 ### `skip`
 
 `.rmanrc "skip": true` on a package means "leave this one alone", and every command that *acts* on
-packages honours it - `run`/`build`/`test`, `exec`, `version`, `changelog`, plus `clean` and
+packages honours it - `run`/`build`/`test`/`lint`, `exec`, `version`, `changelog`, plus `clean` and
 `publish`. `list` deliberately ignores it: it reports on the repository rather than acting on it,
 and an inventory hiding part of it answers a different question than the one asked. A skipped
 package is dropped **before** `--deps`/`--dependents`, so a dependency edge cannot drag it back in.
 
 ### Package filtering
 
-`list`, `run`/`build`/`test`, `exec`, `version`, `changelog` - and a plugin's commands - all accept:
+`list`, `run`/`build`/`test`/`lint`, `exec`, `version`, `changelog` - and a plugin's commands - all accept:
 
 | Option | Description |
 | --- | --- |
@@ -363,7 +364,7 @@ Full semantics (glob syntax, how `--deps`/`--dependents` combine): see
 
 ### Branch guard
 
-Every command that mutates state or runs scripts - `run`/`build`/`test`, `exec`, `version`, and
+Every command that mutates state or runs scripts - `run`/`build`/`test`/`lint`, `exec`, `version`, and
 `rman-node`'s `ci`/`clean`/`publish` - additionally accepts:
 
 | Option | Description |

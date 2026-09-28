@@ -2,14 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import colors from 'ansi-colors';
 import fg from 'fast-glob';
-import type { Package } from '../../../core/package.js';
-import type { Repository } from '../../../core/repository.js';
-import type { LogLevel } from '../../../utils/logger.js';
-import { Logger, resolveRootLogLevel } from '../../../utils/logger.js';
-import type { PackageFilterOptions } from '../../../utils/package-filter.js';
-import { filterPackages } from '../../../utils/package-filter.js';
-import type { ProgressItem } from '../../../utils/progress-panel.js';
-import { ProgressPanel } from '../../../utils/progress-panel.js';
+import type { Package } from '../../../../core/classes/package.js';
+import type { Repository } from '../../../../core/classes/repository.js';
+import type { LogLevel } from '../../../../utils/logger.js';
+import { Logger, resolveRootLogLevel } from '../../../../utils/logger.js';
+import type { PackageFilterOptions } from '../../../../utils/package-filter.js';
+import { filterPackages } from '../../../../utils/package-filter.js';
+import type { ProgressItem } from '../../../../utils/progress-panel.js';
+import { ProgressPanel } from '../../../../utils/progress-panel.js';
 
 export namespace CleanService {
   export interface Options extends PackageFilterOptions {

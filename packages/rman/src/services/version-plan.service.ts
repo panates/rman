@@ -1,8 +1,8 @@
 import path from 'node:path';
 import { RmanApplication } from '../core/application.js';
-import type { Package } from '../core/package.js';
-import type { Repository } from '../core/repository.js';
-import { assertOneScheme, type ChangeKind, semverScheme, VersionScheme } from '../core/version-scheme.js';
+import type { Package } from '../core/classes/package.js';
+import type { Repository } from '../core/classes/repository.js';
+import { assertOneScheme, type ChangeKind, semverScheme, VersionScheme } from '../core/classes/version-scheme.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { findLastReleaseVersion, formatCalendarVersion, usesCalendarVersion } from '../utils/release-version.js';

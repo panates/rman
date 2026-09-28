@@ -3,12 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { RmanApplication } from '../../src/core/application.js';
-import type { ManifestProvider } from '../../src/core/manifest.js';
-import { definePlatform, type Platform } from '../../src/core/plugin.js';
+import { Repository } from '../../src/core/classes/repository.js';
+import { Workspace } from '../../src/core/classes/workspace.js';
+import type { ManifestProvider } from '../../src/core/interfaces/manifest.js';
+import { definePlatform, type Platform } from '../../src/core/interfaces/plugin.js';
 import { registerPlugin } from '../../src/core/plugin-loader.js';
-import { Repository } from '../../src/core/repository.js';
-import { Workspace } from '../../src/core/workspace.js';
-import { BUILTIN_PLUGINS } from '../../src/plugins/builtins.js';
 import { filterPackages } from '../../src/utils/package-filter.js';
 import { createApp, createRepository, usePlugin, useTestEcosystem } from '../_fixture.js';
 
@@ -529,76 +528,37 @@ describe('core/Workspace', () => {
       expect(error?.message).toContain('which is not a platform this repository has');
       /** The message has to say what the repository *does* have, or it only reports that something
        *  is wrong. */
+      /** The message has to say what the repository *does* have, or it only reports that
+       *  something is wrong. `test` alone, because this fixture opts out of rman's own presets -
+       *  a real repository would see `node` here too. */
       expect(error?.message).toContain('Registered: test');
-      expect(error?.message).toContain('rman ships node');
+      expect(error?.message).toContain('Contribute it with "platforms"');
     });
 
     /**
-     * **The root naming a built-in puts it at the front of `plugins`** - saying which technology
-     * this repository *is* is saying it has it, and making the author write both was a distinction
-     * only rman could see. Three claims in one repository, because they are one decision:
+     * **`platform` selects; it no longer loads.** Naming `node` here resolves against the
+     * technologies in play, and the `node` preset is in play because `DEFAULT_PRESETS` puts it
+     * under every root - so the declaration reaches a platform without bringing one.
      *
-     * - the platform arrives although no `plugins` entry named it;
-     * - **so do its contributions** - `clean`, `ci` and the npm target, exactly as
-     *   `plugins: ['node']` brings them. This asserted the opposite for one commit, and the
-     *   repository it was noticed in is what settled it: `platform: 'node'` gave a working
-     *   `rman list` with a `node` column and `Unknown arguments: clean`;
-     * - detection does not run, because the repository *said* something. Guessing anyway would put
-     *   a second platform beside the declared one, competing for every directory the declaration
-     *   did not cover.
+     * It used to *promote* the named built-in to the front of `plugins` (`_expandBuiltinPlugins`),
+     * which arrived with commands and publish targets attached and only ever worked for a name rman
+     * itself shipped. The specs for that promotion, and for a second built-in stubbed into
+     * `BUILTIN_PLUGINS` to observe its ordering, went with it; what replaced the ordering claim is
+     * `workspace-create.spec.ts`'s "lays rman's own presets under the root, **behind** whatever the
+     * repository declared".
      *
-     * On a bare application, not the fixture's: with `test` registered, `node` would be a second
-     * technology and detection would already be suppressed by `platforms.size`, so the spec would
-     * pass without the condition it is about. The control is the case below it.
+     * On a bare application, not the fixture's, so `node` is the only technology in play and the
+     * declaration is doing the work rather than `test` happening to claim the directory.
      */
-    it('loads a built-in it names, contributions and all, and stands in for detection', async () => {
+    it('resolves against a technology the default presets brought, contributions and all', async () => {
       const dir = tmp();
       write(dir, '.rmanrc', { platform: 'node' });
       write(dir, 'package.json', { name: 'root', private: true, version: '1.0.0' });
 
       const repository = await Repository.create(dir, { app: new RmanApplication() });
       expect(repository.rootPackage.provider).toBe('node');
-      expect(repository.detectedBuiltin).toBeUndefined();
       expect(repository.config.commands).toBeDefined();
       expect(repository.config.publishTargets).toBeDefined();
-    });
-
-    /**
-     * **At the front of `plugins`, not the back**, which is what makes it a statement rather than
-     * an addition: `platformFor` takes the first registered platform that recognizes a directory,
-     * so the one this repository says it *is* wins over anything a shared config brought along.
-     *
-     * **Two built-ins are needed to see it at all.** rman ships one, so with only `node` the order
-     * is unobservable and a control that swaps the ends passes - measured. A second is stubbed into
-     * `BUILTIN_PLUGINS` the way `detect.spec.ts` does, and `second` claims the root's directory,
-     * so the answer is a fact about resolution rather than about the array.
-     */
-    it('puts the declared platform ahead of the ones plugins already named', async () => {
-      const dir = tmp();
-      write(dir, '.rmanrc', { platform: 'second', plugins: ['node'] });
-      write(dir, 'second.json', {});
-      write(dir, 'package.json', { name: 'root', version: '1.0.0' });
-
-      const second = definePlatform({
-        name: 'second',
-        manifestProvider: {
-          name: 'second',
-          fileName: 'second.json',
-          read: d =>
-            fs.existsSync(path.join(d, 'second.json')) ? { name: 'x', version: '0.0.0', raw: {} } : undefined,
-          write: () => undefined,
-        },
-      });
-      BUILTIN_PLUGINS.second = { platform: () => second, contribute: () => ({ plugins: [second] }) };
-      try {
-        const repository = await Repository.create(dir, { app: new RmanApplication() });
-        expect([...repository.app.platforms].map(p => p.name)).toEqual(['second', 'node']);
-        /** The consequence, rather than a restatement of the order: the root holds both manifests,
-         *  and the declared platform is the one that claims it. */
-        expect(repository.rootPackage.provider).toBe('second');
-      } finally {
-        delete BUILTIN_PLUGINS.second;
-      }
     });
 
     /** `"[/]"` is the *precise* spelling of "the root is node" - it speaks for the root package
@@ -615,33 +575,12 @@ describe('core/Workspace', () => {
     });
 
     /**
-     * **Only a built-in is promoted**, and a third-party name must not be - `plugins` would then
-     * hold a bare string, which `loadPlugins` reads as a glob matching no file. The failure would
-     * say the plugin is missing while it is registered perfectly well.
-     *
-     * Here `other` is registered on the application directly, the way a programmatic caller does,
-     * so the declaration resolves and nothing is added to `plugins`.
+     * **A nested declaration selects for its own directory and contributes nothing** - which is
+     * what a Node package sitting inside a repository of some other technology needs. `commands`
+     * and `publishTargets` are the repository's, read at the root; the preset put them there, and
+     * this level only says which of the technologies in play claims *this* directory.
      */
-    it('promotes only a built-in, leaving a third-party platform to its own plugins entry', async () => {
-      const dir = tmp();
-      write(dir, '.rmanrc', { platform: 'other' });
-      write(dir, 'other.json', { name: 'root' });
-
-      const app = new RmanApplication();
-      registerPlugin(app, otherPlatform);
-      const repository = await Repository.create(dir, { app });
-      expect(repository.rootPackage.provider).toBe('other');
-      /** Nothing was invented for it: `plugins` is still what the author wrote, which is nothing. */
-      expect(repository.config.plugins).toBeUndefined();
-    });
-
-    /**
-     * **The boundary that remains, and it is structural rather than chosen**: `plugins` is read
-     * once, at the root, before any package exists - so a *nested* declaration cannot contribute
-     * commands even in principle. It still loads the technology, through `declaredPlatformAt`,
-     * which is what a Node package sitting inside a Cargo repository needs.
-     */
-    it('loads the technology alone for a declaration below the root', async () => {
+    it('selects for a directory below the root without contributing anything', async () => {
       const dir = tmp();
       write(dir, '.rmanrc', { platform: 'other' });
       write(dir, 'other.json', { name: 'root', members: ['packages/web'] });
@@ -653,14 +592,12 @@ describe('core/Workspace', () => {
       registerPlugin(app, otherPlatform);
       const repository = await Repository.create(dir, { app });
       expect(repository.getPackages().map(p => p.provider)).toEqual(['node']);
-      /** `clean` is not here, and could not be: the key that brings it was read before this
-       *  directory was known to exist. */
-      expect(repository.config.commands).toBeUndefined();
     });
 
-    /** The control for the one above: the identical repository with the key removed *is* detected,
-     *  and detection brings the whole built-in - commands included. */
-    it('and without it the same repository is detected instead, contributions and all', async () => {
+    /** The control for the one above: the identical repository with the key removed gets the same
+     *  built-in anyway, because rman's own presets are laid under every root - contributions
+     *  included. This was detection's case; the preset default replaced it. */
+    it('and without it the same repository gets the preset anyway, contributions and all', async () => {
       const dir = tmp();
       write(dir, '.rmanrc', {});
       write(dir, 'package.json', { name: 'root', private: true, version: '1.0.0' });
@@ -668,7 +605,7 @@ describe('core/Workspace', () => {
       const app = new RmanApplication();
       app.logger.level = 'silent';
       const repository = await Repository.create(dir, { app });
-      expect(repository.detectedBuiltin?.name).toBe('node');
+      expect(repository.rootPackage.provider).toBe('node');
       expect(repository.config.commands).toBeDefined();
     });
 

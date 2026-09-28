@@ -3,7 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'expect';
-import { assertNoBuiltinShadowing, defaultCommandGlobs, loadCustomCommands } from '../../src/core/custom-command.js';
+import {
+  assertNoBuiltinShadowing,
+  defaultCommandGlobs,
+  loadCustomCommands,
+} from '../../src/core/interfaces/custom-command.js';
 
 const srcIndex = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/index.ts');
 

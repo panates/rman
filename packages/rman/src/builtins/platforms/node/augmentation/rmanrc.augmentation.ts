@@ -1,5 +1,4 @@
-import type cleanCommand from '../commands/clean.command.js';
-import type { CleanExtraKeys } from '../commands/clean.command.js';
+import type { cleanCommand, CleanExtraKeys } from '../commands/clean.command.js';
 import type { NodeConfigKeys, RmanNodeConfig } from '../node-config.interface.js';
 import type { CiService } from '../services/ci.service.js';
 

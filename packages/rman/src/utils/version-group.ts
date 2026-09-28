@@ -1,5 +1,5 @@
-import type { Package } from '../core/package.js';
-import type { Repository } from '../core/repository.js';
+import type { Package } from '../core/classes/package.js';
+import type { Repository } from '../core/classes/repository.js';
 
 /**
  * The identity packages are batched by when `version` plans a release - `.rmanrc group`, cascaded

@@ -1,10 +1,9 @@
 import { expect } from 'expect';
+import { nodePreset } from '../../../src/builtins/presets/node.js';
 import type { NodeConfigKeys, ParsedWorkspaceRange, RmanNodeConfig } from '../../../src/index.js';
 import {
-  BUILTIN_PLUGINS,
   CiService,
   CleanService,
-  isBuiltinPlugin,
   NodeVersionPlanService,
   NPM_TARGET,
   NpmPublishTarget,
@@ -51,41 +50,40 @@ describe('docs/node.md: the documented API surface', () => {
   });
 
   /**
-   * **The central claim, and what the fold changed about it: the built-in is a *config*, not a
-   * bare plugin.**
+   * **The preset is a config, and that is what makes it a preset rather than a bare platform.**
    *
    * It carries the three kinds of contribution the page's opening table lists, which is what
-   * `plugins: ['node']` has to deliver for it to replace the `extends: 'rman-node'` a Node
-   * repository used to be required to write - a technology alone would bring the manifest reader
-   * and leave `rman clean` an unknown argument.
+   * `extends: "rman:node"` - and the default layer that names it - has to deliver: a technology
+   * alone would bring the manifest reader and leave `rman clean` an unknown argument.
    *
    * Asserted on the shape rather than the instances, since the instances are deliberately not
    * exported.
    */
-  it('contributes a plugin, commands and a publish target, as one config', () => {
-    const config = BUILTIN_PLUGINS.node!.contribute();
-    expect(Object.keys(config).sort()).toEqual(['commands', 'plugins', 'publishTargets']);
-    expect(config.plugins).toHaveLength(1);
+  it('contributes a technology, commands and a publish target, as one config', () => {
+    const config = nodePreset();
+    expect(Object.keys(config).sort()).toEqual(['commands', 'platforms', 'publishTargets']);
+    expect(config.platforms).toHaveLength(1);
     expect(config.publishTargets).toHaveLength(1);
-    /** `ci` and `clean` - the two commands the node built-in brings, `publish` being the core's.
+    /** `ci` and `clean` - the two commands the node preset brings, `publish` being the core's.
      *  Declarative factories, so their names come from calling them, which needs an application;
      *  the count is what this case can see. */
     expect(config.commands).toHaveLength(2);
   });
 
   /**
-   * **A function, not a value, and that is the line between bundled and always on.** Registering
-   * the built-in augments the core's `SystemInfo` in place; were that to happen at import, `rman
-   * info` would report npm's tooling in a repository that never named the built-in.
+   * **A function, not a value, and that is the line between shipped and always on.** Building the
+   * preset augments the core's `SystemInfo` in place; were that to happen at import, `rman info`
+   * would report npm's tooling in a repository whose own technology is something else.
    *
-   * `plugin` is the other half: detection asks a platform whether a directory is its own, and that
-   * question has to be answerable without turning anything on - so asking and contributing are two
-   * calls, not one.
+   * **And its contributions are identical across calls**, which a preset that is laid down by
+   * default *and* nameable in `extends` needs: the contribution keys de-duplicate by identity, so
+   * two `NpmPublishTarget` instances reached `publish` and tripped its own collision guard.
    */
-  it('does nothing until it is asked for', () => {
-    expect(typeof BUILTIN_PLUGINS.node!.contribute).toBe('function');
-    expect(isBuiltinPlugin('node')).toBe(true);
-    /** A published package name is not a built-in - it reaches a repository through `extends`. */
-    expect(isBuiltinPlugin('rman-node')).toBe(false);
+  it('builds the same contributions however often it is asked', () => {
+    const a = nodePreset();
+    const b = nodePreset();
+    expect((a.publishTargets as unknown[])[0]).toBe((b.publishTargets as unknown[])[0]);
+    expect((a.platforms as unknown[])[0]).toBe((b.platforms as unknown[])[0]);
+    expect((a.commands as unknown[])[0]).toBe((b.commands as unknown[])[0]);
   });
 });

@@ -1,6 +1,6 @@
 import colors from 'ansi-colors';
-import type { ConfigValue } from '../core/config.js';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
+import type { ConfigValue, RmanConfig } from '../interfaces/rman-config.interface.js';
+import { registerCommand } from '../interfaces/rman-config.interface.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
 import { Logger, resolveRootLogLevel } from '../utils/logger.js';
 import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';

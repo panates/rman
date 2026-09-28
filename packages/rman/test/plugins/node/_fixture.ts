@@ -1,16 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { runCli as rmanRunCli } from '../../../src/cli.js';
-import { registerPlugin } from '../../../src/core/plugin-loader.js';
-import {
-  basePlatform,
-  definePlatform,
-  Repository,
-  RmanApplication,
-  type ServiceMap,
-  VersionPlanService,
-  Workspace,
-} from '../../../src/index.js';
 /**
  * The **platform**, by name - not the module's default export, which is an rman *config* that
  * carries it (`{ plugins: [nodePlatform] }`).
@@ -22,8 +11,19 @@ import {
  */
 /** The platform's own module, not the package entry point: `index.ts` exports what a *user*
  *  needs, and a test reaching for something it does not export is asking the wrong file. */
-import { NodePlatform } from '../../../src/plugins/node/node.platform.js';
-import { NpmPublishTarget } from '../../../src/plugins/node/npm-publish-target.js';
+import { NodePlatform } from '../../../src/builtins/platforms/node/node.platform.js';
+import { NpmPublishTarget } from '../../../src/builtins/publish-targets/npm/npm-publish-target.js';
+import { runCli as rmanRunCli } from '../../../src/cli.js';
+import { registerPlugin } from '../../../src/core/plugin-loader.js';
+import {
+  basePlatform,
+  definePlatform,
+  Repository,
+  RmanApplication,
+  type ServiceMap,
+  VersionPlanService,
+  Workspace,
+} from '../../../src/index.js';
 
 /**
  * Declares this package as a plugin of the fixture repository at `dir`, so its commands exist at
@@ -38,6 +38,8 @@ import { NpmPublishTarget } from '../../../src/plugins/node/npm-publish-target.j
  * Merges into an existing `.rmanrc` rather than replacing it, since most fixtures write one of their
  * own.
  */
+const NODE_PRESET = 'rman:node';
+
 export function declarePlugin(dir: string): void {
   /**
    * Written at the **repository root**, not at `dir`.
@@ -47,17 +49,19 @@ export function declarePlugin(dir: string): void {
    * `.rmanrc` in the chain, so the root's - which says nothing about the plugin - would win and
    * the commands would simply not exist. Measured as `Unknown argument: clean`.
    *
-   * **`plugins: ['node']`, which is what a real repository writes now.** It used to be an
-   * `extends` naming this package's entry point by absolute path, because the plugin shipped
-   * separately and a bare temporary directory has no `node_modules` to resolve `'rman-node'`
-   * through. Bundled, the built-in is reachable by name from anywhere, so the fixture and a real
-   * repository finally write the same line.
+   * **`extends: 'rman:node'`, which is what a real repository writes.** A preset is an ordinary
+   * config that ships with rman - it contributes the technology, the two commands that are npm's
+   * alone and the npm publish target - so the fixture and a real repository write the same line.
+   *
+   * It was `plugins: ['node']` while a built-in was a *name* in that key, and before that an
+   * `extends` naming this package's entry point by absolute path. The `rman:` prefix is what makes
+   * it reachable from a bare temporary directory with no `node_modules` at all.
    */
   const file = path.join(Workspace.findRoot(dir), '.rmanrc');
   const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf-8')) : {};
-  const declared: unknown[] = Array.isArray(config.plugins) ? config.plugins : config.plugins ? [config.plugins] : [];
-  if (!declared.includes('node')) declared.push('node');
-  config.plugins = declared;
+  const declared: unknown[] = Array.isArray(config.extends) ? config.extends : config.extends ? [config.extends] : [];
+  if (!declared.includes(NODE_PRESET)) declared.push(NODE_PRESET);
+  config.extends = declared;
   fs.writeFileSync(file, JSON.stringify(config));
 }
 

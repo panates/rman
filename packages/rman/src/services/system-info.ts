@@ -1,5 +1,5 @@
 import envinfo from 'envinfo';
-import type { Repository } from '../core/repository.js';
+import type { Repository } from '../core/classes/repository.js';
 
 export namespace SystemInfo {
   export interface RepositoryInfo {

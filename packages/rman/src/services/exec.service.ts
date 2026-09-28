@@ -2,7 +2,7 @@ import os from 'node:os';
 import colors from 'ansi-colors';
 import { Task } from 'power-tasks';
 import type { RmanApplication } from '../core/application.js';
-import { Service } from '../core/service.js';
+import { Service } from '../core/classes/service.js';
 import { exec as execCommand } from '../utils/exec.js';
 import { Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
@@ -167,7 +167,7 @@ export namespace ExecService {
   }
 }
 
-declare module '../core/service.js' {
+declare module '../core/classes/service.js' {
   interface ServiceMap {
     exec: ExecService;
   }

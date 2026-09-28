@@ -1,4 +1,4 @@
-import type { Package } from '../core/package.js';
+import type { Package } from '../core/classes/package.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
 import type { GitHelper } from './git.js';
 

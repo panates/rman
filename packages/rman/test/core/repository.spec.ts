@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Repository } from '../../src/core/repository.js';
+import { Repository } from '../../src/core/classes/repository.js';
 import { createRepository, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
@@ -13,6 +13,21 @@ function mkTmp(): string {
 function writeJson(dir: string, rel: string, data: unknown) {
   fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
   fs.writeFileSync(path.join(dir, rel), JSON.stringify(data));
+}
+
+/**
+ * A resolved config with the **contribution keys** dropped, for a case comparing a whole config
+ * object.
+ *
+ * `platform` is written by `ConfigReader` once it knows which technology claimed the directory, and
+ * the three contribution keys are there whenever anything contributed - this fixture's own plugin,
+ * or rman's presets in a repository that did not opt out. None of them is what a cascade case is
+ * about, and a `toEqual` against the literal keys under test says what it means.
+ */
+function settings(config: object): Record<string, unknown> {
+  const rest = { ...(config as Record<string, unknown>) };
+  for (const key of ['platforms', 'commands', 'publishTargets', 'platform']) delete rest[key];
+  return rest;
 }
 
 describe('core/Repository', () => {
@@ -422,10 +437,10 @@ describe('core/Repository', () => {
       const repo = await createRepository(dir);
       /** The root: the unmarked key, which now reaches everyone, plus `"[/]"` - and **not** `"[*]"`,
        *  which names the packages below and the root is nobody's child. */
-      expect(repo.config).toEqual({ everyone: 'from-plain', onlyRoot: 'yes' });
-      expect(repo.getPackage('pkg-a')?.config).toEqual({ everyone: 'from-plain', children: 'yes' });
+      expect(settings(repo.config)).toEqual({ everyone: 'from-plain', onlyRoot: 'yes' });
+      expect(settings(repo.getPackage('pkg-a')!.config)).toEqual({ everyone: 'from-plain', children: 'yes' });
       /** And a directory level closer to the package still wins. */
-      expect(repo.getPackage('pkg-b')?.config).toEqual({ everyone: 'from-plain', children: 'b-own' });
+      expect(settings(repo.getPackage('pkg-b')!.config)).toEqual({ everyone: 'from-plain', children: 'b-own' });
     });
 
     it('keeps the root out of a "[*]" block even when it is the only selector', async () => {
@@ -523,7 +538,7 @@ describe('core/Repository', () => {
       );
 
       const repo = await createRepository(dir);
-      expect(repo.config).toEqual({ plain: 'yes', root: 'yes' });
+      expect(settings(repo.config)).toEqual({ plain: 'yes', root: 'yes' });
     });
 
     it('evaluates ${{ ... }} per package, in every string value', async () => {
@@ -1387,8 +1402,12 @@ describe('core/Repository', () => {
       expect(typeof (repo.config.plugins as any)[0].init).toBe('function');
       /** `commands` is in `CODE_SUBTREES` for the same reason, and learned it the same way: a
        *  declarative command *is* a function, so left out it was called with the config scope and
-       *  its handler closed over something that was not a repository. */
-      expect(typeof (repo.config.commands as any)[0].builder).toBe('function');
+       *  its handler closed over something that was not a repository.
+       *
+       *  Found **by name**, not by index: the `node` preset is laid under every root, so its own
+       *  two commands sit ahead of this repository's in the merged list. */
+      const own = (repo.config.commands as any[]).find(c => c.command === 'x');
+      expect(typeof own.builder).toBe('function');
     });
   });
 

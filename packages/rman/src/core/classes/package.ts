@@ -1,8 +1,8 @@
 import path from 'path';
-import type { ResolvedConfig, RmanConfig } from '../interfaces/rman-config.interface.js';
-import type { RmanApplication } from './application.js';
-import { Manifest } from './manifest.js';
-import type { Platform } from './plugin.js';
+import type { ResolvedConfig, RmanConfig } from '../../interfaces/rman-config.interface.js';
+import type { RmanApplication } from '../application.js';
+import { Manifest } from '../interfaces/manifest.js';
+import type { Platform } from '../interfaces/plugin.js';
 import type { Repository } from './repository.js';
 import { semverScheme, type VersionScheme } from './version-scheme.js';
 

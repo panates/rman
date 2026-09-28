@@ -9,11 +9,11 @@ import { RunService } from '../services/run.service.js';
 import { VersionService } from '../services/version.service.js';
 import type { VersionPlanService } from '../services/version-plan.service.js';
 import { Logger, type LogLevel } from '../utils/logger.js';
-import { basePlatform, type Platform, type Plugin } from './plugin.js';
-import type { PublishTarget } from './publish-target.js';
-import { Registry } from './registry.js';
-import type { Repository } from './repository.js';
-import type { ServiceFactory, ServiceMap } from './service.js';
+import { Registry } from './classes/registry.js';
+import type { Repository } from './classes/repository.js';
+import type { ServiceFactory, ServiceMap } from './classes/service.js';
+import { basePlatform, type Platform, type Plugin } from './interfaces/plugin.js';
+import type { PublishTarget } from './interfaces/publish-target.js';
 
 /**
  * **One rman invocation, and everything it holds.** Created before anything else, handed to every

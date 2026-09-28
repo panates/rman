@@ -1,8 +1,8 @@
-import { Service } from '../core/service.js';
+import { Service } from '../core/classes/service.js';
 
 export class ConfigService extends Service {}
 
-declare module '../core/service.js' {
+declare module '../core/classes/service.js' {
   interface ServiceMap {
     config: ConfigService;
   }

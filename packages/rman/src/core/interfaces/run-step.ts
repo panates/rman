@@ -1,7 +1,7 @@
-import type { Logger } from '../utils/logger.js';
-import type { RunBinOptions, RunBinResult } from '../utils/run-bin.js';
-import type { Package } from './package.js';
-import type { Repository } from './repository.js';
+import type { Logger } from '../../utils/logger.js';
+import type { RunBinOptions, RunBinResult } from '../../utils/run-bin.js';
+import type { Package } from '../classes/package.js';
+import type { Repository } from '../classes/repository.js';
 
 /**
  * What a **function step** is handed - a `run.<script>.before`/`.exec`/`.after` or a

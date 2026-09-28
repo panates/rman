@@ -1,7 +1,7 @@
 import colors from 'ansi-colors';
 import micromatch from 'micromatch';
 import type { Argv } from 'yargs';
-import type { Repository } from '../core/repository.js';
+import type { Repository } from '../core/classes/repository.js';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import { GitHelper } from './git.js';
 

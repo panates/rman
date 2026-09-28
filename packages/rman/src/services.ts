@@ -1,5 +1,5 @@
+export { DockerPublishService } from './builtins/publish-targets/docker/docker-publish.service.js';
 export { ChangelogService } from './services/changelog.service.js';
-export { DockerPublishService } from './services/docker-publish.service.js';
 export { ExecService } from './services/exec.service.js';
 export { GithubReleaseService } from './services/github-release.service.js';
 export { ImportService } from './services/import.service.js';

@@ -1,5 +1,5 @@
 import { expect } from 'expect';
-import type { Package } from '../../src/core/package.js';
+import type { Package } from '../../src/core/classes/package.js';
 import { filterPackages, ROOT_SELECTOR } from '../../src/utils/package-filter.js';
 
 /**
@@ -187,6 +187,51 @@ describe('utils/package-filter', () => {
       // dependents of {c} adds nothing further (nothing depends on c) - "d" never enters at all.
       const result = filterPackages(packages, { scope: 'c', ignore: 'zzz', deps: true, dependents: true });
       expect(result.map(p => p.name).sort()).toEqual(['a', 'b', 'c']);
+    });
+  });
+
+  describe('commandPlatforms: the technologies a command is for', () => {
+    /** `Package.provider` is the platform's name - what `filterPackages` matches on. */
+    function onPlatform(name: string, provider: string): Package {
+      return { name, selector: name, dependencies: [], isRoot: false, provider } as unknown as Package;
+    }
+
+    const polyglot = [onPlatform('web', 'node'), onPlatform('engine', 'cargo'), onPlatform('cli', 'node')];
+
+    /** In a polyglot repository `rman clean` sweeps the node packages and leaves the Cargo ones
+     *  alone, with no `--platform` and no check inside the command. */
+    it('narrows to the declared technologies', () => {
+      const out = filterPackages(polyglot, { commandPlatforms: ['node'] });
+      expect(out.map(p => p.name)).toEqual(['web', 'cli']);
+    });
+
+    /** Absent means every platform - which is what a command that speaks for no one in particular
+     *  says, and is every command that has not declared any. */
+    it('leaves everything alone when the command declares none', () => {
+      expect(filterPackages(polyglot, {}).map(p => p.name)).toEqual(['web', 'engine', 'cli']);
+      expect(filterPackages(polyglot, { commandPlatforms: [] }).map(p => p.name)).toEqual(['web', 'engine', 'cli']);
+    });
+
+    /**
+     * **Silent where `--platform` is loud, and that is the whole reason it is a separate field.**
+     * `--platform cargo` is a request, so a name matching nothing is a typo worth an error. A
+     * command's declaration is a fact: a repository holding none of its technologies is not a
+     * mistake, it just has nothing for that command to act on.
+     */
+    it('answers with nothing rather than throwing when no package matches', () => {
+      const cargoOnly = [onPlatform('engine', 'cargo')];
+      expect(filterPackages(cargoOnly, { commandPlatforms: ['node'] })).toEqual([]);
+      expect(() => filterPackages(cargoOnly, { platform: ['node'] })).toThrow(/matches no package/);
+    });
+
+    /** The declaration is the hard limit and `--platform` narrows inside it, so asking a node-only
+     *  command for Cargo is an empty set - the truthful answer. */
+    it('is the limit --platform narrows inside', () => {
+      expect(filterPackages(polyglot, { commandPlatforms: ['node'], platform: ['node'] }).map(p => p.name)).toEqual([
+        'web',
+        'cli',
+      ]);
+      expect(filterPackages(polyglot, { commandPlatforms: ['node'], platform: ['cargo'] })).toEqual([]);
     });
   });
 });

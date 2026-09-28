@@ -1,10 +1,10 @@
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
+import type { DockerPublishOptions } from '../builtins/publish-targets/docker/docker.target.js';
 import type { RmanApplication } from '../core/application.js';
-import type { Package } from '../core/package.js';
-import { type PublishTarget, unknownTargets } from '../core/publish-target.js';
+import type { Package } from '../core/classes/package.js';
+import { type PublishTarget, unknownTargets } from '../core/interfaces/publish-target.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
-import type { DockerPublishOptions } from '../targets/docker.target.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 

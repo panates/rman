@@ -1,9 +1,9 @@
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
 import EasyTable from 'easy-table';
-import type { ConfigValue } from '../core/config.js';
-import type { RunStepValue } from '../core/run-step.js';
-import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
+import type { RunStepValue } from '../core/interfaces/run-step.js';
+import type { ConfigValue, RmanConfig } from '../interfaces/rman-config.interface.js';
+import { registerCommand } from '../interfaces/rman-config.interface.js';
 import type { VersionService } from '../services/version.service.js';
 import { VersionPlanService } from '../services/version-plan.service.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';

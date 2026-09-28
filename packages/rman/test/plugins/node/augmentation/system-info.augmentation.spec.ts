@@ -1,6 +1,6 @@
 import { expect } from 'expect';
+import { augmentSystemInfo } from '../../../../src/builtins/platforms/node/augmentation/system-info.augmentation.js';
 import { type Repository, SystemInfo } from '../../../../src/index.js';
-import { augmentSystemInfo } from '../../../../src/plugins/node/augmentation/system-info.augmentation.js';
 import { useNodeEcosystem } from '../_fixture.js';
 
 /**

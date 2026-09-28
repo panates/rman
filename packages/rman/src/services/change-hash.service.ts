@@ -1,5 +1,5 @@
-import { Manifest } from '../core/manifest.js';
-import type { Package } from '../core/package.js';
+import type { Package } from '../core/classes/package.js';
+import { Manifest } from '../core/interfaces/manifest.js';
 import type { GitHelper } from '../utils/git.js';
 import { versionLineCount } from '../utils/version-group.js';
 

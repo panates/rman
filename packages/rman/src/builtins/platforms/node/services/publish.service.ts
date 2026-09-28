@@ -16,15 +16,15 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Package } from '../../../core/package.js';
-import type { Repository } from '../../../core/repository.js';
-import { exec } from '../../../utils/exec.js';
-import { GitHelper } from '../../../utils/git.js';
-import type { PackageFilterOptions } from '../../../utils/package-filter.js';
-import { filterPackages } from '../../../utils/package-filter.js';
-import { isCalendarVersion } from '../../../utils/release-version.js';
+import type { Package } from '../../../../core/classes/package.js';
+import type { Repository } from '../../../../core/classes/repository.js';
+import { exec } from '../../../../utils/exec.js';
+import { GitHelper } from '../../../../utils/git.js';
+import type { PackageFilterOptions } from '../../../../utils/package-filter.js';
+import { filterPackages } from '../../../../utils/package-filter.js';
+import { isCalendarVersion } from '../../../../utils/release-version.js';
+import { type NpmPackageView, npmViewPackage } from '../../../publish-targets/npm/npm-view.js';
 import { DEPENDENCY_KEYS } from '../node-manifest.provider.js';
-import { type NpmPackageView, npmViewPackage } from '../utils/npm-view.js';
 import { parseWorkspaceRange, resolveWorkspaceRange } from '../utils/workspace-range.js';
 import { CiService } from './ci.service.js';
 

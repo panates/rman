@@ -2,11 +2,11 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import fastGlob from 'fast-glob';
 import type { ArgumentsCamelCase, Argv } from 'yargs';
-import type { RmanConfig as CommandDeclaration } from '../interfaces/rman-config.interface.js';
-import type { Logger } from '../utils/logger.js';
-import type { RunBinOptions, RunBinResult } from '../utils/run-bin.js';
-import type { Package } from './package.js';
-import type { Repository } from './repository.js';
+import type { RmanConfig as CommandDeclaration } from '../../interfaces/rman-config.interface.js';
+import type { Logger } from '../../utils/logger.js';
+import type { RunBinOptions, RunBinResult } from '../../utils/run-bin.js';
+import type { Package } from '../classes/package.js';
+import type { Repository } from '../classes/repository.js';
 
 /** Where a repository keeps its own commands - one module per command, named after it. */
 export const CUSTOM_COMMAND_DIR = '.rman';

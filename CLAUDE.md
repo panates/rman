@@ -24,9 +24,139 @@ or between exported declarations.
 - When adding a new private helper to an existing file, append it after the last exported
   declaration rather than near whichever exported function happens to call it.
 
+## A class's own steps are `protected` members, not module functions
+
+**The rule above is about a module's helpers; this one overrides it for a class.** Whatever a class
+uses to do its work - a helper function, a list of names it checks against - is a `protected` method
+or field on the class, never a module-scope `function` or `const` below it.
+
+- **A module function cannot be replaced, and that is the whole cost.** It is unreachable from
+  outside its file, so a subclass can override the public method and nothing inside it: the one
+  seam a technology needs (`NodeVersionPlanService extends VersionPlanService` replacing
+  `detectBoundary` and `cascade` while keeping the orchestration) is exactly the shape a private
+  function forbids. A spec cannot stub one either, and per `Service` a stub that *can* be written
+  has to be - mutating a module is the failure CLAUDE.md already records, where restoring a
+  module-scope capture broke a spec two files away.
+- **A list a step checks against is a `protected readonly` field**, for the same reason and with
+  one extra rule: type it `readonly string[]` rather than letting the literal infer, or the declared
+  type is those exact strings and no other list satisfies an override. `ConfigService.configFiles`
+  is the worked example - and it comes in a pair with `configFileKind`, because a subclass adding a
+  name also has to say how that name is read. A field a subclass can widen while a sibling method
+  still refuses what it added is half a seam.
+- **`CODE_SUBTREES` is the exception, and it is not a class's.** It is a module const because
+  `type CodeSubtree = (typeof CODE_SUBTREES)[number]` derives from it - a class field has no type
+  to derive. The test is whether a *type* reads the value, not whether the value feels constant.
+- Pure functions of their arguments that no class uses stay plain exported functions - the line
+  `Service` already draws. This rule is about the steps of a class that exists.
+
+## Class member order: the shape, then the door, then the API, then the workings
+
+```
+static constants
+public fields
+protected fields
+private fields
+
+static factories          // create(), from() - they stand in for the constructor
+constructor
+
+get / set
+public methods
+protected methods
+private methods
+static helpers            // protected/private statics
+```
+
+**This is `@typescript-eslint/member-ordering`'s default with one deviation**, and the default is the
+closest thing to a standard here. The deviation: the rule puts *every* static method after the
+accessors, which buries a factory - and a factory is how you get an instance, so it belongs beside
+the constructor it replaces. `Workspace.create` sitting below `packageAt` would hide the only door
+into a class whose constructor is `protected`.
+
+- **Public before private, at every level**, which is the same rule as the file layout above: what
+  is written for a caller comes first. Inverting it inside a class while the file around it says the
+  opposite is two directions in one file. `Workspace` opening on `_levels` and `_configReader` -
+  two bookkeeping Maps - is what that costs.
+- **Fields before behaviour**, so the shape of the object is visible before what it does. That is
+  the half of the common "private fields first" habit worth keeping; the visibility half is not.
+- **Not enforced by lint yet.** Adding `member-ordering` turns most existing files red at once, so
+  it is a rule to apply to new and rewritten classes first. Enforce it when the tree has caught up -
+  a checked rule beats a remembered one, and this one is easy to forget.
+
+## TSDoc is for the caller; the reasoning goes in a block comment beside it
+
+**A `/** ... *&#47;` block is API documentation and nothing else** - what the thing does, what it
+takes, what it gives back, what a caller has to know to use it. It is what an editor shows on hover
+and what a doc generator publishes, so everything in it is read by someone who only wants to call
+the function.
+
+**Everything else - and this repository has a great deal of it - goes in a plain `/* ... *&#47;`
+block immediately below the TSDoc.** The measurement behind a decision, the alternative that was
+tried and failed, the trap a future editor would otherwise fall into, the spec that pins it: all of
+that is for whoever *changes* the code, not for whoever calls it.
+
+```ts
+/**
+ * Builds and initializes a workspace.
+ */
+/* **`new this()`, not `new Workspace()`.** In a static method `this` is the class the call was
+ * made on, so a subclass inheriting this factory builds itself; hard-coding the name would let
+ * someone override `_init` and never see it run. */
+static async create(...)
+```
+
+- The split is by **audience**, not by length. A one-line note about why a parameter exists is still
+  a note; a paragraph a caller genuinely needs is still TSDoc.
+- **Inline comments inside a body stay where they are.** This rule is about the block attached to a
+  declaration, which is the only one an editor surfaces.
+- The same applies to a `protected` member: its TSDoc is read by a subclass author, and the reason
+  it is shaped that way is not.
+- Do not simply delete the reasoning when it does not belong in the TSDoc - this repository's
+  comments *are* its record of what was measured, and losing one costs the next session the
+  measurement. Move it down, do not drop it.
+
+## `config.ts` is gone - five files, each with one subject
+
+It was 1528 lines holding the reader, the interpolator, the filesystem scope, the types and the path
+constants at once, and its spec was `core/config.spec.ts`. Where each half went:
+
+| | |
+| --- | --- |
+| [`core/config/config-reader.ts`](packages/rman/src/core/config/config-reader.ts) | what the **files say** - one config per directory, `extends`, presets, `plugins`/`platforms`, selector parsing |
+| [`core/workspace.ts`](packages/rman/src/core/classes/workspace.ts) | which directories hold packages, what each answers to, and the **cascade** into `Package.rawConfig` |
+| [`core/config/config-interpolator.ts`](packages/rman/src/core/config/config-interpolator.ts) | what those words **evaluate to** - every `${{ }}`, every value function, `defer(...)`'s second pass |
+| [`core/config/config-file-scope.ts`](packages/rman/src/core/config/config-file-scope.ts) | the `file` and `read(...)` members of the expression scope, and the parse cache |
+| [`interfaces/config-scope.interface.ts`](packages/rman/src/interfaces/config-scope.interface.ts) | what an expression can **name**: `ConfigScope` and its members |
+| [`interfaces/rman-config.interface.ts`](packages/rman/src/interfaces/rman-config.interface.ts) | `RmanConfig`, and the author/reader pair `ConfigValue` / `Resolved` / `ResolvedConfig`, plus `defineConfig` |
+| [`core/config/config-paths.ts`](packages/rman/src/core/config/config-paths.ts) | `CODE_SUBTREES`, `STEP_PATHS`, `DEFERRED_PATHS` |
+
+- **The split is by *lifetime*, not by size.** Reading happens per directory, before any package
+  exists; interpolating needs `pkg`, `repository`, `file` and `git`, which only exist afterwards.
+  One class holding both would have a method that throws when called in the wrong order - which is
+  what the old module was, with the ordering kept by convention.
+- **`config-paths.ts` is three module consts and stays that way.** `CodeSubtree` derives from
+  `CODE_SUBTREES` with `(typeof ...)[number]`, so the value has to be a value a *type* can read -
+  the one exception to "a class's own steps and lists are `protected` members". `DEFERRED_PATHS` has
+  five readers across `core/`, `commands/` and `services/`, which is why the three live together
+  rather than on whichever class happens to walk them.
+- **The scope interfaces are `interfaces/`, not `core/`.** Nothing in them runs, and the audience is
+  a config author - the same line `rman-config.interface.ts` already drew. `ConfigValue` moved in
+  beside `RmanConfig` for a smaller reason that is still worth stating: that file *imported* it, so
+  the move removed an import rather than adding one.
+- **`core/config.spec.ts` is `core/rman-config.interface.spec.ts`**, and holds only the type-level
+  pins - checked by `npm run typecheck`, not by mocha. The behaviour it used to cover is in
+  `config-reader.spec.ts`, `config-interpolator.spec.ts`, `config-file-scope.spec.ts` and
+  `workspace-create.spec.ts`, each self-contained.
+- **Two pins nearly went missing in the move, and the rule is to look for them.** `FileScope`
+  exposing *exactly* `exists`/`resolve`/`resolveFirst` - the spec that stops someone adding a
+  plausible `copy` - and "the directory is untouched" lived in the old spec and had no equivalent in
+  the class's; both are in `config-file-scope.spec.ts` now. A behaviour with a duplicate
+  implementation does not mean it has a duplicate *spec*.
+
 ## Config: who a declaration is about
 
-[`src/core/config.ts`](src/core/config.ts). One sentence decides it: **what is written above reaches
+[`ConfigReader`](packages/rman/src/core/config/config-reader.ts) reads it and
+[`Workspace`](packages/rman/src/core/classes/workspace.ts) cascades it. One sentence decides it: **what is written above reaches
 below, and a `"[selector]"` narrows the audience.**
 
 - **An unmarked key configures that directory and every package under it.** The repository root's
@@ -89,7 +219,7 @@ below, and a `"[selector]"` narrows the audience.**
   - Migration from 1.2.x, in three mechanical rules plus that one: `"[ws:*]"` → `"[*]"`; old `"[*]"`
     (which included the root) → unmarked; a root key that is genuinely the root's → `"[/]"`.
 - **`vars` is declared at any level of the config and scopes its own subtree**
-  (`withScopedVars` in `config.ts`): a fresh copy per level, the level's own block merged **per key**
+  (`ConfigInterpolator._withScopedVars`): a fresh copy per level, the level's own block merged **per key**
   over what the level above resolved to, so `run.vars` covers every script and `run.build.vars`
   covers one.
   - **Copied at every node, not only where a block appears**, and that is the difference between
@@ -258,8 +388,10 @@ when `!repository.monorepo`, or every hook runs twice (measured).
 
 ## Config inheritance: `extends`
 
-[`src/core/extends-config.ts`](src/core/extends-config.ts),
-[`src/core/merge-config.ts`](src/core/merge-config.ts).
+[`ConfigReader._resolveExtends`](packages/rman/src/core/config/config-reader.ts),
+[`src/core/config/merge-config.ts`](packages/rman/src/core/config/merge-config.ts). It was `extends-config.ts`,
+beside a `readDirConfig` in `config.ts`; both are `ConfigReader`'s methods now, which is what closed
+the gap below about a `.cjs` base loading differently from a `.cjs` config.
 
 - **`extends`** names configs merged *underneath* the file naming them (a package, a path, or a list
   in declaration order). Resolved **per directory**, after that directory's own forms combine, so
@@ -289,8 +421,71 @@ when `!repository.monorepo`, or every hook runs twice (measured).
     left alone, since it names no key.
   - `WithAppend<T>` is gone with it, and with it the two-clause trap on `RmanConfig` that generated
     the append forms for contributed keys.
-  - **`plugins`, `commands` and `publishTargets` still append without being asked** - see
-    `ALWAYS_APPEND`. There that is what the *key* means rather than a choice made per layer.
+  - **`plugins`, `platforms`, `commands` and `publishTargets` still append without being asked** -
+    see `ALWAYS_APPEND`. There that is what the *key* means rather than a choice made per layer.
+
+### Presets: `extends: "rman:node"`, and the ones laid down by default
+
+[`src/builtins/presets/`](packages/rman/src/builtins/presets), `ConfigReader._applyPresets`. **A preset is an rman
+config, not a type of its own** - `platforms`, `commands` and `publishTargets`, which are keys that
+already existed. `extends: "rman:node"` resolves the `rman:` prefix against rman's own module and
+merges it underneath, exactly like any other base; a polyglot repository writes
+`extends: ['rman:node', 'rman:cargo']` and gets both, because every key a preset holds appends.
+
+- **A function, not a value** (`export default nodePreset`), and `_readConfigFile` calls whatever a
+  config module exports. `augmentSystemInfo()` mutates the core's `SystemInfo` in place, so a preset
+  evaluated at *import* time would have `rman info` reporting npm's tooling in a repository that
+  never named it.
+- **Its contributions must be identical across calls**, or a repository naming a preset that is
+  *also* laid down by default contributes it twice. `appendList` de-duplicates these keys by
+  identity, so `nodePlatform` and the two commands were already safe and `new NpmPublishTarget()`
+  was not: measured, two targets called `npm` reached `publish`, whose own collision guard fired on
+  a target colliding with itself (`both declare an option named "packageManager"`). The instance is
+  a module singleton now. **A new preset has to do the same.**
+
+**`DEFAULT_PRESETS` is laid under every repository root**, so a repository that writes no config at
+all still has the `node` technology, `clean`, `ci` and the npm target. `Workspace` passes it to the
+**root level only** - everything below inherits what the root settled on - and a caller passing
+`presets: []` gets a bare core, which is what every case in `workspace-create.spec.ts` does.
+
+- **Loaded *after* whatever the config declared, and that is the whole safety of it.**
+  `platformFor` takes the first technology that recognizes a directory, so a repository writing
+  `extends: 'rman:cargo'` has its own platform ahead of node - and a root holding both a
+  `Cargo.toml` and a tooling `package.json` resolves to what it declared. Pinned in
+  `workspace-create.spec.ts` ("lays rman's own presets under the root, **behind** whatever the
+  repository declared"), where a `manifest.json` platform keeps a root that also has a
+  `package.json`.
+  - **The config's own `platforms` array runs the other way round** (`[node, ...declared]`, because
+    the presets merge underneath like any base) and nothing reads it. `context.platforms` /
+    `Workspace.platforms` is the order-bearing list; the array is the record of what was
+    contributed. Worth knowing before reading one off `rman config` and expecting it to say who
+    claims what.
+- **A list of names, never an import** ([`src/builtins/presets/index.ts`](packages/rman/src/builtins/presets/index.ts)
+  exports `DEFAULT_PRESETS` and imports nothing). A preset module pulls in a platform, its commands
+  and its services, one of which extends a core service - so a static `core/` → `presets/` import is
+  the ESM cycle that stopped the *built* CLI dead on every command and that `npm run smoke` exists
+  to catch. `_resolvePreset` goes through the same dynamic `import()` an `extends` does.
+- **This replaced detection** (`plugins/detect.ts`'s `detectBuiltin`), which asked each built-in
+  "is this directory yours?" *without turning anything on*, then merged the matching preset
+  underneath. What it bought was a repository not growing a technology's commands unasked; what it
+  cost was a catalogue module, a `Builtin` type, a per-directory memo, a `DETECTED_BUILTIN` symbol
+  and a gate that had to decide what counts as having "said something" - three conditions, the third
+  of which (a technology already on the application) was measured as worth ten specs. The platform
+  answers the same question now, from the ordinary registry, once loaded.
+  - **The cost, stated rather than hidden**: a repository of some other technology carries node's
+    `clean` and `ci` in `rman --help`, `rman info` reports npm's tooling, and every package's
+    `rman config` shows the preset's contribution keys. rman ships one preset, so none of that is
+    visible today. **Split this list's presets in two - the platform apart from the commands - if
+    that stops being acceptable**; the alternative considered and rejected was making the default
+    layer conditional again, which is detection with extra steps.
+- **`presets: []` is the opt-out**, on `Repository.create`, `runCli` and `Workspace.create` alike -
+  a caller that brought an ecosystem of its own. **The core's own fixture passes it, and that is a
+  safety rule rather than tidiness**: with the presets in, `publish.command.spec.ts` ran a **real
+  `npm publish` against registry.npmjs.org** and only a 404 stopped it - the npm target arrived in
+  a synthetic repository, claimed a package and published it. Same failure `useLocalBin`'s doc
+  records for `docker`, by a new route. A spec that wants the shipped preset asks for it:
+  `plugins/node/_fixture.ts` writes `extends: ['rman:node']`, and the cases about the default call
+  `Repository.create` directly.
 
 ## The type is the only config surface - there is no JSON Schema
 
@@ -305,7 +500,7 @@ work: the type composes and a schema does not.
 - **A plugin's keys arrive by `declare module 'rman'`**, so `rman-node`'s `defineConfig` is the same
   function with a narrower parameter and the import is what carries the augmentation.
 - **`.rmanrc` and `.rmanrc.yml` are now unchecked, and that is the price.** rman validates config at
-  no point during a run - no ajv, no key check anywhere in `config.ts` - so an unknown key in those
+  no point during a run - no ajv, no key check in the reader at all - so an unknown key in those
   forms was always silent at runtime and the schema was the only thing catching it. Recommend a JS
   config for anything non-trivial; do not answer a "my key is ignored" report with "the schema would
   have caught it".
@@ -329,33 +524,150 @@ work: the type composes and a schema does not.
   published nowhere. `vars` is the open slot such a command already has (`additionalProperties: true`
   in the schema that was; free-form in the type), and it cascades to every package.
 
+## `builtins/`: what rman ships, filed by what each thing *is*
+
+```
+builtins/platforms/node/            the Node.js ecosystem - package.json, workspaces,
+                                    node_modules/.bin, the version planner
+builtins/publish-targets/npm/       the npm registry - npm view, npm publish
+builtins/publish-targets/docker/    a registry of images - docker manifest inspect, docker push
+builtins/presets/                   the configs that hand those to a repository
+```
+
+**Filed by subject, not by who uses it.** That is the same rule the config classes follow, and it is
+easy to argue the other way by accident: "move X next to its caller" and "move X to drop a
+dependency edge" are both statements about *usage*, and neither says what X is.
+
+- **`npm-view.ts` is under the target, not under the platform, and it is the worked example.**
+  `platforms/node/` is about the Node.js *ecosystem* - a package there can be private, published to
+  another registry, or never published, and nothing about the platform changes. `npm view` is the
+  npm registry's CLI, which is what `publish-targets/npm/` is named after.
+  - The argument for moving it to the platform was that two files under `platforms/node/` import it,
+    so moving it would drop a cross-edge. That is a graph argument wearing a subject argument's
+    clothes; it was made and withdrawn.
+  - **The edge it leaves is a true sentence, so leave it**:
+    `platforms/node/node-manifest.provider.ts -> publish-targets/npm/npm-view.ts` reads as *the Node
+    ecosystem's manifest provider asks the npm registry what version is out there*, which is exactly
+    what `ManifestProvider.publishedVersion` is for - deliberately per package and per ecosystem, so
+    a polyglot repository asks npm about its Node packages and crates.io about its Cargo ones. A
+    `cargo` platform would depend on a `crates-io` target's client the same way, and that is the
+    shape working rather than leaking.
+  - **One file, two questions, and they stay together.** `npmViewPackage` answers B (is *this
+    version* on the registry) for the target; `npmViewVersion` answers a step of A (borrow a version
+    string to guess a tag name) for the platform. A and B are uncorrelated - see "Change and release
+    detection" - but *how you ask npm anything* is one fact, and splitting it would put that fact in
+    two places.
+- **A barrel is a folder's front door, not a re-export habit.** `platforms/node/index.ts` and
+  `publish-targets/npm/index.ts` exist because `presets/node.ts` composes a built-in through them;
+  `publish-targets/docker/index.ts` because `RmanApplication` registers that target. `src/index.ts`
+  reaches past all of them with deep paths on purpose - what rman *exports* is a separate decision
+  from what a folder contains.
+- **Trap when moving a file: a `declare module` with a relative specifier is resolved against the
+  declaring file**, and it does not look like an import, so an import rewrite misses it.
+  `docker-publish.service.ts` carries `declare module '../core/service.js'` for its `ServiceMap`
+  entry; moving the file two levels deeper left that path pointing at nothing, and the error came
+  out at the *caller* - `'dockerPublish' is not assignable to parameter of type 'keyof ServiceMap'`
+  in `application.ts`, with nothing pointing at the augmentation.
+- **`core/` may not statically reach a *platform*, and a preset counts because it pulls one in.**
+  Not "may not reach `builtins/`" - that would be a rule the tree already breaks. What the
+  existing edges look like, and why each is safe:
+
+  | from | to | why it is fine |
+  | --- | --- | --- |
+  | `core/application.ts` | `publish-targets/docker/index.js` | a leaf - its service extends `Service` and nothing extends it back |
+  | `core/workspace.ts`, `core/config/config-reader.ts` | `presets/index.js` | strings and `node:path`; it imports no preset |
+
+  The thing to keep out is the shape in the `npm run smoke` section: a platform pulls in its
+  services, one of those extends a core service, and the core's own module graph comes back through
+  it. That killed the *built* CLI on every command (`Cannot access 'VersionPlanService' before
+  initialization`) while `npm test` stayed green, because mocha resolves `src` through
+  `tsconfig-test.json`'s `paths` and reaches the two in the other order. A preset is exactly that
+  import, which is why `presets/index.ts` holds names and `ConfigReader` reaches the preset itself
+  through the dynamic `import()` an `extends` already goes through - and why `PRESETS_DIR` lives in
+  that file rather than being computed from the reader's own location.
+  - **`npm run smoke` is the only thing that looks**, so run it after any move that changes who
+    imports whom. `tsc` cannot see it and the suite cannot reproduce it.
+
 ## Which ecosystem a package belongs to
 
-`Package.provider` - `'node'` for one the `node` built-in read, empty when no platform claimed the
+`Package.provider` - `'node'` for one the `node` platform read, empty when no platform claimed the
 directory. Comes from `Platform.name`, and that field means the **ecosystem**, not the file
 (`manifestFile` already says `package.json`; a name repeating it carried no information, which is
 why it went unused until this existed).
 
-**`Platform` is the narrow type and `Plugin` is the broad one**, and the names were the other way
-round until the split. `manifestProvider` is required, which makes the narrow type a *platform* by
-definition - a package shipping only commands never touches it, because commands are a config key.
-So a plugin carries `platforms?: Platform[]` and an `init`, may provide more than one technology
-(`maven` and `gradle` are one plugin, two platforms), and a bare `Platform` is sugar for the plugin
-providing only it (`registerPlugin` normalizes that, and the fixtures go through it rather than
-poking the two registries).
+**`Platform` and `Plugin` are two unrelated things now, not a narrow type and a broad one.** A
+**platform** is one technology - `manifestProvider` is required, which is what makes it one - and it
+reaches a repository through the `platforms` config key, the same route `commands` and
+`publishTargets` already took. A **plugin** is a name and whatever it wants to do at a stage.
 
-- **Both must be declared** through `definePlatform`/`definePlugin`, checked by a non-enumerable
-  brand. No shape test could replace it: an rman **1.x plugin was `{ name, init }`**, and under this
-  split so is a 2.x plugin contributing nothing but an `init`.
-- **The brand cannot be a module-scope `const`.** The file layout puts privates below the exports
-  and `basePlatform`'s initializer *calls* `definePlatform`, so the const sits in its own temporal
-  dead zone: measured, the whole suite failed to load with `Cannot access 'DECLARED' before
+```ts
+interface Plugin {
+  name: string;
+  afterInitApplication?(ctx: { app }): void | Promise<void>;
+  afterInitRepository?(ctx: { app, repository }): void | Promise<void>;
+}
+```
+
+- **`Plugin.platforms` is gone, and the measurement is why it could go without ceremony**: nothing
+  in rman produced one. No built-in shipped a technology through a plugin - the `node` preset
+  declares `platforms: [nodePlatform]` as a config key - and the field's only two readers were
+  plumbing, one of which (`Repository.create`) duplicated the loop three lines below it. `init` had
+  no production producer either; every occurrence in the tree was a test fixture.
+  - It went with the wrapper it existed for: `registerPlugin` used to normalize a bare `Platform`
+    into `{ name, platforms: [entry] }` so everything downstream dealt in one shape. It is two
+    registries and a question with two honest answers now.
+  - `loadPlugins` went at the same time - the old loading path, already uncalled, and the only thing
+    left reading either member. `plugin-loader.ts` is 61 lines holding `registerPlugin`,
+    `checkCustomCommand` and a key name; **its name is now wrong and it should be renamed.**
+- **Two stages, named for *when* rather than for what they touch.** `initRepository` was the first
+  spelling and it reads as *initialize the repository*, which is not what a plugin does there - the
+  core has already done that. Both carry `afterInit` so neither has to be read twice.
+  - **`afterInitRepository` exists because the workaround did not cover everybody.** The advice was
+    "anything wanting the repository belongs in a command's factory, which runs once there is one" -
+    true, and no help to a plugin contributing no command. `afterInitApplication` runs inside
+    `Repository.create` before any package is known, so `ctx.app.repository` throws there.
+  - **Two moments, and deliberately not a hook bus.** Every later point a plugin might want already
+    has a mechanism it would compete with - `run.<script>.before`/`.after`, `version.<slot>`,
+    `publishTargets` - and a second way in means a precedence rule between them that nothing can
+    make obvious. These two are the only boundaries the core itself has. **Add a third only when
+    something concrete cannot be done**, the way this one could not.
+  - The `on` prefix (`onRepositoryReady`) was the alternative, and is this repository's convention
+    for a hook - `getRunSteps` is deliberately *not* `on*` because it is a query. It names a state
+    where `afterInit…` names the core operation you can go and read.
+- **Both must be declared** through `definePlatform`/`definePlugin`, and **the mark says which** -
+  one non-enumerable `Symbol.for('rman.declared')` whose *value* is `'platform' | 'plugin'`
+  (`declaredKind`). No shape test could replace the mark itself: an rman **1.x plugin was
+  `{ name, init }`**, and a 2.x plugin doing nothing but `afterInitApplication` is a plain object
+  too.
+  - **The kind is what made two of three refusals facts rather than guesses.** The mark used to be
+    a bare `true`, so the only question askable was "declared at all?" and everything else got one
+    message about rman 1.x plugins. Measured on two exports: a module returning a *config*
+    (`{ plugins: [] }`) and one returning the string `'oops'` both came back as
+    `Plugin "undefined" … was not declared` - naming a type the value is not and quoting a name it
+    does not have. Now a platform found in `plugins` is told which key it belongs in, and the mirror
+    holds for `platforms`.
+  - **One key carrying the kind, not one key per type.** Same information, less machinery: the key
+    has to be a hoisted function (below), which every extra key would repeat; `isDeclared` stays one
+    lookup rather than an OR someone must remember to extend; and a third declarable is a new string
+    - `publishTargets` is still checked structurally (`typeof target.name === 'string'`) and is the
+    obvious next one. Nothing is built for it yet.
+  - **`isPlatform` reads the mark, not `manifestProvider`.** The structural test was the only one
+    available while a single type was both halves; as a question about an arbitrary import it is a
+    guess that gets the common mistake backwards. The cost, stated: an *undeclared*
+    platform-shaped object is no longer a platform. Everything arriving through a config must be
+    declared anyway, and every `registerPlugin` caller in the tree passes a `definePlatform(...)`.
+  - **The one remaining guess is which sentence to write, never what something is.** Once a value
+    is unmarked the refusal is already decided; the config-shaped check (`extends`, `plugins`,
+    `platforms`, `commands`, `publishTargets` as keys) only picks the more useful message. A wrong
+    guess costs a vaguer error, not a plugin loading as the wrong thing - which is the line
+    `plugins` draws everywhere else.
+- **The brand's key cannot be a module-scope `const`.** The file layout puts privates below the
+  exports and `basePlatform`'s initializer *calls* `definePlatform`, so the const sits in its own
+  temporal dead zone: measured, the whole suite failed to load with `Cannot access 'DECLARED' before
   initialization`. A hoisted function resolving `Symbol.for` fixes it, and two copies of rman in one
   process then agree about the mark.
-- `RmanApplication` holds both: `platforms` is what every seam iterates, `plugins` is who
-  contributed them. **Detection's second condition is `app.platforms.size`**, not `plugins` - what
-  it would add is a platform, so what must not already be there is a platform; a plugin registering
-  only a command says nothing about which directories hold packages.
+- `RmanApplication` holds both registries, and they no longer overlap: `platforms` is what every
+  seam iterates, `plugins` is everything else a repository loaded.
 
 - **The escape hatch for code that legitimately knows one technology**: check
   `if (pkg.provider === 'node')` before reaching into `manifest.raw` for something only npm has.
@@ -376,7 +688,7 @@ poking the two registries).
 
 ## Discovery walks the tree
 
-[`src/core/workspace.ts`](packages/rman/src/core/workspace.ts). `Workspace.Provider` is
+[`src/core/workspace.ts`](packages/rman/src/core/classes/workspace.ts). `Workspace.Provider` is
 `(dir) => string[] | undefined`: **the directories directly below `dir` that hold a package**, or
 "not mine". The recursion is the core's (`walk`), so a platform only ever speaks about its own
 packages - which is all a platform knows.
@@ -418,9 +730,9 @@ Three sources, first that answers: the package's own `.rmanrc "name"`, its platf
 - **`name` and `platform` cannot sit in a `"[glob]"` block** (`assertSelectorBlocks`, beside the
   `extends` refusal): the glob matches the selector, and those are what the selector is derived
   from. `"[/]"` is exempt - the root is addressed structurally, which is the whole reason it is `/`.
-- **`"[/]"` needs no selector, and that did not work.** `resolveConfig`'s gate was
-  `if (packageName)`, so the walk skipped every selector block including that one, and `platform`
-  under `"[/]"` silently did nothing. The gate is `selector !== undefined || isRoot` now.
+- **`"[/]"` needs no selector, and that did not work.** The cascade's gate was `if (packageName)`,
+  so the walk skipped every selector block including that one, and `platform` under `"[/]"` silently
+  did nothing. It is `Workspace._speaksFor` now, which asks `isRoot` before it asks about a name.
 - `Repository.listStatus` is keyed by selector too - by name, a technology that does not name its
   packages had all of them answering to `""`.
 
@@ -454,7 +766,7 @@ config file exports. So the split is about who can *author* what, and it follows
 
 **`RmanConfig` is the *author's* view; `pkg.config` is `ResolvedConfig`, derived from it.** One type
 cannot answer both questions, because a value may be written as a **function** and by the time
-anything reads a config that function has been called. `Resolved<T>` (in `core/config.ts`) is that
+anything reads a config that function has been called. `Resolved<T>` (beside `RmanConfig`) is that
 derivation - one transform, applied at `Package.config` and at `interpolateConfig`'s return - so
 there is no second type to keep in step by hand.
 
@@ -490,7 +802,7 @@ there is no second type to keep in step by hand.
 **A command-owned key is declared by the command**, not centrally: `version.*` lives in
 `version.command.ts`, `publish.*` in `publish.command.ts`, and `CommandContribution` assembles the
 block (see "How a command is declared"). A *target's* block likewise - `publish.docker.*` in
-`targets/docker.target.ts`, `publish.npm.*` in `rman-node`. What is left in the one interface file
+`builtins/publish-targets/docker/`, `publish.npm.*` in `builtins/publish-targets/npm/`. What is left in the one interface file
 is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBranch`, `skip`,
 `group`, `dependencies`, and `run`.
 
@@ -529,10 +841,10 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   Bundled, the node plugin augments **module paths** like every built-in command's contribution
   does, so the limit is gone and each interface is augmented where it lives.
   **The replacement trap is `index.ts`**: an augmentation applies only where its module is in the
-  program, so `src/index.ts` imports `plugins/node/augmentation/rman.augmentation.js` for its types
+  program, so `src/index.ts` imports `builtins/platforms/node/augmentation/rmanrc.augmentation.js` for its types
   alone - without it `clean` and `publish.npm` exist for rman and for no consumer, and no spec can
   see it (see `npm run smoke`). Every type augmentation therefore lives in
-  [`packages/rman/src/plugins/node/augmentation/rman.augmentation.ts`](packages/rman/src/plugins/node/augmentation/rman.augmentation.ts),
+  [`packages/rman/src/builtins`](packages/rman/src/builtins/platforms/node/augmentation/rmanrc.augmentation.ts),
   beside the others rather than next to the code it describes. The *runtime* half of an augmentation
   still lives with its own subject (`augmentSystemInfo()`, `augmentManifest()`, ...).
 - Measured both ways: with the core alone, `{ clean: ... }` and `{ publish: { npm } }` are
@@ -586,46 +898,58 @@ command reads, which is the point of having it.
 - **It must say when a value is printed raw.** `version.before`/`.exec`/`.after` are in
   `DEFERRED_PATHS`, so `${{ pkg.targetVersion }}` is still an expression here - printed among
   resolved values with no note, it reads as interpolation being broken.
-
-## `--config`: what a command would run with
-
-A **global** flag - `rman <anything> --config` prints and runs nothing. Three sections, and each
-answers a different question the other two cannot: `options` (the parsed argv - what this
-invocation asked for), `packages` (the set after `--scope`/`--ignore`/`--deps` and `skip`, computed
-through `filterPackages` the way the command computes it), and the `.rmanrc` those packages carry.
-
-- **Applied once, by wrapping `program.command`** (`interceptConfigFlag` in
-  [`src/cli.ts`](packages/rman/src/cli.ts)), because every command - built-in, a plugin's, a
-  `.rman/*.mjs` one - is registered through that one method. An option per command would have been
-  twelve edits plus a rule for plugin authors to remember, and a global flag that quietly does
-  nothing on whichever command forgot it is worse than no flag. It must be installed **before** any
-  command is registered.
-- **Which keys to show is `configKeys`, declared on the command itself** (`ConfigKeys` in
-  `core/custom-command.ts`) - a `string[]`, or a function of argv where the answer depends on it
-  (`run <script>` reads `run.<script>`). Beside the command rather than in a central map, so it
-  cannot drift from the code doing the reading, and a plugin or `.rman/*.mjs` command can declare
-  it too. **Absent, it prints the whole effective config** - the honest answer when nothing has
-  said which half matters.
-  - **Trap: `toCustomModule` in `cli.ts` builds a *new* spec object**, so a field it does not copy
-    is silently lost. `--config` printed the whole config for every plugin command until
-    `configKeys` was on that list (measured, on `clean` and `ci`). It applies to the
-    `CustomCommand` form only - a **declared** command goes through `toYargsCommand`, the same
-    function the built-ins use, so there is nothing to forward and nothing to forget.
-  - **`configKeys` needed a `declare module 'yargs'` augmentation** of `CommandModule`, not just a
-    field on our own `CustomCommand`: `program.command({ ... })` takes a literal, and TypeScript's
-    excess-property check fires on a literal however the parameter is typed - nine commands failed
-    to compile at once. The augmented parameters must be spelled exactly as yargs spells them
-    (`T = {}, U = {}`) or the merge is refused.
-- **The root package is always in the config section**, even when it is not a target: a repo-wide
-  key is read off the root, so showing only the targets answered `rman ci --config` with
-  `pkg-a: {}` - which reads as "nothing is configured" about the one key `ci` reads (measured).
+- **The contribution keys are left out** - `plugins`, `platforms`, `commands`, `publishTargets`
+  (`CODE_SUBTREES`), through `withoutContributions` in
+  [`utils/printable-config.ts`](packages/rman/src/utils/printable-config.ts). They are code, and
+  this command answers what a repository is *configured* to do. It stopped being a detail the day
+  presets went under every root: measured on this repository, `rman config` printed the npm target's
+  entire option table, a platform's manifest provider and `commands: ['[Function]', '[Function]']`
+  above the two keys the `.rmanrc` actually sets - forty lines of metadata over three of config.
+  - **Silently, and that was argued the other way first.** A note announcing the omission looked
+    like the sibling of the deferred-paths one below, and is not: that note explains a *visible*
+    oddity, this announced an absence the reader was not looking for. What settled it was measuring
+    the condition meant to make it rare - presets go under every root, so every config carries all
+    four and the line printed **every time**, which makes it a banner rather than a report. At this
+    repository's root it was one line of three. A reader asking which technologies are loaded is
+    asking `rman info`; one asking whether their command registered is asking `rman --help`.
+  - **`--config` does the same**, in its "in full" branch only - its narrowed branch already picks
+    the keys the command reads. The two printers cannot disagree about what the config is.
+  - **Distinct from `printableConfig`, which makes a value serializable rather than deciding what is
+    worth showing.** A step written as a function still prints as `[Function: copyDocs]`; that one
+    *is* a setting. Both live in the same module because both callers are printers.
+  - **It imports `CODE_SUBTREES` rather than listing those four names again.** Two lists that can
+    disagree is the failure this tree had already: `presetNames()` held a hardcoded `['node']`
+    beside a resolver that looked somewhere else, and the error message named the preset it had just
+    failed to find.
+- **The first line is the config file the directory declares** (`ConfigReader.findConfigSource`,
+  public for this caller), because the reader's next question is which file to open. Omitted where
+  the directory declares none - naming one that is not there sends them to create a file when the
+  answer is a level above.
+  - **It is the package's *own* file and the printed config is more than it**: the directory chain
+    above, every `extends` base and each `"[selector]"` block are all in there. The per-key answer
+    is `ORIGINS`, which a failing expression's message already names; this line is a starting point,
+    not the provenance.
+  - **Find the header, don't index it.** Three cases asserted `lines[0]` and all three broke on a
+    change that was about something else; `config.command.spec.ts` has a `headerOf(lines)` helper.
+- **Syntax colour, on a terminal only** ([`utils/color-yaml.ts`](packages/rman/src/utils/color-yaml.ts),
+  shared with `--config`). Key in cyan, `${{ }}` in magenta, literals in yellow, list markers and
+  `[Function]` in grey - and a plain string value left alone, because it is the content and
+  colouring it competes with the key for attention.
+  - **`${{ }}` in magenta earns its place**: `version.before`/`.exec`/`.after` are printed raw, so
+    an unresolved expression among resolved values is *correct* here, and the colour is what keeps
+    it from reading as interpolation being broken.
+  - **A line-based highlighter, with one piece of state: an open block scalar.** `lineWidth: 100`
+    makes js-yaml fold a long string into `key: >-` plus deeper-indented prose, and a continuation
+    line holding `(default: ...)` would otherwise have half a sentence coloured as a key, with a
+    `#` in one read as a comment. Everything else is per line; a value's own colon is not a problem
+    because js-yaml quotes any scalar holding one and the key pattern stops at the first.
 - Distinct from [`rman config`](docs/cli/config.md), and keep them distinct: that prints one
   package's whole config with no command involved; this answers "what would *this command* do".
 
 ## `skip`, `--from-root` and `--scope /`, the flags every command should share
 
 - **Top-level `skip`: "leave this package alone", honoured by every command that *acts*** -
-  `run`/`build`/`test`, `exec`, `clean`, `publish`, `version`, `changelog`. Applied inside
+  `run`/`build`/`test`/`lint`, `exec`, `clean`, `publish`, `version`, `changelog`. Applied inside
   `filterPackages` itself, not as one of its options: it is the *repository's* standing filter,
   where `--scope` is the caller's ad-hoc one. Dropped **before** `--deps`/`--dependents`, so a
   dependency edge cannot drag a skipped package back in.
@@ -640,7 +964,7 @@ through `filterPackages` the way the command computes it), and the `.rmanrc` tho
     versioned without ever being published). A blanket `skip` replacing them would flatten that.
 - **`--from-root`/`-r` comes from one `fromRootOption(verb)`** (`applyFromRootOption` for the
   hand-written builder form), not from four near-identical option blocks. It means something **only
-  where a command scopes by the current directory** - `run`/`build`/`test`, `exec`, `clean`,
+  where a command scopes by the current directory** - `run`/`build`/`test`/`lint`, `exec`, `clean`,
   `changelog`, `diff` narrow to `Repository.currentPackage` when you stand inside a package, and
   this is the escape hatch. Do **not** add it to `version`, `publish` or `list`: they
   already work across the whole repository, so the flag would do nothing, and a no-op flag reads as
@@ -659,7 +983,7 @@ through `filterPackages` the way the command computes it), and the `.rmanrc` tho
     parser option does make `-fr` work and breaks every grouped short - `rman list -sj` works today.
     So `-r` stayed. The same reasoning applies to any future two-letter alias here.
   - **There is no `--root-only`, and the rule above is why.** Per command: a no-op on
-    `run`/`build`/`test` (`repository.packages` holds the members only, and the root contributes
+    `run`/`build`/`test`/`lint` (`repository.packages` holds the members only, and the root contributes
     just its `pre`/`post` bookends, so there is nothing to select); identical to `--from-root` on
     `diff` (which is already `rootPackage` with no pathspec); already what `--from-root` does on
     `config`; answerable with `cd $(git rev-parse --show-toplevel)` for `exec`. On `clean` it would
@@ -1076,14 +1400,14 @@ saw one thing to release and it was the one thing that must never be published.
 ### `publish` - the core's command; a *target* is what a plugin contributes
 
 [`src/commands/publish.command.ts`](packages/rman/src/commands/publish.command.ts),
-[`src/core/publish-target.ts`](packages/rman/src/core/publish-target.ts).
+[`src/core/publish-target.ts`](packages/rman/src/core/interfaces/publish-target.ts).
 
 - **Question B.** Each target asks its **own** registry whether this version is already out there:
 
   | Criterion | Source | Claims by default? | Implementation |
   | --- | --- | --- | --- |
   | **b-1** npm-targeted packages | the local version is among the registry's published `versions` | a package `rman-node` read the manifest of | `NpmPublishTarget` → `PublishService` (`rman-node`) |
-  | **b-2** docker-targeted packages | `docker manifest inspect <image>:<version>` | nothing - opt-in | `dockerPublishTarget` → `DockerPublishService` (core) |
+  | **b-2** docker-targeted packages | `docker manifest inspect <image>:<version>` | nothing - opt-in | `dockerPublishTarget` → `DockerPublishService` (`builtins/publish-targets/docker/`) |
   | **b-3** the repository itself (see `github-release`) | a GitHub Release exists for the repository's release tag | n/a - never optional, and not a target | `GithubReleaseService` (core) |
 
 - **`publish` was `rman-node`'s command, and that had the ownership backwards.** Everything the
@@ -1227,7 +1551,7 @@ four behaviours still fire.
 - **`clean.*` is contributed by the command**, like every built-in's own key: `skip` derived from
   its `config` block, `include`/`exclude` through `Extra` because a `CommandOption` cannot say "a
   glob *or* a list of them" - and that union is what a config author writes. **The contribution is
-  declared in `rman.augmentation.ts`, not beside the command**, and only because of the one-block
+  declared in `rmanrc.augmentation.ts`, not beside the command**, and only because of the one-block
   rule: re-measured while moving it, a second `declare module 'rman'` left
   `SystemInfo.PackageManager` unresolved at four call sites. rman's own commands augment a *module
   path*, which has no such limit.
@@ -1242,6 +1566,16 @@ four behaviours still fire.
   them - see above. Both are **declared**, not built, like every built-in.
 
 ### `list` / `run`
+
+- **`build`, `test` and `lint` are aliases for `run <script>`, and all three are core.** The test is
+  what the command *knows*: a script name and nothing else. A Cargo repository declaring
+  `lint: 'cargo clippy'` is served by the same file as a Node one, which is why none of the three
+  sits in the `node` preset - the line `clean` is on the other side of, since everything `clean`
+  knows how to delete is a TypeScript fact.
+- **None of them owns a config key.** `lint` is `run lint` under another name, so its settings are
+  `run.lint`, which belongs to `run` - the three declare `configKeys: ['run.<script>']` and
+  contribute nothing. Two commands cannot contribute under one top-level key anyway (interface
+  merging is not a deep merge), and these never needed to.
 
 - **A `run.<script>` key is not read at one uniform level, and the wrong level fails silently.**
   `RunService` reads `concurrency`, `progress`, `changed` and `changedSince` off
@@ -1267,6 +1601,22 @@ four behaviours still fire.
     sat that way - read since forever, declared never - so a JS config could not write the thing
     that worked. Pinned now in `config.spec.ts`'s `RunScriptOptions` block, with a negative control.
 
+- **A package's own `pre<script>`/`post<script>` and the config's `before`/`after` both run** -
+  they compose, and only `exec` replaces (`slotValues` in `run.service.ts`). The two are not the
+  same kind of key: `exec` is one answer to one question, so a package declaring `"build"` and a
+  config declaring `exec` are the same build stated twice; a hook is a *point*, and two hooks at
+  one point both belong.
+  - **The config brackets the package's own**, which is what the wider statement means:
+    `config.before -> prebuild -> build -> postbuild -> config.after`.
+  - **Measured, and it was a silent loss.** A root declaring `"[*]" run.build.before` lost it
+    entirely for any package that had a `prebuild` - so adding an unrelated codegen hook to one
+    package cancelled a repo-wide `rman clean`, with a stale build directory as the only symptom.
+    The control is the same repository with `prebuild` deleted, where the config's hooks run.
+  - **`version` uses the same function**, so npm's `preversion` no longer replaces a repository's
+    `.rmanrc version.before` either. The rule lives in `RunService` and `VersionService` calls it -
+    two copies would drift, and one of them would sit in the file that writes versions.
+  - `override: true` is unchanged: the config replaces rather than composes, per slot, which is
+    what "ignore what the package says it does" has always meant.
 - **An empty run has two endings, and conflating them hid a broken CI step for months.** Nothing
   defining the script at all is a mistake - `npm run` fails on it, so does `rman` (non-zero). Every
   package being *filtered out* (`--scope`/`--changed`/`skip`/`if:`) is the correct answer to what
@@ -1394,7 +1744,7 @@ underneath, which is the general form of `+key` and the one thing an expression 
   and a cycle is reported rather than half-resolved); spreading would fire every one on every call,
   and one of them throwing would blame the wrong key.
 - **`value` spreads as empty when nothing below set the key, so `[...value, 'x']` needs no guard**
-  (`unsetValue` in `config.ts`). That case is not exotic: a value written to extend an inherited
+  (`ConfigInterpolator._previousValue`'s `UNSET_MARKER`). That case is not exotic: a value written to extend an inherited
   list is also the *first* layer in a repository that inherits nothing.
   - **It was `undefined`, with `value ?? []` required at every site, and the reasoning for that was
     half right.** Defaulting to a plain `[]` would indeed be a guess about the key's type - so the
@@ -1449,7 +1799,7 @@ rman runs on purpose, and a step can be a function too.
 
 ## Function steps: a step written as JavaScript
 
-[`src/core/run-step.ts`](packages/rman/src/core/run-step.ts). `run.<script>.before`/`.exec`/`.after`,
+[`src/core/run-step.ts`](packages/rman/src/core/interfaces/run-step.ts). `run.<script>.before`/`.exec`/`.after`,
 `version.before`/`.exec`/`.after` and `run.<script>.if` each take a **function** as well as a string.
 Six step slots and one condition - and that list is the whole surface, because it is exactly the set
 of keys whose value is a shell command the *author wrote*. `rman exec <cmd>` takes its command from
@@ -1671,7 +2021,7 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   `.rman/publish.mjs` that used to win silently is now a clash that throws.
 - **A bare name in `extends` resolves through the *repository's* `node_modules` first, and falls
   back to whatever is installed beside rman itself** (`resolveConfigTarget` / `resolveBesideRman` in
-  [`src/core/resolve-target.ts`](packages/rman/src/core/resolve-target.ts)). **`extends` is now its
+  [`src/core/resolve-target.ts`](packages/rman/src/core/config/resolve-config-target.ts)). **`extends` is now its
   only caller** - `plugins` takes an instance or a glob and resolves no names at all, so the error
   quoted below can no longer come from that key. A globally installed rman's siblings are the
   globally installed packages, which is what makes the bootstrap work: `rman ci` exists to create
@@ -1690,8 +2040,8 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   - `resolveBesideRman`'s `from` parameter is the test seam: the answer depends on where rman's own
     module sits, so a spec inside this repository could otherwise only prove that this repository
     sees its own `node_modules`.
-- **`plugins` arrives through `extends` too, commands and seams alike.** `Repository.create` reads
-  it off `readDirConfig(rootDir)`, which has already resolved `extends` - so a shared config package
+- **`plugins` arrives through `extends` too, commands and seams alike.** The root's level is read by
+  `ConfigReader`, which has already resolved `extends` - so a shared config package
   can deliver a whole toolchain and a repository writes one line. Measured: with nothing but
   `{ "extends": "shared-config" }`, `rman clean --dry-run` ran and `rman list` found the workspace
   packages, i.e. the inherited entry brought the manifest reader and workspace provider along with
@@ -1783,26 +2133,36 @@ against it, which has already paid for itself twice (`runBin`, `logger`). Its me
   - `register` also allows **one registration per plugin name**, which catches what identity cannot
     (two objects claiming a name, an object duplicating a named package). Registering twice defines
     its commands twice, which yargs does not survive.
-**A root `platform` declaration naming a built-in puts it at the front of `plugins`**
-(`expandBuiltinPlugins`), so the whole built-in arrives - technology, commands, publish targets.
-Saying which technology a repository *is* is saying it has it; making an author write both was a
-distinction only rman could see, and the measured cost was `rman list` working with a `node` column
-beside `Unknown arguments: clean`.
-
-- **At the front**, because `platformFor` takes the first platform that recognizes a directory. Only
-  observable with **two** built-ins - rman ships one, so a control swapping the ends passes until a
-  second is stubbed into `BUILTIN_PLUGINS` (`detect.spec.ts` has the pattern).
-- Read from the unmarked key **or** from `"[/]"`, since both are the root speaking.
-- **Only a built-in is promoted**, checked after the loader's dynamic import: a third-party platform
-  is loaded by the `plugins` entry that brings it, and pushing its bare name in would hand the
-  loader a glob matching no file - the failure reads as the plugin being missing while it is
-  registered perfectly well.
-- **Below the root it loads the technology alone**, and that is structural: `plugins` is read once,
-  at the root, before any package exists, so a nested declaration cannot contribute commands even in
-  principle.
 
 - Don't extend `ALWAYS_APPEND` casually: an always-appending key can never be *un*-said by a closer
   layer, which is only acceptable where the value is a set of contributions rather than a decision.
+
+**`platforms` is the key a technology arrives through, and `platform` only *names* one.** They read
+alike and are opposite directions:
+
+| | |
+| --- | --- |
+| `platforms: [...]` | contributes technologies - an instance, or a glob naming modules that export one. Appends, like `plugins` |
+| `platform: 'node'` | says which of the ones already in play claims **this directory**, overriding the manifest question |
+
+- **A declared `platform` no technology provides is an error** naming the file, and the fix is
+  `platforms` or `extends` - it does not load anything on its own. That is the correction:
+  `platform: 'node'` used to *promote* the named built-in to the front of `plugins`
+  (`_expandBuiltinPlugins`), because saying which technology a repository is was taken as saying it
+  has it. It arrived with commands and publish targets attached, which is a great deal for one word
+  to mean, and it only ever worked for a name rman itself shipped. `DEFAULT_PRESETS` makes the
+  common case (`node`) need no declaration at all, and anything else is one `extends` line.
+- Read from the unmarked key **or** from `"[/]"`, since both are the root speaking - and from any
+  directory, not just the root: which technology claims a directory is that directory's fact.
+- **`ConfigReader` writes it when nothing declared it**, from the first loaded platform whose
+  manifest provider recognizes the directory - so `Workspace._platformFor` finds a name either way
+  and the answer is established once rather than re-derived by whoever reads it.
+- **A plugin's own `platforms` join the same list, inside `ConfigReader._addPlugin`.** They used to
+  be collected by `Workspace._readLevel` *after* the reader had finished, so the reader's own
+  platform decision could not see them - two lists with two orders. Invisible while nothing else was
+  in the list; the moment presets were, a plugin handed straight to `Workspace.create` lost its
+  directories to one (measured: `ws.packages` came back empty for a repository whose own technology
+  was sitting right there).
 
 **`--version` and `--help` must not need a repository.** `rman -v` is what you reach for when
 something is wrong - to find out which rman is even installed - and a broken `.rmanrc` took it away:
@@ -1822,6 +2182,29 @@ could not resolve answered with that error and exit 1 (measured).
 swallowed it, so `rman info` in a directory with no `package.json` reported failure on stdout and
 success to the shell (measured, and true of the published 1.0.10 too). It rethrows now, and the
 entry point exits 1. Any new throw path before `parseAsync` inherits that - keep it that way.
+
+## Lint: `packageDir` entries are absolute
+
+[`eslint.config.mjs`](eslint.config.mjs). `import-x/no-extraneous-dependencies` is pointed at two
+roots for `packages/*/test/**` - the repository root, where a workspace installs its dev tooling
+once, and each package, for its own dependencies and peers. `packageDir` **replaces** the default
+nearest-package lookup rather than adding to it, which is why both have to be listed and why a new
+package gets a line.
+
+- **A relative entry is resolved against `process.cwd()`, not against the config file**, so
+  `'packages/rman'` was right from the repository root and pointed at `packages/rman/packages/rman`
+  - nothing - from inside the package. With that root unseen, the package's own dependencies read as
+  undeclared: measured, `eslint .` clean from the root and
+  `'fast-glob' should be listed in the project's dependencies` from `packages/rman`, on imports
+  declared exactly where they belong.
+- **A lint result that depends on where you are standing is the thing to rule out**, because `npm
+  run lint` is always run from the root and an editor's integration usually is not. Every entry is
+  built with `path.join(import.meta.dirname, ...)`; check from a package directory as well as from
+  the root after touching this rule.
+- **Do not widen the rule to silence it.** Scoped to tests deliberately: setting `packageDir`
+  repository-wide made every runtime import in `packages/rman/src` read as undeclared instead
+  (measured - 90 errors on `ansi-colors` and friends). Source keeps the default lookup, which is the
+  check worth having.
 
 ## Tests: every spec declares its own ecosystem
 
@@ -1891,6 +2274,17 @@ no version planner - so a spec that needs one **brings it**.
     setup failure silences **both** streams - see `plugin.spec.ts`'s own `expectCliFailure`.
   - The quickest way to find a leak is to diff a run's output against what mocha itself prints:
     every line that is neither a suite title nor a result came from the code under test.
+- **A fixture writes ONE config file per directory**, which is the rule `ConfigReader` enforces and
+  which several fixtures predated. Two shapes of the same mistake, and both were silent until the
+  rule existed:
+  - a `.rmanrc` written as the **root marker** plus a `.rmanrc.cjs` for a case that needs a
+    function. The marker only has to exist - `Workspace.findRoot` accepts any `.rmanrc*` - so the
+    `.cjs` *is* the marker. `run.service.spec.ts`'s `writeFixture` and `version.service.spec.ts`'s
+    `fixtureWithOrigin` take the JS form as an argument and write one file or the other.
+  - a `.rmanrc` plus `package.json`'s own `"rman"` key. In `plugins/node/**` this is easy to write
+    by accident because `runCli` calls `declarePlugin`, which writes an `.rmanrc` to declare the
+    preset - so a fixture putting its settings in the manifest ends up with two. Put them in the
+    `.rmanrc`; `declarePlugin` merges into whatever is already there.
 - **A fixture repository sets `user.email`/`user.name` in its own config, right after `git init` -
   never per command with `-c`.** The code under test commits too (`applyPlan` makes one per group
   plus the root's version sync) and cannot be handed an identity, so a fixture that configures only
@@ -1948,11 +2342,14 @@ live at once:
   any command, from the commit the node plugin moved inside rman:
   `ReferenceError: Cannot access 'VersionPlanService' before initialization`, through
   `core/repository -> plugins/detect -> plugins/builtins -> plugins/node/... -> version-plan`.
-  `detect.ts` imported `builtins.js` statically; `config.ts` already imports it dynamically and
+  (Both of those modules are gone - see the presets section - but the shape is not.)
+  `detect.ts` imported `builtins.js` statically; the config reader already imports it dynamically and
   documents the same cycle from the other side. **Any new static import into `plugins/` from `core/`
-  is this bug again.**
+  is this bug again** - and `presets/` counts, since a preset module pulls in a platform and its
+  services. That is why `presets/index.ts` holds names rather than imports and `ConfigReader`
+  reaches a preset through the same dynamic `import()` an `extends` uses.
 - **A `declare module` augmentation that reaches rman and nobody else.** The node plugin's lives in
-  `plugins/node/augmentation/rman.augmentation.ts`, imported by the *plugin's* entry point, which
+  `builtins/platforms/node/augmentation/rmanrc.augmentation.ts`, imported by the plugin's entry point, which
   `index.ts` did not reach - so `clean` and `publish.npm` were typed inside rman and were
   `does not exist in type 'RmanConfig'` for a consumer. The same trap `commands.ts` records, and it
   reappeared because until the fold a consumer imported `rman-node` and got the augmentation with

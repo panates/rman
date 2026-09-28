@@ -1,7 +1,7 @@
-import type { Package } from '../../../core/package.js';
-import { ChangeHashService } from '../../../services/change-hash.service.js';
-import { VersionPlanService } from '../../../services/version-plan.service.js';
-import type { GitHelper } from '../../../utils/git.js';
+import type { Package } from '../../../../core/classes/package.js';
+import { ChangeHashService } from '../../../../services/change-hash.service.js';
+import { VersionPlanService } from '../../../../services/version-plan.service.js';
+import type { GitHelper } from '../../../../utils/git.js';
 /**
  * How a release is planned for an npm repository.
  *

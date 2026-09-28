@@ -1,4 +1,4 @@
-import { SystemInfo as OrgSystemInfo } from '../../../services/system-info.js';
+import { SystemInfo as OrgSystemInfo } from '../../../../services/system-info.js';
 /**
  * Adds the npm half of `SystemInfo` to rman's own types.
  *

@@ -1,8 +1,8 @@
-import type { ArgsOf, CommandOption } from '../../../index.js';
-import type { ConfigValue } from '../../../interfaces/rman-config.interface.js';
-import { declareCommand } from '../../../interfaces/rman-config.interface.js';
-import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../../../utils/branch-guard.js';
-import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from '../../../utils/package-filter.js';
+import type { ArgsOf, CommandOption } from '../../../../index.js';
+import type { ConfigValue } from '../../../../interfaces/rman-config.interface.js';
+import { declareCommand } from '../../../../interfaces/rman-config.interface.js';
+import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../../../../utils/branch-guard.js';
+import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from '../../../../utils/package-filter.js';
 import { CleanService } from '../services/clean.service.js';
 
 /** Hoisted for `ArgsOf` - see `ci.command.ts` and `RmanConfig.ArgsOf`. */
@@ -60,7 +60,7 @@ type Args = ArgsOf<typeof config, typeof COMMAND>;
  * Declared the same way `ci` is - see that file for why a plugin uses `declareCommand` rather than
  * `registerCommand`.
  */
-const cleanCommand = declareCommand(app => {
+export const cleanCommand = declareCommand(app => {
   const repository = app.repository;
   return {
     command: COMMAND,
@@ -97,5 +97,3 @@ const cleanCommand = declareCommand(app => {
     },
   };
 });
-
-export default cleanCommand;

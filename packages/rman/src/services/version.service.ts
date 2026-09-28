@@ -1,11 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { interpolateConfig } from '../core/config.js';
-import { Manifest } from '../core/manifest.js';
-import type { Package } from '../core/package.js';
-import type { Repository } from '../core/repository.js';
-import type { RunStepValue } from '../core/run-step.js';
-import { Service } from '../core/service.js';
+import type { Package } from '../core/classes/package.js';
+import type { Repository } from '../core/classes/repository.js';
+import { Service } from '../core/classes/service.js';
+import { ConfigInterpolator } from '../core/config/config-interpolator.js';
+import { Manifest } from '../core/interfaces/manifest.js';
+import type { RunStepValue } from '../core/interfaces/run-step.js';
 import { GitHelper } from '../utils/git.js';
 import { expandReleaseTag, isCalendarVersion } from '../utils/release-version.js';
 import { stampVersionLabel } from '../utils/version-stamp.js';
@@ -73,6 +73,10 @@ export class VersionService extends Service {
      */
     for (const entry of bumped) assertStampable(entry.package, entry.to!);
 
+    /** One for the whole run: it carries no per-package state, and `defer(...)`'s bookkeeping is
+     *  per call. */
+    const interpolator = new ConfigInterpolator();
+
     for (const entry of bumped) {
       const pkg = entry.package;
       /** The scope these hooks are evaluated against - the only place `${{ pkg.targetVersion }}`
@@ -93,7 +97,7 @@ export class VersionService extends Service {
           RunService.normalizeScriptValue(
             /** `at`: the path is what tells a step function from a value one, and this is a fragment -
              *  without it a function here was called while the hook was being prepared. */
-            interpolateConfig(pkg.config?.version?.[slot], scope, { at: ['version', slot] }),
+            interpolator.interpolate({ config: pkg.config?.version?.[slot], scope, at: ['version', slot] }),
             `version.${slot}`,
           ),
         );
@@ -445,7 +449,7 @@ function assertStampable(pkg: Package, version: string): void {
   }
 }
 
-declare module '../core/service.js' {
+declare module '../core/classes/service.js' {
   interface ServiceMap {
     version: VersionService;
   }
