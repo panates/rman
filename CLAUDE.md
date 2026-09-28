@@ -2530,6 +2530,96 @@ which 1.0.x understands. The failure lands exactly when a release is being cut.
 Dogfooding is not gone, only off the critical path: `npx rman build` still works once a build
 exists, and is the right thing to run when changing `RunService`.
 
+## The release workflow, and the npm auth trap that cost five runs
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) releases rman **with the rman in
+that commit** - `npm ci`, `npm run build`, then `node packages/rman/build/cli.js version/publish/
+github-release`. It called `panates/github-actions/.../node-release.yaml@v1` until 40f41e3, which is
+safe only because *that* version calls rman nowhere: `@v2` drives the whole release with
+`npx rman@1` (measured: 0 references against 20), so following the other repositories onto it would
+have had rman 2.x released by an rman that cannot read this repository's own `.rmanrc.yml`. Same
+bootstrap loop `npm run build` was taken off, and it bites exactly when a release is being cut.
+
+- **Two builds, and both are load-bearing.** The first is the bootstrap - there is no rman to run
+  `version` with until it finishes. The second is the artifact: `postbuild.cjs` bakes
+  `package.json`'s version into `build/constants.js`, so a build made *before* the bump ships a CLI
+  reporting the old version. Measured: set `package.json` to 9.9.9 without rebuilding and
+  `--version` still answers the previous one. It holds although `.rmanrc.yml` declares no
+  `version.stamp` - what bakes the version in is postbuild, not the config.
+- **The built-in `GITHUB_TOKEN`, not a PAT**, and that removes a redundant run rather than a secret:
+  a push made with `GITHUB_TOKEN` deliberately does not trigger workflows, and `version --push`
+  pushes to `main`, which is what this workflow triggers on. With a PAT every release started a
+  second run of itself, which the `no-release` guard does not catch (a `chore(release): ...` message
+  contains neither guard word) and `concurrency: cancel-in-progress: false` does not cancel.
+- **`private: true` had to come off `packages/rman/package.json`**, or `rman publish` releases
+  nothing: it refuses a private package, and measured, the plan answered `skip - private package`.
+  The flag was never about the artifact - publish runs `npm publish` with cwd =
+  `packages/rman/build` and `derivePublishManifest` generates that manifest itself, deleting
+  `private` on the way. It was guarding the *source* directory against a stray `npm publish`, which
+  a `prepublishOnly` says on its own: measured on four routes, it blocks `npm publish` in the
+  package and `npm publish -w packages/rman` from the root, and does not fire for cwd=build (rman's
+  own route) or `npm publish build`. It cannot reach a consumer - `postbuild.cjs` deletes `scripts`
+  wholesale and `derivePublishManifest` keeps only the three install hooks. **No backticks in that
+  message**: npm runs a script through `sh -c "..."`, where a backticked `` `rman publish` `` is
+  command substitution and would run.
+
+**npm Trusted Publishing (OIDC), and the four dead ends it went through.** All of these report as
+one of two messages, neither of which names the cause:
+
+| symptom | what it means |
+| --- | --- |
+| `ENEEDAUTH` | npm found no credential **and did not attempt the OIDC exchange** |
+| `404 Not Found - PUT .../rman` | npm sent a credential the registry rejected - it returns 404 rather than 403 so nobody can probe which packages exist |
+
+- **`registry-url` on `setup-node` is required**, and dropping it was the first dead end. The
+  reasoning was right for v4 and explicitly wrong for v7: v4 wrote an `.npmrc` whose `_authToken`
+  was a dummy `NODE_AUTH_TOKEN` fallback, v7 removed it and says so ("npm Trusted Publishing (OIDC)
+  is not affected, since it does not use NODE_AUTH_TOKEN"), and the documented recipe sets it.
+- **The empty auth line it writes must be stripped**, and that was the second. `registry-url` makes
+  setup-node write `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` into the file
+  `NPM_CONFIG_USERCONFIG` points at - **not** `./.npmrc`, which is where a diagnostic will look
+  first and find nothing. With no token that resolves to nothing, and npm reads *having* an
+  `_authToken` entry as being authenticated already, so it never reaches for OIDC. This is
+  actions/setup-node#1551. The `Configure npm auth` step removes it with `grep -v` into a temp file;
+  **not `sed -i`**, which BSD sed reads as a backup suffix, making the line a silent no-op on macOS
+  - measured while checking that very step.
+- **`npm install -g npm@latest` was a third**, and it was insurance that moved the runner: Node 24
+  ships npm 11.19.0, well past the 11.5.1 OIDC needs, and the upgrade took the job to npm 12.1.0 -
+  a major the recipe never contemplates, since it has no upgrade step at all.
+- **The cause was the trusted-publisher registration on npmjs.com**, and deleting and recreating it
+  fixed it with every field re-entered identically. That is the documented remedy for "everything
+  looks right and OIDC never engages", and it is worth reaching for **early** rather than last.
+- **rman was ruled out by measurement, not by argument.** `npm publish` is a *grandchild* here -
+  `rman publish` execs it through `BinPath.env`, which rebuilds the environment from
+  `{ ...process.env }` - and a probe run inside that spawn reported
+  `child OIDC url: present, child OIDC token: present, child npm: 11.19.0`.
+- **A publish is not visible immediately.** npm answers `Your package is being processed and may
+  take a few minutes to become available`, and a registry query inside that window says the version
+  is absent - measured, and mistaken for a failed publish. Read `npm notice ... Signed provenance
+  statement` plus `+ rman@<version>` in the log as the success, not a registry read taken seconds
+  later.
+
+**The diagnostic step that found all this is deleted**, because the question is answered and it
+printed eight lines on every release. What it did, if it is ever needed again: `npm --version`, the
+presence (never the value) of `ACTIONS_ID_TOKEN_REQUEST_URL`/`_TOKEN`, the contents of
+`${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}` with `_authToken` values redacted, and the claims npm
+matches a publisher on, read from the token GitHub issues for npm's own audience:
+
+```bash
+curl -sS -H "authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+  "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org" |
+  node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+    const c=JSON.parse(Buffer.from(JSON.parse(s).value.split('.')[1],'base64url'));
+    for (const k of ['repository','repository_owner','workflow_ref','job_workflow_ref','environment'])
+      console.log(k, c[k] ?? '(absent)');
+  })"
+```
+
+**Never print the token itself.** `ACTIONS_ID_TOKEN_REQUEST_TOKEN` is a live credential that GitHub
+does **not** mask, because it is not a registered secret - and `${VAR:+present}${VAR:-ABSENT}`, which
+reads as a tidy way to report presence, prints `present<the value>` when the variable is set. Caught
+locally with a fake token before it ever ran.
+
 ## Linking a built package into another repository
 
 **`packages/<name>/build` *is* the published package** - `postbuild.cjs` writes a `package.json`
