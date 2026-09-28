@@ -56,6 +56,14 @@ export class NpmPublishTarget implements PublishTarget {
       describe: 'npm publish --otp <otp> - a 2FA one-time password, for registries that require it',
       type: 'string',
     },
+    staged: {
+      target: 'cli',
+      describe:
+        "npm stage publish - hold each version in npm's staging queue instead of publishing it, " +
+        'until a maintainer runs "npm stage approve" with 2FA. --no-staged forces a direct publish ' +
+        'over .rmanrc "publish.npm.staged"',
+      type: 'boolean',
+    },
     registry: {
       target: 'cli',
       describe: 'Registry to check against and publish to (default: whatever .npmrc already configures)',
@@ -100,6 +108,11 @@ export class NpmPublishTarget implements PublishTarget {
        *  decides the dist-tag and refuses the two cases with nothing to derive, so `--dry-run` and
        *  the JSON a pipeline gates on have to see the flag. */
       tag: ctx.args.tag as string | undefined,
+      /** Plan-time for the same reason, and a stronger one: whether a run leaves the version live
+       *  or waiting for an approval is the thing a reader is confirming. Left `undefined` when the
+       *  flag was not given, so each package's own `publish.npm.staged` still decides - `false`
+       *  here would mean `--no-staged` and silently overrule the config. */
+      staged: ctx.args.staged as boolean | undefined,
     };
   }
 }
