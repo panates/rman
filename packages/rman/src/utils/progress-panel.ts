@@ -9,6 +9,15 @@ export interface ProgressItem {
   /** Label of the step currently running, for work with more than one step (e.g. `run`'s
    *  npm-script steps) - omit `stepsTotal` entirely for single-step work like a plain command. */
   currentStep?: string;
+  /**
+   * **What the current step actually runs** - the shell command, or a function step's name - shown
+   * beside the label so a silent step says what it is.
+   *
+   * The label alone answers "which slot", which is what a reader already knows; a step sitting at
+   * `before (2/9)` for ten seconds with nothing on stdout is the case this exists for, and it is
+   * the common one for a build.
+   */
+  currentCommand?: string;
   stepIndex?: number;
   stepsTotal?: number;
   /** Last captured output line, shown dimmed under the item while it's running. */
@@ -109,7 +118,15 @@ export class ProgressPanel {
         item.stepsTotal && item.stepsTotal > 1 && item.stepIndex != null
           ? `${item.currentStep} (${item.stepIndex + 1}/${item.stepsTotal})`
           : item.currentStep || '';
-      const group = [`${spinner} ${colors.bold(item.name)}  ${colors.gray(step)}  ${colors.yellow(elapsed)}`];
+      /** Measured against the *plain* text: every piece below is wrapped in escape sequences, and
+       *  `String.length` counts those, so budgeting on the rendered string wraps a row that fits. */
+      const fixed = `  ${item.name}  ${step}  ${elapsed}`.length;
+      const command = truncate(item.currentCommand ?? '', (process.stdout.columns || 80) - fixed - 2);
+      const group = [
+        `${spinner} ${colors.bold(item.name)}  ${colors.gray(step)}` +
+          (command ? `  ${colors.cyan(command)}` : '') +
+          `  ${colors.yellow(elapsed)}`,
+      ];
       if (item.lastLine) group.push(`    ${colors.dim(item.lastLine)}`);
       if (used + group.length > budget) break;
       lines.push(...group);
@@ -167,6 +184,20 @@ export class ProgressPanel {
 
     return { successCount, failedCount, skippedCount };
   }
+}
+
+/**
+ * `text` cut to `width`, with a `…` in place of what was dropped.
+ *
+ * **Cut from the end, not the middle.** A command's information is front-loaded - `tsc -b
+ * packages/rman/tsconfig.json` says what it is in the first four characters, and a middle-ellipsis
+ * spends them on a tail nobody is reading at a glance. The one thing it must never do is wrap: a
+ * block taller than the terminal breaks the panel's cursor-up arithmetic, which is the same reason
+ * the row budget above exists.
+ */
+function truncate(text: string, width: number): string {
+  if (!text || width <= 1) return '';
+  return text.length <= width ? text : `${text.slice(0, width - 1)}…`;
 }
 
 /** Classic braille "dots" spinner (cli-spinners' default), one frame per render tick. */

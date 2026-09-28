@@ -1567,6 +1567,25 @@ four behaviours still fire.
 
 ### `list` / `run`
 
+- **The progress panel's row names the command, not just the slot** (`ProgressItem.currentCommand`,
+  set from `step.command` or a function step's own name). `before (2/9)` answers "which slot",
+  which the reader already knows; a row sitting there for ten seconds with nothing on stdout is
+  what the panel was hiding, and for a build it is the common case.
+  - The second line stays the last captured *output*. The command belongs on the first because it
+    has to be stable - replacing it the moment the step prints something takes it away exactly when
+    a long step is still worth identifying.
+  - **Cut from the end, and budgeted against the plain text.** Every field is wrapped in escape
+    sequences and `String.length` counts those, so measuring the rendered string leaves the row
+    short and gets it wrong again the moment the colours change. It must never wrap: a block taller
+    than the terminal breaks the panel's cursor-up arithmetic, which is what the row budget exists
+    for too.
+  - A driver that names its own steps (`ci`'s `wipe`/`install`, `clean`'s `ts`/`glob`) sets no
+    command and the row is unchanged - those labels already say what is happening.
+  - **Trap for a spec that *measures* a row:** strip every CSI sequence, not just the colours. A
+    redraw also writes `\x1b[2K` and `\x1b[1A`, which a colour-only pattern leaves in - invisible to
+    `toContain` and wrong by their length to anything counting characters. Measured: an 80-column
+    row came back as 84.
+
 - **`build`, `test` and `lint` are aliases for `run <script>`, and all three are core.** The test is
   what the command *knows*: a script name and nothing else. A Cargo repository declaring
   `lint: 'cargo clippy'` is served by the same file as a Node one, which is why none of the three

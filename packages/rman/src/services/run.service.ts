@@ -81,6 +81,12 @@ export class RunService extends Service {
         for (let i = 0; i < steps.length; i++) {
           const step = steps[i];
           ctx.currentStep = step.name;
+          /** The command for a shell step, the function's own name for a JS one - and a bare
+           *  marker for an anonymous function, which is still worth saying: the slot label alone
+           *  does not distinguish a JS step from a shell one. `step.label` is not used directly
+           *  because for a function it already folds the slot in (`before (js)`), which the row
+           *  prints two characters to its left. */
+          ctx.currentCommand = step.command ?? (step.run?.name ? `${step.run.name}()` : '(js function)');
           ctx.stepIndex = i;
           if (panel.enabled) {
             const onLine = (line: string) => {
