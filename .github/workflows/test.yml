@@ -1,8 +1,24 @@
 name: Test
+
+# **Nothing here may install rman from the registry.** The setup used to be
+# `panates/gh-setup-node@v1`, which runs `npm i rman -g` twice, unconditionally - so rman's own
+# suite depended on the published copy of itself, and a broken or unpublishable release would have
+# failed these jobs for a reason that has nothing to do with the tests. It also put a *global* rman
+# on PATH while the suite ran, which is the trap the node platform's bin-path provider already
+# documents: the running node's directory goes ahead of the inherited PATH, so a nested `rman`
+# inside a `run` step resolves to the global one rather than the one under test.
+#
+# Its third habit was worse and unrelated to rman: `rm -f package-lock.json` followed by
+# `npm install --no-save`, so the committed lockfile was deleted on every run and the suite never
+# saw the pinned dependency tree at all.
+#
+# Measured before dropping it, because this machine has a global rman and every local run was made
+# with one on PATH: with `rman` replaced by a stub that exits 127 and reports being called,
+# `typecheck`, `lint`, `build`, `smoke` and `citest` all pass and the stub is never reached. Nothing
+# in this repository's CI scripts needs a published rman - which is what "the build must not need
+# rman" already says, now checked rather than assumed.
 on:
   workflow_call:
-    secrets:
-      PERSONAL_ACCESS_TOKEN:
 
   # Can be run manually
   workflow_dispatch:
@@ -45,11 +61,19 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Setup Environment
-        uses: panates/gh-setup-node@v1
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
         with:
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           node-version: '24'
+          # Caches npm's own download cache, keyed on the lockfile - which is the mechanism that
+          # works with `npm ci`, unlike caching `node_modules` and then deleting the key it was
+          # hashed from.
+          cache: npm
+
+      # `ci`, not `install`: the point of a lockfile is that CI runs the tree that was committed.
+      - name: Install dependencies
+        run: npm ci
 
       - name: Check types
         run: npm run typecheck
@@ -94,11 +118,15 @@ jobs:
       TZ: Europe/Istanbul  # Set timezone for entire job
 
     steps:
-      - name: Setup Environment
-        uses: panates/gh-setup-node@v1
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
         with:
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Apply tests
         run: |
