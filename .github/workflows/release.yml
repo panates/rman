@@ -81,7 +81,17 @@ jobs:
           # commits after it, so a shallow clone silently reports the wrong thing rather than
           # failing - every package would look unreleased.
           fetch-depth: 0
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          # The built-in GITHUB_TOKEN, with the `contents: write` above - `main` carries no branch
+          # protection, so nothing here needs a personal token's bypass.
+          #
+          # It also removes a redundant run per release, rather than merely being one secret fewer:
+          # a push made with GITHUB_TOKEN deliberately does **not** trigger workflows, and
+          # `version --push` pushes to `main`, which is what this workflow triggers on. With a PAT
+          # every release started a second run of itself - harmless (`version` finds no bump,
+          # `publish` finds everything published, `github-release` reads up-to-date) but never
+          # cancelled either, since `concurrency` here is `cancel-in-progress: false`. The
+          # `no-release`/`no-test` guards do not catch it: a `chore(release): ...` message contains
+          # neither.
 
       # The highest version `test.yml`'s matrix covers, which is the one to cut a release on: the
       # published artifact should be built by a runtime the suite actually ran against.
@@ -147,5 +157,6 @@ jobs:
       # never arrived. A no-op when the tag already has a release.
       - name: GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          # `GithubReleaseService` reads GITHUB_TOKEN, falling back to GH_TOKEN.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node packages/rman/build/cli.js github-release --yes
