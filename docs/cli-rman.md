@@ -1,8 +1,8 @@
 <!--
 docs-baseline
-git-commit: 16c3525
-package-version: 2.0.0-beta.2
-date: 2026-09-25
+git-commit: f20556f
+package-version: 2.0.0-beta.4
+date: 2026-09-28
 
 Verified against `packages/rman/src/cli.ts`, every `packages/rman/src/commands/*.command.ts` and
 the `node` built-in's own commands as of the commit above (and the matching specs for behavior
@@ -10,7 +10,7 @@ examples). There is no second index: `rman-node` was folded into rman, so every 
 repository can run is listed here. Before trusting/updating this file (or any page under
 `docs/cli/`) in a later session, run:
 
-  git diff 16c3525..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/ packages/rman/src/builtins/
+  git diff f20556f..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/ packages/rman/src/builtins/
 
 and update only the pages touched by what that diff actually shows - don't regenerate everything
 unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -51,13 +51,18 @@ rman <command> --help   # full option list for that one command
 | `github-release` | [`docs/cli/github-release.md`](cli/github-release.md) | Creates the repository's GitHub Release for the version that just shipped. |
 | `import <path>` | [`docs/cli/import.md`](cli/import.md) | Imports an external git repository as a new package, with history. |
 
-**`ci` and `clean` are not in that list** - they come from the
-[`node` built-in](rman.md#the-node-built-in), because each is about npm or TypeScript rather
-than about repositories. It ships *inside* rman, so no second package is installed, but nothing it
-contributes exists until a repository asks for it:
+**`ci` and `clean` are listed apart** - they come from the
+[`node` built-in](rman.md#the-node-built-in), because each is about npm or TypeScript rather than
+about repositories. It ships *inside* rman **and is laid under every repository by default**, so
+they are there in a clone with no `.rmanrc` at all:
 
 | `ci` | [`docs/cli/ci.md`](cli/ci.md) | Wipes `node_modules` and lockfiles, then reinstalls from scratch. |
 | `clean` | [`docs/cli/clean.md`](cli/clean.md) | Removes compiled TypeScript output and whatever `.rmanrc "clean"` lists. |
+
+They are still a *contribution* rather than core, which is the thing to hold onto: a repository of
+another technology carries them without them meaning anything to it, and that cost is the price of
+the default. Measured in a directory holding nothing but a `.git` and an empty `.rmanrc`:
+`rman --help` lists `clean`, `ci` and `publish`.
 
 **`publish` is, and its flags still are not fixed.** The command is rman's; *where a package ships*
 is a **publish target**, which a plugin contributes. rman itself brings `docker` - any language's
@@ -145,10 +150,10 @@ read, since plugins are what find the packages.
 `extends`:
 
 ```yaml
-extends: 'rman-node' # its plugins, commands and publish targets all arrive
+extends: 'rman-cargo' # its platforms, commands and publish targets all arrive
 ```
 
-`plugins: ['rman-node']` is **refused**, naming the fix: that key takes a plugin or a glob naming
+`plugins: ['rman-cargo']` is **refused**, naming the fix: that key takes a plugin or a glob naming
 modules that export one, never a package name. The two are different statements - `extends` inherits
 everything the package declares, while `plugins` names the technologies themselves.
 
@@ -157,11 +162,13 @@ publishing a package:
 
 ```js
 // .rmanrc.mjs
-import { defineConfig, definePlugin } from 'rman';
+import { defineConfig, definePlatform, definePlugin } from 'rman';
 
 export default defineConfig({
-  extends: 'rman-node',
-  plugins: [definePlugin({ name: 'cargo', manifestProvider: cargoManifest })],
+  // a *technology* is `platforms`, and `manifestProvider` is what makes it one
+  platforms: [definePlatform({ name: 'cargo', manifestProvider: cargoManifest })],
+  // a *plugin* is a name and something to do at a stage
+  plugins: [definePlugin({ name: 'audit', afterInitRepository({ repository }) { /* ... */ } })],
 });
 ```
 
@@ -230,12 +237,20 @@ installed where the module can resolve it).
 
 | Clash | What happens |
 | --- | --- |
-| `.rman/*.mjs` vs a **plugin's** command | the repository wins, silently - it is the more specific statement, the same way its own `.rmanrc` overrides an `extends` base |
+| `.rman/*.mjs` vs a **plugin's** command | the repository wins - it is the more specific statement, the same way its own `.rmanrc` overrides an `extends` base. Said out loud at `--log-level verbose`, naming both files |
 | `.rman/*.mjs` vs a **built-in** | refused outright: `".rman/version.mjs" would shadow rman's built-in "version" command.` Rename the file, or give it its own name with `command: '<name>'` |
 | a **plugin** vs a **built-in** | refused outright, same check |
 
-So a repository can replace a plugin's `clean` with its own and never be told - which is the
-intended escape hatch, not an oversight. Nothing can replace a built-in.
+So a repository can replace a contributed `clean` with its own - the intended escape hatch, not an
+oversight. Nothing can replace a built-in.
+
+**Only one of the two is registered, and the note is why that is not a new trap.** Both used to be,
+which cost the help output: measured, `rman --help` listed `deploy` twice, once with each
+description, and nothing said which would run. Deduplicating *silently* would have been worse than
+either - one row and no note leaves "my plugin's command does nothing" with no thread to pull - so
+the loser is named at `verbose`. Not a warning: an override is a correct thing to do, and a
+repository doing it on purpose should not be nagged on every invocation. The note reads
+`--log-level` straight off argv, because commands are registered before parsing.
 
 ## Global options
 
@@ -297,8 +312,7 @@ A misspelled command name (e.g. `rman versoin`) gets a `Did you mean version?` s
 
 ## Command scope: repository root vs. current package
 
-Several commands (`run`/`build`/`test`, `exec`, `changelog`, `diff`, `config`, and `rman-node`'s
-`clean`)
+Several commands (`run`/`build`/`test`, `exec`, `changelog`, `diff`, `config` and `clean`)
 automatically scope themselves to *just the package you're standing in* when your shell's current
 directory is inside one package's own directory (rather than the repository root) - pass
 `--from-root`/`-r` to force the whole repository anyway. This has no effect when you're already
@@ -336,7 +350,8 @@ package is dropped **before** `--deps`/`--dependents`, so a dependency edge cann
 
 ### Package filtering
 
-`list`, `run`/`build`/`test`, `exec`, `version`, `changelog` - and a plugin's commands - all accept:
+`list`, `run`/`build`/`test`, `exec`, `version`, `changelog`, `clean`, `ci`, `publish` - and a
+plugin's commands - all accept:
 
 | Option | Description |
 | --- | --- |
@@ -381,8 +396,8 @@ Full semantics (glob syntax, how `--deps`/`--dependents` combine): see
 
 ### Branch guard
 
-Every command that mutates state or runs scripts - `run`/`build`/`test`, `exec`, `version`, and
-`rman-node`'s `ci`/`clean`/`publish` - additionally accepts:
+Every command that mutates state or runs scripts - `run`/`build`/`test`, `exec`, `version`,
+`publish`, `github-release`, `ci` and `clean` - additionally accepts:
 
 | Option | Description |
 | --- | --- |
@@ -397,16 +412,37 @@ rman publish --ignore-branch 'feature/*'
 An explicit CLI `--allow-branch`/`--ignore-branch` **replaces** the equivalent root `.rmanrc` key
 entirely (they never combine, the same precedence `packageManager` uses). With neither set
 anywhere, every branch is allowed. A detached `HEAD`, or a directory that isn't a git repository at
-all, is never blocked. Read-only/non-branch-sensitive commands (`list`, `diff`, `info`,
-`changelog`, `import`) deliberately do **not** have this guard.
+all, is never blocked. Read-only/non-branch-sensitive commands (`list`, `diff`, `info`, `config`,
+`changelog`, `import`) deliberately do **not** have this guard - `changelog` among them because it
+only ever reads history and writes a file the repository already asked for.
 
 ## Exit codes and the `logged` convention
 
-Every command exits `1` on failure, `0` on success. Internally, a failure that's already printed
-its own colored error message sets an internal `.logged` marker so the top-level handler doesn't
-print a second, redundant generic error - this is invisible from the CLI itself (you'll never see
-a doubled error), but worth knowing if you're piping `rman`'s output or wrapping it in your own
-tooling and only ever see *one* error line per failure.
+Every command exits `1` on failure, `0` on success. Internally, a failure that has already printed
+its own coloured error sets a `.logged` marker so the top-level handler does not print a second,
+generic one.
+
+**An error *without* that marker is printed more than once, and this is a known defect rather than
+a design.** yargs' own `.fail()` writes it and `runCli`'s catch writes it again, on different
+streams. Measured on `rman version banana`: once on stdout and twice on stderr, three lines for one
+mistake. Worth knowing if you pipe rman's output or wrap it - do not take a doubled message as
+evidence that something new is wrong, and do not deduplicate by counting lines.
+
+**A setup failure used to exit `0`**, which is worse than a doubled message and is fixed: `runCli`'s
+top-level catch printed and swallowed, so `rman info` in a directory with no manifest reported
+failure on stdout and success to the shell. It rethrows now and the entry point exits 1. Any new
+throw path before `parseAsync` inherits that.
+
+**`--version` and `--help` survive a repository that will not load**, deliberately: `rman -v` is
+what you reach for when something is wrong, and a broken `.rmanrc` took it away.
+
+- `-v`/`--version` is answered from argv **before the repository is touched** (measured: a config
+  naming a plugin that cannot resolve still prints the version and exits 0).
+- `-h`/`--help` genuinely needs the repository, since every command's registration closes over it
+  and a plugin's commands *are* the repository's - so it degrades to the global options and says
+  why the rest is missing, on **stderr**, leaving `rman --help | less` as just help.
+- **Nothing else degrades.** An ordinary command in a broken repository still prints the reason and
+  exits 1, or a broken repository would look like a working one.
 
 ## Configuration
 
