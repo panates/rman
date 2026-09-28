@@ -20,7 +20,6 @@ import './commands/exec.command.js';
 import './commands/github-release.command.js';
 import './commands/import.command.js';
 import './commands/info.command.js';
-import './commands/lint.command.js';
 import './commands/list.command.js';
 import './commands/publish.command.js';
 import './commands/run.command.js';

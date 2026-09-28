@@ -1640,13 +1640,27 @@ four behaviours still fire.
     `toContain` and wrong by their length to anything counting characters. Measured: an 80-column
     row came back as 84.
 
-- **`build`, `test` and `lint` are aliases for `run <script>`, and all three are core.** The test is
-  what the command *knows*: a script name and nothing else. A Cargo repository declaring
-  `lint: 'cargo clippy'` is served by the same file as a Node one, which is why none of the three
-  sits in the `node` preset - the line `clean` is on the other side of, since everything `clean`
-  knows how to delete is a TypeScript fact.
-- **None of them owns a config key.** `lint` is `run lint` under another name, so its settings are
-  `run.lint`, which belongs to `run` - the three declare `configKeys: ['run.<script>']` and
+- **`build` and `test` are aliases for `run <script>`, and both are core.** The test is what the
+  command *knows*: a script name and nothing else. A Cargo repository declaring `build: 'cargo
+  build'` is served by the same file as a Node one, which is why neither sits in the `node` preset -
+  the line `clean` is on the other side of, since everything `clean` knows how to delete is a
+  TypeScript fact.
+- **There was a `lint` beside them and it was removed; do not add it back.** Linting is the one of
+  the three where **the repository decides what to use**, and an alias is not neutral about that:
+  `rman lint` claims the name for `run lint`, and a built-in name cannot be shadowed
+  (`assertNoBuiltinShadowing` throws - see "A repository's own commands"). So a repository whose
+  linting is one eslint run *at the root* - which is what a flat config already covers, and what
+  makes a per-package `run lint` reload the config once per package and still miss the root's own
+  files - could not contribute a `lint` command at all. Measured on `@panates/rman-preset`, which
+  ships exactly that command: with the alias present, every rman invocation in a repository
+  extending it died with `would shadow rman's built-in "lint" command`.
+  - `build` and `test` are not in the same position: both name a per-package script that rman
+    orchestrates, which is the thing `run` exists for. A repository wanting its own `build`
+    *command* is in the same bind, and that cost is stated rather than hidden - it is just not one
+    anybody has hit.
+  - `rman run lint` is unchanged, and so is every `run.lint` key.
+- **Neither owns a config key.** `build` is `run build` under another name, so its settings are
+  `run.build`, which belongs to `run` - the two declare `configKeys: ['run.<script>']` and
   contribute nothing. Two commands cannot contribute under one top-level key anyway (interface
   merging is not a deep merge), and these never needed to.
 
