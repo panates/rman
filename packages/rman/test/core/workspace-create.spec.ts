@@ -191,14 +191,70 @@ describe('core/Workspace.create()', () => {
       expect(ws.packages.map(p => p.rawConfig.logLevel)).toEqual(['silent', 'silent']);
     });
 
-    /** The root's address is `"[/]"`; a platform block is held to the same line a glob is. */
-    it('never matches the root, which has a platform of its own', async () => {
+    /**
+     * **The root is a package with a platform, so a platform block speaks for it too** - only a
+     * glob is held off the root, and for two reasons that are both about names: `"[my-*]"` must not
+     * pick up a repository whose root package happens to be called `my-repo`, and a catch-all must
+     * not hand a package-shaped setting to a root with no build directory. Neither applies to
+     * `platform:test`, which is not a name and is not a catch-all.
+     *
+     * It read the other way until nesting arrived, "for consistency with a glob", and that made
+     * `"[platform:test]" > "[/]"` - *the root, when it is of this technology* - unanswerable: the
+     * match asked `isRoot` before it asked the platform question.
+     */
+    it('matches the root too, which has a platform of its own', async () => {
       const root = twoPackageRepo();
       write(root, '.rmanrc', JSON.stringify({ '[platform:test]': { logLevel: 'silent' } }));
       const ws = await Workspace.create(root, { app: app(), presets: [], platforms: [test] });
       expect(ws.rootPackage.platform.name).toBe('test');
-      expect(ws.rootPackage.rawConfig.logLevel).toBeUndefined();
+      expect(ws.rootPackage.rawConfig.logLevel).toBe('silent');
       expect(ws.packageAt(path.join(root, 'packages/pkg-a'))!.rawConfig.logLevel).toBe('silent');
+    });
+
+    /**
+     * **The pair the rule above exists for**: the outer block decides *which* root, the inner one
+     * says it is the root, and `"[*]"` beside it still excludes it. This is a whole technology's
+     * shared config in one block - the `vars` a preset declares for a node repository are the
+     * parent's own keys, so they reach the root and the packages alike.
+     *
+     * A narrower rule was tried first - let a chain reach the root only where it *names* `"[/]"` -
+     * and it answers this case while breaking the one it was written for: the nested block could
+     * not read its parent's `vars`, since those are the parent's own keys. Reverting to it turns
+     * the `vars` assertions here red.
+     */
+    it('narrows to the root with a nested "[/]", and to the packages with "[*]"', async () => {
+      const root = twoPackageRepo();
+      write(
+        root,
+        '.rmanrc',
+        JSON.stringify({
+          '[platform:test]': {
+            vars: { tier: 'shared' },
+            '[/]': { logLevel: 'error' },
+            '[*]': { logLevel: 'silent' },
+          },
+        }),
+      );
+
+      const ws = await Workspace.create(root, { app: app(), presets: [], platforms: [test] });
+      expect(ws.rootPackage.rawConfig.logLevel).toBe('error');
+      expect(ws.packageAt(path.join(root, 'packages/pkg-a'))!.rawConfig.logLevel).toBe('silent');
+      expect(ws.rootPackage.rawConfig.vars).toEqual({ tier: 'shared' });
+      expect(ws.packageAt(path.join(root, 'packages/pkg-a'))!.rawConfig.vars).toEqual({ tier: 'shared' });
+    });
+
+    /** The control for the block above: a technology the root is not leaves it alone, so the match
+     *  is the platform question rather than "a platform block now reaches the root". */
+    it('leaves a root of another technology alone', async () => {
+      const root = tmp();
+      const other = technology('other', 'other.json');
+      write(root, 'other.json', JSON.stringify({ name: 'root', members: ['packages/pkg-a'] }));
+      write(root, 'packages/pkg-a/manifest.json', JSON.stringify({ name: 'pkg-a' }));
+      write(root, '.rmanrc', JSON.stringify({ '[platform:test]': { logLevel: 'silent' } }));
+
+      const ws = await Workspace.create(root, { app: app(), presets: [], platforms: [other, test] });
+      expect(ws.rootPackage.platform.name).toBe('other');
+      expect(ws.rootPackage.rawConfig.logLevel).toBeUndefined();
     });
 
     /** `platform` would be circular - the block is matched by platform and would be setting it -

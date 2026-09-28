@@ -1,4 +1,18 @@
 name: Release
+
+# **rman releases itself with the rman in this commit, never with a published one.**
+#
+# This workflow used to call `panates/github-actions/.github/workflows/node-release.yaml@v1`,
+# which is fine only because that version calls rman nowhere (measured: 0 references, against 20
+# in @v2). @v2 drives the whole release with `npx rman@1` - so the day this repository follows the
+# other panates repositories onto it, rman 2.x would be released by rman 1.x, which cannot even
+# read this repository's own `.rmanrc.yml` (`platform`, `"[*]"`). That is the same bootstrap loop
+# `npm run build` was taken off when it stopped being `rman build`, and it bites at exactly the
+# moment a release is being cut.
+#
+# The fix is not to avoid rman - it is to avoid the *registry*. Every step below runs the CLI this
+# commit builds, so the release path exercises the artifact being shipped.
+
 on:
   # Can be run manually
   workflow_dispatch:
@@ -32,7 +46,7 @@ jobs:
           github.event_name == 'push' &&
           !(
             contains(github.event.head_commit.message, 'no-test') ||
-            ( 
+            (
               startsWith(github.event.head_commit.message, 'Merge pull request') &&
               contains(github.event.head_commit.message, '/dev')
             )
@@ -40,35 +54,107 @@ jobs:
         )
       )
     uses: ./.github/workflows/test.yml
-    secrets:
-      PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-
-
-  release_after_test:
-    # Wait for "test" job
-    needs: test
-    uses: panates/github-actions/.github/workflows/node-release.yaml@v1
-    secrets:
-      PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   release:
+    name: Release
+    needs: test
+    # `always()` because `needs` alone would block the whole job whenever `test` is *skipped*, which
+    # is the normal path for a `no-test` commit or a merge from /dev. This one condition replaces
+    # the pair of mirror-image jobs that used to exist for exactly that reason - one with
+    # `needs: test`, one with the test condition negated - which meant the release steps were
+    # written down twice and could drift.
     if: >
-      !contains(github.event.head_commit.message, 'no-release') &&
-      !(
-        (github.event_name == 'workflow_dispatch' && github.event.inputs.skip-tests != 'true') ||
-        (
-          github.event_name == 'push' &&
-          !(
-            contains(github.event.head_commit.message, 'no-test') ||
-            ( 
-              startsWith(github.event.head_commit.message, 'Merge pull request') &&
-              contains(github.event.head_commit.message, '/dev')
-            )
-          )
-        )
-      )
-    uses: panates/github-actions/.github/workflows/node-release.yaml@v1
-    secrets:
-      PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      always() && !cancelled() &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      !contains(github.event.head_commit.message, 'no-release')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # npm Trusted Publishing (OIDC)
+      contents: write   # `version --push`, the tags it creates, and the GitHub Release itself
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # rman resolves each package's release boundary from its own last tag and reads the
+          # commits after it, so a shallow clone silently reports the wrong thing rather than
+          # failing - every package would look unreleased.
+          fetch-depth: 0
+          # The built-in GITHUB_TOKEN, with the `contents: write` above - `main` carries no branch
+          # protection, so nothing here needs a personal token's bypass.
+          #
+          # It also removes a redundant run per release, rather than merely being one secret fewer:
+          # a push made with GITHUB_TOKEN deliberately does **not** trigger workflows, and
+          # `version --push` pushes to `main`, which is what this workflow triggers on. With a PAT
+          # every release started a second run of itself - harmless (`version` finds no bump,
+          # `publish` finds everything published, `github-release` reads up-to-date) but never
+          # cancelled either, since `concurrency` here is `cancel-in-progress: false`. The
+          # `no-release`/`no-test` guards do not catch it: a `chore(release): ...` message contains
+          # neither.
+
+      # The highest version `test.yml`'s matrix covers, which is the one to cut a release on: the
+      # published artifact should be built by a runtime the suite actually ran against.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      # npm Trusted Publishing (OIDC) arrived in npm 11.5.1. Node 24 ships a new enough npm today,
+      # so this is insurance against a runner image moving rather than a known gap - and it is
+      # unnecessary altogether when NPM_TOKEN is set.
+      - name: Ensure npm supports Trusted Publishing (OIDC)
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `version` commits and tags, so the runner needs an identity of its own - it cannot be
+      # handed one per command.
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # Written before anything mutates the repository: `version` below is the first step that
+      # pushes, and an auth failure after it leaves a bump and a tag on main with nothing released.
+      - name: Configure npm auth
+        run: |
+          if [ -n "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" >> ~/.npmrc
+          else
+            echo "No NPM_TOKEN - falling through to npm's own OIDC Trusted Publishing."
+          fi
+
+      # **Build 1 of 2: the bootstrap.** There is no rman to run `version` with until this finishes,
+      # and it must not be a published one. Plain npm, in package order - never `rman build`.
+      - name: Build the CLI this release will be cut with
+        run: npm run build
+
+      # Severity always comes from rman's own reading of the commits since each package's last tag
+      # (conventional-commit prefixes, with a `Release-As:` footer as the one-off override) - never
+      # a static input here, which would apply identically to every future run.
+      # A no-op when nothing warrants a new version, so it needs no gate of its own.
+      - name: Version
+        run: node packages/rman/build/cli.js version --yes --push --allow-branch main
+
+      # **Build 2 of 2: the artifact.** `support/postbuild.cjs` bakes `package.json`'s version into
+      # `build/constants.js`, so a build made *before* the bump ships a CLI that reports the old
+      # version. Measured: bump package.json to 9.9.9 without rebuilding and
+      # `node packages/rman/build/cli.js --version` still answers the previous one.
+      # Note this holds although `.rmanrc.yml` declares no `version.stamp` - what bakes the version
+      # in is postbuild, not the config.
+      # Nearly free: tsc is incremental, so this re-runs little more than the postbuild hooks.
+      - name: Rebuild at the version that was just cut
+        run: npm run build
+
+      # No `--target`: each package's own `.rmanrc "publish.target"` is the single source of truth.
+      # Never looks at whether `version` ran - it inspects what is on disk and on the registry - so
+      # a version cut locally and merged in releases exactly the same way, and re-running is safe.
+      - name: Publish
+        run: node packages/rman/build/cli.js publish --yes
+
+      # After `publish`, so a failed registry push never leaves a release announcing code that
+      # never arrived. A no-op when the tag already has a release.
+      - name: GitHub Release
+        env:
+          # `GithubReleaseService` reads GITHUB_TOKEN, falling back to GH_TOKEN.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node packages/rman/build/cli.js github-release --yes

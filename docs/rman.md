@@ -558,6 +558,8 @@ packageManager: pnpm                          # every package, and the root
   run:
     build:
       after: node ../../support/postbuild.cjs # run in each package's own directory
+"[platform:node]":                            # the packages of a technology
+  clean: { include: [build] }
 "[*-dialect]":                                # a glob over package names
   publish: { skip: true }
 "[pkg-a]":                                    # exactly one
@@ -566,19 +568,26 @@ packageManager: pnpm                          # every package, and the root
 
 Selector details:
 
-- **Two audiences, and the second is a glob:**
+- **Three audiences**, and what each is matched against:
 
-  | | |
-  | --- | --- |
-  | `"[/]"` | the **root package** alone |
-  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches |
+  | | speaks for | matched against |
+  | --- | --- | --- |
+  | `"[/]"` | the **root package** alone, structurally | - |
+  | `"[platform:node]"`, `"[platform:node,cargo]"` | every package of those **technologies**, the root included | `pkg.platform.name` |
+  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches | `pkg.selector` |
 
   `/` for the root because that is what a repository root is called everywhere else, and no package
   can be named it.
 
-  **The root is never selected by name.** A glob matches package names and the root is nobody's
-  child, so `"[my-*]"` cannot quietly reach a repository whose root package is called `my-repo`, and
-  `"[*]"` cannot hand a package-shaped setting to a root with no build directory to apply it to.
+  **The root is never selected by name, and only a glob is held off it.** A glob matches package
+  names and the root is nobody's child, so `"[my-*]"` cannot quietly reach a repository whose root
+  package is called `my-repo`, and `"[*]"` cannot hand a package-shaped setting to a root with no
+  build directory to apply it to. Neither reason touches `"[platform:node]"` - it is not a name and
+  it is not a catch-all - so a platform block answers about the root like any other package, and
+  `"[platform:node]" > "[/]"` is how you say *the root, when it is a node repository*.
+
+  A package **no technology claimed** carries a platform whose name is `''`, so it matches no
+  platform block at all rather than quietly falling into one.
 
   In a **single-package repository the root is the one package**, so `"[/]"` reaches it and `"[*]"`
   reaches nothing.
@@ -598,6 +607,74 @@ Selector details:
   The unmarked keys are the level's floor **wherever they sit in the file** - written after a
   selector block they still lose to it. They are not a third selector but the layer that also feeds
   the directories below.
+- **A selector block may hold further selector blocks, and nesting is an AND.** A nested block
+  applies where its own audience *and* every audience it sits inside all match - which is how you
+  say "these packages, but only the ones that are also X" for a whole block:
+
+  ```yaml
+  "[platform:node]":
+    group: node
+    vars: { tier: base }
+
+    "[pkg-*]":                   # node packages whose selector starts with pkg-
+      group: node-and-pkg
+      vars: { tier: narrowed }   # merges per key: `base` is replaced, the rest is kept
+  ```
+
+  Nest as deep as the question needs. The alternative for a single key is an `if:` expression, and
+  it does not reach far enough on its own - `if` exists on run steps, not on `vars`, `clean.include`
+  or `publish.npm.directory`, so a block is the only way to narrow more than one key at once.
+
+  - **Nesting narrows the audience; it does not raise precedence.** A nested block is merged where
+    its parent sits, depth-first in declaration order, so the layers for
+    `"[platform:node]" { a, "[pkg-*]" { b } }` followed by `"[*]" { c }` are `a`, `b`, `c` - and `c`
+    still wins. That is the same cost the missing specificity ranking has above, and for the same
+    reason: two blocks that both match are siblings whatever depth they sit at, and the order they
+    were written in is the one answer nobody has to invent.
+  - **A selector under a *setting* is refused**, because a setting is not an audience and the block
+    could never be applied:
+
+    ```yaml
+    "[*]":
+      run:
+        build:
+          "[pkg-*]": { exec: tsc }   # refused - naming where it sits
+    ```
+
+  - **`"[platform:node]" > "[/]"` is the root, when the root is a node package.** A platform block
+    asks `pkg.platform.name` and the root is a package with a platform, so a technology's whole
+    shared config fits in one block - the `vars` beside the nested blocks reach the root and the
+    packages alike:
+
+    ```yaml
+    "[platform:node]":
+      vars: { coverage: coverage }
+      "[/]": { clean: { include: "${{ [...value, vars.coverage] }}" } }
+      "[*]": { publish: { npm: { directory: build } } }
+    ```
+
+    Only a **glob** is held off the root, and for two reasons that are both about names: `"[my-*]"`
+    must not pick up a repository whose root package happens to be called `my-repo`, and a catch-all
+    must not hand a package-shaped setting to a root with no build directory. Neither applies to
+    `platform:node`.
+  - **A nested pair that could never match together is refused**, rather than loading and matching
+    nothing. Two are decidable and both are checked: `"[/]"` paired with a **glob**, either way round
+    (a glob never matches the root, so the pair is empty), and two `"[platform:...]"` blocks naming
+    nothing in common (a package carries one platform). `"[platform:node,cargo]" > "[platform:node]"`
+    narrows and is fine. A glob pair is deliberately *not* checked - whether two globs intersect is a
+    real computation, where a platform set is a membership test.
+  - **`platform` cannot sit in a nested `"[/]"`.** Which technology claims a directory is settled
+    before any block is matched, so it is read from a level's own keys or a top-level `"[/]"` and
+    nowhere deeper.
+  - `vars` and the contribution keys (`plugins`, `commands`, `publishTargets`) are exempt from all of
+    this - their contents are not config keys, so a bracketed name in either is data.
+
+  Nesting was refused outright until 2.0.0-beta.4, on the reasoning that selectors do not intersect
+  because specificity ranking was dropped. That conflated two questions: ranking answers which of
+  two *siblings* wins, and nesting asks nothing of the sort. What the refusal got right, and what
+  the checks above keep, is that the shape must never be silent - before it, the inner block reached
+  every package the outer one did and sat in `rman config` output as a literal `'[pkg-*]'` key,
+  looking as though it had worked.
 - `"[ws:*]"` / `"[workspace:*]"` still works and means exactly `"[*]"`. The qualifier said "not the
   root" back when a bare glob included it; the shape of the set says that now. Don't write it in new
   configs.

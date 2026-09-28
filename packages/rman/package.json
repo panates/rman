@@ -1,10 +1,9 @@
 {
   "name": "rman",
   "description": "Repository manager",
-  "version": "2.0.0-beta.3",
+  "version": "2.0.0-beta.4",
   "author": "Panates",
   "license": "MIT",
-  "private": true,
   "dependencies": {
     "@netlify/parse-npm-script": "^0.1.2",
     "@xmldom/xmldom": "^0.9.12",
@@ -31,6 +30,7 @@
     "yargs": "^18.1.0"
   },
   "scripts": {
+    "prepublishOnly": "node -e \"console.error('rman publishes from build/, never from the source tree. Run: rman publish'); process.exit(1)\"",
     "compile": "tsc --noEmit",
     "prebuild": "npm run check && npm run lint && npm run clean",
     "build": "tsc -b tsconfig-build.json",

@@ -161,12 +161,20 @@ below, and a `"[selector]"` narrows the audience.**
 
 - **An unmarked key configures that directory and every package under it.** The repository root's
   own `.rmanrc` is therefore the baseline for the whole repository, the root package included.
-- **A `"[selector]"` block narrows it.** Two audiences, and the second is a glob:
+- **A `"[selector]"` block narrows it.** Three audiences, and what each is matched against:
 
-  | | |
-  | --- | --- |
-  | `"[/]"` | the **root package** alone |
-  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches |
+  | | | matched against |
+  | --- | --- | --- |
+  | `"[/]"` | the **root package** alone, structurally | - |
+  | `"[platform:node]"`, `"[platform:node,cargo]"` | every package of those **technologies**, the root included | `pkg.platform.name` |
+  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches | `pkg.selector` |
+
+  - **Only a glob is held off the root, and the two reasons are both about names**: `"[my-*]"` must
+    not pick up a repository whose root package happens to be called `my-repo`, and a catch-all must
+    not hand a package-shaped setting to a root with no build directory. Neither applies to
+    `platform:node`, which is not a name and is not a catch-all - so a platform block answers about
+    the root like any other package. It read the other way "for consistency with a glob" until
+    nesting arrived, and that made `"[platform:node]" > "[/]"` unanswerable.
 
   - `/` for the root because that is what a repository root is called everywhere else, and no
     package can be named it.
@@ -192,6 +200,72 @@ below, and a `"[selector]"` narrows the audience.**
       order the author typed. What was left was already declaration order with the catch-all lifted
       out of it. The cost, stated rather than hidden: a catch-all written *below* a narrower block
       now overrides it. Writing catch-alls first is a convention, not a rule.
+  - **A selector block may hold further selector blocks, and nesting is an AND**
+    (`Workspace._matchingSelectors`, `ConfigReader._assertSelectorKeys`). A nested block applies
+    where its own audience *and* every audience it sits inside all match:
+
+    ```yaml
+    "[platform:node]":
+      group: node
+      vars: { tier: base }
+      "[pkg-*]": { group: node-and-pkg, vars: { tier: narrowed } }
+    ```
+
+    - **It was refused outright until 2.0.0-beta.4, and the reason given does not survive being
+      written out.** "Selectors do not intersect, because `selectorRank` was dropped" answers a
+      different question: ranking orders two *siblings*, and nesting asks nothing of the sort - a
+      nested block is resolved depth-first in declaration order, which is the rule already in force
+      one level up. What it cost was the only way to narrow a whole block; `if:` is per key and
+      exists on run steps alone, so `vars`, `clean.include` and `publish.npm.directory` were out of
+      reach. The user asked for it directly ("her şeyin başına if koyamayız, özellikle variables
+      lara") and was right.
+    - **Nesting narrows the audience; it does not raise precedence.** Depth-first **pre-order**: a
+      block's own keys, then the blocks inside it, then the next block beside it. So
+      `"[platform:node]" { a, "[pkg-*]" { b } }` then `"[*]" { c }` layers `a, b, c` and the
+      catch-all still wins - the same cost the dropped ranking already documents, not a new one.
+    - **A matching block is merged *stripped*** (`_stripSelectors` on the block, then recurse), or
+      its nested keys land in the resolved config as literal `'[pkg-*]'` entries. That is exactly
+      how the old no-op showed up: measured, a package matching *neither* resolved to
+      `{ group: 'node', '[pkg-*]': { group: 'node-and-pkg' } }`, so the outer block applied to
+      everyone and `rman config` showed the inner one looking as though it had worked. **Silence is
+      the half of the old refusal worth keeping**, and the two checks below are what keep it.
+    - **A selector under a *setting* is refused** - a setting is not an audience, so
+      `"[*]" > run > build > "[pkg-*]"` could never be applied. One walk does both jobs
+      (`_assertSelectorKeys`), and `at.length > enclosing.length` is the whole test: the two arrays
+      stay equal while every ancestor is a selector and `at` runs ahead the moment one is not.
+    - **`"[platform:node]" > "[/]"` is the pair the whole thing is for**, and getting it wrong once
+      is why this is written out. It means *the root, when the root is a node package*, and it plus
+      `"[platform:node]" > "[*]"` is a technology's entire shared config in one block - `vars`
+      included, since those are the parent's own keys and reach both. It was refused at first on a
+      misdiagnosis: the audience is not empty, `_speaksFor` merely asked `isRoot` before it asked
+      the platform question. **A narrower repair was tried and measured wrong** - let a chain reach
+      the root only where it *names* `"[/]"`, keeping a plain `"[platform:node]"` off it. That
+      answers the pair and still breaks the case: the nested block came back `vars is not defined`,
+      because `vars` is the parent's key. Narrowing an audience and hiding the enclosing block's
+      settings from it are different things.
+    - **A nested pair that could never match together is refused** (`_assertNestable`), rather than
+      loading and matching nobody. Two are decidable: **`"[/]"` paired with a glob**, either way
+      round (a glob matches a name and the root is nobody's child), and **two platform blocks naming
+      nothing in common** (a package carries one `platform.name`;
+      `"[platform:node,cargo]" > "[platform:node]"` narrows and is fine). `ParsedSelector.names`
+      exists for that intersection - `test` alone answers "does this one match", not "can anything".
+      **A glob pair is deliberately not checked**: glob intersection is a real computation with a
+      wrong answer available both ways, where a platform set is `includes`, and `"[pkg-*]" >
+      "[lib-*]"` matching nothing is what a top-level `"[lib-*]"` already does unreported.
+    - **`platform` is the one key a nested `"[/]"` cannot carry.** Which technology claims a
+      directory is settled before any block is matched, so `Workspace._declaredPlatformName` reads
+      the level's own key or a **top-level** `"[/]"` and nothing deeper - and inside a platform
+      block it would be deciding whether its own block applies.
+    - **`vars` and the contribution keys are exempt**: their contents are not config keys. `vars` is
+      free-form by contract and `CODE_SUBTREES` hold plugins, commands and publish targets, whose
+      key space rman does not own. A bracketed name in either is data.
+    - **`_stripSelectors` carries the object's own symbols, and leaving them behind was a measured
+      loss that predated nesting.** `mergeConfig` reads a key's `ORIGINS` and `PREVIOUS_VALUES` off
+      the *source*, so a copy holding only string keys arrives with neither. Measured on one
+      repository: an unmarked `group: "${{ nope.boom }}"` reported `Invalid expression in "group"`
+      with **no file**, while the identical expression inside `"[*]"` named `.rmanrc` - because a
+      block was merged as itself and only the unmarked layer went through the copy. Nesting would
+      have spread that to the blocks too. Pinned in `repository.spec.ts` across all three layers.
   - **`"[ws:*]"` / `"[workspace:*]"` is accepted and means exactly `"[*]"`.** The qualifier said
     "not the root" back when a bare glob included it; the shape of the set says that now. Kept
     working rather than rejected because both spellings resolve to the same packages - an error
@@ -1586,13 +1660,27 @@ four behaviours still fire.
     `toContain` and wrong by their length to anything counting characters. Measured: an 80-column
     row came back as 84.
 
-- **`build`, `test` and `lint` are aliases for `run <script>`, and all three are core.** The test is
-  what the command *knows*: a script name and nothing else. A Cargo repository declaring
-  `lint: 'cargo clippy'` is served by the same file as a Node one, which is why none of the three
-  sits in the `node` preset - the line `clean` is on the other side of, since everything `clean`
-  knows how to delete is a TypeScript fact.
-- **None of them owns a config key.** `lint` is `run lint` under another name, so its settings are
-  `run.lint`, which belongs to `run` - the three declare `configKeys: ['run.<script>']` and
+- **`build` and `test` are aliases for `run <script>`, and both are core.** The test is what the
+  command *knows*: a script name and nothing else. A Cargo repository declaring `build: 'cargo
+  build'` is served by the same file as a Node one, which is why neither sits in the `node` preset -
+  the line `clean` is on the other side of, since everything `clean` knows how to delete is a
+  TypeScript fact.
+- **There was a `lint` beside them and it was removed; do not add it back.** Linting is the one of
+  the three where **the repository decides what to use**, and an alias is not neutral about that:
+  `rman lint` claims the name for `run lint`, and a built-in name cannot be shadowed
+  (`assertNoBuiltinShadowing` throws - see "A repository's own commands"). So a repository whose
+  linting is one eslint run *at the root* - which is what a flat config already covers, and what
+  makes a per-package `run lint` reload the config once per package and still miss the root's own
+  files - could not contribute a `lint` command at all. Measured on `@panates/rman-preset`, which
+  ships exactly that command: with the alias present, every rman invocation in a repository
+  extending it died with `would shadow rman's built-in "lint" command`.
+  - `build` and `test` are not in the same position: both name a per-package script that rman
+    orchestrates, which is the thing `run` exists for. A repository wanting its own `build`
+    *command* is in the same bind, and that cost is stated rather than hidden - it is just not one
+    anybody has hit.
+  - `rman run lint` is unchanged, and so is every `run.lint` key.
+- **Neither owns a config key.** `build` is `run build` under another name, so its settings are
+  `run.build`, which belongs to `run` - the two declare `configKeys: ['run.<script>']` and
   contribute nothing. Two commands cannot contribute under one top-level key anyway (interface
   merging is not a deep merge), and these never needed to.
 

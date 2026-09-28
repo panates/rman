@@ -80,8 +80,14 @@ function preparePublishManifest(
  *   builds a native module on install. The rest (`build`, `test`, `prepare`, ...) never reach the
  *   consumer - `prepare` runs for a git dependency, which builds from the repository, not from this
  *   tarball.
- * - `private` - rman refuses to publish a private package in the first place, so carrying the flag
- *   into a manifest that is being published can only be wrong.
+ * - `private` - it is a statement about the **source tree**, not about the artifact derived from it,
+ *   and a manifest being published is by definition not private. rman's own gate normally stops a
+ *   private package before this runs, so the line looks unreachable; it is not, because `private`
+ *   is also how a repository keeps a stray `npm publish` out of the package directory while
+ *   publishing `build/` on purpose. That is a real configuration - this repository ran it until
+ *   `rman publish` became its own release path and the gate started refusing the thing it ships.
+ *   A narrower guard (`prepublishOnly`, which never reaches a consumer either) says the same thing
+ *   without claiming the artifact is unpublishable.
  * - `publishConfig.directory` - it pointed *here*; kept, it would point one level deeper again.
  */
 function derivePublishManifest(pkg: Package, packagesByName: Map<string, Package>): Record<string, any> {
