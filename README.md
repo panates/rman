@@ -2,6 +2,12 @@
 
 Repository manager. This repository is a monorepo:
 
+[![NPM Version][npm-image]][npm-url]
+[![NPM Downloads][downloads-image]][downloads-url]
+[![CI Tests][ci-test-image]][ci-test-url]
+[![Test Coverage][coveralls-image]][coveralls-url]
+
+
 | Package | |
 | --- | --- |
 | [`rman`](packages/rman) | everything - the language-agnostic core, plus the built-in plugins that ship with it. |
@@ -52,3 +58,13 @@ npm run smoke     # the built CLI actually starts, and a consumer's compiler see
 ## Licence
 
 MIT
+
+
+[npm-image]: https://img.shields.io/npm/v/rman
+[npm-url]: https://npmjs.org/package/rman
+[downloads-image]: https://img.shields.io/npm/dm/rman.svg
+[downloads-url]: https://npmjs.org/package/rman
+[ci-test-image]: https://github.com/panates/rman/actions/workflows/test.yml/badge.svg
+[ci-test-url]: https://github.com/panates/rman/actions/workflows/test.yml
+[coveralls-image]: https://img.shields.io/coveralls/panates/rman/dev.svg
+[coveralls-url]: https://coveralls.io/r/panates/rman
