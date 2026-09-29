@@ -66,7 +66,9 @@ export class NpmPublishTarget implements PublishTarget {
     },
     registry: {
       target: 'cli',
-      describe: 'Registry to check against and publish to (default: whatever .npmrc already configures)',
+      describe:
+        'Registry to check against and publish to, for every package in this run. Overrides each ' +
+        'package\'s own "publishConfig.registry"; with neither, npm resolves .npmrc itself',
       type: 'string',
     },
     userconfig: {

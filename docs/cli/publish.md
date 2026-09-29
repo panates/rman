@@ -76,7 +76,7 @@ options, in addition to:
 | `--tag <name>` | string | - | `npm publish --tag <name>` - the dist-tag this version is published under (default `latest`). |
 | `--otp <code>` | string | - | `npm publish --otp <code>` - a 2FA one-time password, for registries that require it. |
 | `--staged` | boolean | - | `npm stage publish` - hold each version in npm's staging queue instead of publishing it. `--no-staged` forces a direct publish over `.rmanrc "publish.npm.staged"`. See [Staged publishing](#staged-publishing). |
-| `--registry <url>` | string | - | Registry to check against **and** publish to (default: whatever `.npmrc` already configures). |
+| `--registry <url>` | string | - | Registry to check against **and** publish to, for every package in this run. Overrides each package's own `publishConfig.registry`; with neither, npm resolves `.npmrc` itself. See [Publishing somewhere other than npmjs.org](#publishing-somewhere-other-than-npmjsorg). |
 | `--userconfig <path>` | string | - | Path to a custom `.npmrc` for both the registry check and the actual publish. |
 | `--contents <dir>` | string | - | Subdirectory to publish from, relative to each package's own directory - the lowest-precedence way to say it, after `publishConfig.directory` and `.rmanrc "publish.npm.directory"`. |
 
@@ -192,6 +192,42 @@ This is the right gate for a release pipeline - not [`rman version --json`](vers
 *other* question ("does anything need a new version number?") and correctly reports nothing when a
 version was bumped in an earlier run, or bumped locally and merged in, or when a previous publish
 failed after the tag was already pushed.
+
+## Publishing somewhere other than npmjs.org
+
+GitHub Packages, a company registry, anything else - stated in any of the three ways npm already
+understands, and **`publish` asks the same registry it publishes to**:
+
+| where it is stated | scope |
+| --- | --- |
+| `.npmrc` - `@owner:registry=https://npm.pkg.github.com` | every package under that scope, and the usual GitHub Packages setup |
+| `package.json` - `publishConfig.registry` | that one package |
+| `--registry <url>` | every package in this run |
+
+Precedence is npm's own, verified against it: `--registry` wins over `publishConfig.registry`, and
+with neither given nothing is passed at all, so npm resolves `.npmrc` itself.
+
+**Mixed registries in one repository are the point of the middle row.** A monorepo publishing some
+packages to npmjs.org and others to GitHub Packages states it per package, and one `rman publish`
+sends each where it belongs - `--registry` cannot express that, since it is one value for the run.
+
+```json
+// packages/internal-lib/package.json
+{ "name": "@myorg/internal-lib", "publishConfig": { "registry": "https://npm.pkg.github.com" } }
+```
+
+**Authentication is not rman's**, and does not travel with any of this. The registry a package goes
+to still needs its own credential in `.npmrc` - `//npm.pkg.github.com/:_authToken=...` for GitHub
+Packages - or `--userconfig <path>` pointing at a file that has it. npm Trusted Publishing (OIDC)
+covers npmjs.org only.
+
+**A note on the check.** `publish` asks the registry whether a version is already there
+(the question [`rman publish` exists to answer](#publish-targets)), and `npm view` - unlike
+`npm publish` - does **not**
+read `publishConfig.registry`; rman passes it explicitly for exactly that reason. Without it the
+lookup went to npmjs.org for a package that lives elsewhere, came back empty, and the plan read
+`never published` on **every** run: the first publish succeeded and the second was rejected by the
+registry for republishing a version.
 
 ## Staged publishing
 

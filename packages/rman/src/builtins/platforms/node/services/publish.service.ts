@@ -260,7 +260,14 @@ export namespace PublishService {
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
     const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
 
-    const viewPackage = deps.npmViewPackage ?? ((name: string, cwd: string) => npmViewPackage(name, cwd, options));
+    /** Per package, not per run: `resolveRegistry` reads the package's own `publishConfig.registry`
+     *  when `--registry` was not given, so the question is asked where the answer lives. The test
+     *  seam keeps its `(name, cwd)` shape - a stub answers from a map and has no registry to
+     *  respect. */
+    const viewPackage = (pkg: Package) =>
+      deps.npmViewPackage
+        ? deps.npmViewPackage(pkg.name, pkg.dirname)
+        : npmViewPackage(pkg.name, pkg.dirname, { ...options, registry: resolveRegistry(pkg, options.registry) });
 
     const entries = new Map<string, Entry>();
     const toCheck: Package[] = [];
@@ -302,7 +309,7 @@ export namespace PublishService {
 
     await Promise.all(
       toCheck.map(async pkg => {
-        const view = await viewPackage(pkg.name, pkg.dirname);
+        const view = await viewPackage(pkg);
         const registryVersion = view?.latest;
         /** **This version**, not `latest` - the two part company the moment a prerelease is
          *  published under its own dist-tag, and `latest` then never moves however many betas go
@@ -410,6 +417,41 @@ function resolvePublishDir(pkg: Package, contentsOverride: string | undefined): 
   const configured = pkg.config?.publish?.npm?.directory;
   const rel = (typeof native === 'string' && native) || configured || contentsOverride;
   return rel ? path.resolve(pkg.dirname, rel) : pkg.dirname;
+}
+
+/**
+ * Which registry a package's own version is asked about, and published to.
+ *
+ * npm's own precedence, measured rather than assumed: `--registry` on the command line wins over
+ * `package.json`'s `publishConfig.registry`, and with neither given npm resolves it itself from
+ * `.npmrc` - including a scoped `@owner:registry=`, which is how a GitHub Packages repository is
+ * normally set up.
+ *
+ * @returns the registry to pass, or `undefined` to let npm decide.
+ */
+/* **The check has to ask the registry the publish will use, and it did not.** `npm publish` honours
+ * `publishConfig.registry` - it survives into the generated manifest, since `derivePublishManifest`
+ * deletes only `publishConfig.directory` - but **`npm view` ignores it**: measured, a package whose
+ * `publishConfig.registry` pointed at a dead local address was still answered from
+ * registry.npmjs.org.
+ *
+ * So question B was asked of the wrong registry for exactly one of the three ways a registry can be
+ * stated, and `npmViewPackage` swallows a failed lookup as `undefined`, which reads as "never
+ * published". Two consequences, and the second is the one to fear:
+ *
+ * - the plan proposes a publish on **every** run, so the first succeeds and the second is rejected
+ *   by the registry for republishing a version - a release job that fails for no reason of its own;
+ * - if some *other* package holds that name on npmjs.org, rman reads a stranger's version list, and
+ *   can report `up-to-date` for a publish that never happened.
+ *
+ * A scoped name in an `.npmrc` was always fine - measured, `npm view @foo/bar` with
+ * `@foo:registry=http://127.0.0.1:1/` tries that address - which is why this went unnoticed.
+ *
+ * Returning `undefined` rather than a default is the half that keeps it working: passing an explicit
+ * `--registry` would override whatever `.npmrc` says and break the case that already worked. */
+function resolveRegistry(pkg: Package, override: string | undefined): string | undefined {
+  const native = pkg.manifest.raw.publishConfig?.registry;
+  return override || (typeof native === 'string' && native ? native : undefined);
 }
 
 /**
