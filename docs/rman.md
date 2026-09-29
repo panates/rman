@@ -1414,7 +1414,7 @@ step there is mistaken for a value.
 | `version.changelog` | `boolean` | `false` | Root-level only. Default for `version --changelog` when the CLI flag isn't given - `--no-changelog` still overrides it off for one run. |
 | `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
 | `version.stampDockerfile` | `boolean` | `true` | Per-package cascaded. Rewrite this package's Dockerfile `org.opencontainers.image.version` label to the version being written, in the same commit as the bump. Only ever rewrites a label already declared; reads `publish.docker.dockerfile`. |
-| `version.stamp` | `string \| string[]` | none | Per-package cascaded. Source files (relative to the package's own directory) whose `version` constant is rewritten to the version being written, in the same commit. A listed file a package doesn't have is a silent no-op. |
+| `version.stamp` | `string \| {file, constant?, optional?} \| (…)[]` | none | Per-package cascaded. Source files (relative to the package's own directory) whose `version` constant is rewritten to the version being written, in the same commit. `constant` names the identifier when it is not spelled `version`. A listed file a package doesn't **have** is a silent no-op; one that exists and holds nothing rewritable is an **error**, raised before anything is written - that is what catches a typo'd path or a renamed identifier before it ships a stale constant on every release. `optional: true` waives that refusal, for a **shared preset** naming one path for every package of a technology, which is saying "stamp it where there is one" and cannot know which repositories keep a constant there. |
 | `version.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. Hooks around a version bump's write. **The same composition rule `run` uses** - npm's `preversion`/`postversion` run *inside* the config's `before`/`after` rather than replacing them, and only `version` (the `exec` slot) is replaced by the package's own. Left **unevaluated** at load (`DEFERRED_PATHS`), which is what lets `${{ pkg.targetVersion }}` bind here and nowhere else. A `RunStepValue` is a shell command **or a function** - see [Function steps](#function-steps). |
 | `changelog.titles` | `Record<string, string>` | one heading per **standard** Conventional Commits type, in this order: `feat` ✨ Features, `fix` 🐛 Bug Fixes, `perf` ⚡ Performance and Optimizations, `revert` ⏪ Reverts, `refactor` 🔧 Refactoring, `docs` 📚 Documentation, `test` 🧪 Tests, `build` 📦 Build System, `ci` 🤖 Continuous Integration, `chore` 🧹 Chores, `style` 🎨 Code Style, `*` 💬 General Changes | Per-package cascaded. The heading each commit type is listed under, and the order the sections come out in. **Merged over the defaults per key**, so naming one type does not cost you the others. A type rman does not ship a heading for - `dev`, `bench` - falls in the catch-all until you give it one. `'*'` is the catch-all and always renders last. Two types sharing a heading share one section. These add sections and hide nothing: `ignoreTypes` is what drops a type. |
 | `changelog.sortTitles` | `string[]` (commit types) | none | Per-package cascaded. The order the sections come out in. A sort, not a filter: an unlisted type keeps its place after the listed ones, a listed type with no heading of its own sorts nothing, and `'*'` is always last. |
@@ -1859,6 +1859,15 @@ The same pass rewrites the `version` constant in every file `version.stamp` list
 property (`version: '...'`) too, only on the whole identifier, quoting preserved. Explicitly listed
 rather than discovered, since no standard says a given file holds the version; a listed file a
 package doesn't have is a silent no-op.
+
+A listed file that *does* exist and holds nothing rewritable is an **error**, raised before anything
+is written - the two are not the same thing. A missing file means "not this package"; an existing one
+with nothing to rewrite means the repository asked for something and did not get it, and silence
+there ships a stale constant on every release from then on. Writing `{ file, optional: true }` waives
+the refusal, and it is written for one case: a **shared config** naming one path for every package of
+a technology is saying *stamp it where there is one*, and cannot know which of the repositories
+extending it actually keeps a version constant there. A bare string still throws - the asker chooses,
+the way `file.exists()` and `file.resolve()` already split the same question.
 
 #### Dirty packages
 

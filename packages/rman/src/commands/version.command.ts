@@ -153,7 +153,9 @@ export interface VersionExtraKeys {
   /** Files whose hard-coded version is rewritten to the version being written, in the same commit
    *  as the bump - paths relative to the package's own directory (e.g. `["src/constants.ts"]`).
    *  Per-package cascaded; a listed file a package doesn't have is a silent no-op, so one `"[*]"`
-   *  declaration covers a repo where only some packages carry one.
+   *  declaration covers a repo where only some packages carry one. A file that *exists* and holds
+   *  nothing rewritable is an error instead - unless the entry is `{ file, optional: true }`, which
+   *  is how a shared preset says "stamp it where there is one".
    *
    *  Stamping the source, not the build output: a build-time rewrite leaves the checked-in file
    *  claiming a placeholder, so anything running from source reports that placeholder, git never
@@ -174,9 +176,19 @@ export interface VersionExtraKeys {
   after?: RunStepValue | RunStepValue[];
 }
 
-/** One `version.stamp` entry: a path, or a path plus the identifier to rewrite when it is not
- *  spelled `version`. */
-export type VersionStampEntry = string | { file: string; constant?: string };
+/**
+ * One `version.stamp` entry: a path, or a path plus the identifier to rewrite when it is not spelled
+ * `version` and whether the entry is `optional`.
+ *
+ * **`optional` marks an entry whose author cannot know whether the file holds a version.** A file
+ * that exists and has nothing to rewrite is otherwise an error - that is what catches a typo'd path
+ * or a renamed identifier before it silently ships a stale constant on every release. The case it
+ * is wrong for is a *shared preset* naming one path for every package of a technology, which is
+ * saying "stamp it where there is one" and cannot know which repositories keep a constant there.
+ * A bare string still throws; the asker chooses, the way `file.exists()` and `file.resolve()`
+ * already split the same question.
+ */
+export type VersionStampEntry = string | { file: string; constant?: string; optional?: boolean };
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 

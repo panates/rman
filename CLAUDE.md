@@ -1381,6 +1381,20 @@ saw one thing to release and it was the one thing that must never be published.
     repository asked for something and did not get it - and silently released a tagged commit with a
     stale constant. It is a *configuration* mistake, so the check runs first: finding it mid-write
     left the manifest bumped on disk with no commit and no tag (measured, exit 1 and a dirty tree).
+    - **`{ file, optional: true }` waives that refusal, and exists because the entry and the
+      expectation can have different authors.** "Somebody asked and did not get it" is the whole
+      justification, and somebody is not always the repository: a *shared preset* naming
+      `src/constants.ts` for every package of a technology means "stamp it where there is one" and
+      cannot know which of forty repositories keeps a constant there. Measured on
+      `panates/postgrejs`, which extends `@panates/rman-preset`: the file exists, has never held a
+      version constant (`git log -S"export const version" -- src/` is empty), and `rman version`
+      refused the release over a line nobody in that repository wrote.
+    - **A bare string still throws**, and that asymmetry is the feature - it is what catches a
+      typo'd path or a renamed identifier. The `file.exists()` / `file.resolve()` split again: the
+      optional form and the throwing form, chosen by the caller.
+    - The two specs are each other's control: same file, same missing constant, opposite outcome.
+      A third pins that `optional` waives the *refusal* and not the *work* - a file that does hold a
+      version is still stamped, or "skip it" and "ignore the entry" would be indistinguishable.
   - **`undefined` from a stamper means "nothing matched", never "no change needed".** Conflating
     them made that error message a liar - a file already sitting at the target version is not a file
     holding no version.

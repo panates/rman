@@ -939,6 +939,62 @@ describe('services/version', () => {
       expect(git(dir, 'status', '--porcelain')).toBe('');
     });
 
+    /**
+     * **`{ file, optional: true }` is the same file and the opposite answer**, which is the whole
+     * point: the entry above and this one differ only in who is expected to know whether the
+     * constant is there. A repository naming a path means it, and a typo or a renamed identifier
+     * must not quietly ship a stale constant on every release from then on; a **shared preset**
+     * naming one path for every package of a technology is saying "stamp it where there is one" and
+     * cannot know which of forty repositories keeps a constant there.
+     *
+     * Measured on `panates/postgrejs`: the file exists, has never held a version constant, and
+     * `rman version` refused the release over a line nobody in that repository wrote.
+     *
+     * The case above is the control - reverting the `optional` clause leaves it green and turns this
+     * one red, and dropping the check entirely does the reverse.
+     */
+    it('skips a listed file it cannot rewrite when the entry is optional, and releases', async () => {
+      const { dir } = fixtureWithOrigin();
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        rman: { version: { stamp: [{ file: 'src/constants.ts', optional: true }] } },
+      });
+      const constants = path.join(dir, 'packages/a/src/constants.ts');
+      fs.mkdirSync(path.dirname(constants), { recursive: true });
+      fs.writeFileSync(constants, "export const VERSION = '1';\n");
+      commitAll(dir, 'chore: add constants');
+
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
+
+      /** The release happened, and the file it could not stamp is untouched rather than mangled. */
+      expect(JSON.parse(fs.readFileSync(path.join(dir, 'packages/a/package.json'), 'utf-8')).version).toBe('1.1.0');
+      expect(fs.readFileSync(constants, 'utf-8')).toBe("export const VERSION = '1';\n");
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+    });
+
+    /** `optional` waives the refusal, it does not waive the *work* - a file that does hold a version
+     *  is still stamped. Without this, "skip it" and "ignore the entry" would be indistinguishable. */
+    it('still stamps an optional entry whose file does hold a version', async () => {
+      const { dir } = fixtureWithOrigin();
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        rman: { version: { stamp: [{ file: 'src/constants.ts', optional: true }] } },
+      });
+      const constants = path.join(dir, 'packages/a/src/constants.ts');
+      fs.mkdirSync(path.dirname(constants), { recursive: true });
+      fs.writeFileSync(constants, "export const version = '1.0.0';\n");
+      commitAll(dir, 'chore: add constants');
+
+      const repo = await createRepository(dir);
+      await service('version').applyPlan(await planner().getPlan(repo));
+
+      expect(fs.readFileSync(constants, 'utf-8')).toBe("export const version = '1.1.0';\n");
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+    });
+
     it('binds ${{ pkg.targetVersion }} in a version hook, and only there', async () => {
       // The version being written does not exist until the plan is computed, long after the config
       // was resolved - so these three paths are left raw at load and evaluated here.

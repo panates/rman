@@ -372,6 +372,9 @@ export namespace VersionService {
       const before = fs.readFileSync(file, 'utf-8');
       const next = Manifest.stampVersion(pkg, file, before, version, { constant: entry.constant });
       if (next === undefined) {
+        /** Unreachable in a normal run - `assertStampable` already refused, before any write. Kept
+         *  because this function is exported and a caller may reach it directly. */
+        if (entry.optional) continue;
         const relative = path.relative(pkg.dirname, file);
         throw new Error(
           `"version.stamp" lists "${relative}" for "${pkg.name}", but nothing in it could be ` +
@@ -403,20 +406,38 @@ const VERSION_LIFECYCLE = 'version';
 
 /**
  * `.rmanrc "version.stamp"`, normalized: a bare string is the file, an object may also name the
- * identifier that holds the version (`{ file: 'src/version.go', constant: 'Version' }`).
+ * identifier that holds the version (`{ file: 'src/version.go', constant: 'Version' }`) and may
+ * mark the entry `optional`.
  *
  * The object form exists because the identifier was unnameable: `stampVersionConstant` took a
  * `name` and nothing ever passed it, so only the exact lowercase word `version` was ever matched -
  * `VERSION`, `Version` and `appVersion` were all silently skipped.
  */
-function readStampEntries(pkg: Package): { file: string; constant?: string }[] {
+/* **`optional` exists because the entry and the expectation can have different authors.** A file
+ * that exists and holds nothing rewritable is an error precisely because it means somebody asked
+ * for something and did not get it - but "somebody" is not always the repository. A *shared preset*
+ * naming `src/constants.ts` for every package of a technology is saying "stamp it where there is
+ * one", and it cannot know which of forty repositories actually keeps a version constant there.
+ * Measured on `panates/postgrejs`, which extends `@panates/rman-preset`: the file exists, has never
+ * held a version constant, and `rman version` therefore refused the release for a line no one in
+ * that repository wrote.
+ *
+ * So the *asker* says which it meant, and the two spellings keep their own failure modes: a bare
+ * string still throws, which is what catches a typo'd path or a renamed identifier before it
+ * silently ships a stale constant on every release from then on. It is the `file.exists()` /
+ * `file.resolve()` split again - the optional form and the throwing form, chosen by the caller. */
+function readStampEntries(pkg: Package): { file: string; constant?: string; optional?: boolean }[] {
   const configured = pkg.config?.version?.stamp;
   const list = Array.isArray(configured) ? configured : configured ? [configured] : [];
-  const entries: { file: string; constant?: string }[] = [];
+  const entries: { file: string; constant?: string; optional?: boolean }[] = [];
   for (const item of list) {
     if (typeof item === 'string') entries.push({ file: item });
     else if (item && typeof item === 'object' && typeof (item as any).file === 'string') {
-      entries.push({ file: (item as any).file, constant: (item as any).constant });
+      entries.push({
+        file: (item as any).file,
+        constant: (item as any).constant,
+        optional: (item as any).optional === true,
+      });
     }
   }
   return entries;
@@ -436,6 +457,9 @@ function assertStampable(pkg: Package, version: string): void {
       constant: entry.constant,
     });
     if (next !== undefined) continue;
+    /** The entry said "stamp it if there is one", so there being none is the answer rather than a
+     *  mistake - see `readStampEntries`. */
+    if (entry.optional) continue;
     const relative = path.relative(pkg.dirname, file);
     throw new Error(
       `"version.stamp" lists "${relative}" for "${pkg.name}", but nothing in it could be ` +
