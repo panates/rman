@@ -1,3 +1,4 @@
+import colors from 'ansi-colors';
 import { expect } from 'expect';
 import { ProgressPanel } from '../../src/utils/progress-panel.js';
 
@@ -44,6 +45,22 @@ function captureLogs(fn: () => void): string[] {
   const lines: string[] = [];
   console.log = (...args: unknown[]) => {
     lines.push(stripAnsi(args.map(a => (typeof a === 'string' ? a : String(a))).join(' ')));
+  };
+  try {
+    fn();
+  } finally {
+    console.log = original;
+  }
+  return lines;
+}
+
+/** `captureLogs` strips ANSI, which is right for every case asserting on text and useless for one
+ *  asserting on colour. This is the same capture with the escape sequences left in. */
+function captureRawLogs(fn: () => void): string[] {
+  const original = console.log;
+  const lines: string[] = [];
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map(a => (typeof a === 'string' ? a : String(a))).join(' '));
   };
   try {
     fn();
@@ -245,6 +262,48 @@ describe('utils/ProgressPanel', () => {
       const lines = captureLogs(() => panel.printSummary());
       expect(lines.some(l => l.includes('X') && l.includes('a'))).toBe(true);
       expect(lines.some(l => l.includes('boom'))).toBe(true);
+    });
+
+    /**
+     * **The log is a replay, so it is printed exactly as captured.** It holds every step the item
+     * ran and only the last one failed - painting the block red reports the ones that succeeded as
+     * failures. Measured on a real build whose `before` ran `rman check` then `rman lint`: check
+     * passed, printed `no circular dependency was found` and `1 succeeded, 0 failed`, and both came
+     * back red under the failing package.
+     *
+     * Asserted on the raw text rather than through `stripAnsi`, because the defect *is* an escape
+     * sequence: `colors.red()` wrapped the join, so an uncoloured line gained a red opener and a
+     * line carrying its own colour fell into red after its reset.
+     */
+    it("leaves a failed item's captured log uncoloured - the steps that succeeded are in it too", () => {
+      /* **`colors.enabled` has to be forced on, or this case proves nothing.** ansi-colors
+       * disables itself when stdout is not a TTY, which it is not under mocha - so `colors.red(x)`
+       * returns `x` and the assertion passes with the defect reinstated. Caught by running the
+       * negative control: reverting the fix left this green. It also reads through
+       * `captureRawLogs` rather than `captureLogs`, which strips ANSI - either alone is enough
+       * to make the case vacuous. Restored in `finally`, since
+       * `enabled` is module-global and a leaked `true` would colour every later spec's output. */
+      const wasEnabled = colors.enabled;
+      colors.enabled = true;
+      try {
+        const panel = new ProgressPanel('X', true);
+        const a = panel.addItem('a');
+        a.status = 'failed';
+        a.log.push('check passed', '1 succeeded, 0 failed', 'boom');
+        panel.start();
+        panel.stop();
+
+        const lines = captureRawLogs(() => panel.printSummary());
+        const replay = lines.find(l => l.includes('1 succeeded, 0 failed'));
+        expect(replay).toBeDefined();
+        expect(replay).toBe('check passed\n1 succeeded, 0 failed\nboom');
+
+        /** The X line itself still marks the failure - that is what the colour is for. */
+        const header = lines.find(l => stripAnsi(l).startsWith('X '));
+        expect(header).toContain('\x1b[31m');
+      } finally {
+        colors.enabled = wasEnabled;
+      }
     });
   });
 });
