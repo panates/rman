@@ -6,9 +6,10 @@
 rman changelog [options...]
 ```
 
-Generates a changelog per package from unreleased commits, grouped into ✨ Features / 🐛 Bug Fixes
-/ 🔧 Other Changes via best-effort [Conventional Commits](https://www.conventionalcommits.org/)
-parsing. Prints to stdout by default; `--write` prepends into each package's own `CHANGELOG.md`
+Generates a changelog per package from unreleased commits, grouped by
+[Conventional Commits](https://www.conventionalcommits.org/) type - ✨ Features, 🐛 Bug Fixes,
+⚡ Performance and Optimizations, and a section for every other standard type - on a best-effort
+parse. Prints to stdout by default; `--write` prepends into each package's own `CHANGELOG.md`
 instead.
 
 ## Options
@@ -22,6 +23,7 @@ Accepts [package filtering](../cli-rman.md#package-filtering) options, in additi
 | `--file-path <path>` | - | string | With `--write`, the file to prepend into, relative to each package's own directory. Default `"CHANGELOG.md"`, or `.rmanrc "changelog.filePath"`. |
 | `--from-root` | `-r` | boolean | Generate for the whole repository even when standing inside one package's own directory (which otherwise scopes it to just that package). No effect elsewhere. |
 | `--include-skipped` | - | boolean | Also generate for a package with `.rmanrc "publish.skip"` - excluded by default. |
+| `--no-commit-hash` | - | boolean | Leave each commit's short sha off its line. On by default; GitHub autolinks a bare abbreviated sha wherever it renders Markdown inside the repository, so `(a1b2c3d)` is a link on the page and stays readable in a terminal. Turn it off for notes read somewhere else. Also `.rmanrc "changelog.commitHash"`. |
 | `--no-unreleased` | - | boolean | Leave out the entry for commits that are not released yet - a changelog of released history only. On by default; also `.rmanrc "changelog.unreleased"`. |
 | `--starting-at <ref>` | - | string | Where this package's changelog begins - a version or release tag (inclusive), a `YYYY-MM-DD` date, or a commit. Releases older than it are left out. Also `.rmanrc "changelog.startingAt"`. See [Where a changelog begins](#where-a-changelog-begins). |
 | `--release-version <v>` | - | string | The version these notes are **for** - what the entry heading shows. Default: read back from each package's own latest release tag, which is only right once that release is tagged. Pass it when generating notes ahead of the bump (e.g. from `changed --json`), otherwise the heading shows the *previous* release. |
@@ -152,9 +154,31 @@ file byte-identical.
 
 ## Section headings (`changelog.titles`)
 
-The headings were three fixed strings, so a repository writing `dev:` commits had nowhere to put
-them but "Other Changes". `changelog.titles` maps a Conventional Commits type to the heading it is
-listed under - and with it, the order the sections come out in:
+rman ships a heading for every **standard** Conventional Commits type, in this order:
+
+| type | heading | | type | heading |
+| --- | --- | --- | --- | --- |
+| `feat` | ✨ Features | | `test` | 🧪 Tests |
+| `fix` | 🐛 Bug Fixes | | `build` | 📦 Build System |
+| `perf` | ⚡ Performance and Optimizations | | `ci` | 🤖 Continuous Integration |
+| `revert` | ⏪ Reverts | | `chore` | 🧹 Chores |
+| `refactor` | 🔧 Refactoring | | `style` | 🎨 Code Style |
+| `docs` | 📚 Documentation | | `*` | 💬 General Changes |
+
+There used to be three - `feat`, `fix` and the catch-all - and everything else landed in one heap.
+Counted across four repositories of this project's own organization, that heap held 194 `chore`, 86
+`docs`, 68 `refactor`, 29 `test`, 27 `ci` and 24 `perf`: more commits than the two named types put
+together, under a heading saying only "not one of those two".
+
+**These add sections; they hide nothing.** That is the one place this parts from
+conventional-changelog, whose default preset silently drops `chore`, `ci`, `build`, `style` and
+`test` - a changelog quietly missing a third of the history.
+[`ignoreTypes`](#configuration-rmanrc-changelog) is the key that drops a type, and it stays the only
+one that does.
+
+A type rman does not name - `dev`, `bench`, whatever convention a repository invented - still goes in
+the catch-all until you give it a heading. `changelog.titles` maps a type to the heading it is listed
+under, and with it the order the sections come out in:
 
 ```yaml
 changelog:
@@ -173,9 +197,19 @@ changelog:
 ### Development Changes
 - rework the harness
 
-### 🔧 Other Changes
+### 🧹 Chores
 - bump deps
 ```
+
+Each bullet ends with its commit's short sha, which GitHub turns into a link wherever it renders
+Markdown inside the repository. `--no-commit-hash` (or `.rmanrc "changelog.commitHash": false`)
+leaves it off.
+
+**A message repeated inside one section is written once.** Real histories hold runs of identical
+subjects - one of this organization's repositories had a release entry reading `Updated config` five
+times - and the repetition states nothing the first line did not. The survivor keeps the earliest
+commit's sha. Deduplicated *per section*, not per entry: `feat: x` and `fix: x` are different claims
+under different headings, and collapsing those would lose a fact rather than a repetition.
 
 | | |
 | --- | --- |
@@ -200,8 +234,11 @@ changelog:
 ### Development Changes
 ### 🐛 Bug Fixes
 ### New Features
-### 🔧 Other Changes
+### 🧹 Chores
+### 💬 General Changes
 ```
+
+`chore`, which `sortTitles` did not list, keeps its default position after the three that were.
 
 Separate from `titles` because they are two decisions: `titles` patches a heading's *wording*, so
 letting it also decide position would mean renaming `feat` silently moved it.
@@ -218,7 +255,7 @@ The cost, stated rather than hidden: a default section cannot be *removed* by le
 entirely, and it still wins - a type named here and ignored there gets no heading.
 
 **The type prefix is stripped in every section now**, not only in Features and Bug Fixes. It used
-to be, so "Other Changes" read `- chore: bump deps` - the heading naming the type and the bullet
+to be, so "General Changes" read `- chore: bump deps` - the heading naming the type and the bullet
 repeating it - while Features read `- a new capability`. With every type able to have a heading of
 its own, that asymmetry has no defence left.
 
@@ -299,7 +336,7 @@ fallback for a file with no marker, which is the one run that has to guess.
 
 ```yaml
 changelog:
-  ignoreTypes: [chore, ci] # commit types dropped entirely, not just folded into "Other Changes"
+  ignoreTypes: [chore, ci] # commit types dropped entirely, not just folded into "General Changes"
   tagPattern: 'v*' # rarely needed - the default is derived from how many version lines the
   #                  repository has: 'v*' with one, '{name}@*' with several
   filePath: CHANGELOG.md

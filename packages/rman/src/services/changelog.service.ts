@@ -52,8 +52,8 @@ export class ChangelogService extends Service {
    * outside every package) - unless it's broad enough to count as a repo-wide change (see
    * `BROAD_COMMIT_THRESHOLD`/`ownersOf`), in which case it goes to root alone instead of being
    * repeated verbatim across most of the repository. Subject lines are grouped ✨ Features/🐛 Bug
-   * Fixes/🔧 Other Changes on a best-effort Conventional Commits read; anything that doesn't parse
-   * just lands in Other Changes as-is, so a repo that doesn't follow that convention still gets a
+   * Fixes/💬 General Changes on a best-effort Conventional Commits read; anything that doesn't parse
+   * just lands in General Changes as-is, so a repo that doesn't follow that convention still gets a
    * usable list. `.rmanrc changelog.ignoreTypes` (cascaded, e.g. `[chore, dev]`) drops commits of
    * those types entirely instead - see `ignoreTypesConfig`. A release marker - a bare version-bump
    * commit (`"6.0.1"`), or any of the messages `version` itself writes - is always dropped
@@ -154,12 +154,7 @@ export class ChangelogService extends Service {
         if (await isBelowStartingPoint(git, pkg, segment, floor, floorIndex)) continue;
         const ownCommits = dropVersionBumps(segment.commits).filter(c => ownersOf(repository, c).has(pkg));
         if (!ownCommits.length) continue;
-        const sections = groupCommits(
-          ownCommits.map(c => c.subject),
-          ignoreTypesConfig(pkg),
-          titles,
-          order,
-        );
+        const sections = groupCommits(ownCommits, ignoreTypesConfig(pkg), titles, order, withCommitHash(pkg, options));
         // every commit could have been dropped by ignoreTypes - skip this package's entry entirely
         // rather than rendering a heading with nothing real underneath it.
         if (!sections.length) continue;
@@ -199,9 +194,9 @@ interface Section {
 }
 
 /** `.rmanrc changelog.ignoreTypes` (cascaded, per-package overridable) - Conventional Commits
- *  `type`s to drop entirely (e.g. `[chore, dev]`), not just fold into "Other Changes". Only
+ *  `type`s to drop entirely (e.g. `[chore, dev]`), not just fold into "General Changes". Only
  *  applies to commits that actually parse as `type: ...` - a non-conventional message always
- *  still lands in Other Changes, since it has no `type` to match against. */
+ *  still lands in General Changes, since it has no `type` to match against. */
 function ignoreTypesConfig(pkg: Package): Set<string> {
   const v = pkg.config?.changelog?.ignoreTypes;
   return new Set(Array.isArray(v) ? v.map(t => String(t).toLowerCase()) : []);
@@ -236,40 +231,65 @@ function resolveTitles(pkg: Package): Map<string, string> {
  *
  * **The type prefix is stripped for every section, not just two.** It used to be `push(line)` for
  * `feat`/`fix` and `push(subject)` for everything else, so Features read `- the first feature`
- * while Other Changes read `- chore: write changelog` - the heading naming the type and the bullet
- * repeating it. With every type able to have a heading of its own that asymmetry has no defence
- * left. A subject that is not Conventional Commits at all has no prefix to strip and is kept whole.
+ * while General Changes read `- chore: write changelog` - the heading naming the type and the
+ * bullet repeating it. With every type able to have a heading of its own that asymmetry has no
+ * defence left. A subject that is not Conventional Commits at all has no prefix to strip and is
+ * kept whole.
+ */
+/* **A message repeated inside one section is written once.** Real histories hold runs of identical
+ * subjects - measured on `panates/postgrejs`, whose v2.22.1 entry read `Updated config` five times
+ * under one heading - and the repetition states nothing the first line did not. Deduplicated **per
+ * section**, not per entry: `feat: x` and `fix: x` are different claims that land under different
+ * headings, and collapsing those would lose a fact rather than a repetition.
+ *
+ * **Keyed on the message, before the sha is appended**, which is the whole subtlety: with the sha on
+ * the line every duplicate is textually unique and the check would never fire. So the survivor keeps
+ * the *first* commit's sha - and since `listCommits` returns oldest-first, that is the earliest of
+ * the run. The others are dropped entirely, which is the point rather than a cost: the entry says
+ * what changed, and `git log` says how many times it was committed.
+ *
+ * **The sha is written plain, never as a Markdown link.** GitHub autolinks an abbreviated sha
+ * wherever it renders Markdown inside the repository, so `(a1b2c3d)` is already a link on the page
+ * and still readable in a terminal; a hand-built URL would need to know the forge, which nothing
+ * here does. Seven characters because that is what `git log --abbrev-commit` and GitHub both show.
  */
 function groupCommits(
-  subjects: string[],
+  commits: CommitInfo[],
   ignoreTypes: Set<string>,
   titles: Map<string, string>,
   order: string[],
+  commitHash: boolean,
 ): Section[] {
   const CATCH_ALL = '*';
   const byTitle = new Map<string, string[]>();
+  const seenByTitle = new Map<string, Set<string>>();
   const titleFor = (type: string) => titles.get(type) ?? titles.get(CATCH_ALL) ?? DEFAULT_TITLES.get(CATCH_ALL)!;
-  const push = (title: string, line: string) => {
+  const push = (title: string, message: string, sha: string) => {
+    let seen = seenByTitle.get(title);
+    if (!seen) seenByTitle.set(title, (seen = new Set()));
+    if (seen.has(message)) return;
+    seen.add(message);
+    const line = commitHash ? `${message} (${sha.slice(0, SHORT_SHA_LENGTH)})` : message;
     const lines = byTitle.get(title);
     if (lines) lines.push(line);
     else byTitle.set(title, [line]);
   };
 
-  for (const subject of subjects) {
+  for (const { subject, sha } of commits) {
     const parsed = ConventionalCommitsService.parseSubject(subject);
     if (!parsed) {
-      push(titleFor(CATCH_ALL), subject);
+      push(titleFor(CATCH_ALL), subject, sha);
       continue;
     }
     const { type, scope, description } = parsed;
     if (ignoreTypes.has(type)) continue;
-    push(titleFor(type), scope ? `**${scope}:** ${description}` : description);
+    push(titleFor(type), scope ? `**${scope}:** ${description}` : description, sha);
   }
 
   /**
    * Only a type with a heading of its own takes a position. A type nobody named resolves to the
    * catch-all, so ordering by it would drag the catch-all to wherever that type was listed -
-   * measured: `sortTitles: ['docs', 'fix', 'feat']` with no `docs` heading put "Other Changes"
+   * measured: `sortTitles: ['docs', 'fix', 'feat']` with no `docs` heading put "General Changes"
    * first and swallowed the sections after it.
    */
   const ordered = [...new Set(order.filter(t => t !== CATCH_ALL && titles.has(t)).map(titleFor))];
@@ -322,11 +342,58 @@ function legacyBuckets(sections: Section[], titles: Map<string, string>) {
 
 /** `feat`/`fix`/everything else, which is what rman shipped before `changelog.titles` existed and
  *  so is what a repository that sets nothing still gets, wording and order alike. */
+/**
+ * The heading each commit type is listed under, and - because `resolveOrder` falls back to
+ * `titles.keys()` - the order the sections come out in. `.rmanrc changelog.titles` is merged over
+ * this **per key**, so a repository renaming one keeps the rest and keeps its position.
+ */
+/* **Three entries was too few, and the measurement is what says so.** `feat`, `fix` and a catch-all
+ * were all rman named, so every other type fell into one heap: counted across four of this
+ * organization's repositories (rman, postgrejs, panates-javascript, syncbridge-public), that heap
+ * held 194 `chore`, 86 `docs`, 68 `refactor`, 29 `test`, 27 `ci` and 24 `perf` - more commits than
+ * the two named types put together, under a heading that says only "not one of the two".
+ *
+ * The set is Conventional Commits' own standard types and stops there. `dev` (32 across the same
+ * four) and `bench` (9) are this organization's inventions, and a repository names those in its own
+ * `changelog.titles` - or a shared preset does it once for all of them. rman shipping a heading for
+ * a type no convention defines would be guessing on everyone else's behalf.
+ *
+ * **These add sections; they do not hide anything.** `ignoreTypes` is what drops a type, and it
+ * stays the only thing that does - which is the one place this parts from conventional-changelog,
+ * whose default preset silently hides `chore`, `ci`, `build`, `style` and `test`. A changelog that
+ * quietly omits a third of the history is the failure mode worth avoiding; a reader who does not
+ * want those sections can say so in one key.
+ *
+ * Order: Features, Bug Fixes, Performance and Reverts first, as conventional-changelog has them -
+ * the four a reader is looking for - then the rest, then the catch-all, which `groupCommits` pins
+ * last whatever anyone writes.
+ *
+ * **Every emoji here is checked for U+FE0F and none carries it.** A variation selector survives
+ * github-slugger, so `### ♻️ Refactoring` gets an anchor nobody types by hand and every link to it
+ * silently lands at the top of the page - the trap already recorded for `⬆️`. That is why refactor
+ * is `🔧` (U+1F527, free now that the catch-all is `💬`) rather than `♻️`, and ci is `🤖` rather
+ * than `⚙️`.
+ *
+ * "General Changes", not "Other Changes", for the catch-all: even with eleven named types it holds
+ * whatever convention a repository invented for itself, and "Other" reads as the leftovers after
+ * the interesting part. */
 const DEFAULT_TITLES = new Map([
   ['feat', '✨ Features'],
   ['fix', '🐛 Bug Fixes'],
-  ['*', '🔧 Other Changes'],
+  ['perf', '⚡ Performance and Optimizations'],
+  ['revert', '⏪ Reverts'],
+  ['refactor', '🔧 Refactoring'],
+  ['docs', '📚 Documentation'],
+  ['test', '🧪 Tests'],
+  ['build', '📦 Build System'],
+  ['ci', '🤖 Continuous Integration'],
+  ['chore', '🧹 Chores'],
+  ['style', '🎨 Code Style'],
+  ['*', '💬 General Changes'],
 ]);
+
+/** What `git log --abbrev-commit` prints and what GitHub autolinks. */
+const SHORT_SHA_LENGTH = 7;
 
 function bulletList(lines: string[]): string {
   return lines.map(l => `- ${l}`).join('\n');
@@ -393,6 +460,13 @@ function resolveUnreleased(pkg: Package, options: ChangelogService.Options): boo
   if (options.version) return true;
   const cfg = pkg.config?.changelog?.unreleased;
   return options.unreleased ?? (typeof cfg === 'boolean' ? cfg : true);
+}
+
+/** Whether each line carries its commit's short sha - `.rmanrc changelog.commitHash`, or the flag,
+ *  which wins as everywhere. Defaults to `true`; `--no-commit-hash` is what turns it off. */
+function withCommitHash(pkg: Package, options: ChangelogService.Options): boolean {
+  const cfg = pkg.config?.changelog?.commitHash;
+  return options.commitHash ?? (typeof cfg === 'boolean' ? cfg : true);
 }
 
 /**
@@ -810,6 +884,9 @@ export namespace ChangelogService {
      *  omitted, and `true` when neither says. A caller passing `version` always gets it, since that
      *  names the release being cut; see `resolveUnreleased`. */
     unreleased?: boolean;
+    /** Whether each line ends with its commit's short sha - `.rmanrc changelog.commitHash` when
+     *  omitted, and `true` when neither says. See `withCommitHash`. */
+    commitHash?: boolean;
   }
 
   /** One package's (root included) generated changelog entry - what `getEntries`/`generate`

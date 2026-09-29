@@ -30,6 +30,18 @@ function headingFor(name: string): RegExp {
   return new RegExp(`^## .*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'm');
 }
 
+/**
+ * Bullet lines with the trailing ` (short sha)` removed, for the assertions that compare a section's
+ * lines **exactly**.
+ *
+ * A fixture's shas are new on every run, so an exact comparison cannot name them - and the two
+ * choices are this or loosening those assertions to `toContain`, which would stop them noticing an
+ * extra line. The sha itself is pinned by its own cases below, on a shape a spec can state.
+ */
+function withoutSha(lines: string[]): string[] {
+  return lines.map(l => l.replace(/ \([0-9a-f]{7}\)$/, ''));
+}
+
 describe('services/changelog', () => {
   useTestEcosystem();
 
@@ -106,7 +118,7 @@ describe('services/changelog', () => {
     expect(output).toContain('- **pkg-b:** correct a bug');
     // the docs commit only touched a root-level file - it belongs to root's own entry.
     expect(output).toMatch(headingFor(`${path.basename(dir)} repository`));
-    expect(output).toContain('### 🔧 Other Changes');
+    expect(output).toContain('### 💬 General Changes');
     /** The bullet no longer repeats the type its heading already names - see `changelog.titles`. */
     expect(output).toContain('- update readme');
   });
@@ -229,7 +241,7 @@ describe('services/changelog', () => {
     expect(output).not.toMatch(headingFor('root'));
   });
 
-  it('a commit for a non-conventional subject still lands in Other Changes, not dropped', async () => {
+  it('a commit for a non-conventional subject still lands in General Changes, not dropped', async () => {
     const dir = tmp();
     writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
     /** Marks the repository root: `Workspace.findRoot` looks for an `.rmanrc*` or a `.git`,
@@ -250,6 +262,78 @@ describe('services/changelog', () => {
     await createRepository(dir);
     const output = content(await service('changelog').getEntries({ from: baseHash }));
     expect(output).toContain('- just a plain message');
+  });
+
+  /**
+   * **A repository with a run of identical subjects, which is the shape this is for.** Measured on
+   * `panates/postgrejs`, whose `v2.22.1` entry read `Updated config` five times under one heading -
+   * five commits that really were worded the same, so it is not rman inventing them, and the
+   * repetition states nothing the first line did not.
+   */
+  function repoWithRepeatedSubjects(): { dir: string; baseHash: string } {
+    const dir = tmp();
+    writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+    fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+    writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+    const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+    run('init', '-q');
+    run('config', 'user.email', 't@t.com');
+    run('config', 'user.name', 't');
+    run('add', '-A');
+    run('commit', '-q', '-m', 'init');
+    const baseHash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
+    for (const [i, subject] of [
+      'Updated config',
+      'Updated config',
+      'feat(pkg-a): a feature',
+      'Updated config',
+    ].entries()) {
+      fs.writeFileSync(path.join(dir, `packages/a/f${i}.txt`), 'x');
+      run('add', '-A');
+      run('commit', '-q', '-m', subject);
+    }
+    return { dir, baseHash };
+  }
+
+  it('writes a repeated subject once per section, keeping the first commit of the run', async () => {
+    const { dir, baseHash } = repoWithRepeatedSubjects();
+    await createRepository(dir);
+
+    const entry = (await service('changelog').getEntries({ from: baseHash })).find(e => e.label === 'pkg-a')!;
+    expect(withoutSha(entry.other)).toEqual(['Updated config']);
+    /** `listCommits` returns oldest-first, so the survivor is the earliest of the run - stated here
+     *  because "the first" is otherwise ambiguous about which end. */
+    const shas = execFileSync('git', ['log', '--reverse', '--format=%h', `${baseHash}..HEAD`], { cwd: dir })
+      .toString()
+      .trim()
+      .split('\n');
+    expect(entry.other).toEqual([`Updated config (${shas[0]})`]);
+  });
+
+  /** **The control for keying the check on the message rather than the rendered line.** With the sha
+   *  appended first, every duplicate is textually unique and the deduplication would never fire -
+   *  so this asserts the two together, which is the only combination that can catch that order. */
+  it('deduplicates across the whole section, not just consecutive lines, and only within a section', async () => {
+    const { dir, baseHash } = repoWithRepeatedSubjects();
+    await createRepository(dir);
+
+    const entry = (await service('changelog').getEntries({ from: baseHash })).find(e => e.label === 'pkg-a')!;
+    // The third "Updated config" sits after the feat commit, so a consecutive-only check would keep
+    // it. And the feature keeps its own line - a different section is a different claim.
+    expect(entry.other).toHaveLength(1);
+    expect(withoutSha(entry.features)).toEqual(['**pkg-a:** a feature']);
+  });
+
+  it('appends each commit\'s short sha, and "commitHash: false" turns it off', async () => {
+    const { dir, baseHash } = repoWithRepeatedSubjects();
+    await createRepository(dir);
+
+    const on = content(await service('changelog').getEntries({ from: baseHash }));
+    expect(on).toMatch(/^- \*\*pkg-a:\*\* a feature \([0-9a-f]{7}\)$/m);
+
+    const off = content(await service('changelog').getEntries({ from: baseHash, commitHash: false }));
+    expect(off).toContain('- **pkg-a:** a feature\n');
+    expect(off).not.toMatch(/\([0-9a-f]{7}\)/);
   });
 
   it('drops bare version-bump commits ("6.0.1") entirely, rather than listing them as changes', async () => {
@@ -350,7 +434,7 @@ describe('services/changelog', () => {
   });
 
   describe('.rmanrc changelog.ignoreTypes', () => {
-    it('drops commits of the given conventional-commit types entirely, not just into Other Changes', async () => {
+    it('drops commits of the given conventional-commit types entirely, not just into General Changes', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       /** Marks the repository root: `Workspace.findRoot` looks for an `.rmanrc*` or a `.git`,
@@ -384,7 +468,7 @@ describe('services/changelog', () => {
       expect(output).toContain('- a real feature');
       expect(output).not.toContain('bump a dependency');
       expect(output).not.toContain('tweak a local script');
-      expect(output).not.toContain('### 🔧 Other Changes'); // nothing left to put there
+      expect(output).not.toContain('### 💬 General Changes'); // nothing left to put there
     });
 
     it('leaves a non-conventional (typeless) commit alone - ignoreTypes only matches a real "type:" prefix', async () => {
@@ -935,7 +1019,7 @@ describe('services/changelog', () => {
       const pkgA = entries.find(e => e.label === 'pkg-a');
       expect(pkgA).toBeDefined();
       expect(pkgA!.version).toBe('1.0.0');
-      expect(pkgA!.features).toEqual(['**pkg-a:** add a feature']);
+      expect(withoutSha(pkgA!.features)).toEqual(['**pkg-a:** add a feature']);
       expect(pkgA!.content).toMatch(headingFor('pkg-a'));
       expect(pkgA!.filePath).toBe('CHANGELOG.md');
 
@@ -943,7 +1027,12 @@ describe('services/changelog', () => {
       expect(root).toBeDefined();
       // nothing has ever been released here (no tag, nothing on npm), so the boundary-free view
       // reaches all the way back to the first commit.
-      expect(root!.other).toEqual(['init', 'update readme']);
+      /** **`update readme` before `init`, which is not chronological order.** `other` is every
+       *  section that is not Features or Bug Fixes, flattened in *section* order - and `docs:` has
+       *  a heading of its own now, which sorts above the catch-all that `init` (not a conventional
+       *  subject) falls into. The commits are still the two this fixture makes; only which section
+       *  each lands in changed. */
+      expect(withoutSha(root!.other)).toEqual(['update readme', 'init']);
     });
 
     it('returns [] when there is nothing unreleased', async () => {

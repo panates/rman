@@ -1447,7 +1447,30 @@ saw one thing to release and it was the one thing that must never be published.
     files have a `headingFor(name)` regex helper for this.
 - **`changelog.titles` maps a commit type to its section heading** (`resolveTitles`/`groupCommits`),
   and with it the section order. It was three hardcoded strings, so `feat` and `fix` were the only
-  two types rman could name and everything else - `dev`, `docs`, `perf` - shared "Other Changes".
+  two types rman could name and everything else - `dev`, `docs`, `perf` - shared one heap.
+  - **rman now ships a heading for every *standard* Conventional Commits type**, in this order:
+    `feat` ✨ Features, `fix` 🐛 Bug Fixes, `perf` ⚡ Performance and Optimizations, `revert`
+    ⏪ Reverts, `refactor` 🔧 Refactoring, `docs` 📚 Documentation, `test` 🧪 Tests, `build`
+    📦 Build System, `ci` 🤖 Continuous Integration, `chore` 🧹 Chores, `style` 🎨 Code Style, and
+    `*` 💬 General Changes. Measured across four of this organization's repositories, the old
+    catch-all held 194 `chore`, 86 `docs`, 68 `refactor`, 29 `test`, 27 `ci` and 24 `perf` - more
+    commits than `feat` and `fix` together, under a heading saying only "not one of those two".
+    - **The set stops at the standard types.** `dev` (32 across the same four) and `bench` (9) are
+      this organization's inventions; a repository names those in its own `titles`, or a shared
+      preset does it once. Shipping a heading for a type no convention defines is guessing on every
+      other user's behalf.
+    - **They add sections and hide nothing** - the one place this parts from conventional-changelog,
+      whose default preset silently drops `chore`, `ci`, `build`, `style` and `test`. A changelog
+      quietly missing a third of the history is the worse failure; `ignoreTypes` stays the only key
+      that drops a type.
+    - **Every emoji is checked for U+FE0F and none carries it**, pinned by a spec that walks the
+      rendered headings. A variation selector survives github-slugger, so `### ♻️ Refactoring` gets
+      an anchor nobody types and every link to it lands at the page top - the `⬆️` trap again. It is
+      why refactor is `🔧` (free since the catch-all became `💬`) and ci is `🤖`.
+    - **Adding defaults breaks specs that assert a heading list**, and two of them silently: a case
+      reading `sortTitles: ['docs', ...]` to mean "a type with no heading" tested the opposite once
+      `docs` had one, and a case asserting the catch-all "renders last" had nothing to assert once
+      `chore` took its only occupant. `commitsFixture` carries a `wip:` commit for that second one.
   - **Merged over the defaults per key, not replacing them** - the `vars` rule rather than a new
     exception, and what the shape asks for: naming `dev` must not silently cost a repository its
     `feat` and `fix`. Renaming a default keeps its position. The cost: a default section cannot be
@@ -1458,18 +1481,42 @@ saw one thing to release and it was the one thing that must never be published.
     keeps its place after the listed ones.
     - **Only a type with a heading of its own takes a position.** A type nobody named resolves to
       the catch-all, so ordering by it drags the catch-all to that position: measured,
-      `sortTitles: ['docs', 'fix', 'feat']` with no `docs` heading put "Other Changes" first and
-      swallowed everything after it.
+      `sortTitles: ['docs', 'fix', 'feat']` with no `docs` heading put "General Changes" first and
+      swallowed everything after it. (`docs` is a default heading now, so the spec for this uses
+      `dev` - a type rman does not ship one for.)
   - **`'*'` is the catch-all and is always rendered last**, whatever position it was declared in - a
     catch-all in the middle silently swallows the sections after it.
   - **The type prefix is stripped in every section now.** It was `push(line)` for `feat`/`fix` and
-    `push(subject)` for the rest, so Other Changes read `- chore: bump deps` while Features read
+    `push(subject)` for the rest, so General Changes read `- chore: bump deps` while Features read
     `- a new capability`. With every type able to carry a heading that asymmetry has no defence.
     A non-Conventional subject has no prefix to strip and is kept whole.
   - **`Entry.features/fixes/other` and `{{features}}`/`{{fixes}}`/`{{other}}` are derived**
     (`legacyBuckets`), so they keep meaning what they meant - whatever `feat` and `fix` are listed
     under, everything else together. `Entry.sections` is the shape that does not lose a repository's
     own headings; prefer it.
+- **A message repeated inside one section is written once** (`groupCommits`). Measured on
+  `panates/postgrejs`, whose `v2.22.1` entry read `Updated config` five times - five commits really
+  worded the same, so it is not rman inventing them, and the repetition states nothing the first
+  line did not.
+  - **Per section, not per entry**: `feat: x` and `fix: x` are different claims under different
+    headings, and collapsing those loses a fact rather than a repetition.
+  - **Keyed on the message, before the sha is appended**, which is the whole subtlety - with the sha
+    on the line every duplicate is textually unique and the check would never fire. The survivor
+    keeps the *first* commit's sha, and `listCommits` returns oldest-first, so that is the earliest
+    of the run. The spec asserts the dedup and the sha together, which is the only combination that
+    can catch the wrong order.
+- **Each bullet ends with its commit's short sha** - `changelog.commitHash` / `--no-commit-hash`,
+  default `true`.
+  - **Plain, never a Markdown link.** GitHub autolinks an abbreviated sha wherever it renders
+    Markdown inside the repository, so `(a1b2c3d)` is a link on the page and still readable in a
+    terminal; a hand-built URL would need to know the forge, which nothing here does.
+  - **No `default: true` on the yargs option**, the same trap `unreleased` avoids: declared there, an
+    omitted flag arrives as `true` rather than `undefined`, so the flag would beat
+    `.rmanrc changelog.commitHash` on every run and the key could never turn it off. The default
+    lives in `withCommitHash`.
+  - **A spec comparing a section's lines exactly cannot name a fixture's shas**, which are new every
+    run - `changelog.service.spec.ts` has a `withoutSha()` helper for that, rather than loosening
+    those assertions to `toContain`, which would stop them noticing an extra line.
 - **`changelog.unreleased` defaults to `true`, so the flag that acts is `--no-unreleased`** -
   the one place this deliberately parts from `auto-changelog`, which defaults its equivalent off.
   That tool documents a finished history; `rman changelog` exists to answer what is *not* released

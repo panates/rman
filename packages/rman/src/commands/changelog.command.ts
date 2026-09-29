@@ -69,6 +69,30 @@ const config = {
       "{{package}}/{{version}} placeholders are that file's content, not config expressions.",
     type: 'string',
   },
+  /**
+   * **Default `true`, so the flag that does something is `--no-commit-hash`.** GitHub autolinks a
+   * bare abbreviated sha wherever it renders Markdown inside a repository, so the plain
+   * `(a1b2c3d)` this writes is a link on the page and stays readable in a terminal - which a
+   * hand-built `[a1b2c3d](https://.../commit/a1b2c3d)` would not be, and which rman could not build
+   * anyway without knowing the forge.
+   *
+   * `'both'` rather than config-only: it is a lasting preference, and it is also the one thing a
+   * caller may want to turn off for a single run - `github-release` bodies are rendered in the same
+   * repository, but notes pasted somewhere else lose the autolinking and keep the noise.
+   */
+  /* **No `default: true` here, and that is the trap `unreleased` already avoids** - the default
+   * lives in `withCommitHash`. Declared as a yargs default, an omitted flag arrives as `true`
+   * rather than `undefined`, so the flag would win over `.rmanrc changelog.commitHash` on every run
+   * and the config key could never turn it off. The precedence rule everywhere is *the flag wins
+   * when it was given*, which needs an unset flag to stay unset. */
+  commitHash: {
+    target: 'both',
+    cliName: 'commit-hash',
+    describe:
+      "Append each commit's short sha to its line (default true) - pass --no-commit-hash for " +
+      'notes that are read outside the repository, where GitHub does not autolink it',
+    type: 'boolean',
+  },
   tagPattern: {
     target: 'config',
     describe:
@@ -191,6 +215,7 @@ const changelogCommand = registerCommand(app => {
         version: args.releaseVersion,
         startingAt: args.startingAt,
         unreleased: args.unreleased,
+        commitHash: args.commitHash,
       };
       const changelog = app.getService('changelog');
       const entries = write ? await changelog.generateToFile(options) : await changelog.getEntries(options);

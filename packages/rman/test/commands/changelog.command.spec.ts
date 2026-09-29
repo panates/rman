@@ -293,7 +293,7 @@ describe('commands/changelog', () => {
    */
   /**
    * **The section headings were three hardcoded strings**, so a repository writing `dev:` commits
-   * had nowhere to put them but "Other Changes". `changelog.titles` maps a Conventional Commits
+   * had nowhere to put them but "General Changes". `changelog.titles` maps a Conventional Commits
    * type to the heading it is listed under, and with it the order sections come out in.
    */
   describe('changelog.titles', () => {
@@ -307,7 +307,16 @@ describe('commands/changelog', () => {
       run('config', 'user.name', 't');
       run('add', '-A');
       run('commit', '-q', '-m', 'feat: a new capability');
-      for (const message of ['fix(parser): handle empty input', 'dev: rework the harness', 'chore: bump deps']) {
+      for (const message of [
+        'fix(parser): handle empty input',
+        'dev: rework the harness',
+        'chore: bump deps',
+        /** **Something with no heading anywhere**, so the catch-all is never empty. Without it these
+         *  cases stopped covering the catch-all the moment `chore` became a default heading: an
+         *  empty section is dropped, so "renders last" had nothing to assert about. `dev` used to
+         *  play this part and cannot any more - half of them give it a heading of its own. */
+        'wip: leave this one uncategorized',
+      ]) {
         fs.writeFileSync(path.join(dir, `${message.length}.txt`), 'x');
         run('add', '-A');
         run('commit', '-q', '-m', message);
@@ -315,27 +324,83 @@ describe('commands/changelog', () => {
       return dir;
     }
 
+    /** One commit of every type rman names, so this is the case that actually pins the default set -
+     *  its wording and its order - rather than the four-commit fixture above, which only ever shows
+     *  the handful of headings it happens to produce. */
+    function everyTypeFixture(): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'feat: a new capability');
+      for (const type of ['fix', 'perf', 'revert', 'refactor', 'docs', 'test', 'build', 'ci', 'chore', 'style']) {
+        fs.writeFileSync(path.join(dir, `${type}.txt`), 'x');
+        run('add', '-A');
+        run('commit', '-q', '-m', `${type}: something`);
+      }
+      fs.writeFileSync(path.join(dir, 'unknown.txt'), 'x');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'wip: leave this one uncategorized');
+      return dir;
+    }
+
     const output = async (dir: string) =>
       (await captureLogs(() => runCli({ cwd: dir, argv: ['changelog'] }))).join('\n');
     const headings = (out: string) => out.split('\n').filter(l => l.startsWith('### '));
 
+    /**
+     * **rman named three types and every other one fell into the catch-all** - measured across four
+     * of this organization's repositories, that heap held 194 `chore`, 86 `docs`, 68 `refactor`, 29
+     * `test`, 27 `ci` and 24 `perf`, more commits than `feat` and `fix` together under a heading
+     * saying only "not one of those two". These are Conventional Commits' standard types and the
+     * set stops there: `dev` and `bench` are this organization's own and belong in its `titles`.
+     *
+     * Asserted in full, wording and order alike, because both are a promise to anyone whose
+     * changelog is already written - a renamed heading leaves a file with two names for one section.
+     */
     it('defaults to what rman shipped, wording and order alike', async () => {
-      expect(headings(await output(commitsFixture()))).toEqual([
+      expect(headings(await output(everyTypeFixture()))).toEqual([
         '### ✨ Features',
         '### 🐛 Bug Fixes',
-        '### 🔧 Other Changes',
+        '### ⚡ Performance and Optimizations',
+        '### ⏪ Reverts',
+        '### 🔧 Refactoring',
+        '### 📚 Documentation',
+        '### 🧪 Tests',
+        '### 📦 Build System',
+        '### 🤖 Continuous Integration',
+        '### 🧹 Chores',
+        '### 🎨 Code Style',
+        '### 💬 General Changes',
       ]);
+    });
+
+    /** **No heading may carry U+FE0F.** A variation selector survives github-slugger, so the anchor
+     *  is one nobody types by hand and every link to that section silently lands at the top of the
+     *  page - the trap already recorded for `⬆️`. It is invisible on screen, which is exactly why it
+     *  needs a check rather than an eye: `♻️ Refactoring` and `⚙️ Continuous Integration` were both
+     *  written that way first. */
+    it('uses no emoji carrying a variation selector, which would break every anchor', async () => {
+      for (const heading of headings(await output(everyTypeFixture()))) {
+        expect([...heading].map(c => c.codePointAt(0))).not.toContain(0xfe0f);
+      }
     });
 
     /** The key the user asked for, verbatim - and `fix` keeps its default rather than being lost
      *  to a wholesale replace, which is what makes naming one type safe. */
     it('renames a type’s heading and adds one, keeping the defaults it did not name', async () => {
       const dir = commitsFixture({ changelog: { titles: { feat: 'New Features', dev: 'Development Changes' } } });
+      /** `dev` is a key rman does not ship, so it is appended after the defaults; `chore` keeps both
+       *  its default wording and its default position. */
       expect(headings(await output(dir))).toEqual([
         '### New Features',
         '### 🐛 Bug Fixes',
+        '### 🧹 Chores',
         '### Development Changes',
-        '### 🔧 Other Changes',
+        '### 💬 General Changes',
       ]);
     });
 
@@ -362,11 +427,14 @@ describe('commands/changelog', () => {
       const dir = commitsFixture({
         changelog: { titles: { feat: 'New Features', dev: 'Development Changes' }, sortTitles: ['dev', 'fix', 'feat'] },
       });
+      /** The three it listed come first in that order; `chore`, which it did not list, keeps its
+       *  default position after them, and the catch-all is last however anyone writes it. */
       expect(headings(await output(dir))).toEqual([
         '### Development Changes',
         '### 🐛 Bug Fixes',
         '### New Features',
-        '### 🔧 Other Changes',
+        '### 🧹 Chores',
+        '### 💬 General Changes',
       ]);
     });
 
@@ -379,14 +447,23 @@ describe('commands/changelog', () => {
 
       expect(rows[0]).toBe('### Development Changes');
       expect(rows).toContain('### ✨ Features');
-      expect(rows[rows.length - 1]).toBe('### 🔧 Other Changes');
+      expect(rows[rows.length - 1]).toBe('### 💬 General Changes');
     });
 
     /** Naming a type nobody gave a heading sorts nothing, because there is no section to sort -
-     *  `sortTitles` orders sections, it does not create them. */
+     *  `sortTitles` orders sections, it does not create them.
+     *
+     *  **`dev`, not `docs`.** This read `['docs', 'fix', 'feat']` while rman named only three types,
+     *  and `docs` is a default heading now - so the case would have gone on passing while testing
+     *  the opposite of what it says. A type with no heading has to be one rman does not ship. */
     it('is a no-op for a type with no heading of its own', async () => {
-      const dir = commitsFixture({ changelog: { sortTitles: ['docs', 'fix', 'feat'] } });
-      expect(headings(await output(dir))).toEqual(['### 🐛 Bug Fixes', '### ✨ Features', '### 🔧 Other Changes']);
+      const dir = commitsFixture({ changelog: { sortTitles: ['dev', 'fix', 'feat'] } });
+      expect(headings(await output(dir))).toEqual([
+        '### 🐛 Bug Fixes',
+        '### ✨ Features',
+        '### 🧹 Chores',
+        '### 💬 General Changes',
+      ]);
     });
 
     /** A catch-all in the middle of the order would silently swallow the sections after it. */
@@ -400,7 +477,7 @@ describe('commands/changelog', () => {
 
     /**
      * **The type prefix is stripped in every section now.** It used to be stripped for `feat`/`fix`
-     * and kept everywhere else, so Features read `- a new capability` while Other Changes read
+     * and kept everywhere else, so Features read `- a new capability` while General Changes read
      * `- chore: bump deps` - the heading naming the type and the bullet repeating it. With every
      * type able to have a heading of its own, that asymmetry has no defence left.
      */

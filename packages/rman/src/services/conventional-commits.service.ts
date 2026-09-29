@@ -13,7 +13,7 @@
 export namespace ConventionalCommitsService {
   /**
    * `type(scope): description`, optionally with a `!` breaking-change marker - Conventional
-   * Commits' subject-line shape. Anything that doesn't match falls into "Other Changes" as-is (for
+   * Commits' subject-line shape. Anything that doesn't match falls into "General Changes" as-is (for
    * changelog entries) or defaults to a patch-level change (for version bump severity) - see
    * `parseSubject`.
    */
