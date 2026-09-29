@@ -167,7 +167,21 @@ export class ProgressPanel {
         failedCount++;
         if (this.live.enabled) {
           console.log(colors.red.bold('X'), item.name, duration);
-          if (item.log.length) console.log(colors.red(item.log.join('\n')));
+          /* **The replayed log is printed as it was captured, never painted.** It holds the output
+           * of every step this item ran, and only the last one failed - so colouring the block red
+           * reports the ones that succeeded as failures. Measured on a real build whose `before`
+           * ran `rman check` and then `rman lint`: check passed and printed
+           * `✅ no circular dependency was found` and `1 succeeded, 0 failed`, and both came back
+           * red under the failing package.
+           *
+           * It also corrupts what the steps themselves coloured. `colors.red()` wraps the whole
+           * string, so a line with its own colour keeps it up to its reset and then falls into red
+           * for the remainder: `1 succeeded, 0 failed` rendered with `1 succeeded` still green and
+           * the comma after it red.
+           *
+           * The `X` above already says the item failed, and the step that failed printed its own
+           * error. */
+          if (item.log.length) console.log(item.log.join('\n'));
         }
       } else {
         skippedCount++;
