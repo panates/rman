@@ -516,7 +516,11 @@ export class Repository extends Package {
     }
 
     const packages = workspace.packages;
-    const repo = new Repository(app, rootDir, packages.length > 0, packages, from, workspace.rootPackage.platform);
+    /** `workspace.monorepo`, not `packages.length > 0` again: the workspace already had to answer
+     *  this during the cascade - it is what decides whether a `"[glob]"` speaks for the root - and
+     *  two copies of the derivation could disagree silently, resolving a config under one answer
+     *  and building the package list under the other. */
+    const repo = new Repository(app, rootDir, workspace.monorepo, packages, from, workspace.rootPackage.platform);
     repo._adopt(workspace);
     app.attachRepository(repo);
     return Repository._init(repo);

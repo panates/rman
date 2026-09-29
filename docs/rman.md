@@ -624,7 +624,7 @@ packageManager: pnpm                          # every package, and the root
   run:
     build:
       before: node support/generate.cjs       # a repo-wide bookend, run once at the root
-"[*]":                                        # the packages below - never the root
+"[*]":                                        # the packages - not a monorepo's root
   run:
     build:
       after: node ../../support/postbuild.cjs # run in each package's own directory
@@ -644,23 +644,31 @@ Selector details:
   | --- | --- | --- |
   | `"[/]"` | the **root package** alone, structurally | - |
   | `"[platform:node]"`, `"[platform:node,cargo]"` | every package of those **technologies**, the root included | `pkg.platform.name` |
-  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches | `pkg.selector` |
+  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages this directory holds that the glob matches | `pkg.selector` |
 
   `/` for the root because that is what a repository root is called everywhere else, and no package
   can be named it.
 
-  **The root is never selected by name, and only a glob is held off it.** A glob matches package
-  names and the root is nobody's child, so `"[my-*]"` cannot quietly reach a repository whose root
-  package is called `my-repo`, and `"[*]"` cannot hand a package-shaped setting to a root with no
-  build directory to apply it to. Neither reason touches `"[platform:node]"` - it is not a name and
-  it is not a catch-all - so a platform block answers about the root like any other package, and
-  `"[platform:node]" > "[/]"` is how you say *the root, when it is a node repository*.
+  **A monorepo's root is never selected by name, and only a glob is held off it.** A glob matches
+  package names and a monorepo's root is nobody's child, so `"[my-*]"` cannot quietly reach a
+  repository whose root package is called `my-repo`, and `"[*]"` cannot hand a package-shaped
+  setting to a root with no build directory to apply it to. Neither reason touches
+  `"[platform:node]"` - it is not a name and it is not a catch-all - so a platform block answers
+  about the root like any other package, and `"[platform:node]" > "[/]"` is how you say *the root,
+  when it is a node repository*.
 
   A package **no technology claimed** carries a platform whose name is `''`, so it matches no
   platform block at all rather than quietly falling into one.
 
-  In a **single-package repository the root is the one package**, so `"[/]"` reaches it and `"[*]"`
-  reaches nothing.
+  In a **single-package repository the root is the one package, so every selector reaches it** -
+  `"[/]"` because it is the root, `"[*]"` and a matching name glob because it is a package. Both
+  reasons for holding a glob off a root describe a *container*: a name shape shared with the things
+  below, and a directory with no build output of its own. A root with nothing below it is neither.
+  The two blocks are then layered in declaration order, like any two selectors that both match.
+
+  This is what lets a shared config declare one package block. `@panates/rman-preset` puts
+  `run.build`, `publish.npm.directory` and `version.stamp` under `"[platform:node]" > "[*]"`, and a
+  single-package repository extending it gets them without restating a line.
 - The pattern is a **glob over package names**, anchored at both ends - `"[*-dialect]"` matches
   `mysql-dialect`, not `my-dialect-helper`. Glob, not regex, like every other pattern in rman.
 - In YAML the quotes are **required**. A bare `[*]` parses as a flow sequence, and `*` as an alias
@@ -729,7 +737,10 @@ Selector details:
     `platform:node`.
   - **A nested pair that could never match together is refused**, rather than loading and matching
     nothing. Two are decidable and both are checked: `"[/]"` paired with a **glob**, either way round
-    (a glob never matches the root, so the pair is empty), and two `"[platform:...]"` blocks naming
+    (a glob never matches a monorepo's root, so the pair is empty - the check is made per directory,
+    before any package is known, so it cannot ask whether this repository has only one; in a
+    single-package repository `"[/]"` alone already reaches everything, so nothing is lost by the
+    refusal standing there too), and two `"[platform:...]"` blocks naming
     nothing in common (a package carries one platform). `"[platform:node,cargo]" > "[platform:node]"`
     narrows and is fine. A glob pair is deliberately *not* checked - whether two globs intersect is a
     real computation, where a platform set is a membership test.

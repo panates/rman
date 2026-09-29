@@ -58,11 +58,16 @@ export interface PackageFilterOptions {
 /**
  * **`--scope /` is the repository's own root package**, the one selector that is not a glob.
  *
- * The same `/` `.rmanrc`'s `"[/]"` block uses, and for the same reason stated there: *the root is
- * never selected by name.* A glob matches package names, and a name can be anything - so
+ * The same `/` `.rmanrc`'s `"[/]"` block uses, and for the same reason stated there: *a monorepo's
+ * root is never selected by name.* A glob matches package names, and a name can be anything - so
  * `--scope rman-repo` happened to work (measured) while being exactly the name-based addressing the
  * config selectors were redesigned to remove. `/` is structural, cannot collide with a package
  * (nothing can be named it), and gives "the root" one spelling across config and CLI.
+ *
+ * **In a single-package repository a glob does reach the root**, because there it is not a container
+ * that happens to have a name - it is the one package, and `--scope '*'` meaning "no packages" was
+ * the same silent emptiness `"[*]"` had in a `.rmanrc`. `/` still selects it, so nothing that worked
+ * stops working; see `Workspace._speaksFor`, which carries the identical clause.
  *
  * Accepted by `--ignore` too. The asymmetry would be the thing to remember, and `--ignore /` -
  * every package but the root - is a real thing to want of `clean`.
@@ -366,5 +371,12 @@ function selector(value: string | string[]): (pkg: Package) => boolean {
    *  `/` above already is. It was `pkg.name`, and the two coincide for every Node repository; a
    *  package having a name at all is an ecosystem's promise, and a repository can assign a selector
    *  where its own does not offer one. */
-  return pkg => (pkg.isRoot ? wantsRoot : globs.length > 0 && micromatch.isMatch(pkg.selector, globs));
+  /** **A glob reaches the root in a single-package repository**, exactly as `"[*]"` does in a
+   *  `.rmanrc` - the two are documented as the same set, so they move together or a repository's
+   *  config and its `--scope` disagree about what a package is. In a monorepo the root is still
+   *  addressed by `/` alone; there it is a container that happens to have a name, and a glob picking
+   *  it up by that name is the trap `/` was introduced to remove. `pkg.repository` is safe to read
+   *  under `isRoot`, which is `false` until `Repository.create` assigns it. */
+  const matchesGlob = (pkg: Package): boolean => globs.length > 0 && micromatch.isMatch(pkg.selector, globs);
+  return pkg => (pkg.isRoot ? wantsRoot || (!pkg.repository.monorepo && matchesGlob(pkg)) : matchesGlob(pkg));
 }

@@ -57,7 +57,8 @@ rman changelog --scope /                    # the root package's own entry, and 
 `changelog` is one of the two commands whose candidate list holds the repository's own root package
 (the other is [`clean`](clean.md)), so **`--scope /` means something here** - it selects the root's
 entry, which is where commits under no package, and repo-wide ones, are attributed. See
-[package filtering](../cli-rman.md#package-filtering); an ordinary glob never matches the root.
+[package filtering](../cli-rman.md#package-filtering); an ordinary glob never matches a monorepo's
+root (in a single-package repository the root *is* the one package, so it does).
 
 With `--write`, prints `updated <label> <filePath>` per package that had something to write,
 instead of the entry's raw content. With nothing unreleased at all, prints `No unreleased

@@ -88,6 +88,25 @@ export class Workspace {
     this.platforms = [...(options.platforms ?? [])];
   }
 
+  /**
+   * Whether the walk found packages *below* the root - i.e. whether this is a monorepo.
+   *
+   * `false` means the root is the repository's one and only package, which is what decides whether
+   * a `"[glob]"` selector speaks for it (see {@link Workspace._speaksFor}).
+   */
+  /* **One derivation, read from two places.** `Repository.create` computed `packages.length > 0`
+   * itself and passed it in as the `monorepo` constructor argument; `_speaksFor` now needs the same
+   * fact *during* the cascade, which runs before any `Repository` exists. Two copies of a one-line
+   * derivation is two places to disagree, and the disagreement would be silent - a config resolved
+   * under one answer and a command's package list built under the other. `Repository.create` reads
+   * this getter now.
+   *
+   * Safe to ask at cascade time because `_discover` has already run: `_init` walks the tree first
+   * and only then resolves selectors and configs, so `packages` is final by the time either asks. */
+  get monorepo(): boolean {
+    return this.packages.length > 0;
+  }
+
   /** The package at a directory, root included, or `undefined` for one that holds none. */
   packageAt(dirname: string): Package | undefined {
     const resolved = path.resolve(dirname);
@@ -386,17 +405,47 @@ export class Workspace {
   /**
    * Whether one selector block speaks for this package.
    *
-   * `"[/]"` asks only whether this *is* the root. Everything else matches packages **below** the
-   * root and never the root itself, which is addressed structurally or not at all.
+   * `"[/]"` asks only whether this *is* the root. A `"[glob]"` matches packages **below** the root -
+   * and, in a repository that has none, the root itself, because there it *is* the one package.
    */
-  /* **A glob never matching the root removes two traps at once**: `"[my-*]"` cannot quietly pick up
-   * a repository whose root package is called `my-repo`, and `"[*]"` cannot hand a package-shaped
-   * setting to a root with no build directory to apply it to. Neither trap exists for a platform
-   * block - `platform:node` is not a name and cannot match by accident, and it is not a catch-all -
-   * so **a platform link answers about the root like any other package**, and what keeps a plain
-   * `"[platform:node]"` off the root is `_matchingSelectors`' chain rule rather than a refusal here.
-   * Asking `isRoot` first was what made `"[platform:node]" > "[/]"` unanswerable: the pair says *the
-   * root, when it is a node package*, and the short-circuit never let the platform question be put.
+  /* **A glob is held off a MONOREPO root, and only a monorepo root** - which is narrower than the
+   * rule this replaces and is the whole of the change. Both justifications for the old blanket
+   * refusal are statements about a monorepo root, and neither survives being read in a
+   * single-package repository:
+   *
+   *   - `"[my-*]"` must not quietly pick up a repository whose root package is called `my-repo`.
+   *     That is an *accidental* name collision between a container and the things it contains.
+   *     With nothing contained, the root is not a container that happens to share a name shape -
+   *     it is the package, and `"[postgrejs]"` naming it is the author saying what they mean.
+   *   - `"[*]"` must not hand a package-shaped setting to a root with no build directory to apply
+   *     it to. A single-package root *has* the build directory: it is where the package is built.
+   *
+   * What the old rule cost, measured on `panates/postgrejs` before this: `@panates/rman-preset`
+   * declares its whole package block under `"[platform:node]" > "[*]"` - `run.build`,
+   * `publish.npm.directory`, `version.stamp`, the build directory's `clean.include` - and *none* of
+   * it reached that repository. `rman build` answered `No package defines a "build" script.` and
+   * `rman config` showed the four keys simply absent, with nothing reporting that a block had
+   * matched nobody. The workaround would have been for every single-package repository to restate
+   * the preset's block under `"[/]"`, which is the duplication a shared preset exists to remove -
+   * and it is not even writable in YAML, since two of those values are JavaScript functions the
+   * preset keeps to itself.
+   *
+   * **`"[/]"` still means the root and is still the right spelling for a repo-wide setting**, so in
+   * a single-package repository both selectors reach the one package and are layered in declaration
+   * order like any two siblings. That overlap is not a conflict to resolve: `"[/]"` says *the
+   * repository* and `"[*]"` says *its packages*, and in a repository of one those are the same
+   * object - which is the fact this rule finally states.
+   *
+   * Neither trap exists for a platform block - `platform:node` is not a name and cannot match by
+   * accident, and it is not a catch-all - so **a platform link answers about the root like any other
+   * package**, and what keeps a plain `"[platform:node]"` off the root is `_matchingSelectors`'
+   * chain rule rather than a refusal here. Asking `isRoot` first was what made
+   * `"[platform:node]" > "[/]"` unanswerable: the pair says *the root, when it is a node package*,
+   * and the short-circuit never let the platform question be put.
+   *
+   * **The CLI moves with this, and has to**: `--scope '*'` and `"[*]"` are documented as the same
+   * set, so `package-filter.ts`'s `selector()` carries the identical clause. Changing one alone
+   * would make a repository's config and its `--scope` disagree about what a package is.
    *
    * A package no technology claimed carries `basePlatform`, whose name is `''`, so it matches no
    * platform block at all - `parseSelector`'s test refuses an empty name rather than letting an
@@ -408,7 +457,8 @@ export class Workspace {
   ): boolean {
     if (scope === 'root') return audience.isRoot;
     if (scope === 'platform') return test(audience.platform);
-    return !audience.isRoot && audience.selector !== undefined && test(audience.selector);
+    if (audience.isRoot && this.monorepo) return false;
+    return audience.selector !== undefined && test(audience.selector);
   }
 
   /**

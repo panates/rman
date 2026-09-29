@@ -167,27 +167,55 @@ below, and a `"[selector]"` narrows the audience.**
   | --- | --- | --- |
   | `"[/]"` | the **root package** alone, structurally | - |
   | `"[platform:node]"`, `"[platform:node,cargo]"` | every package of those **technologies**, the root included | `pkg.platform.name` |
-  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages **below** this directory that the glob matches | `pkg.selector` |
+  | `"[*]"`, `"[pkg-a]"`, `"[*-dialect]"` | the packages this directory holds that the glob matches - **in a monorepo those are the ones below it; in a single-package repository it is the root, which is the one package** | `pkg.selector` |
 
-  - **Only a glob is held off the root, and the two reasons are both about names**: `"[my-*]"` must
-    not pick up a repository whose root package happens to be called `my-repo`, and a catch-all must
-    not hand a package-shaped setting to a root with no build directory. Neither applies to
-    `platform:node`, which is not a name and is not a catch-all - so a platform block answers about
-    the root like any other package. It read the other way "for consistency with a glob" until
-    nesting arrived, and that made `"[platform:node]" > "[/]"` unanswerable.
+  - **Only a glob is held off the root, and only a *monorepo's*** (`Workspace._speaksFor`). The two
+    reasons are both about names and both are statements about a container: `"[my-*]"` must not pick
+    up a repository whose root package happens to be called `my-repo`, and a catch-all must not hand
+    a package-shaped setting to a root with no build directory. Neither survives in a repository the
+    root has nothing below - there it is not a container sharing a name shape with its contents, it
+    *is* the package, and it does have the build directory. Neither applies to `platform:node`
+    either, which is not a name and is not a catch-all - so a platform block answers about the root
+    like any other package. It read the other way "for consistency with a glob" until nesting
+    arrived, and that made `"[platform:node]" > "[/]"` unanswerable.
 
   - `/` for the root because that is what a repository root is called everywhere else, and no
     package can be named it.
-  - **The CLI shares this vocabulary**: `--scope /` / `--ignore /` is the root package and a glob
-    never matches it, so `"[*]"` and `--scope '*'` mean the same set. They disagreed until 2.0 -
-    measured, `rman clean --scope 'rman*'` selected this repository's root. See the
-    shared-flags section below.
-  - **The root is never selected by name, and that one rule removes two traps.** A glob matches
-    package names and the root is nobody's child, so `"[my-*]"` cannot quietly pick up a repository
-    whose root package is called `my-repo`, and `"[*]"` cannot hand a package-shaped setting to a
-    root with no build directory to apply it to. The root is addressed structurally or not at all.
-    (That second trap was real: three specs in `repository.spec.ts` broke the day `"[*]"` reached
-    the root, all `${{ file.resolve(...) }}` asking about a `tsconfig.json` the root does not have.)
+  - **The CLI shares this vocabulary**: `--scope /` / `--ignore /` is the root package, a glob never
+    matches a monorepo's root and does match a single-package repository's, so `"[*]"` and
+    `--scope '*'` mean the same set. They disagreed until 2.0 - measured, `rman clean --scope
+    'rman*'` selected this repository's root. **Change one and you must change the other**
+    (`package-filter.ts`'s `selector()` carries the identical clause), or a repository's config and
+    its `--scope` disagree about what a package is. See the shared-flags section below.
+  - **A monorepo's root is never selected by name, and that one rule removes two traps.** A glob
+    matches package names and a monorepo's root is nobody's child, so `"[my-*]"` cannot quietly pick
+    up a repository whose root package is called `my-repo`, and `"[*]"` cannot hand a package-shaped
+    setting to a root with no build directory to apply it to. There the root is addressed
+    structurally or not at all. (That second trap was real: three specs in `repository.spec.ts` broke
+    the day `"[*]"` reached the root, all `${{ file.resolve(...) }}` asking about a `tsconfig.json`
+    the root does not have - and all three are monorepo fixtures, which is why they stayed green when
+    the rule was narrowed to monorepos.)
+  - **In a single-package repository `"[/]"` and `"[*]"` both reach the one package**, and are
+    layered in declaration order like any two siblings. That overlap is not a conflict to resolve:
+    `"[/]"` says *the repository* and `"[*]"` says *its packages*, and in a repository of one those
+    are the same object.
+    - **What the blanket rule cost, measured on `panates/postgrejs`**: `@panates/rman-preset`
+      declares its whole package block under `"[platform:node]" > "[*]"` - `run.build`,
+      `publish.npm.directory`, `version.stamp`, the build directory's `clean.include` - and *none* of
+      it reached that repository. `rman build` answered `No package defines a "build" script.` and
+      `rman config` simply lacked the four keys, with nothing reporting that a block had matched
+      nobody. The workaround would have been for every single-package repository to restate the
+      preset's block under `"[/]"` - the duplication a shared preset exists to remove, and not even
+      writable in YAML, since two of those values are JavaScript functions the preset keeps to
+      itself.
+    - **`Workspace.monorepo` is the one derivation** (`packages.length > 0`, a getter).
+      `Repository.create` used to compute it again for the constructor argument; two copies of it
+      could disagree silently, resolving a config under one answer and building the package list
+      under the other.
+    - **`_assertNestable` still refuses `"[/]"` nested with a glob, in every repository.** The
+      refusal is now a false negative for a single-package one, where both would match - and it
+      stays, because `ConfigReader` runs per directory *before* any package is known and so cannot
+      ask the question. Nothing is lost: there `"[/]"` alone already reaches everything.
   - **Precedence: unmarked first, then the selector blocks in the order they were written** - later
     wins, as `overrides` does in eslint, prettier and babel. Directory levels closer to the package
     still win over everything above them.
@@ -272,7 +300,7 @@ below, and a `"[selector]"` narrows the audience.**
     would be friction with no reader to protect. Retired from the docs; don't write it in new code.
   - The root *package* is the one whose directory is the repository root - no other test, and none
     would be as reliable, since a name can be anything. In a single-package repository that is the
-    only package, so `"[/]"` reaches it and `"[*]"` reaches nothing.
+    only package, so `"[/]"` and `"[*]"` both reach it.
 - **Every directory cascades, and whether it holds a package changes nothing.** This is the
   correction the design above *is*: the root used to be the one level whose unmarked config stayed
   put, so an intermediate `packages/` reached the packages below while the root beside it did not -
@@ -1064,13 +1092,18 @@ command reads, which is the point of having it.
     be **actively misleading**: measured, the root's own sweep recurses through `packages/*`, so a
     flag named "root only" deletes *more* than a package-scoped run. Where the root genuinely is a
     candidate, `--scope /` says so - see below.
-- **`--scope /` is the root package, and a glob never matches the root** (`ROOT_SELECTOR` /
+- **`--scope /` is the root package, and a glob never matches a *monorepo's* root** (`ROOT_SELECTOR` /
   `selector` in `package-filter.ts`, `Package.isRoot`). One vocabulary with `.rmanrc`'s `"[/]"`, and
-  the same justification: *the root is never selected by name.*
+  the same justification: *a monorepo's root is never selected by name.*
   - **Both halves are the feature.** `/` alone would be sugar - `--scope <root's name>` already
     worked (measured on this repository: `rman clean --scope 'rman*'` selected the root). Leaving
     globs able to reach it keeps exactly the trap the config selectors were redesigned to remove,
     and for `clean` it is destructive rather than merely surprising.
+  - **In a single-package repository a glob does reach the root**, because there it is the one
+    package - `repository.packages` is `[rootPackage]`, so `--scope '*'` selecting nothing was the
+    same silent emptiness `"[*]"` had in the config. `/` still selects it, so nothing that worked
+    stops working. The clause is written twice on purpose, here and in `Workspace._speaksFor`, and
+    the two must never drift: `"[*]"` and `--scope '*'` are one set.
   - Accepted by `--ignore` too, so `--ignore /` is every package but the root. The asymmetry would
     be the thing to remember, and that spelling is a real thing to want of `clean`.
   - **It selects nothing where the root is not a candidate, deliberately.**

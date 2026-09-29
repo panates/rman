@@ -19,10 +19,17 @@ function pkg(name: string, dependencies: Package[] = []): Package {
   return { name, selector: name, dependencies, isRoot: false } as unknown as Package;
 }
 
-/** The repository's own root package - what `--scope /` selects. Given a selector like any other
- *  package on purpose: the point of `ROOT_SELECTOR` is that it is *not* how the root is found. */
-function rootPkg(name: string): Package {
-  return { name, selector: name, dependencies: [], isRoot: true } as unknown as Package;
+/**
+ * The repository's own root package - what `--scope /` selects. Given a selector like any other
+ * package on purpose: the point of `ROOT_SELECTOR` is that it is *not* how the root is found.
+ *
+ * **`repository.monorepo` has to be on it**, and stating it is the point rather than plumbing: it is
+ * what decides whether a glob is offered this package at all. `true` by default because every spec
+ * below but one describes a repository with members; the single-package case passes `false` and is
+ * the one where a glob reaches the root.
+ */
+function rootPkg(name: string, monorepo = true): Package {
+  return { name, selector: name, dependencies: [], isRoot: true, repository: { monorepo } } as unknown as Package;
 }
 
 /**
@@ -103,11 +110,12 @@ describe('utils/package-filter', () => {
 
       /**
        * The other half of the rule, and the reason `/` is not merely a second spelling: a glob is
-       * never offered the root. `.rmanrc` already says this (`"[my-*]"` cannot pick up a root called
-       * `my-repo`; `"[*]"` means the members) and the CLI disagreed - measured, `clean --scope
-       * 'rman*'` selected this repository's own root, whose sweep recurses through `packages/*`.
+       * never offered a **monorepo's** root. `.rmanrc` already says this (`"[my-*]"` cannot pick up a
+       * root called `my-repo`; `"[*]"` means the members) and the CLI disagreed - measured, `clean
+       * --scope 'rman*'` selected this repository's own root, whose sweep recurses through
+       * `packages/*`.
        */
-      it("a glob never matches the root, however well the root's name fits it", () => {
+      it("a glob never matches a monorepo's root, however well its name fits", () => {
         const packages = [rootPkg('the-repo'), pkg('the-lib')];
         expect(filterPackages(packages, { scope: 'the-*' }).map(p => p.name)).toEqual(['the-lib']);
         expect(filterPackages(packages, { scope: 'the-repo' }).map(p => p.name)).toEqual([]);
@@ -118,6 +126,24 @@ describe('utils/package-filter', () => {
         const packages = [rootPkg('the-repo'), pkg('the-lib')];
         const result = filterPackages(packages, { ignore: '*' });
         expect(result.map(p => p.name)).toEqual(['the-repo']);
+      });
+
+      /**
+       * **In a single-package repository the root IS the package, so a glob reaches it** - the same
+       * clause `Workspace._speaksFor` carries for `"[*]"`, and they move together because `--scope
+       * '*'` and `"[*]"` are documented as the same set. `repository.packages` is `[rootPackage]`
+       * there, so this is the whole candidate list, and the old rule made `--scope '*'` select
+       * nothing at all in a repository with exactly one thing to select.
+       *
+       * `/` still selects it, so nothing that worked stops working - which is what the second
+       * assertion is for.
+       */
+      it('a glob does match the root of a single-package repository, and so does /', () => {
+        const solo = [rootPkg('solo', false)];
+        expect(filterPackages(solo, { scope: '*' }).map(p => p.name)).toEqual(['solo']);
+        expect(filterPackages(solo, { scope: 'so*' }).map(p => p.name)).toEqual(['solo']);
+        expect(filterPackages(solo, { scope: ROOT_SELECTOR }).map(p => p.name)).toEqual(['solo']);
+        expect(filterPackages(solo, { ignore: '*' })).toEqual([]);
       });
     });
 

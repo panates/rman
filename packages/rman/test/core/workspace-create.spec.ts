@@ -243,6 +243,30 @@ describe('core/Workspace.create()', () => {
       expect(ws.packageAt(path.join(root, 'packages/pkg-a'))!.rawConfig.vars).toEqual({ tier: 'shared' });
     });
 
+    /**
+     * **The same pair in a repository of one, where both halves land on the same package.** A
+     * `"[glob]"` is held off a *monorepo's* root because there the root is a container that happens
+     * to have a name; with no members there is nothing to contain, so the root is the package and
+     * `"[*]"` is about it.
+     *
+     * Written here rather than only in `repository.spec.ts` because `_speaksFor` is the workspace's
+     * and `monorepo` is now the workspace's own answer (`packages.length > 0`), read by
+     * `Repository.create` rather than recomputed there.
+     *
+     * The controls are the two cases above, which use `twoPackageRepo()`: reverting the clause
+     * leaves them green and turns this red, and widening it to every root does the opposite.
+     */
+    it('lets a "[glob]" reach the root when the repository has no other packages', async () => {
+      const root = tmp();
+      write(root, 'manifest.json', JSON.stringify({ name: 'solo' }));
+      write(root, '.rmanrc', JSON.stringify({ '[*]': { logLevel: 'silent' }, '[so*]': { group: 'named' } }));
+
+      const ws = await Workspace.create(root, { app: app(), presets: [], platforms: [test] });
+      expect(ws.monorepo).toBe(false);
+      expect(ws.rootPackage.rawConfig.logLevel).toBe('silent');
+      expect(ws.rootPackage.rawConfig.group).toBe('named');
+    });
+
     /** The control for the block above: a technology the root is not leaves it alone, so the match
      *  is the platform question rather than "a platform block now reaches the root". */
     it('leaves a root of another technology alone', async () => {

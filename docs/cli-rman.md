@@ -381,15 +381,20 @@ identifier and cannot be ambiguous, where a scope glob is arbitrary text), and t
 case-insensitive.
 
 **`--scope /` is the root package, and it is not a glob.** The same `/` `.rmanrc`'s `"[/]"` block
-uses, for the reason stated there: *the root is never selected by name.* So a glob is never offered
-the root - `--scope '*'` means the members, `--scope /` means the root - which is what stops
-`--scope '@myorg/*'` from quietly picking up a repository whose root package is called
+uses, for the reason stated there: *a monorepo's root is never selected by name.* So a glob is never
+offered a monorepo's root - `--scope '*'` means the members, `--scope /` means the root - which is
+what stops `--scope '@myorg/*'` from quietly picking up a repository whose root package is called
 `@myorg/monorepo`. That mattered most for `clean`, where the root's own sweep recurses through every
 package directory.
 
-It selects nothing where the root is not a candidate to begin with, which is most commands: the
-repository's package list holds the workspace members only, so `list`, `run` and `exec` have no root
-row to select, while `clean` and `changelog` put it in their candidate list on purpose.
+**In a single-package repository a glob does reach the root**, because there it is the one package -
+the repository's package list is just the root, so `--scope '*'` selecting nothing would be an empty
+answer in a repository with exactly one thing to select. `--scope /` still selects it. This mirrors
+`"[*]"` in a `.rmanrc` exactly, and deliberately: the two are one set.
+
+It selects nothing where the root is not a candidate to begin with, which is most commands in a
+monorepo: the repository's package list holds the workspace members only, so `list`, `run` and `exec`
+have no root row to select, while `clean` and `changelog` put it in their candidate list on purpose.
 
 Full semantics (glob syntax, how `--deps`/`--dependents` combine): see
 [docs/rman.md#package-filtering-scopeignoreplatformdepsdependents](rman.md#package-filtering-scopeignoreplatformdepsdependents).

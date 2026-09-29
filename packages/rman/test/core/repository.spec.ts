@@ -623,7 +623,27 @@ describe('core/Repository', () => {
       expect(repo.config.group).toBe('plain');
     });
 
-    it('in a single-package repository the root is the one package, so "[*]" reaches nothing', async () => {
+    /**
+     * **The root is the one package here, so every selector reaches it** - `"[/]"` because it is the
+     * root and `"[*]"` because it is a package, which in a repository of one are the same object.
+     *
+     * The rule used to hold a glob off the root unconditionally, and both reasons for that are
+     * statements about a *monorepo* root: a glob must not pick up a container that happens to share
+     * a name shape with the things it contains, and a package-shaped setting must not land on a root
+     * with no build directory to apply it to. Neither is true of a repository whose root has no
+     * contents and does have the build directory.
+     *
+     * What it cost, measured on `panates/postgrejs`: `@panates/rman-preset` puts its whole package
+     * block under `"[platform:node]" > "[*]"`, so `run.build`, `publish.npm.directory` and
+     * `version.stamp` reached that repository not at all - `rman build` answered `No package defines
+     * a "build" script.` and `rman config` simply lacked the keys, with nothing reporting that a
+     * block had matched nobody.
+     *
+     * The control for it is two `it`s above ("keeps the root out of a `"[*]"` block even when it is
+     * the only selector"), which is the same assertion in a monorepo and must stay red-if-reverted
+     * the other way round.
+     */
+    it('in a single-package repository the root is the one package, so "[*]" reaches it too', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'solo', version: '1.0.0' });
       fs.writeFileSync(
@@ -632,7 +652,19 @@ describe('core/Repository', () => {
       );
 
       const repo = await createRepository(dir);
-      expect(settings(repo.config)).toEqual({ plain: 'yes', root: 'yes' });
+      expect(settings(repo.config)).toEqual({ plain: 'yes', star: 'yes', root: 'yes' });
+    });
+
+    /** A named glob reaches it for the same reason, and this is the half that reads as a surprise -
+     *  so it is pinned separately. `"[solo]"` naming the only package in the repository is the
+     *  author saying what they mean, not the accidental collision `/` was introduced to prevent. */
+    it('lets a named glob reach the root of a single-package repository', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'solo', version: '1.0.0' });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[so*]': { group: 'named' } }));
+
+      const repo = await createRepository(dir);
+      expect(repo.config.group).toBe('named');
     });
 
     it('evaluates ${{ ... }} per package, in every string value', async () => {
