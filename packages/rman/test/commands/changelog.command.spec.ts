@@ -199,7 +199,14 @@ describe('commands/changelog', () => {
 
     it('documents every release when nothing sets a floor', async () => {
       const headings = await headingsWith(historyFixture());
-      expect(headings.filter(h => h.includes('v'))).toHaveLength(3);
+      /* **Select the released segments by excluding the unreleased one, never by looking for a
+       * "v".** This read `h.includes('v')`, meaning to pick out `## v1.0.0` and friends - and the
+       * unreleased heading carries the fixture's temp directory name, whose random suffix contains
+       * a lowercase `v` about 9% of the time. It then counted 4 and the spec failed for a reason
+       * nothing in it pointed at. Measured on the run that caught it: the suffix was `uqmZvQ`, and
+       * across three Node versions that is a ~25% chance of a red CI run - which is what made this
+       * look like a timing flake. */
+      expect(headings.filter(h => !h.includes('Unreleased'))).toHaveLength(3);
     });
 
     it('takes a version, inclusively', async () => {
