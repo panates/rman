@@ -139,6 +139,67 @@ describe('commands/publish', () => {
   });
 
   /**
+   * **The check has to ask the registry the publish will use.** `npm publish` honours
+   * `publishConfig.registry` - it survives into the generated manifest - but `npm view` ignores it:
+   * measured, a package whose `publishConfig.registry` pointed at a dead local address was still
+   * answered from registry.npmjs.org. Asked of the wrong registry, a lookup fails, `npmViewPackage`
+   * swallows that as `undefined`, and the plan reads "never published" on every run - so the first
+   * publish succeeds and the second is rejected for republishing a version.
+   *
+   * Pinned on the *argv*, because that is the only place the difference exists. `--dry-run` still
+   * runs the check and publishes nothing.
+   */
+  describe('which registry a package is checked against', () => {
+    async function viewCall(manifest: object, argv: string[]): Promise<string> {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0', ...manifest });
+      return withStubbedNpm(dir, async logFile => {
+        await captureLogs(() => runCli({ cwd: dir, argv }));
+        return (
+          fs
+            .readFileSync(logFile, 'utf-8')
+            .split('\n')
+            .map(l => l.split('||')[1] ?? '')
+            .find(a => a.startsWith('view')) ?? ''
+        );
+      });
+    }
+
+    it("uses the package's own publishConfig.registry", async () => {
+      const call = await viewCall({ publishConfig: { registry: 'https://registry.example.test/' } }, [
+        'publish',
+        '--dry-run',
+        '--yes',
+      ]);
+      expect(call).toContain('--registry https://registry.example.test/');
+    });
+
+    /** npm's own precedence, measured: `publishConfig` alone publishes to it, and `--registry`
+     *  beside it wins. The check follows the publish rather than inventing an order. */
+    it('lets --registry win over it, as npm does', async () => {
+      const call = await viewCall({ publishConfig: { registry: 'https://from-manifest.test/' } }, [
+        'publish',
+        '--dry-run',
+        '--yes',
+        '--registry',
+        'https://from-cli.test/',
+      ]);
+      expect(call).toContain('--registry https://from-cli.test/');
+      expect(call).not.toContain('from-manifest');
+    });
+
+    /** **The half that keeps the case that already worked.** With neither given, nothing is passed
+     *  and npm resolves `.npmrc` itself - including a scoped `@owner:registry=`, which is how a
+     *  GitHub Packages repository is normally set up and which `npm view` has always honoured.
+     *  Passing a default here would override it. */
+    it('passes none when neither is given, so npm resolves .npmrc itself', async () => {
+      const call = await viewCall({}, ['publish', '--dry-run', '--yes']);
+      expect(call).toContain('view pkg-a');
+      expect(call).not.toContain('--registry');
+    });
+  });
+
+  /**
    * **Staged publishing puts the version in npm's queue instead of on the registry**, pending an
    * `npm stage approve` that carries the 2FA challenge. The command is `npm stage publish` - npm's
    * own spelling, not a flag - so what has to be pinned is the *command line*, which is the only
