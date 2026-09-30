@@ -100,6 +100,82 @@ describe('utils/ProgressPanel', () => {
     });
   });
 
+  /**
+   * **The bar is filled from step progress, not from finished items.** With one item it otherwise
+   * never moves at all - which is `rman changelog` under `changelog.groupBy: 'group'`, where the
+   * row beside the bar counts to 1825 while the bar sits empty.
+   */
+  describe("the bar fills from a running item's own steps", () => {
+    /** How many cells of the 24-wide bar are filled, read back off a redraw. */
+    async function filledCells(prepare: (panel: ProgressPanel) => void): Promise<number> {
+      let cells = -1;
+      await withCapturedStdout(
+        async writes => {
+          const panel = new ProgressPanel('X', true);
+          prepare(panel);
+          panel.start();
+          await wait(150);
+          panel.stop();
+          const plain = stripAnsi(writes.join(''));
+          /** The whole bar, filled and empty cells together - matching only up to the first
+           *  empty cell reads a *full* bar as no bar at all, which is the case this exists for. */
+          const bar = /[█░]{24}/.exec(plain);
+          cells = bar ? [...bar[0]].filter(c => c === '█').length : -1;
+        },
+        { columns: 200, rows: 24 },
+      );
+      return cells;
+    }
+
+    it('a single item half way through its steps fills about half the bar', async () => {
+      const cells = await filledCells(panel => {
+        const item = panel.addItem('only');
+        item.status = 'running';
+        item.startedAt = Date.now();
+        item.currentStep = 'reading commits';
+        item.stepsTotal = 1000;
+        item.stepIndex = 499;
+      });
+      expect(cells).toBe(12);
+    });
+
+    it('stays empty for that same item before it reports a step - nothing has happened yet', async () => {
+      const cells = await filledCells(panel => {
+        const item = panel.addItem('only');
+        item.status = 'running';
+        item.startedAt = Date.now();
+        item.currentStep = 'detecting';
+      });
+      expect(cells).toBe(0);
+    });
+
+    it('a finished item still counts as a whole one', async () => {
+      const cells = await filledCells(panel => {
+        panel.addItem('a').status = 'success';
+        const b = panel.addItem('b');
+        b.status = 'running';
+        b.startedAt = Date.now();
+        b.currentStep = 'x';
+        b.stepsTotal = 2;
+        b.stepIndex = 0;
+      });
+      /** One of two done plus half of the other: three quarters of 24. */
+      expect(cells).toBe(18);
+    });
+
+    it('clamps a caller that reports more steps than it declared', async () => {
+      const cells = await filledCells(panel => {
+        const item = panel.addItem('only');
+        item.status = 'running';
+        item.startedAt = Date.now();
+        item.currentStep = 'x';
+        item.stepsTotal = 10;
+        item.stepIndex = 99;
+      });
+      expect(cells).toBe(24);
+    });
+  });
+
   it('when enabled, the redraw shows the title, a progress bar, and the running item', async () => {
     await withCapturedStdout(
       async writes => {

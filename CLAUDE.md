@@ -1790,6 +1790,18 @@ saw one thing to release and it was the one thing that must never be published.
     leaves in milliseconds, so marking them running fills the panel with rows about to go quiet,
     and the header counts anything not pending as done. `stepIndex` is **0-based** (the panel
     renders `stepIndex + 1`), which is the mistake that shipped `(3/2)` to a terminal.
+  - **The header bar is filled from step progress, not from finished items** (`filled` in
+    `ProgressPanel.render`): a finished item counts as a whole one, a *running* item as the
+    fraction of its own steps it has got through. Counting whole items made the bar useless exactly
+    where it was needed - one file under `groupBy: 'group'`, so it sat empty at `0/1` for the whole
+    run while the row beside it counted to 1825. `run` gains the same in the small: a nine-step
+    build advances within the package instead of jumping at the end of it. The `done/total` counter
+    stays items, which is a different true fact and the one the bar cannot carry.
+    - `renderProgressBar` clamps both ends now, because a fractional input can round past `width`
+      and `'x'.repeat(-1)` throws - inside a redraw, where nothing catches it.
+    - **A spec reading the bar back must match filled *and* empty cells together.** Matching up to
+      the first `░` reads a full bar as no bar at all, which is exactly the clamp case; measured,
+      that spec reported 0 cells and looked like a code bug.
   - `listCommitsCached` shares one fetch between targets with the same boundary, so the commits are
     counted under whichever target asked first. Reporting per sharer would mean either several
     fetches or several rows counting the same work.

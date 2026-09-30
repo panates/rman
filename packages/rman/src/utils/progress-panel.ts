@@ -97,14 +97,34 @@ export class ProgressPanel {
     let running = 0;
     let done = 0;
     let failedSoFar = 0;
+    /**
+     * **What the bar is filled from, and it is not `done`.** A finished item counts as a whole one;
+     * a *running* item counts as the fraction of its own steps it has got through, so the bar moves
+     * while a single item is working rather than only when one ends.
+     *
+     * Counting whole items made the bar useless exactly where it was needed most: `rman changelog`
+     * writes one file under `changelog.groupBy: 'group'`, so the bar sat empty at `0/1` for the
+     * entire run while the row beside it counted to 1825. `run` gains the same thing in the small -
+     * a nine-step build now advances within the package instead of jumping at the end of it.
+     */
+    let filled = 0;
     for (const item of this.items.values()) {
-      if (item.status === 'running') running++;
-      else if (item.status !== 'pending') done++;
+      if (item.status === 'running') {
+        running++;
+        /** `stepIndex` is 0-based, so a step in progress is `index + 1` of `total` begun - and
+         *  clamped, since a caller may report more steps than it first declared. */
+        if (item.stepsTotal && item.stepIndex != null) {
+          filled += Math.min(1, (item.stepIndex + 1) / item.stepsTotal);
+        }
+      } else if (item.status !== 'pending') {
+        done++;
+        filled += 1;
+      }
       if (item.status === 'failed') failedSoFar++;
     }
 
     const header = colors.bgCyan.black.bold(` ${this.title} `);
-    const bar = renderProgressBar(done, total);
+    const bar = renderProgressBar(filled, total);
     const totalElapsed = formatDuration(Date.now() - this.startedAt);
     const failedText =
       failedSoFar > 0 ? colors.red.bold(`${failedSoFar} failed`) : colors.gray(`${failedSoFar} failed`);
@@ -224,7 +244,10 @@ function truncate(text: string, width: number): string {
 /** Classic braille "dots" spinner (cli-spinners' default), one frame per render tick. */
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+/** `done` is fractional - see the `filled` accumulator in `render`. Clamped both ends, or a
+ *  rounding overshoot asks `repeat` for a negative count and throws inside a redraw. */
 function renderProgressBar(done: number, total: number, width = 24): string {
-  const filled = total ? Math.round((done / total) * width) : 0;
+  const cells = total ? Math.round((done / total) * width) : 0;
+  const filled = Math.max(0, Math.min(width, cells));
   return colors.green('█'.repeat(filled)) + colors.gray('░'.repeat(width - filled));
 }
