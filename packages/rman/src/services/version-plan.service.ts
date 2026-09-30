@@ -270,9 +270,59 @@ export abstract class VersionPlanService {
    * a dependent that pins exact versions is a broken install.
    */
   protected cascadeFor(members: Package[], bump: string): VersionPlanService.Cascade {
+    /** **A declared cascade is a floor, never a ceiling** - see `declaredCascade`. It joins the
+     *  technologies' answers and the widest of the set wins, which is the rule already applied to
+     *  two technologies disagreeing. */
     const answers = new Set(members.map(m => this.plannerFor(m).cascade(bump)));
+    const declared = this.declaredCascade(members);
+    if (declared) answers.add(declared);
     for (const widest of CASCADE_WIDEST_FIRST) if (answers.has(widest)) return widest;
     return 'changed';
+  }
+
+  /**
+   * `.rmanrc "version.cascade"` for a group, or `undefined` where no member declares one - in which
+   * case the technology's own `cascade` answers. Members disagreeing take the widest, the same rule
+   * and the same direction `cascadeFor` applies to two technologies.
+   */
+  /* **Why a repository gets to say this at all.** `cascade` is abstract because two of its inputs
+   * are an ecosystem's: whether a caret range already carries a patch to a dependent, and whether
+   * a floor left behind is a broken install. Those npm answers are right. What they cannot answer
+   * is whether a repository wants **one number across its whole product** - which is a release
+   * identity decision, not a fact about a package manager, and there was nowhere to state it.
+   *
+   * Measured on `panates/sqb`: 17 packages, `group: true`, every one published at 6.0.10 since it
+   * moved off rman 1.x's `version.unified: true` - and a `fix:` in two of them planned
+   * `6.0.10 -> 6.0.11` for those two and `no-change` for the other fifteen. Correct on ranges (all
+   * 39 internal edges are caret peers, so the fix reaches dependents with no republish) and still
+   * the wrong answer for that repository: the divergence is permanent, since a group's next
+   * baseline is `highestVersion(members)`, and every README and issue there is written in terms of
+   * one number.
+   *
+   * **The default is unchanged**, so this costs nothing to a repository that never writes the key.
+   *
+   * **It is not a safety valve, and must not be documented as one.** A change that can break a
+   * dependent is a `feat:` or a `feat!:`; republishing the dependent under a new number does not
+   * make a behavioural break safe, it only renumbers it. The lever for that is the bump size, which
+   * comes from the commit message.
+   *
+   * **A floor, never a ceiling, and that asymmetry is the whole safety of the key.** `cascadeFor`
+   * adds this answer to the technologies' and takes the widest, so a repository can ask for a
+   * *wider* release than npm requires and cannot ask for a narrower one. The direction matters
+   * because the two mistakes are not symmetric, which this class's own doc already records: too
+   * wide republishes a package that did not need it - visible and harmless - while too narrow
+   * leaves a dependent's published range floor wrong, which is a broken install. Concretely, a
+   * repository writing `cascade: changed` still gets the whole group on a **major**, because
+   * `^1.0.0` does not admit `2.0.0` and an in-group dependent left at the old number would declare
+   * a range its own group no longer satisfies. So `changed` means "no floor of my own", not "never
+   * more than the changed packages". */
+  protected declaredCascade(members: Package[]): VersionPlanService.Cascade | undefined {
+    const declared = new Set(
+      members.map(m => m.config?.version?.cascade).filter((c): c is VersionPlanService.Cascade => !!c),
+    );
+    if (!declared.size) return undefined;
+    for (const widest of CASCADE_WIDEST_FIRST) if (declared.has(widest)) return widest;
+    return undefined;
   }
 
   /**
@@ -336,8 +386,15 @@ export abstract class VersionPlanService {
    * bump (or `undefined` for one with no real commits since its last boundary) - `undefined`
    * here always means "unchanged", never "explicit version" (that path is handled separately).
    *
-   * How wide the bump goes is `cascade`'s answer, and only its answer: an explicit
-   * `rman version <v>` has no bump left to consult, so it reaches the changed members alone.
+   * How wide the bump goes is `cascade`'s answer, and only its answer.
+   *
+   * **An explicit `rman version <v>` reaches every member of the group, and the old wording here
+   * said the opposite.** It read "so it reaches the changed members alone", which is true of the
+   * code and false as a sentence: `getPlan` marks *every* eligible package changed with reason
+   * `explicit version <v>`, and a group's members are drawn from `eligible`, so "the changed
+   * members" is all of them. Measured while adding `version.cascade` - a spec asserting the
+   * narrow reading failed. A repository in lockstep therefore keeps it when the number is chosen
+   * by hand, with no cascade involved.
    */
   protected computeGroupPlan(
     key: string,
@@ -376,6 +433,12 @@ export abstract class VersionPlanService {
     }
 
     const bumping = new Set<Package>(changed);
+    /** **`'changed'` with no bump is not a narrowing, because there is nothing left to narrow.** An
+     *  explicit `rman version <v>` puts *every* eligible package into `changeByPackage` (see
+     *  `getPlan`), and a group's members are drawn from `eligible` alone - so `changed` already
+     *  holds all of them and no cascade could add one. Measured while wiring `version.cascade`: a
+     *  declared cascade consulted here is dead code, and the spec written for it asserted a reason
+     *  string that never renders. */
     const cascade = bump ? this.cascadeFor(members, bump) : 'changed';
     if (cascade === 'group') {
       for (const m of members) bumping.add(m);
@@ -395,6 +458,11 @@ export abstract class VersionPlanService {
 
     /** Why a member with no commits of its own is being bumped. `'group'` reaches members that
      *  depend on nothing at all, so calling those a "dependent" was simply untrue. */
+    /* `bump` is always set where this string is *read*: a member reaches it only through
+     * `own?.reason ?? inherited`, and the one path with no bump - an explicit version - gives every
+     * member an `own.reason` of its own (`explicit version <v>`). So there is no
+     * `a undefined change` to guard against here. Checked rather than assumed, because the
+     * template reads as though there were. */
     const inherited =
       cascade === 'group' ? `in-group member of a ${bump} change` : `in-group dependent of a ${bump} change`;
     for (const m of members) {

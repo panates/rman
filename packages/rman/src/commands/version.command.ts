@@ -106,6 +106,19 @@ const config = {
       'commit\'s own group shares one version. Default "chore(release): v{version}".',
     type: 'string',
   },
+  cascade: {
+    target: 'config',
+    describe:
+      'The narrowest this repository is willing to release a group: "changed" (only packages with ' +
+      'commits of their own, i.e. no floor of your own), "dependents" (those plus in-group ' +
+      'packages depending on them), or "group" (every member, so the group stays in lockstep). ' +
+      'A floor, not a ceiling: the technology still widens it where a narrower release would ' +
+      "leave a dependent's published artifact or range floor behind - under npm that is " +
+      '"dependents" for a patch or a minor and the whole group for a major, so "changed" is a ' +
+      'no-op there. Per-package cascaded; a group whose members disagree takes the widest.',
+    type: 'string',
+    choices: ['changed', 'dependents', 'group'] as const,
+  },
   releaseTagPattern: {
     target: 'config',
     describe:

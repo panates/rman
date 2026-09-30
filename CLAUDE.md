@@ -1377,12 +1377,59 @@ saw one thing to release and it was the one thing that must never be published.
     releases a package that did not strictly need it, which is visible and harmless.
   - Abstract are exactly the two decisions no repository-in-general has an answer to:
     `detectBoundary` (which registry stands in when a package has no release tag yet) and `cascade`
-    (how far into its group a bump reaches). **`cascade` is a statement about dependency *ranges*,
-    not versions** - patch reaches only the changed packages because `^1.2.0` already resolves to
-    `1.2.1`; an ecosystem pinning exact versions must release every dependent for a patch too.
+    (how far into its group a bump reaches). **`cascade` is a statement about what a *published
+    artifact* still needs, not about versions** - an ecosystem pinning exact versions must release
+    every dependent for a patch, and one resolving from source may need no release at all.
+    - **npm's table is `dependents` / `dependents` / `group` by patch / minor / major, and `patch`
+      answered `'changed'` until 2.4.** The range argument for the old answer is sound and too
+      narrow: `^1.2.0` does resolve to `1.2.1`, so a consumer receives a fix with nothing
+      downstream republished - but a dependent's *artifact* was built against the old code, and
+      anything that bundles or vendors it keeps shipping the pre-fix version until it is released
+      again, which under that default never happened. Widening prefers visible churn over an
+      invisible miss, which is the asymmetry `cascadeFor` already resolves by taking the widest.
+    - **The cost, stated rather than hidden**: `patch` and `minor` are now the same answer, so the
+      table no longer distinguishes them and a future reason to treat a patch differently has
+      nowhere to live. They are kept as two entries for that reason. And `'changed'` is now
+      unreachable under npm, which makes `version.cascade: changed` a no-op in a Node repository -
+      still meaningful as "no floor of my own", since it is a floor and never a ceiling.
     Groups, the commit→size reading, the cascade mechanics and the root's release identity stay in
     the core: none of them is a technology's business, and moving them out would have every plugin
     copy them.
+  - **`.rmanrc "version.cascade"` is the repository's floor under that answer, and it exists because
+    `cascade` was carrying two different questions.** The ecosystem's half is right and stays: a
+    caret range already carries a patch to a dependent, so npm answers `changed`. What it cannot
+    answer is whether a repository wants **one number across its whole product**, which is a release
+    identity decision and had nowhere to be stated - `cascade` is a `protected abstract` method, so
+    no config could reach it.
+    - **Measured on `panates/sqb`**: 17 packages, `group: true`, every one published at 6.0.10 ever
+      since it moved off rman 1.x's `version.unified: true` - and a `fix:` in two of them planned
+      `6.0.10 -> 6.0.11` for those two and `no-change` for the other fifteen. Correct on ranges (all
+      39 internal edges are caret peers, so the fix reaches dependents with no republish) and the
+      wrong answer for that repository: the divergence is **permanent**, since a group's next
+      baseline is `highestVersion(members)`.
+    - **This is what `group`'s own documentation promised.** "`true` = one repo-wide version line"
+      reads as lockstep, and was lockstep in 1.x; the cascade table quietly made it true of majors
+      only. Two rules in this file contradicted each other and the user hit the seam.
+    - **A floor, never a ceiling** (`cascadeFor` adds it to the technologies' answers and takes the
+      widest). A repository may ask for a *wider* release than npm requires and cannot ask for a
+      narrower one, because the two mistakes are not symmetric - too wide republishes a package that
+      did not need it, too narrow leaves a dependent's published range floor wrong, which is a
+      broken install. So `cascade: changed` still reaches in-group dependents on a **patch** and the
+      whole group on a **major**; it means "no floor of my own", never "at most the changed
+      packages". With npm's patch answer now `dependents`, `changed` narrows nothing at all there.
+    - **`group` is the only value that changes anything in a Node repository**, which is worth
+      knowing before reaching for the other two: `dependents` equals the default, `changed` is a
+      no-op, and `group` is lockstep. The three are kept because the key belongs to the core and an
+      ecosystem answering `'changed'` would honour all of them.
+    - **It is not a safety valve.** A change that can break a dependent is a `feat:` or a `feat!:`;
+      renumbering the dependent does not make a behavioural break safe. The lever for that is the
+      bump size, which comes from the commit message. Don't answer "a patch might break my
+      dependents" with this key.
+    - **An explicit `rman version <v>` never consults it**, and `computeGroupPlan`'s doc used to say
+      the opposite ("reaches the changed members alone"). `getPlan` marks *every* eligible package
+      changed with reason `explicit version <v>` and a group's members come from `eligible`, so all
+      of them move already. A declared cascade read on that path was written, measured unreachable
+      and removed; the spec that asserted the narrow reading is the only reason it was caught.
 - **The bump *names* belong to the version scheme, not to rman** (`VersionScheme.bumpNames`,
   smallest first). `patch`/`minor`/`major` are semver's words for how a *number* moves, and a
   `major.minor.build.revision` scheme has four sizes and no `patch` - so `rman version <bump>`
@@ -2705,20 +2752,19 @@ exited 1.
 
 ## The build must not need rman
 
-`npm run build` is `npm run build -w packages/rman && npm run build -w packages/node` - plain npm,
-in that order, never `rman build`.
+`npm run build` is `npm run build -w packages/rman` - plain npm, never `rman build`.
 
 **It was `rman build`, and that is a bootstrap loop that only bites on the release that matters.**
 The `rman` on PATH is whatever is *published*, so a version introducing a config feature cannot
 build itself: the repository's own `.rmanrc.yml` already uses `plugins` and `"[*]"`, neither of
 which 1.0.x understands. The failure lands exactly when a release is being cut.
 
-- **Order is the whole content of the script**, and `rman` first: `rman-node`'s build resolves
-  `rman` from `packages/rman/build/index.d.ts`, and each package's `postbuild` writes its published
-  manifest. `packages/node/tsconfig.json` does carry `references: [{ path: "../rman" }]`, so `tsc`
-  would order the *compilation* on its own - but not the pre/post hooks around it, which is what the
-  script sequences. Two packages, so the order is written out rather than derived; deriving it would
-  mean reimplementing the thing being bootstrapped away from.
+- **It named two workspaces until `packages/node` was folded in, and the second half stayed here
+  long after the directory went.** What that ordering clause said - `rman` first, because
+  `rman-node`'s build resolved `rman` from `packages/rman/build/index.d.ts`, and because `tsc -b`
+  would order the compilation but not the pre/post hooks around it - is still the right reasoning
+  for a second package, and there is no second package. Restore it with the order written out, not
+  derived, if one ever comes back.
 - npm runs each workspace's `prebuild`/`postbuild` itself, so nothing else moves.
 - **CI needed no change, and that was worth checking rather than assuming**: the release workflow
   (`panates/github-actions/.github/workflows/node-release.yaml@v1`) calls rman nowhere - packages

@@ -331,7 +331,19 @@ describe('services/version', () => {
       return dir;
     }
 
-    it('patch: only the changed package bumps - an unrelated group-mate stays put', async () => {
+    /**
+     * **`pkg-b` stays put because this planner answers `'changed'` for a patch, not because it is
+     * unrelated** - and the old title said the second thing. `fixture()` gives `pkg-b` a
+     * `dependencies: { 'pkg-a': '^1.0.0' }`, so the unrelated case was never covered here at all.
+     * Renamed rather than rewritten, because the case is about `'changed'` reaching one package.
+     *
+     * **The planner is the fixture's `TestVersionPlanService`, whose table is its own** (major →
+     * group, minor → dependents, everything else → changed). npm's table is
+     * `NodeVersionPlanService`'s and says `dependents` for a patch as of 2.4 - a difference this
+     * file cannot see, and the reason a first attempt at this change edited npm's table and left
+     * two specs here red. Anything asserting npm's answers belongs in the node planner's own spec.
+     */
+    it("patch: 'changed' reaches the changed package alone, dependent or not", async () => {
       const dir = fixture();
       fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
       commitAll(dir, 'fix: a bug in pkg-a');
@@ -390,6 +402,124 @@ describe('services/version', () => {
       const repo = await createRepository(dir);
       const plan = await planner().getPlan(repo);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ to: '1.5.1' });
+    });
+  });
+
+  /**
+   * **Each of these is the negative control for one of the three cascade cases above**, on the same
+   * `fixture()` and the same commit - so a pair differs in nothing but the key, and reverting
+   * `declaredCascade` turns exactly these red while the defaults stay green.
+   */
+  describe('.rmanrc "version.cascade" - a repository\'s own release width', () => {
+    /** `fixture()`'s pkg-b depends on pkg-a, which is what the `dependents` case needs; the
+     *  `group` case below writes its own repository with no edge at all, so that "reached because
+     *  it is a member" cannot be mistaken for "reached because it is a dependent". */
+    it('group: a patch in one member moves the whole group, where the default moves only the changed one', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ version: { cascade: 'group' } }));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      /** No dependency on pkg-a - a `dependents` cascade would leave this one alone. */
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      commitAll(dir, 'fix: a bug in pkg-a');
+
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
+      expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'bump', to: '1.0.1' });
+      /** The reason has to say *why* a package with no commits is moving, or the plan reads as
+       *  though rman invented a change for it. */
+      expect(entryFor(plan, 'pkg-b')!.reason).toBe('in-group member of a patch change');
+    });
+
+    /**
+     * **The floor cannot be used as a ceiling**, which is the one thing that makes the key safe to
+     * hand to a repository. `dependents` is wider than `changed` and still below this planner's
+     * answer for a `feat!:`, which is `group` - because an in-group member left at `1.0.0` would
+     * publish a `^1.0.0` range its own group no longer satisfies, a broken install rather than
+     * noise. `pkg-b` depends on nothing, so only the `group` answer can reach it.
+     *
+     * **A `changed` floor has no case of its own here**, and that is not an omission: this
+     * planner's own patch answer is already `changed`, so declaring it changes nothing that could
+     * be observed. What it would mean - "no floor of my own" - is what omitting the key means.
+     */
+    it('dependents: cannot cap a major, which still reaches a member that depends on nothing', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ version: { cascade: 'dependents' } }));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      commitAll(dir, 'feat!: breaking in pkg-a');
+
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0' });
+      expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'bump', to: '2.0.0' });
+    });
+
+    /**
+     * **An explicit version already moves the whole group, with no cascade involved** - and this
+     * case is here because the first version of it asserted the opposite and failed.
+     *
+     * `computeGroupPlan`'s own doc said an explicit `rman version <v>` "reaches the changed members
+     * alone", which reads as a narrowing and is not one: `getPlan` marks *every* eligible package
+     * changed with reason `explicit version <v>`, and a group's members come from `eligible`. So a
+     * declared cascade consulted on that path would have been dead code - it was written, measured
+     * unreachable, and removed. Pinned because a repository in lockstep depends on the behaviour,
+     * whatever the reason it happens for.
+     */
+    it('an explicit "rman version <v>" moves every member, cascade or not', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      /** Deliberately the *narrowest* floor, to show the explicit-version path does not consult
+       *  it: pkg-b still moves. */
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ version: { cascade: 'changed' } }));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      commitAll(dir, 'fix: a bug in pkg-a');
+
+      const repo = await createRepository(dir);
+      /** `bump` carries either a bump name or a concrete version - see its own doc; a version is
+       *  what makes `explicitVersion` the path under test. */
+      const plan = await planner().getPlan(repo, { bump: '3.2.1' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '3.2.1' });
+      expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'bump', to: '3.2.1' });
+      /** Its own reason, not an inherited one - which is the evidence that it was marked changed
+       *  rather than swept in by a cascade. */
+      expect(entryFor(plan, 'pkg-b')!.reason).toBe('explicit version 3.2.1');
+    });
+
+    /** Declared per package and cascaded, so a group holding one member that asks for lockstep
+     *  releases as one - the same "widest wins" direction two technologies get. */
+    it('one member asking for the wider answer decides for its whole group', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      fs.writeFileSync(path.join(dir, 'packages/b/.rmanrc'), JSON.stringify({ version: { cascade: 'group' } }));
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      commitAll(dir, 'fix: a bug in pkg-a');
+
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
+      expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'bump', to: '1.0.1' });
     });
   });
 

@@ -171,8 +171,16 @@ export const testSteps: RunService.StepSource = (pkg: Package, script: string) =
  * The planner the core specs plan with. `VersionPlanService` is abstract, so `version`/`changed`
  * have nothing to ask without one.
  *
- * `cascade` repeats semver's familiar mapping because that is the behaviour the existing specs
+ * `cascade` states semver's familiar mapping because that is the behaviour the existing specs
  * assert; that it *has* to be stated here at all is the seam working.
+ *
+ * **It is no longer the same table npm uses, and that difference is load-bearing.** As of 2.4
+ * `NodeVersionPlanService` answers `'dependents'` for a patch where this still answers `'changed'`,
+ * so a case in `services/version.service.spec.ts` asserts *this* table and says nothing about a
+ * Node repository. The two agreed until then, which is how a change to npm's answer came out green
+ * here while turning two of the core's cases red for the opposite reason. Anything about npm's own
+ * widths belongs in `plugins/node/services/version-plan.service.spec.ts`; keep this one as the
+ * plain mapping the core's mechanics are written against, and do not "sync" it with npm's.
  */
 export class TestVersionPlanService extends VersionPlanService {
   protected detectBoundary(git: GitHelper, pkg: Package): Promise<string | undefined> {
