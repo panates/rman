@@ -1,5 +1,24 @@
 platform: 'node'
 
+changelog:
+  # How far back a changelog goes. `v2.0.0` leaves the 1.x line out: it was a different CLI, and
+  # its entries say nothing useful about this one.
+  #
+  # Unmarked, so it reaches the repository root as well as the package. Under `"[*]"` the root
+  # would have no floor of its own - measured: its changelog ran back to v0.0.2 (2021), 94 entries.
+  startingAt: v2.0.0
+
+# rman does not extend `@panates/rman-preset` the way the other repositories do, and cannot: the
+# preset peer-depends on rman, so that would be a bootstrap loop. Anything the preset would have
+# given us has to be written out here - which is why the changelog was missing for three releases.
+'[/]':
+  version:
+    # Write each bumped package's CHANGELOG.md as part of the release commit.
+    #
+    # Root level, and that matters: `version` reads this off the *root's* config once per run.
+    # Written under `"[*]"` it would reach the package and silently do nothing.
+    changelog: true
+
 '[*]':
   publish:
     npm:
