@@ -25,6 +25,7 @@ Accepts [package filtering](../cli-rman.md#package-filtering) options, in additi
 | `--include-skipped` | - | boolean | Also generate for a package with `.rmanrc "publish.skip"` - excluded by default. |
 | `--no-commit-hash` | - | boolean | Leave each commit's short sha off its line. On by default; GitHub autolinks a bare abbreviated sha wherever it renders Markdown inside the repository, so `(a1b2c3d)` is a link on the page and stays readable in a terminal. Turn it off for notes read somewhere else. Also `.rmanrc "changelog.commitHash"`. |
 | `--no-unreleased` | - | boolean | Leave out the entry for commits that are not released yet - a changelog of released history only. On by default; also `.rmanrc "changelog.unreleased"`. |
+| `--group-by <what>` | - | `package` \| `group` | What one changelog file covers. `package` (default) is one file per package; `group` is one file per set of packages that releases together, written at the repository root. Also `.rmanrc "changelog.groupBy"`. See [One file per package, or one per release](#one-file-per-package-or-one-per-release). |
 | `--starting-at <ref>` | - | string | Where this package's changelog begins - a version or release tag (inclusive), a `YYYY-MM-DD` date, or a commit. Releases older than it are left out. Also `.rmanrc "changelog.startingAt"`. See [Where a changelog begins](#where-a-changelog-begins). |
 | `--release-version <v>` | - | string | The version these notes are **for** - what the entry heading shows. Default: read back from each package's own latest release tag, which is only right once that release is tagged. Pass it when generating notes ahead of the bump (e.g. from `changed --json`), otherwise the heading shows the *previous* release. |
 
@@ -93,6 +94,55 @@ rman records where it stopped in the file itself, as an HTML comment that render
 ```
 
 There is **one** marker per file, rewritten on each write rather than accumulated.
+
+## One file per package, or one per release
+
+By default every package gets its own `CHANGELOG.md`. For a repository whose packages release
+**together** that is usually the wrong unit: they all bump on one version, so most of them have no
+commit of their own and their file only ever says "Updated dependencies" - and nowhere in the
+repository says what the release as a whole contained.
+
+`changelog.groupBy: 'group'` makes the unit a **release group** instead - the same `.rmanrc group`
+key `rman version` batches its plan by:
+
+```yaml
+group: true # every package releases together, on one version line
+
+changelog:
+  groupBy: group # so they share one changelog, at the repository root
+```
+
+| `group` | Where its changelog goes |
+| --- | --- |
+| `true` (the default group) | `CHANGELOG.md` at the repository root |
+| `'core'` (a named group) | `CHANGELOG-core.md` at the repository root |
+| `false` | `CHANGELOG.md` in that package's own directory |
+
+That last row is the same rule as the other two, not an exception to them: `group: false` already
+makes a package a group of itself, so a solo group's home is its own directory. A repository with
+independent versioning therefore sees no change at all.
+
+A group's entry holds every commit belonging to **any** of its members, listed once each - a commit
+touching two of them is one line, not two. Its heading names the release rather than a member: a
+repo-wide tag (`v1.2.0`) is already the right heading and is used as-is, while under `{name}@*` -
+where the tag would be one member's `pkg-a@1.2.0` over a file describing all of them - the group's
+own name carries it (`## core 1.2.0`).
+
+**A named group is written into a file name**, so it is limited to 15 characters of letters, digits,
+`.`, `-` and `_`, starting with a letter or digit. Anything else is refused when the config is read,
+naming the package that declared it - rather than escaped into a file name the repository never
+asked for.
+
+`rman version --changelog` follows this too, making one call per file rather than one per package,
+and folds the group's changelog into that group's own release commit - so `git show <tag>` carries
+the notes for the release that tag names.
+
+### Migrating a repository that already has per-package files
+
+Turning this on does not move or merge what is already there: the per-package files are simply no
+longer written to, and the new root file starts from each group's last release. Delete the old ones
+in the same commit as the config change, or leave them as the historical record - but do not leave
+them *and* expect them to keep updating.
 
 ## One entry per release, not one per run
 
@@ -341,6 +391,8 @@ changelog:
   #                  repository has: 'v*' with one, '{name}@*' with several
   filePath: CHANGELOG.md
   template: changelog.template.md # a PATH to a template file, relative to the repo root
+  groupBy: package # or 'group': one file per set of packages that releases together, at the
+  #                  repository root. Read off the root only - it is one layout per repository.
 ```
 
 A commit is attributed to every package its files fall under; one broad enough to touch at least 3

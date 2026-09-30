@@ -683,5 +683,130 @@ describe('commands/version', () => {
       await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--no-changelog'] }));
       expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
     });
+
+    /**
+     * **A repository-wide commit is documented in the root's changelog, and used to be documented
+     * nowhere at all.**
+     *
+     * `ChangelogService` attributes a commit touching more than half the packages to the root
+     * rather than repeating it in every one of them (`ownersOf`/`BROAD_COMMIT_THRESHOLD`), and
+     * `version --changelog` wrote a file only for the entries in `bumped` - which excludes a
+     * monorepo's root, because its version is informational. Between the two rules the commit
+     * reached no file.
+     *
+     * Measured on `panates/sqb`'s 6.0.11 before the fix: the only commit in the range touched all
+     * 17 packages, so 15 of the 17 changelogs were not written at all, the two that were held only
+     * their own narrow `fix:`, and the dependency bump itself appeared in none of them.
+     */
+    it("a repository-wide commit lands in the root's changelog, not nowhere", async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ version: { changelog: true } }));
+      for (const name of ['a', 'b', 'c']) {
+        writeJson(dir, `packages/${name}/package.json`, { name: `pkg-${name}`, version: '1.0.0' });
+        fs.writeFileSync(path.join(dir, `packages/${name}/src.txt`), 'x');
+      }
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      /** Touches every package, so `ownersOf` calls it the root's. */
+      for (const name of ['a', 'b', 'c']) {
+        fs.appendFileSync(path.join(dir, `packages/${name}/src.txt`), 'broad\n');
+      }
+      commitAll(dir, 'fix: a repository-wide dependency bump');
+      /** One package's own, so the two halves can be told apart. */
+      fs.appendFileSync(path.join(dir, 'packages/a/src.txt'), 'narrow\n');
+      commitAll(dir, 'fix(a): something only pkg-a cares about');
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+
+      const rootLog = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf8');
+      expect(rootLog).toContain('a repository-wide dependency bump');
+      const pkgLog = fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf8');
+      expect(pkgLog).toContain('something only pkg-a cares about');
+      /** The broad commit is the root's alone - repeating it in every package is what the
+       *  threshold exists to avoid, and what this must not quietly become. */
+      expect(pkgLog).not.toContain('a repository-wide dependency bump');
+      /** `pkg-b` bumped with the group and owns nothing, so it gets no file - an empty heading
+       *  would say less than its absence. */
+      expect(fs.existsSync(path.join(dir, 'packages/b/CHANGELOG.md'))).toBe(false);
+    });
+
+    /** The root's file belongs to no group, so no group commit would carry it - it rides with the
+     *  root's own version sync instead. Left behind, it is an uncommitted edit that `publish` then
+     *  reads as a dirty tree. */
+    it("commits the root's changelog rather than leaving the tree dirty", async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ version: { changelog: true } }));
+      for (const name of ['a', 'b']) {
+        writeJson(dir, `packages/${name}/package.json`, { name: `pkg-${name}`, version: '1.0.0' });
+        fs.writeFileSync(path.join(dir, `packages/${name}/src.txt`), 'x');
+      }
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      for (const name of ['a', 'b']) fs.appendFileSync(path.join(dir, `packages/${name}/src.txt`), 'broad\n');
+      commitAll(dir, 'fix: touches everything');
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+      const syncCommit = git(dir, 'show', '--name-only', '--pretty=format:', 'HEAD~1');
+      expect(syncCommit).toContain('CHANGELOG.md');
+      expect(syncCommit).toContain('package.json');
+    });
+
+    /**
+     * **`changelog.groupBy: 'group'` - one file for the release, in the tagged commit.**
+     *
+     * The two things that can only be measured end to end: that the group's file is written *once*
+     * rather than once per member (`changelogCalls` batches the call), and that it lands in the
+     * group's own commit rather than in the root's version sync one commit earlier - which is what
+     * `git show <tag>` shows a reader.
+     */
+    it('writes one changelog for the whole group, in the commit the tag names', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ version: { changelog: true }, changelog: { groupBy: 'group' } }),
+      );
+      for (const name of ['a', 'b']) {
+        writeJson(dir, `packages/${name}/package.json`, { name: `pkg-${name}`, version: '1.0.0' });
+        fs.writeFileSync(path.join(dir, `packages/${name}/src.txt`), 'x');
+      }
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      fs.appendFileSync(path.join(dir, 'packages/a/src.txt'), 'one\n');
+      commitAll(dir, 'fix(a): something pkg-a cares about');
+      fs.appendFileSync(path.join(dir, 'packages/b/src.txt'), 'two\n');
+      commitAll(dir, 'feat(b): something pkg-b cares about');
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+
+      /** One file, at the root, holding both packages' work - which is the whole point: the
+       *  release is readable in one place. */
+      const rootLog = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf8');
+      expect(rootLog).toContain('something pkg-a cares about');
+      expect(rootLog).toContain('something pkg-b cares about');
+      expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
+      expect(fs.existsSync(path.join(dir, 'packages/b/CHANGELOG.md'))).toBe(false);
+      /**
+       * **One heading, which is what `changelogCalls` buys and the bullets cannot show.** Called
+       * once per package instead, each call's group holds only that package - so each bullet is
+       * still written exactly once and the file still ends up with both, under *two* `## v1.0.1`
+       * headings for one release. Measured: a control reverting the batching leaves every other
+       * assertion here green and only this one red.
+       */
+      expect(rootLog.match(/^## /gm)).toHaveLength(1);
+      expect(rootLog.match(/something pkg-a cares about/g)).toHaveLength(1);
+
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+      /** In the tagged commit, so `git show v1.0.1` carries the notes for the release it names. */
+      const tagged = git(dir, 'show', '--name-only', '--pretty=format:', 'v1.0.1');
+      expect(tagged).toContain('CHANGELOG.md');
+    });
   });
 });

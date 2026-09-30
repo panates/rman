@@ -5,6 +5,7 @@ import type { Repository } from '../core/classes/repository.js';
 import { Service } from '../core/classes/service.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
+import { groupKeyOf } from '../utils/version-group.js';
 import { ChangeHashService } from './change-hash.service.js';
 import { ConventionalCommitsService } from './conventional-commits.service.js';
 
@@ -37,7 +38,7 @@ export class ChangelogService extends Service {
      * for a file leaves the newest documented commit behind it.
      */
     for (const entry of entries) {
-      prependToChangelogFile(entry.package, entry.filePath, entry.content, entry.documentedUpTo);
+      prependToChangelogFile(entry.file, entry.content, entry.documentedUpTo);
     }
     return entries;
   }
@@ -120,18 +121,24 @@ export class ChangelogService extends Service {
       return promise;
     };
 
+    /**
+     * **The unit is a changelog group, not a package** - see `partitionTargets`. Under the default
+     * `groupBy: 'package'` every target is a group of one, so everything below reads exactly as it
+     * did when this loop was written against packages.
+     */
+    const groups = partitionTargets(repository, targets, options);
     const commitsByTarget = await Promise.all(
-      targets.map(async pkg => {
-        const changelogFile = path.join(pkg.dirname, resolveFilePath(pkg, options.filePath));
-        const from = await resolveBoundary(git, pkg, changelogFile, options);
-        return listCommitsCached(from);
-      }),
+      groups.map(async group => listCommitsCached(await resolveBoundary(git, group.home, group.file, options))),
     );
 
     const entries: ChangelogService.Entry[] = [];
-    for (let i = 0; i < targets.length; i++) {
-      const pkg = targets[i];
-      const label = pkg === repository.rootPackage ? `${path.basename(repository.dirname)} repository` : pkg.name;
+    for (let i = 0; i < groups.length; i++) {
+      const group = groups[i];
+      /** Every per-package question - the boundary, the tag pattern, the titles, the template -
+       *  is asked of one member, because a group is by definition the packages that release
+       *  together and therefore answer these the same way. */
+      const pkg = group.home;
+      const label = group.label;
 
       /**
        * **One entry per release in the range, not one entry per package.** The range is whatever
@@ -152,7 +159,11 @@ export class ChangelogService extends Service {
       for (const segment of await splitByRelease(git, pkg, commitsByTarget[i])) {
         if (!segment.tag && !withUnreleased) continue;
         if (await isBelowStartingPoint(git, pkg, segment, floor, floorIndex)) continue;
-        const ownCommits = dropVersionBumps(segment.commits).filter(c => ownersOf(repository, c).has(pkg));
+        /** A commit belongs to a group when it belongs to **any** of its members - one line for a
+         *  commit touching two of them, which is the whole reason a group shares a file. */
+        const ownCommits = dropVersionBumps(segment.commits).filter(c =>
+          [...ownersOf(repository, c)].some(owner => group.members.has(owner)),
+        );
         if (!ownCommits.length) continue;
         const sections = groupCommits(ownCommits, ignoreTypesConfig(pkg), titles, order, withCommitHash(pkg, options));
         // every commit could have been dropped by ignoreTypes - skip this package's entry entirely
@@ -168,9 +179,10 @@ export class ChangelogService extends Service {
           git,
           options.version,
           segment.tag,
+          group.grouped,
         );
         entries.push({
-          package: pkg,
+          package: group.filePkg,
           label,
           version,
           /** The last commit this entry covers - what the file's marker records. For a tagged
@@ -180,12 +192,29 @@ export class ChangelogService extends Service {
           sections,
           ...legacyBuckets(sections, titles),
           content,
-          filePath: resolveFilePath(pkg, options.filePath),
+          file: group.file,
+          filePath: path.relative(group.filePkg.dirname, group.file),
         });
       }
     }
     return entries;
   }
+}
+
+/**
+ * What one changelog file is about - `.rmanrc changelog.groupBy`, `'package'` when nothing says.
+ *
+ * **Read off the repository root and nowhere else.** It decides a *layout*, so there is one answer
+ * for the whole repository, exactly as `run`'s `concurrency` is the root's because there is one
+ * scheduler. Cascaded per package it would mean two packages of one group disagreeing about which
+ * file they share, which has no answer.
+ *
+ * `VersionService` asks too, so that `version --changelog` makes one call per file rather than one
+ * per package - the same entry prepended once per member otherwise.
+ */
+export function changelogGroupBy(repository: Repository, options: ChangelogService.Options = {}): 'package' | 'group' {
+  const declared = options.groupBy ?? repository.rootPackage.config?.changelog?.groupBy;
+  return declared === 'group' ? 'group' : 'package';
 }
 
 interface Section {
@@ -571,6 +600,80 @@ function resolveFilePath(pkg: Package, optionsFilePath?: string): string {
   return typeof cfg === 'string' && cfg ? cfg : DEFAULT_CHANGELOG_FILE;
 }
 
+/** One changelog file's worth of packages - what `getEntries` iterates instead of packages. */
+interface ChangelogGroup {
+  /** The member whose config, tags, template and boundary answer every per-package question. The
+   *  root when it is in the group, since that is the level a group-wide file is configured at. */
+  home: Package;
+  /** Whose directory holds the file, which is not always `home`: a named group's members are all
+   *  below the root while its file sits at the root. */
+  filePkg: Package;
+  /** Absolute. */
+  file: string;
+  label: string;
+  members: Set<Package>;
+  /** Several packages share this file, so nothing written into it may name just one of them - see
+   *  `resolveHeading`. */
+  grouped: boolean;
+}
+
+/**
+ * The targets cut into the files they will be written to.
+ *
+ * **One rule, not two.** A changelog belongs to the set of packages that version and release
+ * together - `.rmanrc group`, the same key `version` batches its plan by - and `group: false`
+ * already makes a package a group of itself. So a solo group's file is its package's own, and
+ * anything wider goes to the repository root, where it is the one file describing that release.
+ *
+ * Under the default `groupBy: 'package'` every target is made a group of one, so this returns
+ * exactly what the loop saw when it was written against packages. That is the whole of the
+ * opt-out: no repository's layout changes until it asks.
+ *
+ * The default group is unsuffixed (`CHANGELOG.md`), since a repository releasing along one line has
+ * nothing to distinguish it from; a named group takes its name (`CHANGELOG-core.md`). The name is
+ * checked where it is read - see `groupKeyOf` - so nothing has to be escaped here.
+ */
+function partitionTargets(
+  repository: Repository,
+  targets: Package[],
+  options: ChangelogService.Options,
+): ChangelogGroup[] {
+  const grouping = changelogGroupBy(repository, options);
+  const byKey = new Map<string, Package[]>();
+  for (const pkg of targets) {
+    const key = grouping === 'group' ? groupKeyOf(pkg) : `solo:${pkg.name}`;
+    const members = byKey.get(key);
+    if (members) members.push(pkg);
+    else byKey.set(key, [pkg]);
+  }
+
+  const repositoryLabel = `${path.basename(repository.dirname)} repository`;
+  return [...byKey].map(([key, members]) => {
+    /** `targets` starts at the root, so a group holding it has it first - which is what makes the
+     *  root the `home` of the default group without a second rule saying so. */
+    const home = members[0];
+    const grouped = !key.startsWith('solo:');
+    const named = key.startsWith('named:') ? key.slice('named:'.length) : undefined;
+    const filePkg = grouped ? repository.rootPackage : home;
+    return {
+      home,
+      filePkg,
+      grouped,
+      members: new Set(members),
+      label: named ?? (home === repository.rootPackage ? repositoryLabel : home.name),
+      file: path.join(filePkg.dirname, suffixFileName(resolveFilePath(home, options.filePath), named)),
+    };
+  });
+}
+
+/** `CHANGELOG.md` + `core` -> `CHANGELOG-core.md`, keeping whatever directory and extension
+ *  `changelog.filePath` chose (`docs/HISTORY.md` -> `docs/HISTORY-core.md`). */
+function suffixFileName(filePath: string, suffix: string | undefined): string {
+  if (!suffix) return filePath;
+  const ext = path.extname(filePath);
+  return path.join(path.dirname(filePath), `${path.basename(filePath, ext)}-${suffix}${ext}`);
+}
+
 /**
  * This package's current version, from git tags rather than its (possibly stale - see the
  * `{{version}}` doc on `Changelog.getEntries`) package.json. Falls back to package.json's version
@@ -596,18 +699,29 @@ async function resolveHeading(
   label: string,
   versionOverride: string | undefined,
   segmentTag: string | undefined,
+  grouped: boolean,
 ): Promise<{ version: string; date: string; title: string }> {
   const today = new Date().toISOString().slice(0, 10);
-  const expanded = ChangeHashService.tagPattern(pkg).replace('{name}', pkg.name);
+  const pattern = ChangeHashService.tagPattern(pkg);
+  const expanded = pattern.replace('{name}', pkg.name);
+  /**
+   * **A group's heading may not be one member's tag.** Under a repo-wide pattern the tag is already
+   * package-neutral (`v1.2.3`) and is the best heading there is. Under `{name}@*` it is
+   * `pkg-a@1.2.3` - one member's name over a file describing the whole group, and a different
+   * member's name each time the first one changes. There the group's own label carries it.
+   */
+  const ownTag = !grouped || !pattern.includes('{name}');
+  const groupHeading = (version: string) => `${label} ${version}`;
 
   /** A segment that a release tag closes is headed by **that** release, whatever the newest one
    *  is - which is the whole point of splitting, and the reason an override cannot win here: a
    *  caller naming a version is naming the *unreleased* one, the segment with no tag. */
   if (segmentTag) {
+    const version = ChangeHashService.extractVersion(segmentTag, expanded);
     return {
-      version: ChangeHashService.extractVersion(segmentTag, expanded),
+      version,
       date: (await git.commitDate(segmentTag)) ?? today,
-      title: segmentTag,
+      title: ownTag ? segmentTag : groupHeading(version),
     };
   }
 
@@ -618,7 +732,11 @@ async function resolveHeading(
    * that is when it is happening.
    */
   if (versionOverride) {
-    return { version: versionOverride, date: today, title: ChangeHashService.expandTag(pkg, versionOverride) };
+    return {
+      version: versionOverride,
+      date: today,
+      title: ownTag ? ChangeHashService.expandTag(pkg, versionOverride) : groupHeading(versionOverride),
+    };
   }
 
   /**
@@ -741,9 +859,10 @@ async function renderEntry(
   git: GitHelper,
   versionOverride: string | undefined,
   segmentTag: string | undefined,
+  grouped: boolean,
 ): Promise<{ version: string; content: string }> {
   const template = resolveTemplate(repository, pkg);
-  const { version, date, title } = await resolveHeading(git, pkg, label, versionOverride, segmentTag);
+  const { version, date, title } = await resolveHeading(git, pkg, label, versionOverride, segmentTag, grouped);
   const content = render(template, {
     package: label,
     version,
@@ -813,13 +932,7 @@ async function resolveBoundary(
 /** Prepends `content` right after the top-level "# Changelog" heading if the file already has
  *  one, otherwise creates the file (and any missing parent directory - `relFilePath` can nest one,
  *  e.g. `'docs/CHANGELOG.md'`) with one. Leaves everything already in the file untouched below it. */
-function prependToChangelogFile(
-  pkg: Package,
-  relFilePath: string,
-  content: string,
-  documentedUpTo: string | undefined,
-): void {
-  const file = path.join(pkg.dirname, relFilePath);
+function prependToChangelogFile(file: string, content: string, documentedUpTo: string | undefined): void {
   const existing = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '';
   const headerMatch = /^# Changelog\r?\n+/.exec(existing);
   const header = headerMatch ? headerMatch[0] : '# Changelog\n\n';
@@ -887,14 +1000,23 @@ export namespace ChangelogService {
     /** Whether each line ends with its commit's short sha - `.rmanrc changelog.commitHash` when
      *  omitted, and `true` when neither says. See `withCommitHash`. */
     commitHash?: boolean;
+    /** What one changelog file is about - a package, or the group of packages that release
+     *  together. `.rmanrc changelog.groupBy` (read off the root) when omitted, and `'package'` when
+     *  neither says. See `changelogGroupBy` and `partitionTargets`. */
+    groupBy?: 'package' | 'group';
   }
 
   /** One package's (root included) generated changelog entry - what `getEntries`/`generate`
    *  return. */
   export interface Entry {
+    /** **Whose directory holds the file**, which under `groupBy: 'group'` is the repository root
+     *  for every group of more than one - the entry is about all of them. The member whose config
+     *  and tags the entry was resolved from is not carried: it is an implementation detail of the
+     *  group, and naming one member here would read as the entry being that package's. */
     package: Package;
-    /** Display name for this entry's heading - `"<repo dir name> repository"` for the root
-     *  package, its own name otherwise (see `getEntries`'s doc comment on `{{package}}`). */
+    /** Display name for this entry's heading - the group's name under `groupBy: 'group'`,
+     *  `"<repo dir name> repository"` for the root package, its own name otherwise (see
+     *  `getEntries`'s doc comment on `{{package}}`). */
     label: string;
     /** `options.version` when the caller gave one, otherwise resolved from git tags rather than
      *  package.json - see `resolveVersion`. */
@@ -914,8 +1036,12 @@ export namespace ChangelogService {
     other: string[];
     /** The fully rendered entry, via `.rmanrc changelog.template` (or the built-in default). */
     content: string;
-    /** Where this entry would be (or, with `options.write`, was) written, relative to the
-     *  package's own directory - see `GetOptions.filePath`. */
+    /** Where this entry would be (or, with `options.write`, was) written - **absolute**, and what
+     *  `generateToFile` writes to. A caller needing the path resolves it from here rather than
+     *  rebuilding it from `package` and `filePath`, which a group's file cannot be rebuilt from:
+     *  its name carries the group. */
+    file: string;
+    /** `file` relative to `package`'s own directory, for display - see `Options.filePath`. */
     filePath: string;
   }
 }

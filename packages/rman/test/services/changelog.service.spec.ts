@@ -1094,4 +1094,153 @@ describe('services/changelog', () => {
       expect(logged).toEqual([]);
     });
   });
+
+  /**
+   * **`changelog.groupBy: 'group'` - one file per set of packages that release together.**
+   *
+   * The fixture's `.rmanrc` is `{}`, so every package is in the implicit `default` group and the
+   * whole repository shares one file. `group: false` makes a package a group of itself, which is
+   * what makes this one rule rather than two.
+   */
+  describe('changelog.groupBy', () => {
+    /** The config is left uncommitted on purpose: committing it would put a `chore:` commit of the
+     *  fixture's own making into every range these cases read, and `.rmanrc` only has to be on disk
+     *  for `ConfigReader` to see it. */
+    function groupFixture(rmanrc: unknown): { dir: string; baseHash: string } {
+      const fixture = fixtureWithUnpushedCommits();
+      fs.writeFileSync(path.join(fixture.dir, '.rmanrc'), JSON.stringify(rmanrc));
+      return fixture;
+    }
+
+    it("defaults to 'package', so no repository's layout changes until it asks", async () => {
+      const { dir, baseHash } = groupFixture({});
+      await createRepository(dir);
+
+      const entries = await service('changelog').getEntries({ from: baseHash });
+
+      expect(entries.length).toBeGreaterThan(1);
+      expect(new Set(entries.map(e => e.file)).size).toBe(entries.length);
+    });
+
+    it('writes one entry at the repository root for the whole default group', async () => {
+      const { dir, baseHash } = groupFixture({});
+      await createRepository(dir);
+
+      const entries = await service('changelog').getEntries({ from: baseHash, groupBy: 'group' });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0].file).toBe(path.join(dir, 'CHANGELOG.md'));
+      /** Every member's commits in the one file - which is the point: a reader sees the whole
+       *  release rather than one package's slice of it. */
+      expect(entries[0].content).toContain('- **pkg-a:** add a feature');
+      expect(entries[0].content).toContain('- **pkg-b:** correct a bug');
+      expect(entries[0].content).toContain('- update readme');
+    });
+
+    it('leaves a group: false package its own file, which is the same rule and not a second one', async () => {
+      const { dir, baseHash } = groupFixture({ '[pkg-a]': { group: false } });
+      await createRepository(dir);
+
+      const entries = await service('changelog').getEntries({ from: baseHash, groupBy: 'group' });
+      const byFile = new Map(entries.map(e => [path.relative(dir, e.file), e]));
+
+      expect([...byFile.keys()].sort()).toEqual(['CHANGELOG.md', path.join('packages', 'a', 'CHANGELOG.md')]);
+      expect(byFile.get(path.join('packages', 'a', 'CHANGELOG.md'))!.content).toContain('- **pkg-a:** add a feature');
+      /** pkg-a left the default group, so its commit is not in the group's file either. */
+      expect(byFile.get('CHANGELOG.md')!.content).not.toContain('add a feature');
+    });
+
+    it("names a named group's file after it, at the root", async () => {
+      const { dir, baseHash } = groupFixture({ '[*]': { group: 'core' } });
+      await createRepository(dir);
+
+      const entries = await service('changelog').getEntries({ from: baseHash, groupBy: 'group' });
+      const core = entries.find(e => e.label === 'core');
+
+      expect(core).toBeDefined();
+      expect(core!.file).toBe(path.join(dir, 'CHANGELOG-core.md'));
+      expect(core!.content).toContain('- **pkg-a:** add a feature');
+      expect(core!.content).toContain('- **pkg-b:** correct a bug');
+    });
+
+    it("keeps changelog.filePath's directory and extension when it suffixes a group name", async () => {
+      const { dir, baseHash } = groupFixture({ '[*]': { group: 'core' } });
+      await createRepository(dir);
+
+      const entries = await service('changelog').getEntries({
+        from: baseHash,
+        groupBy: 'group',
+        filePath: 'docs/HISTORY.md',
+      });
+
+      expect(entries.find(e => e.label === 'core')!.file).toBe(path.join(dir, 'docs/HISTORY-core.md'));
+    });
+
+    /** A group's file may not be headed by one member's tag: under `{name}@*` the heading would
+     *  name whichever member happens to sort first, over a file describing all of them. */
+    it("heads a group's entry with the group, not with a member's tag name", async () => {
+      const { dir, baseHash } = groupFixture({ '[*]': { group: 'core' }, changelog: { tagPattern: '{name}@*' } });
+      await createRepository(dir);
+
+      const entries = await service('changelog').getEntries({
+        from: baseHash,
+        groupBy: 'group',
+        version: '3.1.0',
+      });
+      const core = entries.find(e => e.label === 'core')!;
+
+      expect(core.content).toContain('## core 3.1.0');
+      expect(core.content).not.toContain('pkg-a@3.1.0');
+    });
+
+    it('writes the group file once, however many members it has', async () => {
+      const { dir } = groupFixture({});
+      await createRepository(dir);
+
+      const entries = await service('changelog').generateToFile({ groupBy: 'group' });
+
+      expect(entries).toHaveLength(1);
+      const written = fs.readFileSync(path.join(dir, 'CHANGELOG.md'), 'utf-8');
+      expect(written.match(/- \*\*pkg-a:\*\* add a feature/g)).toHaveLength(1);
+      expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
+    });
+  });
+
+  /**
+   * **A group name is a file name now**, so it is checked where it is read rather than escaped
+   * where it is written - see `assertGroupName`. Refused for every command, not only `changelog`:
+   * `groupKeyOf` is what `version` batches its plan by too.
+   */
+  describe('group names', () => {
+    function repoWithGroup(name: string): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ group: name }));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      return dir;
+    }
+
+    it('refuses one longer than 15 characters, naming the length', async () => {
+      const dir = repoWithGroup('a-very-long-group-name');
+      const repository = await createRepository(dir);
+      expect(() => repository.getPackages().map(p => p.config.group)).not.toThrow();
+      await expect(service('changelog').getEntries({ groupBy: 'group' })).rejects.toThrow(
+        /at most 15 characters, and it is 22/,
+      );
+    });
+
+    it('refuses a character a file name should not carry, and says what is allowed', async () => {
+      const dir = repoWithGroup('core/api');
+      await createRepository(dir);
+      await expect(service('changelog').getEntries({ groupBy: 'group' })).rejects.toThrow(
+        /start with a letter or digit/,
+      );
+    });
+
+    it('accepts letters, digits, dot, dash and underscore', async () => {
+      const dir = repoWithGroup('core_v2.1-x');
+      await createRepository(dir);
+      await expect(service('changelog').getEntries({ groupBy: 'group' })).resolves.toBeDefined();
+    });
+  });
 });

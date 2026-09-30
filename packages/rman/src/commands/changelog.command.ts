@@ -132,6 +132,29 @@ const config = {
       '--no-unreleased for a changelog of released history only',
     type: 'boolean',
   },
+  /**
+   * **What one changelog file is about.** `'package'` gives every package its own; `'group'` gives
+   * one to each set of packages that versions and releases together (`.rmanrc group`), written at
+   * the repository root - `CHANGELOG.md` for the default group, `CHANGELOG-<name>.md` for a named
+   * one. A `group: false` package is a group of itself either way, so its file stays its own.
+   *
+   * **`'package'` is the default because changing a repository's layout silently is not something a
+   * minor release may do**, not because it is the better answer. For a repository releasing along
+   * one line it is measurably the worse one: every package is bumped together, so most of them have
+   * no commit of their own and get a file that only ever says "Updated dependencies" - measured on
+   * `panates/sqb`, fifteen of seventeen. The whole release is then readable nowhere.
+   *
+   * Read off the repository root and nowhere else - see `changelogGroupBy`.
+   */
+  groupBy: {
+    target: 'both',
+    cliName: 'group-by',
+    describe:
+      'What one changelog file covers: "package" (default, one per package) or "group" (one per ' +
+      'set of packages released together, at the repository root)',
+    type: 'string',
+    choices: ['package', 'group'] as const,
+  },
   startingAt: {
     target: 'both',
     cliName: 'starting-at',
@@ -218,6 +241,7 @@ const changelogCommand = registerCommand(app => {
         startingAt: args.startingAt,
         unreleased: args.unreleased,
         commitHash: args.commitHash,
+        groupBy: args.groupBy,
       };
       const changelog = app.getService('changelog');
       const entries = write ? await changelog.generateToFile(options) : await changelog.getEntries(options);

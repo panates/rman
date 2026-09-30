@@ -7,9 +7,12 @@ import { ConfigInterpolator } from '../core/config/config-interpolator.js';
 import { Manifest } from '../core/interfaces/manifest.js';
 import type { RunStepValue } from '../core/interfaces/run-step.js';
 import { GitHelper } from '../utils/git.js';
+import { ROOT_SELECTOR } from '../utils/package-filter.js';
 import { expandReleaseTag, isCalendarVersion } from '../utils/release-version.js';
+import { groupKeyOf } from '../utils/version-group.js';
 import { stampVersionLabel } from '../utils/version-stamp.js';
 import { ChangeHashService } from './change-hash.service.js';
+import { changelogGroupBy } from './changelog.service.js';
 import { RunService } from './run.service.js';
 import { VersionPlanService } from './version-plan.service.js';
 
@@ -141,12 +144,45 @@ export class VersionService extends Service {
      *  `version` never required at all. Falls back to `changelog`'s own default only when this
      *  package genuinely has no prior tag (a first-ever release). */
     const changelogFileByPackage = new Map<string, string>();
+    /**
+     * Every entry the changelog is written for - which, unlike `bumped`, **includes a monorepo's
+     * root**.
+     */
+    /* **Without the root, a repository-wide commit is documented nowhere.** `ChangelogService`
+     * attributes a commit touching more than half the packages to the root instead of repeating it
+     * in all of them (`ownersOf`/`BROAD_COMMIT_THRESHOLD`) - and the root was excluded here, so
+     * that commit reached no file at all. Measured on `panates/sqb`'s 6.0.11: the one commit in the
+     * range touched all 17 packages, every package's entry was therefore empty and skipped by
+     * `changelog.service.ts`'s `!ownCommits.length` guard, and the release shipped with two
+     * changelogs updated out of seventeen and the change itself recorded in none of them.
+     *
+     * The two rules have to agree about who owns a broad commit, and the attribution is the one
+     * worth keeping: repeating an identical line in seventeen files is what the threshold exists to
+     * avoid. So the root gets its changelog written, and the repository has one file that says what
+     * a release contained repository-wide.
+     *
+     * **`bumped` stays as it is.** It drives the manifest writes, the stamps and `updated`, and a
+     * monorepo root's version is informational - writing it as a release would be the thing
+     * `isRealEntry` exists to prevent. This is a different question with a different answer. */
+    const changelogTargets = plan.filter(e => e.status === 'bump');
     if (options.changelog) {
-      for (const entry of bumped) {
+      /** **One call per file, not one per package.** Under `changelog.groupBy: 'group'` a group's
+       *  members share one file, so calling per package would prepend that group's entry once per
+       *  member - the same release written into the file three times. */
+      for (const target of changelogCalls(repository, changelogTargets)) {
+        const entry = target.entries[0];
+        /** **The root is addressed structurally, never by name.** A glob does not match a
+         *  monorepo's root, so `scope: entry.package.name` would select nothing for it - the same
+         *  vocabulary `--scope /` and `.rmanrc`'s `"[/]"` already use. */
+        const scope = target.entries.map(e =>
+          repository.monorepo && e.package === repository.rootPackage ? ROOT_SELECTOR : e.package.name,
+        );
+        /** Every member of a group releases at the same version off the same tag, so any of them
+         *  answers for the boundary - see `applyPlan`'s own per-group tag set. */
         const fromTag = ChangeHashService.expandTag(entry.package, entry.from);
         const from = (await git.tagExists(fromTag)) ? fromTag : undefined;
         const changelogEntries = await this.app.getService('changelog').generateToFile({
-          scope: entry.package.name,
+          scope,
           fromRoot: true,
           from,
           // The tag for this release doesn't exist yet (it's created below), so changelog's own
@@ -157,11 +193,12 @@ export class VersionService extends Service {
           // to bump, so its folded-in changelog shouldn't then be silently dropped by that flag.
           includeSkipped: true,
         });
+        /** Recorded against **every** package the call covered, not against the entry's own
+         *  `package` - a group's file sits at the repository root, so keying it by that would file
+         *  the group's changelog under the root and leave the group commit without it. */
         for (const ce of changelogEntries) {
-          changelogFileByPackage.set(
-            ce.package.name,
-            path.relative(repository.dirname, path.join(ce.package.dirname, ce.filePath)),
-          );
+          const file = path.relative(repository.dirname, ce.file);
+          for (const e of target.entries) changelogFileByPackage.set(e.package.name, file);
         }
       }
     }
@@ -176,10 +213,18 @@ export class VersionService extends Service {
 
     if (rootEntry?.status === 'bump') {
       const message = `chore: sync root version to ${rootEntry.to}`;
-      const sha = await git.commit(
-        [path.relative(repository.dirname, repository.rootPackage.manifestFileName)],
-        message,
-      );
+      /** The root's own `CHANGELOG.md` rides along here, for the same reason its manifest does:
+       *  it belongs to no group, so no group commit would carry it and it would be left behind as
+       *  an uncommitted edit that `publish` then reads as a dirty tree. */
+      const files = [path.relative(repository.dirname, repository.rootPackage.manifestFileName)];
+      const rootChangelog = changelogFileByPackage.get(repository.rootPackage.name);
+      /** **Unless a group commit below is already carrying it**, which is the ordinary case under
+       *  `changelog.groupBy: 'group'`: the root is a member of the default group, so its file *is*
+       *  the group's. Committed here it would land one commit before the tag, leaving `git show
+       *  <tag>` without the notes for the release that tag names. */
+      const claimedByGroup = new Set(bumped.map(e => changelogFileByPackage.get(e.package.name)));
+      if (rootChangelog && !claimedByGroup.has(rootChangelog)) files.push(rootChangelog);
+      const sha = await git.commit(files, message);
       /** No packages: this commit carries the root's informational version and nothing releasable,
        *  which is why `updated` does not count it either. */
       commits.push({ sha, message, packages: [] });
@@ -192,14 +237,17 @@ export class VersionService extends Service {
       else byGroup.set(entry.groupKey, [entry]);
     }
     for (const [, groupEntries] of byGroup) {
-      const files = groupEntries.map(e => path.relative(repository.dirname, e.package.manifestFileName));
+      /** A **set**: the members of a group share one changelog file under
+       *  `changelog.groupBy: 'group'`, and `git commit` given the same path twice is a needless
+       *  way to find out whether it minds. */
+      const files = new Set(groupEntries.map(e => path.relative(repository.dirname, e.package.manifestFileName)));
       for (const e of groupEntries) {
         const changelogFile = changelogFileByPackage.get(e.package.name);
-        if (changelogFile) files.push(changelogFile);
-        files.push(...(stampedByPackage.get(e.package.name) ?? []));
+        if (changelogFile) files.add(changelogFile);
+        for (const f of stampedByPackage.get(e.package.name) ?? []) files.add(f);
       }
       const message = VersionService.buildCommitMessage(repository, groupEntries, options.message);
-      const sha = await git.commit(files, message);
+      const sha = await git.commit([...files], message);
       commits.push({ sha, message, packages: groupEntries.map(e => e.package.name) });
       const tags = new Set(groupEntries.map(e => ChangeHashService.expandTag(e.package, e.to!)));
       for (const tag of tags) {
@@ -471,6 +519,32 @@ function assertStampable(pkg: Package, version: string): void {
             `version is declared in it. Name a plugin in .rmanrc "plugins".`),
     );
   }
+}
+
+/**
+ * The plan entries cut into one call to `ChangelogService.generateToFile` per **file** it will
+ * write.
+ *
+ * Under the default `changelog.groupBy: 'package'` that is one call per entry, which is what this
+ * always was. Under `'group'` the members of a group share one file, so they share one call - and
+ * the grouping asked for is the changelog's (`groupKeyOf`), never the *planner's*: those two answer
+ * different questions and disagree about the root, which `VersionPlanService` puts in a group of its
+ * own (`__root__`) while `groupKeyOf` puts it wherever its config does. Batching by the planner's
+ * key would give a `group: true` repository two files where it asked for one.
+ */
+function changelogCalls(
+  repository: Repository,
+  entries: VersionPlanService.Entry[],
+): { entries: VersionPlanService.Entry[] }[] {
+  if (changelogGroupBy(repository) !== 'group') return entries.map(entry => ({ entries: [entry] }));
+  const byKey = new Map<string, VersionPlanService.Entry[]>();
+  for (const entry of entries) {
+    const key = groupKeyOf(entry.package);
+    const list = byKey.get(key);
+    if (list) list.push(entry);
+    else byKey.set(key, [entry]);
+  }
+  return [...byKey.values()].map(grouped => ({ entries: grouped }));
 }
 
 declare module '../core/classes/service.js' {

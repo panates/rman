@@ -1691,6 +1691,55 @@ saw one thing to release and it was the one thing that must never be published.
   - The `---` between releases is the **writer's**, not the template's: an entry printed to stdout
     or handed to `github-release` as a body has nothing below it to be separated from. None is
     written into a fresh file.
+- **`changelog.groupBy` decides what one file is about, and the unit is a *release group***
+  (`partitionTargets`, `changelogGroupBy`). `'package'` is the default and nothing about an existing
+  repository changes until it asks; `'group'` gives one file to each set of packages that versions
+  and releases together - the same `.rmanrc group` key `version` batches its plan by.
+  - **One rule, not two.** `group: false` already makes a package a group of itself, so a solo
+    group's file is its package's own and anything wider goes to the repository root: `CHANGELOG.md`
+    for the default group, `CHANGELOG-<name>.md` for a named one. A repository on independent
+    versioning therefore sees no difference between the two modes, which is what makes this a
+    generalization rather than a second mechanism.
+  - **What it fixes is not cosmetic.** Under `group: true` every package bumps together, so most of
+    them own no commit and `!ownCommits.length` skips their entry entirely - measured on
+    `panates/sqb`'s 6.0.11, fifteen of seventeen files were not written and the release was readable
+    nowhere. The root-changelog fix above routes a *broad* commit somewhere; this routes the whole
+    release somewhere.
+  - **`BROAD_COMMIT_THRESHOLD` stops mattering in group mode, and that is the tell the unit is
+    right.** A commit touching every package is the group's by construction, so there is nothing to
+    divert to the root - the threshold exists only because a package-shaped file cannot hold a
+    repo-shaped commit.
+  - **Read off the root and nowhere else.** It is a *layout*, so there is one answer per repository -
+    the rule `run`'s `concurrency` already follows. Cascaded per package, two members of one group
+    could disagree about which file they share, which has no answer.
+  - **`home` and `filePkg` are different packages and must stay so.** Every per-package question -
+    boundary, tag pattern, titles, template - is asked of a member (`home`, the root when it is in
+    the group, since `targets` starts there); the file sits wherever the group's file sits
+    (`filePkg`, the root for any group of more than one). Collapsing them breaks a named group both
+    ways: ask the root and `{name}@*` finds no tag, write beside the member and the group's file
+    lands inside one of its packages.
+  - **A group's heading may not be one member's tag.** Under a repo-wide pattern the tag (`v1.2.0`)
+    is already package-neutral and is used as-is; under `{name}@*` it would be `pkg-a@1.2.0` over a
+    file describing all of them, and a *different* member's name as soon as the first one changes -
+    so the group's label carries it (`## core 1.2.0`).
+  - **`version --changelog` batches one call per file** (`changelogCalls`), by `groupKeyOf` and
+    never by the *planner's* key - those disagree about the root, which `VersionPlanService` puts in
+    a group of its own (`__root__`). Per package instead, each call's group holds one member, so
+    every bullet is still written exactly once and the file ends up with **two** `## v1.0.1`
+    headings for one release. A spec asserting the bullets passes either way; the one that measures
+    it counts headings, and its control was run.
+  - **The group's file rides the group's commit, not the root's version sync.** The root is a member
+    of the default group, so `changelogFileByPackage.get(root.name)` is the group's file - added to
+    the sync commit it would land one commit *before* the tag, leaving `git show <tag>` without the
+    notes for the release it names. `claimedByGroup` is that guard, and the group commit's file list
+    is a `Set` because the members share one path.
+- **A group name is a file name, so it is checked where it is read** (`assertGroupName`, in
+  `groupKeyOf`): a letter or digit, then letters, digits, `.`, `-`, `_`, at most 15. The alternative
+  was escaping it at the one place it is written, and that is the worse half - an escape turns
+  `core/api` into a `core-api.md` the repository never asked for and cannot search for, and every
+  future reader of the name would have to repeat it. 15 is about the reader rather than any
+  filesystem: the name is repeated in every heading of the file it names and in the file name
+  itself. Refused for `version` too, since `groupKeyOf` is what batches its plan.
 - **Trap:** run *after* a tag has been created, auto-detection finds that new tag and reports
   nothing changed. Hence: in CI, release notes are generated **before** `version`; and any code path
   running after the tag exists (`version --changelog`, `github-release`) passes the boundary
