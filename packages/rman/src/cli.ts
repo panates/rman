@@ -142,8 +142,10 @@ export async function runCli(options?: {
      * The thirteen hand-written `initCli(repository, program)` calls this replaces were the second
      * place a command had to be listed, and the list the shadow check guards with was a third.
      */
+    /** Registered further down, once the contributed commands are known - a `shadowable` built-in
+     *  whose name one of them took must not be registered at all, or `--help` lists the name twice
+     *  with two descriptions and nothing says which runs. */
     const builtIns = commandRegistry.map(register => register(app));
-    for (const meta of builtIns) program.command(toYargsCommand(meta));
 
     /**
      * Commands that are not built in, all from **one** key: `.rmanrc "commands"`, whose default
@@ -224,6 +226,34 @@ export async function runCli(options?: {
       }
     }
     assertNoBuiltinShadowing(commands, builtInNames(builtIns));
+
+    /**
+     * **Built-ins first, minus any `shadowable` one a contributed command has taken.**
+     *
+     * Skipping the registration rather than letting yargs' last-wins settle it is the same fix
+     * `byName` above is: the override already resolved correctly either way, but both rows appeared
+     * in `--help`, each with its own description and nothing to say which would run. Measured here
+     * on `test`, with rman's alias and `@panates/rman-preset`'s command both listed.
+     *
+     * Order is unchanged - built-ins are still registered before the contributed ones, so help
+     * reads as it always has.
+     */
+    const taken = new Set(commands.map(c => c.name));
+    const shadowed = builtIns.filter(meta => meta.shadowable && taken.has(commandName(meta.command)));
+    for (const meta of builtIns) {
+      if (shadowed.includes(meta)) continue;
+      program.command(toYargsCommand(meta));
+    }
+    /** Said out loud at `verbose`, for the reason the contributed-on-contributed note above gives:
+     *  an override is correct and should not nag, but "rman test does something else here" needs a
+     *  thread to pull. */
+    if (shadowed.length) {
+      const logger = new Logger(argvLogLevel(_argv) ?? resolveRootLogLevel(repository));
+      for (const meta of shadowed) {
+        const name = commandName(meta.command);
+        logger.verbose(`rman's own "${name}" is overridden by ${describeCommandSource(byName.get(name)!.file)}.`);
+      }
+    }
     for (const { module } of commands) program.command(module);
     /** Warned about, not thrown: one unparseable file must not take the other commands with it.
      *  Loud enough not to be mistaken for success, and it names the file and the reason - "my
@@ -531,7 +561,13 @@ if (isMain()) runCli().catch(() => process.exit(1));
  * yargs' own command rather than one of ours, so it is the one name still written here.
  */
 function builtInNames(metas: RmanConfig.CommandMetadata[]): string[] {
-  const names = metas.flatMap(meta => [commandName(meta.command), ...(meta.aliases ?? [])]);
+  /** **A `shadowable` built-in is left out, so a contributed command may take its name.** Only
+   *  `build` and `test` are, and only because they carry no logic of their own - see
+   *  `CommandMetadata.shadowable`. Everything else defends its name, which is what keeps
+   *  `rman publish` from resolving to two different things. */
+  const names = metas
+    .filter(meta => !meta.shadowable)
+    .flatMap(meta => [commandName(meta.command), ...(meta.aliases ?? [])]);
   return [...names, 'completion'];
 }
 

@@ -181,6 +181,57 @@ describe('cli: global --config', () => {
   });
 
   /**
+   * **`build` and `test` may be taken by a repository's own command; every other built-in may not.**
+   *
+   * Both are aliases for `run <script>` and carry no logic of their own, so the name belongs to
+   * whoever has the better answer. The case that forced it, measured across seven repositories of
+   * this organization: not one has a package with its own `test` script, because their testing is a
+   * single run at the repository root - so `rman test` fanned out over packages that define nothing
+   * and everyone typed `npm test` instead. Declaring a `test` command used to throw "would shadow
+   * rman's built-in", which is the same wall `lint` hit before it stopped being an alias.
+   *
+   * **Through `runCli`, not `assertNoBuiltinShadowing` with a hand-written list.** A list passed in
+   * by the spec proves nothing about what `builtInNames` derives from the registry - the first
+   * draft of this case did exactly that and would have passed with the change reverted. Here the
+   * built-in `test` is really registered first and the contributed one really has to win.
+   */
+  it("lets a repository's own command take the test alias", async () => {
+    const dir = fixture();
+    fs.mkdirSync(path.join(dir, '.rman'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.rman', 'test.mjs'),
+      `export default {
+         describe: 'the repository decides what testing means',
+         configKeys: ['vars'],
+         handler: ctx => { throw new Error('the handler must not run under --config'); },
+       };`,
+    );
+
+    /** `--config` prints which command it resolved, without running it - so this says *whose* `test`
+     *  won without needing the command to do anything. */
+    const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['test', '--config'] }))).join('\n');
+    expect(out).toContain('command: test');
+    expect(out).toContain('the keys test reads: vars');
+  });
+
+  /** The control, and the half that must never regress: `publish` carries its own logic, and two
+   *  things answering to that name is the ambiguity the refusal exists for. */
+  it('still refuses a repository command that would shadow a non-alias built-in', async () => {
+    const dir = fixture();
+    fs.mkdirSync(path.join(dir, '.rman'), { recursive: true });
+    /** `describe` is not decoration here: without it `checkCustomCommand` skips the file with a
+     *  warning, so it never becomes a command and there is nothing to shadow. The first draft of
+     *  this case omitted it and the run resolved cleanly - a control that was not controlling
+     *  anything. */
+    fs.writeFileSync(
+      path.join(dir, '.rman', 'publish.mjs'),
+      `export default { describe: 'would publish, differently', handler: () => {} };`,
+    );
+
+    await expect(runCli({ cwd: dir, argv: ['publish', '--config'] })).rejects.toThrow(/shadow/);
+  });
+
+  /**
    * **`.rmanrc "commands"` is the same path, with the directory named instead of assumed** -
    * `.rman/*.mjs` is only this key's default value.
    */

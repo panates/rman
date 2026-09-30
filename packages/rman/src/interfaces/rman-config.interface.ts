@@ -585,6 +585,32 @@ export namespace RmanConfig {
      * does; a command that is silent does not know it is. */
     printsDocument?: boolean;
     /**
+     * **Whether a contributed command may take this name.** `build` and `test` are the only two,
+     * and they are the only two that carry no logic of their own - both are `run <script>` under a
+     * shorter name. A name whose holder has nothing to defend should belong to whoever has the
+     * better answer for it.
+     *
+     * Read by `cli.ts`'s `builtInNames`, which is what `assertNoBuiltinShadowing` checks against.
+     * The existing "one registration per name, keeping the last" rule then does the rest, and
+     * announces the override at `--log-level verbose`.
+     */
+    /* **The case this opens, measured across seven repositories**: not one of them has a package
+     * with its own `test` script, because their testing is a single run at the repository root -
+     * exactly as their linting is a single eslint run there. So `rman test` fanned out over
+     * packages that define nothing, answered `No package defines a "test" script.`, and everyone
+     * typed `npm test` instead. A contributed `test` that runs the root's script is the useful
+     * meaning of the name, and until now declaring one threw: "would shadow rman's built-in".
+     *
+     * That is the same wall `lint` hit, which is why `lint` is not an alias any more. This is the
+     * cheaper answer for the two that remain - `lint` could be deleted during 2.0 for free, while
+     * removing `test` now would break a published surface for the benefit of nobody: the alias has
+     * zero invocations anywhere, only documentation.
+     *
+     * **Not a general relaxation.** Every other built-in defends its name, and that refusal is what
+     * keeps `rman publish` from resolving to two different things - a repository's own command has
+     * `.rman/*.mjs` for that, where the repository is expected to win. */
+    shadowable?: boolean;
+    /**
      * **The parameter is the command's own business, so this states no type for it.**
      * A handler annotates itself with `ArgsOf<typeof config, typeof COMMAND>`, which this interface
      * cannot compute for it - `M` is inferred from the literal the handler sits in, so naming it

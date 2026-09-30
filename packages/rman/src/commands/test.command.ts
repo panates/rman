@@ -11,6 +11,9 @@ const testCommand = registerCommand(app => {
   return {
     command: COMMAND,
     describe: 'Alias for "run test"',
+    /** An alias carries no logic of its own, so a repository with a better answer for the name may
+     *  take it - see `CommandMetadata.shadowable`. */
+    shadowable: true,
     /** Owns nothing, for the same reason `build` does not - see there. */
     configKeys: ['run.test'],
     config,

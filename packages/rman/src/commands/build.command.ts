@@ -11,6 +11,9 @@ const buildCommand = registerCommand(app => {
   return {
     command: COMMAND,
     describe: 'Alias for "run build"',
+    /** An alias carries no logic of its own, so a repository with a better answer for the name may
+     *  take it - see `CommandMetadata.shadowable`. */
+    shadowable: true,
     /**
      * Read, not owned - and it owns nothing at all. `build` is `run build` under another name, so its
      * settings live in `run.build`, which belongs to `run`. Two commands cannot contribute under one

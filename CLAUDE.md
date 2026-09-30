@@ -981,6 +981,36 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   `PublishTarget.claims`, answered by the ecosystem that read the manifest. **Never narrow it
   again.** A name nothing implements is caught by `publish` itself, naming the targets the
   repository does have.
+## `build` and `test` may be shadowed; every other built-in may not
+
+`CommandMetadata.shadowable`, read by `cli.ts`'s `builtInNames`. Those two are the only built-ins
+that carry no logic of their own - both are `run <script>` under a shorter name - so the name belongs
+to whoever has the better answer for it.
+
+- **The case that forced it, measured across seven repositories of this organization**: not one has a
+  package with its own `test` script, because testing there is a single run at the repository root,
+  exactly as linting is a single eslint run there. So `rman test` fanned out over packages defining
+  nothing, answered `No package defines a "test" script.`, and everyone typed `npm test` - leaving
+  one verb outside the set. `rman test` itself had **zero invocations anywhere**; the only mentions
+  are documentation.
+- **This is the wall `lint` hit**, which is why `lint` is not an alias any more. Deleting `test` the
+  same way would have been the cleaner surface and a **major** - for the benefit of nobody, since the
+  alias has no users. Shadowing reaches the same place without breaking a repository whose tests
+  really are per package, which still has `rman run test`.
+- **A shadowed built-in is not registered at all.** Letting yargs' last-wins settle it leaves *two*
+  rows in `--help`, each with its own description and nothing saying which runs - measured on `test`,
+  with rman's alias and `@panates/rman-preset`'s command both listed. That is the same failure
+  `byName` already fixed for contributed-on-contributed, and the fix is the same shape: skip the
+  registration, say so at `verbose`.
+- **Not a general relaxation.** Every other built-in defends its name, and that refusal is what keeps
+  `rman publish` from resolving to two different things. A repository that wants one anyway has
+  `.rman/*.mjs`, where it wins by design.
+- **Two spec traps, both caught by asking what would fail**: a case passing a hand-written list to
+  `assertNoBuiltinShadowing` proves nothing about what `builtInNames` derives - it would pass with
+  the change reverted, so the case goes through `runCli`. And a `.rman/publish.mjs` fixture without
+  `describe` is skipped before it can shadow anything, so the refusal control was not controlling.
+  A third case reads the registry and pins that **exactly** `build` and `test` carry the flag.
+
 ## The status line around every command
 
 [`utils/status-region.ts`](packages/rman/src/utils/status-region.ts), installed by

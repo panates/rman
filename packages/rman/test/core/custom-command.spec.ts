@@ -1,3 +1,4 @@
+import '../../src/commands.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,10 +10,14 @@ import {
   describeCommandSource,
   loadCustomCommands,
 } from '../../src/core/interfaces/custom-command.js';
+import { commandRegistry } from '../../src/interfaces/rman-config.interface.js';
+import { createRepository, useTestEcosystem } from '../_fixture.js';
 
 const srcIndex = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/index.ts');
 
 describe('core/custom-command', () => {
+  useTestEcosystem();
+
   const dirs: string[] = [];
   after(() => {
     for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
@@ -192,6 +197,34 @@ describe('core/custom-command', () => {
     it('quotes a file once, relative to the cwd', () => {
       expect(describeCommandSource(path.join(process.cwd(), '.rman', 'deploy.mjs'))).toBe('".rman/deploy.mjs"');
     });
+  });
+
+  /**
+   * **Exactly two built-ins are shadowable, and this reads the registry rather than a list.**
+   *
+   * `shadowable` is what lets a repository take a name, so marking one by accident is how
+   * `rman publish` would quietly start resolving to two different things - the ambiguity the
+   * refusal exists for. The two that carry it are aliases for `run <script>`: they have no logic of
+   * their own, so the name belongs to whoever has the better answer.
+   *
+   * Derived from `commandRegistry`, so a command added later is covered without anyone remembering
+   * this case - the same reason `builtInNames` stopped being a hand-maintained array.
+   */
+  it('marks only the run aliases as shadowable', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-shadowable-'));
+    dirs.push(dir);
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', version: '1.0.0' }));
+    fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+    /** A real repository, because each register function reads `app.repository` eagerly - a bare
+     *  application answers "the repository is not available yet". */
+    const repo = await createRepository(dir);
+    const shadowable = commandRegistry
+      .map(register => register(repo.app))
+      .filter(meta => meta.shadowable)
+      .map(meta => meta.command.split(' ')[0])
+      .sort();
+
+    expect(shadowable).toEqual(['build', 'test']);
   });
 
   /**
