@@ -25,6 +25,8 @@ Accepts [package filtering](../cli-rman.md#package-filtering) options, in additi
 | `--include-skipped` | - | boolean | Also generate for a package with `.rmanrc "publish.skip"` - excluded by default. |
 | `--no-commit-hash` | - | boolean | Leave each commit's short sha off its line. On by default; GitHub autolinks a bare abbreviated sha wherever it renders Markdown inside the repository, so `(a1b2c3d)` is a link on the page and stays readable in a terminal. Turn it off for notes read somewhere else. Also `.rmanrc "changelog.commitHash"`. |
 | `--no-unreleased` | - | boolean | Leave out the entry for commits that are not released yet - a changelog of released history only. On by default; also `.rmanrc "changelog.unreleased"`. |
+| `--rebuild` | - | boolean | Regenerate each changelog file from the whole history instead of appending to it. Implies `--write`, ignores the file's own marker, and replaces what is in the file rather than prepending - for a repository changing its changelog layout, or one whose files drifted. |
+| `--no-progress` | - | boolean | Leave off the live progress panel. On by default, and auto-disabled when stderr is not a TTY. The panel is drawn on **stderr**, so `rman changelog > NOTES.md` still gets clean notes. Also `.rmanrc "changelog.progress"`. |
 | `--group-by <what>` | - | `package` \| `group` | What one changelog file covers. `package` (default) is one file per package; `group` is one file per set of packages that releases together, written at the repository root. Also `.rmanrc "changelog.groupBy"`. See [One file per package, or one per release](#one-file-per-package-or-one-per-release). |
 | `--starting-at <ref>` | - | string | Where this package's changelog begins - a version or release tag (inclusive), a `YYYY-MM-DD` date, or a commit. Releases older than it are left out. Also `.rmanrc "changelog.startingAt"`. See [Where a changelog begins](#where-a-changelog-begins). |
 | `--release-version <v>` | - | string | The version these notes are **for** - what the entry heading shows. Default: read back from each package's own latest release tag, which is only right once that release is tagged. Pass it when generating notes ahead of the bump (e.g. from `changed --json`), otherwise the heading shows the *previous* release. |
@@ -94,6 +96,32 @@ rman records where it stopped in the file itself, as an HTML comment that render
 ```
 
 There is **one** marker per file, rewritten on each write rather than accumulated.
+
+## Rebuilding a file from scratch
+
+`--write` appends: it starts from the marker the last write left in the file, which is what keeps a
+second run from re-listing what is already there. `--rebuild` does the opposite - it ignores that
+marker (and the file's own last-modifying commit), reads the whole history, and **replaces** the
+file rather than prepending to it:
+
+```bash
+rman changelog --rebuild
+```
+
+It implies `--write`, because there is nothing else it could mean. Use it when the shape of the
+file changed rather than its contents - switching `changelog.groupBy`, renaming a section through
+`changelog.titles`, or setting `changelog.startingAt` for the first time - and when a file has
+drifted from what the history says.
+
+A file this run produces no entry for is **left alone** rather than emptied: a rebuild replaces
+what it can regenerate, and a package with nothing to say still keeps whatever is in its file.
+An explicit `--from` still wins, since that names a boundary for this run rather than one read back
+off disk.
+
+**It reads the entire history, which is not free.** Measured on `panates/sqb` (1825 commits): the
+boundary detection is the fast half at ~1.2s for 18 targets, since those run concurrently; reading
+and parsing the commits runs one target at a time, and a full rebuild there takes minutes.
+`changelog.startingAt` floors which releases are *written*, not how far back the history is read.
 
 ## One file per package, or one per release
 

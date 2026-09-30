@@ -56,11 +56,18 @@ export class ProgressPanel {
   private spinnerFrame = 0;
   private startedAt = 0;
 
+  /**
+   * `stream` is where the panel is drawn - **stdout by default**, which is what `run` and `exec`
+   * have always used. A command whose *answer* goes to stdout passes `process.stderr`, or
+   * redirecting that answer into a file captures the panel's cursor-movement codes along with it:
+   * `rman changelog > NOTES.md` is the case, and it is the same reason the status region moved.
+   */
   constructor(
     private readonly title: string,
     enabled: boolean,
+    stream?: NodeJS.WriteStream,
   ) {
-    this.live = new LiveRegion(enabled);
+    this.live = new LiveRegion(enabled, stream);
   }
 
   get enabled(): boolean {

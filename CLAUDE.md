@@ -1740,6 +1740,50 @@ saw one thing to release and it was the one thing that must never be published.
   future reader of the name would have to repeat it. 15 is about the reader rather than any
   filesystem: the name is repeated in every heading of the file it names and in the file name
   itself. Refused for `version` too, since `groupKeyOf` is what batches its plan.
+- **`--rebuild` regenerates a file instead of appending to it**, and both halves are load-bearing.
+  `resolveBoundary` returns `undefined` before it looks at anything: the marker and `catchUpFile`
+  are both records of what a *previous* run wrote, so consulting either would rebuild the file from
+  where the file already is. And `generateToFile` empties each file it is about to write, once,
+  before any prepend - measured with a control, without it two rebuilds give **8 headings and the
+  same line twice** where one gives 4 and once.
+  - **Only files this run produced an entry for.** A file the run has nothing to say about is left
+    alone: emptying it would lose what is there and put nothing back.
+  - An explicit `--from` still wins, since that names a boundary the caller chose for this run.
+  - It implies `--write`, because "rebuild the changelog" with no file to rebuild would either
+    print - which `--from <first-tag>` already does - or silently do nothing.
+- **Detection is parallel across targets and the commit read is not, and the slow half is the
+  second one.** Measured on `panates/sqb` with a timestamping `git` shim: 18 targets resolve their
+  boundary in **18 concurrent** `git describe` calls, 1.2s wall against 1.8s summed; reading the
+  range is **peak concurrency 1**, 156 invocations, 6.6s - two `git show` per commit (header, then
+  files), one target at a time. A full rebuild of that repository's 1825 commits takes minutes.
+  - `Promise.all` over the groups is what makes the first half concurrent, and `GitHelper` spawns
+    through `execFile`, so nothing underneath serializes it. Within one target the steps are a
+    chain (tag -> registry -> file -> merge-base) and cannot be.
+  - **`changelog.startingAt` floors which releases are written, not how far back the history is
+    read**, so it does not make a rebuild cheaper. Bounding the *fetch* by it is the obvious
+    optimization and is not done: the floor is inclusive and may be a version rather than a ref, so
+    turning it into a fetch boundary means resolving it to the release *before* it, which is a
+    correctness question rather than a rename.
+- **The progress panel is reported, never printed by the service** (`ChangelogService.Options.
+  progress`, `Progress`). `ChangelogService` is documented as pure with respect to the console and
+  that is not tidiness: `version --changelog` drives it in the middle of its own output, so a panel
+  drawn from inside would land on top of that. The CLI implements `Progress` against
+  `ProgressPanel`; every other caller leaves it out.
+  - **Drawn on stderr**, which is why `ProgressPanel` grew a `stream` parameter - `changelog` is
+    `printsDocument`, so `rman changelog > NOTES.md` would otherwise capture the panel's
+    cursor-movement codes into the notes. `LiveRegion` already took the parameter and its own doc
+    anticipated this caller.
+  - A label sits at `pending` between its two phases deliberately: `detect` finishing does not
+    finish the label, and the header's bar counts anything not pending as done - so marking it
+    otherwise shows the run complete while the slow half has not started. `stepIndex` is **0-based**
+    (the panel renders `stepIndex + 1`), which is the mistake that shipped `(3/2)` to a terminal.
+  - The static line it replaces is kept for when the panel cannot draw - a pipe, or
+    `--no-progress` - which are exactly the two cases that line was for.
+- **`--write` prints one line per *file*, not per entry.** An entry is a release, so a backfill
+  produces several for one file; printed per entry the run repeated `updated ... CHANGELOG.md` once
+  per release it found. The path is repository-relative and the label is gone with the repetition:
+  `packages/core/CHANGELOG.md` already says which package it is, and under `groupBy: 'group'` the
+  label names a group while the path names the file that was actually written.
 - **Trap:** run *after* a tag has been created, auto-detection finds that new tag and reports
   nothing changed. Hence: in CI, release notes are generated **before** `version`; and any code path
   running after the tag exists (`version --changelog`, `github-release`) passes the boundary

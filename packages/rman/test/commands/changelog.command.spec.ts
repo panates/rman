@@ -125,15 +125,45 @@ describe('commands/changelog', () => {
   });
 
   describe('--write', () => {
-    it('prints "updated <label> <filePath>" per entry instead of the raw content, and writes the file', async () => {
+    it('prints "updated <repo-relative path>" instead of the raw content, and writes the file', async () => {
       const { dir, baseHash } = fixtureWithOneFeature();
       const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--from', baseHash, '--write'] }));
 
-      expect(lines.some(l => l.includes('updated') && l.includes('pkg-a') && l.includes('CHANGELOG.md'))).toBe(true);
+      /** The path, not the package label: it already says which package the file belongs to, and
+       *  under `changelog.groupBy: 'group'` the label names a group while the path names the file
+       *  that was written. */
+      expect(lines.some(l => l.includes('updated') && l.includes(path.join('packages', 'a', 'CHANGELOG.md')))).toBe(
+        true,
+      );
       expect(lines.some(l => l.includes('a shiny new feature'))).toBe(false);
 
       const written = fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf-8');
       expect(written).toContain('a shiny new feature');
+    });
+
+    /**
+     * **One line per file, however many releases the run documented.** An entry is a release, so a
+     * backfill produces several for one file - printed per entry the run repeated `updated ...
+     * CHANGELOG.md` once per release, which on a real repository was twelve identical lines.
+     */
+    it('names each file once, not once per release it documented', async () => {
+      const { dir, baseHash } = fixtureWithOneFeature();
+      const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      /** A release inside the range, so `splitByRelease` cuts it into two segments - two entries
+       *  for the one file, which is exactly the shape that used to print twice. */
+      run('tag', 'v1.0.1');
+      fs.writeFileSync(path.join(dir, 'packages/a/second.txt'), 'x');
+      run('add', '-A');
+      run('commit', '-q', '-m', 'fix: a second change');
+
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--from', baseHash, '--write'] }));
+
+      const updated = lines.filter(l => l.includes('updated'));
+      expect(updated).toHaveLength(1);
+      /** Both releases really are in the file - the dedup is of the *report*, not of the work. */
+      const written = fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf-8');
+      expect(written).toContain('a shiny new feature');
+      expect(written).toContain('a second change');
     });
 
     it('--file-path (kebab-case CLI flag) controls where --write prepends into', async () => {

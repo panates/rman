@@ -1,9 +1,13 @@
+import path from 'node:path';
 import colors from 'ansi-colors';
+import type { Repository } from '../core/classes/repository.js';
 import type { ConfigValue, RmanConfig } from '../interfaces/rman-config.interface.js';
 import { registerCommand } from '../interfaces/rman-config.interface.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
+import type { ChangelogService } from '../services/changelog.service.js';
 import { Logger, resolveRootLogLevel } from '../utils/logger.js';
 import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
+import { ProgressPanel } from '../utils/progress-panel.js';
 
 const COMMAND = 'changelog' as const;
 
@@ -146,6 +150,29 @@ const config = {
    *
    * Read off the repository root and nowhere else - see `changelogGroupBy`.
    */
+  /**
+   * **The panel is drawn on stderr, not stdout**, which is the whole reason this needed a change
+   * rather than a call: `changelog` is `printsDocument`, so `rman changelog > NOTES.md` would
+   * otherwise capture the panel's cursor-movement codes into the notes. Same reasoning the status
+   * region already carries.
+   */
+  /**
+   * **Implies `--write`, because there is nothing else it could mean.** "Rebuild the changelog"
+   * with no file to rebuild would either print (which `rman changelog --from <first-tag>` already
+   * does) or silently do nothing; neither is what was asked for.
+   */
+  rebuild: {
+    target: 'cli',
+    describe:
+      'Regenerate each changelog file from the whole history instead of appending to it - ' +
+      'implies --write, and replaces what is in the file rather than prepending to it',
+    type: 'boolean',
+  },
+  progress: {
+    target: 'both',
+    describe: 'Show a live progress panel (default: true; auto-disabled when stderr is not a TTY)',
+    type: 'boolean',
+  },
   groupBy: {
     target: 'both',
     cliName: 'group-by',
@@ -220,14 +247,25 @@ const changelogCommand = registerCommand(app => {
     ],
     handler: async (args: Args) => {
       const from = args.from;
-      const write = args.write;
+      const rebuild = !!args.rebuild;
+      const write = args.write || rebuild;
       const logger = new Logger(args.logLevel ?? resolveRootLogLevel(repository));
 
-      if (!from || from === ChangeHashService.AUTO) {
-        // Auto-detection is mostly local git work, but the registry fallback it can reach for
-        // (only when a package has no tag at all, and only if the package's own ecosystem provides
-        // one) is a network round trip per package - without this, the command looks hung for that
-        // stretch instead of just busy.
+      /**
+       * **The panel replaces the static line, and only where it can actually draw.** That line
+       * ("Detecting each package's last release...") answered "did it start" and then said nothing
+       * for the rest of the run - which is the longer half: measured on a `panates/sqb` backfill,
+       * boundary detection is 1.2s and reading the commits is 6.6s, one target at a time.
+       *
+       * Off it falls back to the line, because the two cases it is off in are exactly the two the
+       * line is for: a pipe, and `--no-progress`.
+       */
+      const panel = new ProgressPanel(
+        'CHANGELOG',
+        (args.progress ?? resolveProgressConfig(repository)) !== false && !!process.stderr.isTTY,
+        process.stderr,
+      );
+      if (!panel.enabled && (!from || from === ChangeHashService.AUTO)) {
         logger.info(colors.gray("Detecting each package's last release..."));
       }
 
@@ -242,21 +280,86 @@ const changelogCommand = registerCommand(app => {
         unreleased: args.unreleased,
         commitHash: args.commitHash,
         groupBy: args.groupBy,
+        rebuild,
+        progress: panelReporter(panel),
       };
       const changelog = app.getService('changelog');
-      const entries = write ? await changelog.generateToFile(options) : await changelog.getEntries(options);
+      panel.start();
+      let entries: ChangelogService.Entry[];
+      try {
+        entries = write ? await changelog.generateToFile(options) : await changelog.getEntries(options);
+      } finally {
+        /** In a `finally`, or a throw leaves the redraw interval running and the cursor parked
+         *  inside a half-drawn block - the process then prints its error over the panel. */
+        panel.stop();
+      }
 
       if (!entries.length) {
         logger.info(colors.gray('No unreleased changes.'));
         return;
       }
-      for (const entry of entries) {
-        if (write) logger.info(colors.green('updated'), colors.cyan(entry.label), entry.filePath);
-        else console.log(entry.content);
+      if (!write) {
+        for (const entry of entries) console.log(entry.content);
+        return;
+      }
+      /**
+       * **One line per file, not one per entry.** An entry is a *release*, so a backfill produces
+       * several for the same file and printed per entry the run repeats `updated ... CHANGELOG.md`
+       * once per release it found - twelve identical lines on a real repository, saying nothing
+       * the first did not.
+       *
+       * The path is repository-relative and the label is gone with the repetition: `packages/core/
+       * CHANGELOG.md` already says which package it belongs to, and under
+       * `changelog.groupBy: 'group'` the label names a group while the path names the file that
+       * was actually written - which is what the reader is being told about.
+       */
+      for (const file of new Set(entries.map(e => e.file))) {
+        logger.info(colors.green('updated'), path.relative(repository.dirname, file));
       }
     },
   };
 });
+
+/** `.rmanrc changelog.progress`, off the **root** - one panel for the run, so one answer for the
+ *  repository, the rule `run`'s `concurrency` already follows. */
+function resolveProgressConfig(repository: Repository): boolean | undefined {
+  const v = repository.rootPackage.config?.changelog?.progress;
+  return typeof v === 'boolean' ? v : undefined;
+}
+
+/**
+ * The panel, driven by what `ChangelogService` reports.
+ *
+ * A label sits at `pending` between its two phases on purpose: `detect` finishing does not finish
+ * the label, and the header's bar counts anything not pending as done - so marking it otherwise
+ * would show the run complete while the slow half had not started.
+ */
+function panelReporter(panel: ProgressPanel): ChangelogService.Progress {
+  const items = new Map<string, ReturnType<ProgressPanel['addItem']>>();
+  return {
+    start(labels) {
+      for (const label of labels) items.set(label, panel.addItem(label, 2));
+    },
+    step(label, phase) {
+      const item = items.get(label);
+      if (!item) return;
+      item.status = 'running';
+      item.currentStep = phase === 'detect' ? 'detecting last release' : 'reading commits';
+      /** 0-based: the panel renders `stepIndex + 1`, the way `RunService` sets it. */
+      item.stepIndex = phase === 'detect' ? 0 : 1;
+      item.startedAt ??= Date.now();
+      if (phase === 'detect') item.status = 'pending';
+    },
+    done(label, wrote) {
+      const item = items.get(label);
+      if (!item) return;
+      /** Nothing to document is not a failure and not a success - it is the third thing the panel
+       *  already has a word for. */
+      item.status = wrote ? 'success' : 'skipped';
+      item.finishedAt = Date.now();
+    },
+  };
+}
 
 export default changelogCommand;
 

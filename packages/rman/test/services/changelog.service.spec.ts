@@ -7,6 +7,9 @@ import { ChangeHashService } from '../../src/services/change-hash.service.js';
 import type { ChangelogService } from '../../src/services/changelog.service.js';
 import { createRepository, registryVersions, service, useTestEcosystem } from '../_fixture.js';
 
+/** The `<!-- rman:documented-up-to <sha> -->` line `--write` leaves behind. */
+const MARKER_LINE = /<!-- rman:documented-up-to [0-9a-f]{7,40} -->/;
+
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-changelog-test-'));
 }
@@ -1241,6 +1244,101 @@ describe('services/changelog', () => {
       const dir = repoWithGroup('core_v2.1-x');
       await createRepository(dir);
       await expect(service('changelog').getEntries({ groupBy: 'group' })).resolves.toBeDefined();
+    });
+  });
+
+  /**
+   * **`rebuild` regenerates a file instead of appending to it.** The two things that narrow a
+   * boundary - the file's own marker and `catchUpFile` - are both records of what a previous run
+   * wrote, so a rebuild ignores them; and the file is emptied before anything is prepended, or the
+   * regenerated history lands on top of the history already there.
+   */
+  describe('--rebuild', () => {
+    it('ignores the marker and re-reads the whole range', async () => {
+      const { dir } = fixtureWithUnpushedCommits();
+      await createRepository(dir);
+
+      await service('changelog').generateToFile({});
+      const first = fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf-8');
+      expect(first).toMatch(MARKER_LINE);
+
+      /** A plain second write finds the marker and has nothing left to say. */
+      const appended = await service('changelog').generateToFile({});
+      expect(appended.some(e => e.label === 'pkg-a')).toBe(false);
+
+      const rebuilt = await service('changelog').generateToFile({ rebuild: true });
+      expect(rebuilt.some(e => e.label === 'pkg-a')).toBe(true);
+    });
+
+    it('replaces the file rather than prepending, so running it twice changes nothing', async () => {
+      const { dir } = fixtureWithUnpushedCommits();
+      await createRepository(dir);
+      const file = path.join(dir, 'packages/a/CHANGELOG.md');
+
+      await service('changelog').generateToFile({ rebuild: true });
+      const once = fs.readFileSync(file, 'utf-8');
+      await service('changelog').generateToFile({ rebuild: true });
+      const twice = fs.readFileSync(file, 'utf-8');
+
+      expect(twice).toBe(once);
+      expect(twice.match(/add a feature/g)).toHaveLength(1);
+    });
+
+    it('leaves a file this run has nothing to say about alone', async () => {
+      const { dir } = fixtureWithUnpushedCommits();
+      await createRepository(dir);
+      /** pkg-b owns no commit in this range, so no entry names its file - emptying it would lose
+       *  what is there and put nothing back. */
+      const untouched = path.join(dir, 'packages/b/CHANGELOG.md');
+      fs.writeFileSync(untouched, '# Changelog\n\nhand written, keep me\n');
+
+      await service('changelog').generateToFile({ rebuild: true, scope: 'pkg-a' });
+
+      expect(fs.readFileSync(untouched, 'utf-8')).toContain('hand written, keep me');
+    });
+
+    it('an explicit from still wins over it', async () => {
+      const { dir, baseHash } = fixtureWithUnpushedCommits();
+      await createRepository(dir);
+
+      const entries = await service('changelog').getEntries({ rebuild: true, from: baseHash });
+
+      expect(entries.length).toBeGreaterThan(0);
+    });
+  });
+
+  /**
+   * **What a run reports.** The service prints nothing itself - `version --changelog` drives it in
+   * the middle of its own output - so the CLI's panel is fed from here.
+   */
+  describe('Options.progress', () => {
+    it('reports every label up front, then a phase per label, then whether it wrote', async () => {
+      const { dir, baseHash } = fixtureWithUnpushedCommits();
+      await createRepository(dir);
+
+      const events: string[] = [];
+      await service('changelog').getEntries({
+        from: baseHash,
+        progress: {
+          start: labels => events.push(`start:${labels.length}`),
+          step: (label, phase) => events.push(`step:${label}:${phase}`),
+          done: (label, wrote) => events.push(`done:${label}:${wrote}`),
+        },
+      });
+
+      expect(events[0]).toBe('start:3');
+      expect(events).toContain('step:pkg-a:detect');
+      expect(events).toContain('step:pkg-a:commits');
+      expect(events).toContain('done:pkg-a:true');
+      /** Every label reaches `done`, including one that produced nothing - a caller rendering a
+       *  panel would otherwise leave that row spinning for the rest of the run. */
+      expect(events.filter(e => e.startsWith('done:'))).toHaveLength(3);
+    });
+
+    it('is optional - nothing is reported and nothing throws without it', async () => {
+      const { dir, baseHash } = fixtureWithUnpushedCommits();
+      await createRepository(dir);
+      await expect(service('changelog').getEntries({ from: baseHash })).resolves.toBeDefined();
     });
   });
 });
