@@ -88,7 +88,7 @@ export class GitHelper {
    * without one, whatever's committed on the current branch but not yet in its upstream (same
    * source as `listCommittedFiles`, via `git cherry`).
    */
-  async listCommits(options?: { hash?: string }): Promise<CommitInfo[]> {
+  async listCommits(options?: { hash?: string; onProgress?: GitHelper.CommitProgress }): Promise<CommitInfo[]> {
     const hash = options?.hash;
     let shas: string[];
     if (hash) {
@@ -110,14 +110,14 @@ export class GitHelper {
       }
       shas = Array.from(cherryOut.matchAll(/[a-f0-9]{7,40}/gi)).map(m => m[0]);
     }
-    return this._commitInfoFor(shas);
+    return this._commitInfoFor(shas, options?.onProgress);
   }
 
   /** Every commit reachable from HEAD, oldest first - for a boundary-free "everything so far"
    *  view (e.g. a package that's never been tagged/released at all, so there's no "since" ref to
    *  measure from and `listCommits()`'s own no-hash fallback, upstream push status, doesn't apply -
    *  a repo with no configured remote at all is common and shouldn't read as "nothing happened"). */
-  async listAllCommits(): Promise<CommitInfo[]> {
+  async listAllCommits(options?: { onProgress?: GitHelper.CommitProgress }): Promise<CommitInfo[]> {
     let stdout: string;
     try {
       ({ stdout } = await execFileAsync('git', ['log', '--reverse', '--format=%H'], { cwd: this.cwd }));
@@ -125,11 +125,18 @@ export class GitHelper {
       return [];
     }
     const shas = stdout.trim() ? stdout.trim().split(/\r?\n/) : [];
-    return this._commitInfoFor(shas);
+    return this._commitInfoFor(shas, options?.onProgress);
   }
 
-  private async _commitInfoFor(shas: string[]): Promise<CommitInfo[]> {
+  /* **The slow loop, and the only one worth reporting.** Two `git show` per commit, one commit at
+   * a time - measured on `panates/sqb`, 156 invocations at peak concurrency 1 for a four-release
+   * range, and 1825 commits for a full rebuild. Everything around it is either concurrent across
+   * targets or in memory, which is why `onProgress` is here and nowhere else. */
+  private async _commitInfoFor(shas: string[], onProgress?: GitHelper.CommitProgress): Promise<CommitInfo[]> {
     const commits: CommitInfo[] = [];
+    /** Reported before the first commit, so a caller knows the total while the count is still 0 -
+     *  otherwise a panel has nothing to draw for the whole of the first commit. */
+    onProgress?.(0, shas.length);
     for (const sha of shas) {
       // subject and body in one call (NUL-separated, since a commit message itself never
       // contains one) - halves the process-spawns per commit compared to two separate `git show`s.
@@ -147,6 +154,7 @@ export class GitHelper {
         body: body.trim(),
         files: files.map(f => path.join(this.cwd, f)),
       });
+      onProgress?.(commits.length, shas.length);
     }
     return commits;
   }
@@ -385,6 +393,12 @@ export class GitHelper {
       throw new Error(`Unable to apply patches: ${e.message}`, { cause: e });
     }
   }
+}
+
+export namespace GitHelper {
+  /** Called once with `(0, total)` before the first commit, then after each one - so a caller can
+   *  show the total while the count is still zero. */
+  export type CommitProgress = (done: number, total: number) => void;
 }
 
 const execFileAsync = promisify(execFile);

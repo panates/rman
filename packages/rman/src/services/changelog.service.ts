@@ -113,10 +113,15 @@ export class ChangelogService extends Service {
     // all of them the same way; under fixed versioning, npm auto-detection usually does too) - so
     // the git fetch for a given hash is cached, run once no matter how many packages share it.
     const commitsByHash = new Map<string, Promise<CommitInfo[]>>();
-    const listCommitsCached = (hash: string | undefined): Promise<CommitInfo[]> => {
+    /** `label` only steers the progress report, and only for the target that *triggers* the fetch:
+     *  several targets sharing a boundary share one fetch, so the commits are counted under
+     *  whichever asked first. Reporting it per sharer would mean either several fetches or several
+     *  rows counting the same work. */
+    const listCommitsCached = (hash: string | undefined, label: string): Promise<CommitInfo[]> => {
       const key = hash ?? '';
       let promise = commitsByHash.get(key);
       if (!promise) {
+        const onProgress = (done: number, total: number) => options.progress?.commits?.(label, done, total);
         // No boundary at all means nothing has ever been released, so everything so far is
         // unreleased - the same fallback `VersionService` makes. (Not "not yet pushed": that reads
         // as empty the moment a first release is pushed, and for a repo with no remote at all.)
@@ -127,7 +132,7 @@ export class ChangelogService extends Service {
          * against shas that are no longer in the list - every cut silently missed, and the whole
          * range rendered as one release. Measured while writing it.
          */
-        promise = hash ? git.listCommits({ hash }) : git.listAllCommits();
+        promise = hash ? git.listCommits({ hash, onProgress }) : git.listAllCommits({ onProgress });
         commitsByHash.set(key, promise);
       }
       return promise;
@@ -151,7 +156,13 @@ export class ChangelogService extends Service {
     const commitsByTarget = await Promise.all(
       groups.map(async group => {
         progress?.step(group.label, 'detect');
-        return listCommitsCached(await resolveBoundary(git, group.home, group.file, options));
+        const from = await resolveBoundary(git, group.home, group.file, options);
+        /** **Reading the range happens here, not in the loop below**, which is what makes this the
+         *  phase a panel has to name: the boundary is resolved and then every commit after it is
+         *  fetched, still inside this `Promise.all`. The loop below is `splitByRelease`, the
+         *  grouping and the template - all in memory. */
+        progress?.step(group.label, 'commits');
+        return listCommitsCached(from, group.label);
       }),
     );
 
@@ -163,10 +174,9 @@ export class ChangelogService extends Service {
        *  together and therefore answer these the same way. */
       const pkg = group.home;
       const label = group.label;
-      /** The slow half, and the one worth a panel: reading and parsing every commit in the range,
-       *  which runs one target at a time. Measured on a `panates/sqb` backfill - 156 git
-       *  invocations, peak concurrency 1, 6.6s against detection's 1.2s. */
-      progress?.step(label, 'commits');
+      /** Cutting the range into releases, grouping the subjects and rendering - no git left, so
+       *  this is the fast phase however long the list is. */
+      progress?.step(label, 'render');
       const entriesBefore = entries.length;
 
       /**
@@ -1070,11 +1080,23 @@ export namespace ChangelogService {
     /** Every label this run will work through, before any of it starts. */
     start(labels: string[]): void;
     /**
-     * A label entered a phase. `'detect'` is resolving its boundary, which every label enters at
-     * once; `'commits'` is reading and parsing the range, which they enter one at a time and which
-     * is the slow half.
+     * A label entered a phase, in this order:
+     *
+     * - `'detect'` - resolving its boundary. Every label enters this at once, and it is quick.
+     * - `'commits'` - reading and parsing the range. **The slow one**, two `git show` per commit,
+     *   one commit at a time; `commits()` counts it.
+     * - `'render'` - cutting into releases, grouping and templating. No git, so however long the
+     *   list is this is the fast one.
      */
-    step(label: string, phase: 'detect' | 'commits'): void;
+    step(label: string, phase: 'detect' | 'commits' | 'render'): void;
+    /**
+     * How far the `'commits'` phase has got - `done` of `total`, called with `(0, total)` first so
+     * the total is known while the count is still zero.
+     *
+     * Optional because it is the only member that fires per *commit* rather than per label: a
+     * reporter that only wants the phases leaves it out and pays nothing.
+     */
+    commits?(label: string, done: number, total: number): void;
     /** A label is finished. `wrote` is false when the range produced no entry for it. */
     done(label: string, wrote: boolean): void;
   }

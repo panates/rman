@@ -1773,10 +1773,26 @@ saw one thing to release and it was the one thing that must never be published.
     `printsDocument`, so `rman changelog > NOTES.md` would otherwise capture the panel's
     cursor-movement codes into the notes. `LiveRegion` already took the parameter and its own doc
     anticipated this caller.
-  - A label sits at `pending` between its two phases deliberately: `detect` finishing does not
-    finish the label, and the header's bar counts anything not pending as done - so marking it
-    otherwise shows the run complete while the slow half has not started. `stepIndex` is **0-based**
-    (the panel renders `stepIndex + 1`), which is the mistake that shipped `(3/2)` to a terminal.
+  - **Three phases, and the middle one is where the time goes**: `detect` (boundary, concurrent
+    across targets, milliseconds), `commits` (reading the range, two `git show` each, one commit at
+    a time), `render` (splitting, grouping, templating - no git). **The commit read happens inside
+    the same `Promise.all` as the boundary**, not in the entry loop below it, and mislabelling it
+    the other way was the first thing shipped here: the panel named the fast loop "reading
+    commits" while the real read sat unnamed in the phase called "detect".
+  - **The unit shown has to be commits, not files.** `Progress.commits(label, done, total)` is fed
+    from `GitHelper`'s `onProgress`, which is on `_commitInfoFor` and nowhere else because that is
+    the only serial loop. Without it the row sat unchanged for the whole slow phase - measured on
+    `panates/sqb`, a rebuild read 1825 commits at **~1.2/sec** (older commits are far slower than
+    recent ones: the same loop does ~12/sec over a four-release range), so ~25 minutes with one
+    line on screen. There is exactly one file under `groupBy: 'group'`, so the header's bar is
+    honestly `0/1` the whole time and the item line is what carries the answer.
+  - A label sits at `pending` during `detect` deliberately: every label enters it at once and
+    leaves in milliseconds, so marking them running fills the panel with rows about to go quiet,
+    and the header counts anything not pending as done. `stepIndex` is **0-based** (the panel
+    renders `stepIndex + 1`), which is the mistake that shipped `(3/2)` to a terminal.
+  - `listCommitsCached` shares one fetch between targets with the same boundary, so the commits are
+    counted under whichever target asked first. Reporting per sharer would mean either several
+    fetches or several rows counting the same work.
   - The static line it replaces is kept for when the panel cannot draw - a pipe, or
     `--no-progress` - which are exactly the two cases that line was for.
 - **`--write` prints one line per *file*, not per entry.** An entry is a release, so a backfill

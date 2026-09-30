@@ -1329,12 +1329,56 @@ describe('services/changelog', () => {
       expect(events[0]).toBe('start:3');
       expect(events).toContain('step:pkg-a:detect');
       expect(events).toContain('step:pkg-a:commits');
+      expect(events).toContain('step:pkg-a:render');
       expect(events).toContain('done:pkg-a:true');
       /** Every label reaches `done`, including one that produced nothing - a caller rendering a
        *  panel would otherwise leave that row spinning for the rest of the run. */
       expect(events.filter(e => e.startsWith('done:'))).toHaveLength(3);
     });
 
+    /**
+     * **The per-commit count, which is the only thing that moves during the slow phase.** Without
+     * it a panel shows one row for the whole run - measured on `panates/sqb`, a rebuild sat at the
+     * same line for minutes while 1825 commits were read, because the unit shown was files to
+     * write and `changelog.groupBy: 'group'` has exactly one.
+     */
+    it('counts the commits it reads, starting with the total', async () => {
+      const { dir, baseHash } = fixtureWithUnpushedCommits();
+      await createRepository(dir);
+
+      const ticks: [number, number][] = [];
+      await service('changelog').getEntries({
+        from: baseHash,
+        progress: {
+          start: () => {},
+          step: () => {},
+          done: () => {},
+          commits: (_label, done, total) => ticks.push([done, total]),
+        },
+      });
+
+      /** `(0, total)` first, so a caller knows the total while the count is still zero - otherwise
+       *  there is nothing to draw for the whole of the first commit. */
+      expect(ticks[0][0]).toBe(0);
+      expect(ticks[0][1]).toBeGreaterThan(0);
+      const total = ticks[0][1];
+      /** One tick per commit on top of that opening one, ending exactly at the total. */
+      expect(ticks).toHaveLength(total + 1);
+      expect(ticks[ticks.length - 1]).toEqual([total, total]);
+    });
+
+    it('leaves the count out without complaint - it is the one optional member', async () => {
+      const { dir, baseHash } = fixtureWithUnpushedCommits();
+      await createRepository(dir);
+      const phases: string[] = [];
+      await expect(
+        service('changelog').getEntries({
+          from: baseHash,
+          progress: { start: () => {}, step: (_l, p) => phases.push(p), done: () => {} },
+        }),
+      ).resolves.toBeDefined();
+      expect(phases).toContain('commits');
+    });
     it('is optional - nothing is reported and nothing throws without it', async () => {
       const { dir, baseHash } = fixtureWithUnpushedCommits();
       await createRepository(dir);

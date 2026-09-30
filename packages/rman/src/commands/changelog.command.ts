@@ -334,21 +334,44 @@ function resolveProgressConfig(repository: Repository): boolean | undefined {
  * the label, and the header's bar counts anything not pending as done - so marking it otherwise
  * would show the run complete while the slow half had not started.
  */
+const PHASE_LABELS = {
+  detect: 'detecting last release',
+  commits: 'reading commits',
+  render: 'writing changelog',
+} as const;
+
 function panelReporter(panel: ProgressPanel): ChangelogService.Progress {
   const items = new Map<string, ReturnType<ProgressPanel['addItem']>>();
   return {
     start(labels) {
-      for (const label of labels) items.set(label, panel.addItem(label, 2));
+      for (const label of labels) items.set(label, panel.addItem(label));
     },
     step(label, phase) {
       const item = items.get(label);
       if (!item) return;
-      item.status = 'running';
-      item.currentStep = phase === 'detect' ? 'detecting last release' : 'reading commits';
-      /** 0-based: the panel renders `stepIndex + 1`, the way `RunService` sets it. */
-      item.stepIndex = phase === 'detect' ? 0 : 1;
+      item.currentStep = PHASE_LABELS[phase];
       item.startedAt ??= Date.now();
-      if (phase === 'detect') item.status = 'pending';
+      /**
+       * **`detect` leaves the row pending on purpose.** Every label enters it at once and it is
+       * over in milliseconds; showing all of them "running" would fill the panel with rows that
+       * are about to go quiet again, and the header counts anything not pending as done.
+       */
+      item.status = phase === 'detect' ? 'pending' : 'running';
+      /** The counter belongs to `commits` alone - there it counts real work, and a `(1/3)` over
+       *  the other two would be counting phases, which the label already names. */
+      item.stepIndex = undefined;
+      item.stepsTotal = undefined;
+    },
+    commits(label, done, total) {
+      const item = items.get(label);
+      if (!item) return;
+      /** **This is what the panel is for.** The row sat at one line for the whole of the slow
+       *  phase - measured on `panates/sqb`, minutes for a full rebuild's 1825 commits - because
+       *  the unit shown was files to write, and there is exactly one of those under
+       *  `changelog.groupBy: 'group'`. The commits are the work. */
+      item.stepsTotal = total;
+      /** 0-based: the panel renders `stepIndex + 1`, the way `RunService` sets it. */
+      item.stepIndex = Math.max(0, done - 1);
     },
     done(label, wrote) {
       const item = items.get(label);

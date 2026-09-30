@@ -118,10 +118,15 @@ what it can regenerate, and a package with nothing to say still keeps whatever i
 An explicit `--from` still wins, since that names a boundary for this run rather than one read back
 off disk.
 
-**It reads the entire history, which is not free.** Measured on `panates/sqb` (1825 commits): the
-boundary detection is the fast half at ~1.2s for 18 targets, since those run concurrently; reading
-and parsing the commits runs one target at a time, and a full rebuild there takes minutes.
-`changelog.startingAt` floors which releases are *written*, not how far back the history is read.
+**It reads the entire history, which is not free.** Boundary detection is the fast half - every
+target resolves its own concurrently, ~1.2s for 18 of them on `panates/sqb`. Reading the commits is
+not: two `git show` each, one at a time. Measured on the same repository, a full rebuild reads 1825
+commits at roughly 1.2 per second and takes about 25 minutes; the same loop manages ~12 per second
+over a recent four-release range, so older history is markedly slower.
+
+The progress panel counts those commits (`reading commits (418/1825)`), which is the only thing
+that moves during that phase. `changelog.startingAt` floors which releases are *written*, not how
+far back the history is read, so it does not make a rebuild cheaper.
 
 ## One file per package, or one per release
 
