@@ -9,14 +9,20 @@
 export class LiveRegion {
   private lineCount = 0;
   readonly enabled: boolean;
+  /** Where the block is drawn. **stdout by default**, which is what the progress panel has always
+   *  used; a caller whose *answer* goes to stdout passes stderr instead, so redirecting the answer
+   *  into a file does not capture cursor-movement codes. Both land on the same terminal, so only
+   *  one region may be live at a time either way. */
+  private readonly stream: NodeJS.WriteStream;
 
-  constructor(enabled: boolean = !!process.stdout.isTTY) {
-    this.enabled = enabled;
+  constructor(enabled?: boolean, stream: NodeJS.WriteStream = process.stdout) {
+    this.stream = stream;
+    this.enabled = enabled ?? !!stream.isTTY;
   }
 
   render(lines: string[]): void {
     if (!this.enabled) return;
-    const width = process.stdout.columns || 80;
+    const width = this.stream.columns || 80;
     /** Measure by visible length, not raw length - a heavily-colored line has far more
      *  bytes than visible characters, and slicing the raw string would cut mid-escape-code. */
     let clipped = lines.map(l => {
@@ -28,7 +34,7 @@ export class LiveRegion {
      *  scrolls the screen, "move up N rows" can't actually get back N rows, and every
      *  redraw lands lower than the last, leaving a trail instead of a single updating block.
      *  Callers should size their own content to fit, but this is a hard backstop. */
-    const maxRows = Math.max(1, (process.stdout.rows || 24) - 1);
+    const maxRows = Math.max(1, (this.stream.rows || 24) - 1);
     if (clipped.length > maxRows) clipped = clipped.slice(0, maxRows);
 
     let out = this.lineCount ? `\x1b[${this.lineCount}A` : '';
@@ -36,7 +42,7 @@ export class LiveRegion {
     for (let i = clipped.length; i < this.lineCount; i++) out += '\r\x1b[2K\n';
     if (clipped.length < this.lineCount) out += `\x1b[${this.lineCount - clipped.length}A`;
 
-    process.stdout.write(out);
+    this.stream.write(out);
     this.lineCount = clipped.length;
   }
 
@@ -46,7 +52,7 @@ export class LiveRegion {
     let out = `\x1b[${this.lineCount}A`;
     for (let i = 0; i < this.lineCount; i++) out += '\r\x1b[2K\n';
     out += `\x1b[${this.lineCount}A`;
-    process.stdout.write(out);
+    this.stream.write(out);
     this.lineCount = 0;
   }
 }

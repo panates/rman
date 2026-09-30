@@ -9,6 +9,7 @@ import { RunService } from '../services/run.service.js';
 import { VersionService } from '../services/version.service.js';
 import type { VersionPlanService } from '../services/version-plan.service.js';
 import { Logger, type LogLevel } from '../utils/logger.js';
+import type { StatusRegion } from '../utils/status-region.js';
 import { Registry } from './classes/registry.js';
 import type { Repository } from './classes/repository.js';
 import type { ServiceFactory, ServiceMap } from './classes/service.js';
@@ -42,6 +43,20 @@ export class RmanApplication {
    * puts none.
    */
   readonly platforms = new Registry<Platform>();
+
+  /**
+   * The live status line, while a command is running under one - `cli.ts` sets it and clears it.
+   *
+   * Read by whatever spawns a child process: a region draws a block at the bottom of the terminal
+   * and redraws it in place, so a child writing straight to the terminal scrolls the screen and the
+   * next redraw erases the wrong rows. `runBin` therefore pipes the child while this is set and
+   * routes its output through `passThrough`.
+   */
+  /* **On the application rather than a module-level singleton**, which is the same seam `BinPath`
+   * already uses: `runBin` and `exec` are handed an `app`, so nothing has to reach for ambient
+   * state, and a spec that builds its own application cannot be affected by one that built
+   * another. The root-hook era this repository removed is what that rule is about. */
+  statusRegion?: StatusRegion;
 
   /**
    * The **plugins** themselves, in declaration order - what a config named, before the platforms

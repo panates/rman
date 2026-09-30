@@ -64,14 +64,33 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
   const cwd = options.cwd ?? process.cwd();
   const logLevel = options.logLevel ?? 'info';
   const atLeast = (level: LogLevel) => LOG_LEVELS.indexOf(logLevel) >= LOG_LEVELS.indexOf(level);
+  /**
+   * **A live status region forces `pipe`, whatever the log level would have chosen.** The region
+   * draws a block at the bottom of the terminal and redraws it in place; a child writing straight
+   * to the terminal scrolls the screen, and the next redraw's "move up N rows" then erases what the
+   * child just printed. So the child is piped and every line goes through `passThrough`, which
+   * erases the block, writes, and redraws below it - the same arrangement `RunService` makes for the
+   * progress panel, for the same reason.
+   *
+   * An explicit `options.stdio` still wins: a caller that has thought about it outranks this.
+   */
+  const region = options.app?.statusRegion?.live ? options.app.statusRegion : undefined;
   /** Below 'info' the output is captured rather than streamed, so a quiet run stays quiet and a
    *  failing one can still say what went wrong. */
-  const stdio = options.stdio ?? (atLeast('info') ? 'inherit' : 'pipe');
+  const stdio = options.stdio ?? (region ? 'pipe' : atLeast('info') ? 'inherit' : 'pipe');
   if (atLeast('verbose')) console.log(colors.magenta('verbose'), colors.gray('$'), bin, argv.join(' '));
   const child = spawn(process.platform === 'win32' ? `${bin}.cmd` : bin, argv, {
     cwd,
     stdio: stdio === 'inherit' ? 'inherit' : 'pipe',
-    env: BinPath.env({ cwd, env: options.env, app: options.app }) as NodeJS.ProcessEnv,
+    /** **`FORCE_COLOR` when a region made us pipe.** A child checks `isTTY` to decide whether to
+     *  colour, and a pipe is not one - so routing eslint's output through the region would
+     *  otherwise strip the colour it had when it inherited the terminal. Set only for that case:
+     *  a caller that asked for `pipe` itself is usually capturing text to read, not to show. */
+    env: BinPath.env({
+      cwd,
+      env: region && atLeast('info') ? { FORCE_COLOR: '1', ...options.env } : options.env,
+      app: options.app,
+    }) as NodeJS.ProcessEnv,
     windowsHide: true,
   });
   /** So an interrupted rman does not leave this running - `exec` always did this and this did not,
@@ -79,8 +98,17 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
   trackChild(child);
 
   let output = '';
-  child.stdout?.on('data', (d: Buffer) => (output += d.toString()));
-  child.stderr?.on('data', (d: Buffer) => (output += d.toString()));
+  /** **Streamed through the region as it arrives, not held to the end.** Piping is how the region
+   *  stays intact; buffering would additionally make a long command look silent, which is the very
+   *  thing the region exists to fix. Only when a region is live - otherwise `pipe` keeps meaning
+   *  "capture, and surface it if this fails". */
+  const collect = (d: Buffer) => {
+    const text = d.toString();
+    output += text;
+    if (region && atLeast('info')) region.passThrough(text);
+  };
+  child.stdout?.on('data', collect);
+  child.stderr?.on('data', collect);
 
   return new Promise<RunBinResult>((resolve, reject) => {
     child.on('error', (e: any) => {
@@ -92,7 +120,10 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
       if (code === 0) return resolve({ code: 0, output });
       /** Captured output has to be surfaced here or it is lost with the process - the one thing
        *  worse than a noisy failure is a silent one. 'silent' is the caller saying otherwise. */
-      if (stdio === 'pipe' && output && logLevel !== 'silent') process.stderr.write(output);
+      /** Already streamed through the region, so printing it again would double it. */
+      if (stdio === 'pipe' && output && logLevel !== 'silent' && !(region && atLeast('info'))) {
+        process.stderr.write(output);
+      }
       const err: any = new Error(`"${bin} ${argv.join(' ')}" exited with code ${code}`);
       err.code = code;
       err.output = output;

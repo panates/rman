@@ -16,6 +16,8 @@ const infoCommand = registerCommand(app => {
   const repository = app.repository;
   return {
     command: COMMAND,
+    /** Prints a report, which is the whole output. */
+    printsDocument: true,
     describe: 'Prints local environment and repository information',
     config,
     examples: [

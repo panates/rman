@@ -566,6 +566,25 @@ export namespace RmanConfig {
      */
     positionals?: Record<string, PositionalOption>;
     /**
+     * **This command's stdout *is* its answer, so nothing may be printed around it.** `rman config`
+     * writes a loadable YAML document, `list` a table, `changelog` the notes themselves - a status
+     * line above or below any of them is content the reader did not ask for, and for `config` it
+     * makes the output unloadable.
+     *
+     * Everything else gets a line naming the command when it starts and one giving the result and
+     * the elapsed time when it ends (`cli.ts`'s `interceptStatusLines`).
+     */
+    /* **Declared rather than listed centrally**, which is the rule `builtInNames` already follows:
+     * a hand-maintained list in `cli.ts` would be a second place to state a fact the command owns,
+     * and it could not reach a *contributed* command at all - a repository's own `rman report` that
+     * prints a document would have no way to say so.
+     *
+     * The default is the loud one on purpose. The complaint this answers is "it started and it
+     * ended and I could not tell whether it ran", and a command author who has to remember a flag
+     * to fix that is the same failure one step removed. A command that prints a document knows it
+     * does; a command that is silent does not know it is. */
+    printsDocument?: boolean;
+    /**
      * **The parameter is the command's own business, so this states no type for it.**
      * A handler annotates itself with `ArgsOf<typeof config, typeof COMMAND>`, which this interface
      * cannot compute for it - `M` is inferred from the literal the handler sits in, so naming it

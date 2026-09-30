@@ -85,6 +85,10 @@ declare module 'yargs' {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface CommandModule<T = {}, U = {}> {
     configKeys?: ConfigKeys;
+    /** Whether this command's stdout is a document nothing may be printed around - see
+     *  `CommandMetadata.printsDocument`. Here as well as there because `cli.ts` reads it off the
+     *  *registration*, which is the only shape that reaches `program.command`. */
+    printsDocument?: boolean;
   }
 }
 

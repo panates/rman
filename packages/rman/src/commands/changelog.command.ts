@@ -184,6 +184,8 @@ const changelogCommand = registerCommand(app => {
   const repository = app.repository;
   return {
     command: COMMAND,
+    /** Prints the notes themselves, which a caller redirects into a file. */
+    printsDocument: true,
     describe: 'Generates a changelog per package from unreleased commits',
     /** Read, not owned: `publish.skip` is `publish`'s key, reused here on purpose - a package that is
      *  never distributed gets no release notes either. */

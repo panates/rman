@@ -13,6 +13,8 @@ const diffCommand = registerCommand(app => {
   const repository = app.repository;
   return {
     command: COMMAND,
+    /** Prints git's own diff, passed through. */
+    printsDocument: true,
     describe: "Shows the git diff since a package's (or the whole repository's) last release tag",
     config,
     positionals: {

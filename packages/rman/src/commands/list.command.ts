@@ -51,6 +51,8 @@ type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;
 const listCommand = registerCommand(app => {
   return {
     command: COMMAND,
+    /** Prints a table, and `--json` beside it. */
+    printsDocument: true,
     aliases: ['ls'],
     describe: 'Lists packages in repository',
     config,

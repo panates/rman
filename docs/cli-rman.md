@@ -263,6 +263,36 @@ These apply to every command, before the command name:
 | `--log-level <level>` | - | Default verbosity of the per-step log for `run`/`build`/`test`/`ci` (`silent`\|`error`\|`info`\|`verbose`). Default `info`, or `.rmanrc "logLevel"`. Per-package overridable via `.rmanrc run.<script>.logLevel`. Only affects the *classic* one-line-per-step log - it has no effect on the live progress panel's own output. |
 | `--config` | - | Print what this command would run with, and **run nothing**. See below. |
 
+### The status line
+
+Every command that does work runs under a live line on **stderr**, so a command that prints nothing
+is still visibly running:
+
+```
+⠹ lint  my-repo  2.4s
+✔ lint  3.6s
+```
+
+The spinner and the clock are redrawn in place, and the result line replaces them - with `✖` and the
+elapsed time when the command fails, so a run that stops is never mistaken for one that hung.
+
+Four cases are silent, and each is about not corrupting something:
+
+- **A command whose output *is* its answer** - `config`, `list`, `info`, `diff`, `changelog`.
+  `rman config` writes a loadable YAML document, and a line above it would make it unparseable.
+- **`--json`**, whichever command produced it, so `rman version --json | jq` never receives prose.
+- **`--config`**, for the same reason.
+- **`--log-level silent`**.
+
+**stderr rather than stdout**, so `rman changelog > NOTES.md` leaves the notes alone in the file. And
+**nothing is drawn when stderr is not a TTY** (CI, a pipe): the escape codes would be noise there,
+while the result line still says how the run went and how long it took.
+
+A command's own output is routed through the line rather than around it - while one is live,
+`runBin` pipes the child instead of handing it the terminal, since a write underneath the block
+would be erased by the next redraw. Colour survives that (`FORCE_COLOR`), so eslint's output looks
+the same as it did.
+
 ### `--config`: what would this command run with?
 
 Any command, `--config` anywhere in the line. Nothing is executed:

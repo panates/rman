@@ -981,6 +981,47 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   `PublishTarget.claims`, answered by the ecosystem that read the manifest. **Never narrow it
   again.** A name nothing implements is caught by `publish` itself, naming the targets the
   repository does have.
+## The status line around every command
+
+[`utils/status-region.ts`](packages/rman/src/utils/status-region.ts), installed by
+`cli.ts`'s `interceptStatusLines`. A spinner, the command's name, the repository and a clock
+counting up while it runs; a `✔`/`✖` line with the elapsed time when it ends.
+
+- **The complaint it answers is "did it even run".** `rman lint` on a clean repository is silent for
+  several seconds - eslint says nothing when it has nothing to say - and a static start line answers
+  "did it start" without answering "is it still going".
+- **One interception point, not a line per command**, which is the rule `--config` already follows:
+  every command reaches yargs through `program.command`, so wrapping that one method is what makes
+  it universal. A line each command remembers to write is the same failure one step removed.
+- **`printsDocument` is the opt-out, declared on the command** - `config`, `list`, `info`, `diff`,
+  `changelog`. Their stdout *is* the answer, and for `config` a line above it makes the YAML
+  unloadable. Declared rather than listed in `cli.ts`, which is the rule `builtInNames` follows: a
+  central list is a second place to state a fact the command owns, and it could not reach a
+  *contributed* command at all.
+  - **The field has to be carried through `toYargsCommand`**, beside `configKeys`. Measured by
+    leaving it out: `config` declared `printsDocument: true` and still printed a status line above
+    its own document, because `cli.ts` reads the *registration* and the flag never got there. Pinned
+    by the one spec that turns red when that line is reverted.
+- **`--json` and `--config` are checked, not declared**: any command may grow a `--json`, and a
+  consumer doing `rman version --json | jq` must never receive prose.
+- **On stderr, and `LiveRegion` took a `stream` parameter for it.** A command's answer goes to
+  stdout, so `rman changelog > NOTES.md` has to leave the notes alone in the file - cursor-movement
+  codes in there are worse than noise. `ProgressPanel`'s region keeps stdout, unchanged.
+- **A live region forces `runBin` to pipe**, and that is not a preference. The region redraws by
+  moving the cursor up N rows; a child writing straight to the terminal scrolls the screen, so the
+  next redraw erases what the child just printed. So output goes through `passThrough` - erase,
+  write, redraw below - which is the arrangement `RunService` already makes for the progress panel.
+  `FORCE_COLOR=1` goes with it, or eslint sees a pipe and drops the colour it had.
+- **The region lives on `RmanApplication.statusRegion`**, not in a module-level singleton. `runBin`
+  and `exec` are handed an `app` already - the same seam `BinPath` uses - so nothing reaches for
+  ambient state and one spec's application cannot affect another's. That is what the removed root
+  hooks were about.
+- **The spinner's interval is `unref`'d**, or a command that finishes its work waits out the frame
+  before the process can exit.
+- **Not drawn when stderr is not a TTY**, where the escape codes mean nothing - but the result line
+  still prints, which is the half a CI log wants. `cli.spec.ts` therefore sees **one** line, not
+  two; the live half is `status-region.spec.ts`, which builds the region with `enabled` forced on.
+
 ## `rman config` - the resolved config, for the directory you are standing in
 
 [`src/commands/config.command.ts`](packages/rman/src/commands/config.command.ts). Prints

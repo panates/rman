@@ -30,6 +30,7 @@ import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/
 import { filterPackages, readFromRootOption, readPackageFilterOptions } from './utils/package-filter.js';
 import { printableConfig, withoutContributions } from './utils/printable-config.js';
 import { runBin } from './utils/run-bin.js';
+import { StatusRegion } from './utils/status-region.js';
 
 export async function runCli(options?: {
   argv?: string[];
@@ -122,6 +123,15 @@ export async function runCli(options?: {
      * quietly does nothing on whichever command forgot it is worse than no flag.
      */
     interceptConfigFlag(repository, program);
+
+    /**
+     * **A command that says nothing is indistinguishable from one that did not run.** `rman lint`
+     * on a clean repository starts and ends in silence - eslint prints nothing when it has nothing
+     * to say - and the reader is left wondering whether the command exists. One line when it
+     * starts and one when it ends answers that for every command at once, which is the same reason
+     * `--config` is applied here rather than per command.
+     */
+    interceptStatusLines(repository, program);
 
     /**
      * **Built-ins come from `commandRegistry`, in the order their modules were imported.** Each
@@ -328,6 +338,72 @@ function interceptConfigFlag(repository: Repository, program: Argv): void {
     return register({
       ...spec,
       handler: (args: any) => (args.config ? printCommandConfig(repository, spec, args) : run(args)),
+    });
+  };
+}
+
+/**
+ * Replaces `program.command` with a version that brackets every handler in a line naming the
+ * command and a line giving its result and elapsed time.
+ *
+ * One interception point rather than a line written into each command - the same reason
+ * `interceptConfigFlag` is one, and it has to go in **before** any command is registered.
+ */
+/* **Why this exists at all**: a command that prints nothing is indistinguishable from one that
+ * never ran. `rman lint` on a clean repository is exactly that - eslint says nothing when it has
+ * nothing to say - and the reader is left asking whether the command took.
+ *
+ * **Four cases stay silent**, and each is about not corrupting something:
+ *
+ *   - `printsDocument` - the command's stdout *is* its answer. `rman config` writes a loadable YAML
+ *     document; a line above it makes the document unparseable, which is the same failure its own
+ *     colour handling already avoids for a pipe.
+ *   - `--json` and `--config` - machine output, whichever command produced it. `--json` is checked
+ *     rather than declared because any command may grow one, and a consumer doing
+ *     `rman version --json | jq` must never receive prose.
+ *   - `--log-level silent`, which is what it is for.
+ *
+ * **Written to stderr, not stdout**, so `rman changelog > NOTES.md` keeps the notes alone in the
+ * file even for a command that declares no `printsDocument`. The status is about the run, not the
+ * answer, and stderr is where that belongs.
+ *
+ * **The end line reports failure too, and then rethrows.** A command that throws still deserves the
+ * bracket closed - a start line with nothing after it reads as a hang. The error itself is left to
+ * the caller, which already prints it. */
+function interceptStatusLines(repository: Repository, program: Argv): void {
+  const register = program.command.bind(program) as (spec: any) => Argv;
+  (program as any).command = (spec: any) => {
+    if (!spec || typeof spec !== 'object' || typeof spec.handler !== 'function') return register(spec);
+    const run = spec.handler;
+    return register({
+      ...spec,
+      handler: async (args: any) => {
+        /** The flag when it was given, the repository's own `logLevel` otherwise - the same
+         *  precedence every other reader of it applies. `argvLogLevel` is not used here: that one
+         *  exists for diagnostics emitted *before* parsing, and by now yargs has the answer. */
+        const level = args.logLevel ?? repository.config?.logLevel;
+        if (spec.printsDocument || args.json || args.config || level === 'silent') return run(args);
+
+        const name = commandName(spec.command ?? '');
+        /** Held on the application so `runBin` can find it through the `app` it already receives -
+         *  see `RmanApplication.statusRegion` for why that rather than ambient state. */
+        const region = new StatusRegion(name, repository.name ?? '');
+        repository.app.statusRegion = region;
+        region.start();
+        try {
+          const result = await run(args);
+          region.stop('ok');
+          return result;
+        } catch (e) {
+          /** **The bracket is closed even on a failure.** A spinner that simply stops, leaving its
+           *  last frame on screen, reads as a hang - which is the thing this exists to prevent. The
+           *  error itself is left to the caller, which already prints it. */
+          region.stop('fail');
+          throw e;
+        } finally {
+          repository.app.statusRegion = undefined;
+        }
+      },
     });
   };
 }

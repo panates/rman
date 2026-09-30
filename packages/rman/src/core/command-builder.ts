@@ -16,6 +16,11 @@ export function toYargsCommand(meta: RmanConfig.CommandMetadata): CommandModule 
     aliases: meta.aliases,
     describe: meta.describe,
     configKeys: configKeysOf(meta),
+    /** Carried through like `configKeys`, and for the same reason: `cli.ts` reads it off the
+     *  registration, which is the only shape that reaches `program.command`. Left out, the flag is
+     *  a field nothing ever sees - measured, `rman config` printed a status line above its own YAML
+     *  document while declaring `printsDocument: true`. */
+    printsDocument: meta.printsDocument,
     builder: (cmd: Argv) => {
       if (meta.parserConfiguration) cmd.parserConfiguration(meta.parserConfiguration);
       for (const [name, spec] of Object.entries(meta.positionals ?? {})) cmd.positional(name, spec);

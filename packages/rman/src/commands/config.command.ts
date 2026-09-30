@@ -28,6 +28,8 @@ const configCommand = registerCommand(app => {
   const repository = app.repository;
   return {
     command: COMMAND,
+    /** Prints a loadable YAML document - a line above it is what makes it unparseable. */
+    printsDocument: true,
     describe: 'Prints the effective .rmanrc config for the package of the current directory',
     config,
     examples: [

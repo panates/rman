@@ -22,6 +22,24 @@ async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
   return lines;
 }
 
+/** Runs `fn` with `process.stderr.write` captured. The status lines go to stderr on purpose - so a
+ *  caller redirecting stdout into a file keeps the answer alone in it - which is also why
+ *  `captureLogs` above cannot see them. */
+async function captureStderr(fn: () => Promise<void>): Promise<string> {
+  const original = process.stderr.write.bind(process.stderr);
+  let out = '';
+  (process.stderr as NodeJS.WriteStream).write = ((chunk: any) => {
+    out += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await fn();
+  } finally {
+    (process.stderr as NodeJS.WriteStream).write = original;
+  }
+  return out;
+}
+
 describe('cli: global --log-level', () => {
   useTestEcosystem();
 
@@ -278,6 +296,101 @@ describe('cli: global --config', () => {
  * unassignable - so `ArgsOf` had to mark everything optional. The `as` is gone from both; if it
  * comes back, this suite is where to look first.
  */
+
+/**
+ * **A command that prints nothing is indistinguishable from one that never ran.** `rman lint` on a
+ * clean repository is exactly that - eslint says nothing when it has nothing to say - and the
+ * reader is left asking whether the command took. One line when it starts and one when it ends
+ * answers it for every command at once, which is why it is an interception point in `cli.ts` rather
+ * than a line each command remembers to write.
+ */
+describe('cli: status lines around a command', () => {
+  useTestEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  function fixture(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-status-test-'));
+    dirs.push(dir);
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: 'root', private: true, workspaces: ['packages/*'] }),
+    );
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { run: { build: { exec: 'echo hi' } } } }));
+    fs.mkdirSync(path.join(dir, 'packages/a'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'packages/a/package.json'), JSON.stringify({ name: 'pkg-a', version: '1.0.0' }));
+    return dir;
+  }
+
+  it('writes a result line naming the command and how long it took', async () => {
+    const dir = fixture();
+    const err = await captureStderr(() => runCli({ cwd: dir, argv: ['build'] }).catch(() => {}));
+
+    expect(err).toContain('build');
+    /** **One line here, not two.** While the command runs the status is a *live* line - a spinner
+     *  and a ticking clock, redrawn in place - and a redraw needs a TTY. Under a test runner stderr
+     *  is a pipe, so `StatusRegion` draws nothing and only the result survives, which is the half
+     *  that carries information into a CI log. The live half is covered in `status-region.spec.ts`,
+     *  where the region is built with `enabled` forced on. */
+    expect(err.split('\n').filter(l => l.includes('build'))).toHaveLength(1);
+    /** The result line carries a duration - `4.1s` / `950ms` / `2m 03s`. */
+    expect(err).toMatch(/\d+(\.\d+)?(ms|s)/);
+  });
+
+  /**
+   * **`--json` is checked rather than declared**, because any command may grow one and a consumer
+   * doing `rman version --json | jq` must never receive prose. The control for this is the case
+   * above: the same command, without the flag, writes both lines.
+   */
+  it('says nothing under --json, whichever command produced it', async () => {
+    const dir = fixture();
+    const err = await captureStderr(() => runCli({ cwd: dir, argv: ['version', '--json'] }).catch(() => {}));
+    expect(err).not.toContain('version');
+  });
+
+  /** What `silent` is for. */
+  it('says nothing under --log-level silent', async () => {
+    const dir = fixture();
+    const err = await captureStderr(() =>
+      runCli({ cwd: dir, argv: ['build', '--log-level', 'silent'] }).catch(() => {}),
+    );
+    expect(err).toBe('');
+  });
+
+  /**
+   * **A command whose stdout *is* its answer gets nothing printed around it.** `rman config` writes
+   * a loadable YAML document; a line above it is what makes the document unparseable - the same
+   * failure its own colour handling already avoids for a pipe.
+   *
+   * This is the case that caught the field not being carried: `printsDocument` was declared on the
+   * command and dropped by `toYargsCommand`, so `cli.ts` never saw it and `config` printed a status
+   * line above its own YAML. Reverting that one line in `command-builder.ts` turns this red.
+   */
+  it('says nothing around a command that prints a document', async () => {
+    const dir = fixture();
+    const err = await captureStderr(() => runCli({ cwd: dir, argv: ['config'] }).catch(() => {}));
+    expect(err).toBe('');
+  });
+
+  /** **A failing command still gets its bracket closed.** A start line with nothing after it reads
+   *  as a hang, which is the thing this feature exists to prevent. */
+  it('writes the result line when the command fails, and still fails', async () => {
+    const dir = fixture();
+    let threw = false;
+    const err = await captureStderr(async () => {
+      await runCli({ cwd: dir, argv: ['run', 'nope'] }).catch(() => {
+        threw = true;
+      });
+    });
+
+    expect(threw).toBe(true);
+    expect(err.split('\n').filter(l => l.includes('run'))).toHaveLength(1);
+  });
+});
+
 describe('cli: a required positional', () => {
   useTestEcosystem();
 
