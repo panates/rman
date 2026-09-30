@@ -1042,6 +1042,20 @@ counting up while it runs; a `✔`/`✖` line with the elapsed time when it ends
   next redraw erases what the child just printed. So output goes through `passThrough` - erase,
   write, redraw below - which is the arrangement `RunService` already makes for the progress panel.
   `FORCE_COLOR=1` goes with it, or eslint sees a pipe and drops the colour it had.
+  - **It is added *onto* a base environment and must never be written as one.** `BinPath.env`'s
+    `env` option is the environment to *derive from* - it stands in for `process.env` rather than
+    extending it - so `{ FORCE_COLOR: '1', ...options.env }` handed over with no `options.env` left
+    the child holding that single variable and a PATH of nothing but the contributed directories.
+    Shipped in 2.3.0 and it broke every `runBin` call made while a region is live, which is all of
+    them. Measured on `panates/sqb`: `rman test` still *found* npm - the node walk ends at the
+    running interpreter's own directory, where npm sits - and npm then died `spawn sh ENOENT`,
+    because `/bin` was not on the PATH it was given.
+  - **Why it took a repository to find it.** A binary run straight out of `node_modules/.bin`
+    survives a PATH like that: its `#!/usr/bin/env node` shebang is resolved by absolute path and
+    `node` is the one entry the walk does append. eslint, prettier and tsc all pass. What fails is a
+    child that spawns a *shell* - `npm run` being the one every repository types - so the preset's
+    `lint`, `check` and `format` were green while `test` was not. **A spec covering a `runBin` env
+    has to run something that spawns `sh` itself**, which is what `run-bin.spec.ts` does.
 - **The region lives on `RmanApplication.statusRegion`**, not in a module-level singleton. `runBin`
   and `exec` are handed an `app` already - the same seam `BinPath` uses - so nothing reaches for
   ambient state and one spec's application cannot affect another's. That is what the removed root

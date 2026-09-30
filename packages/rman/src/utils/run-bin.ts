@@ -86,9 +86,16 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
      *  colour, and a pipe is not one - so routing eslint's output through the region would
      *  otherwise strip the colour it had when it inherited the terminal. Set only for that case:
      *  a caller that asked for `pipe` itself is usually capturing text to read, not to show. */
+    /* **It is added *onto* a base environment, never written as one.** `BinPath.env`'s `env` is the
+     * environment to derive from - it replaces `process.env` rather than extending it - so
+     * `{ FORCE_COLOR: '1' }` handed over alone left the child with that one variable plus a PATH
+     * holding only `node_modules/.bin`. Measured on `panates/sqb` at 2.3.0: `rman test` found npm
+     * (the walk ends at the running node's own directory) and npm then died with
+     * `spawn sh ENOENT`, because `/bin` was not on the PATH it was given. Every `runBin` call made
+     * while a status region is live had it, which since 2.3.0 is every one of them. */
     env: BinPath.env({
       cwd,
-      env: region && atLeast('info') ? { FORCE_COLOR: '1', ...options.env } : options.env,
+      env: region && atLeast('info') ? { FORCE_COLOR: '1', ...(options.env ?? process.env) } : options.env,
       app: options.app,
     }) as NodeJS.ProcessEnv,
     windowsHide: true,

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { runBin } from '../../src/utils/run-bin.js';
+import { StatusRegion } from '../../src/utils/status-region.js';
 import { createApp, useLocalBin } from '../_fixture.js';
 
 describe('utils/run-bin', () => {
@@ -83,5 +84,47 @@ describe('utils/run-bin', () => {
     const dir = fixture('#!/bin/sh\necho noise\n');
     const result = await runBin('fake-tool', [], { cwd: dir, logLevel: 'error', app });
     expect(result.output.trim()).toBe('noise');
+  });
+
+  /**
+   * **A live status region adds `FORCE_COLOR` to the environment; it must not become the
+   * environment.** `BinPath.env`'s `env` option is the base to derive from, so handing it
+   * `{ FORCE_COLOR: '1' }` alone dropped `process.env` entirely - the child got that one variable
+   * and a PATH holding nothing but the contributed directories.
+   *
+   * The two assertions are the two halves of what that cost, and the nested `sh` is the failure as
+   * it was actually reported: on `panates/sqb` at 2.3.0 `rman test` reached npm (the node walk ends
+   * at the running interpreter's own directory, where npm sits) and npm died with
+   * `spawn sh ENOENT`, because `/bin` was not on the PATH it was handed.
+   */
+  it('adds FORCE_COLOR onto the inherited environment when a region is live, rather than replacing it', async () => {
+    const dir = fixture(
+      '#!/bin/sh\necho "marker=$RMAN_SPEC_MARKER"\necho "color=$FORCE_COLOR"\nsh -c \'echo nested\'\n',
+    );
+    /** Enabled but never started - `live` is the drawing flag, and a running spinner would write
+     *  frames over mocha's own report. */
+    app.statusRegion = new StatusRegion('spec', '', true);
+
+    process.env.RMAN_SPEC_MARKER = 'inherited';
+    let result;
+    try {
+      /** The region's `passThrough` writes to stderr, so it is silenced for the duration rather
+       *  than spliced into the reporter's output. */
+      const original = process.stderr.write.bind(process.stderr);
+      (process.stderr as NodeJS.WriteStream).write = (() => true) as typeof process.stderr.write;
+      try {
+        result = await runBin('fake-tool', [], { cwd: dir, app });
+      } finally {
+        (process.stderr as NodeJS.WriteStream).write = original;
+      }
+    } finally {
+      delete process.env.RMAN_SPEC_MARKER;
+    }
+
+    expect(result.output).toContain('marker=inherited');
+    expect(result.output).toContain('color=1');
+    /** The PATH is still a usable one: a child of the child resolves `sh`, which is what npm does
+     *  for every script it runs. */
+    expect(result.output).toContain('nested');
   });
 });
