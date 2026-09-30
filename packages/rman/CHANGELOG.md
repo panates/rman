@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to b1168723c695e471d89e103fbbe2a2ce51f56f9a -->
+<!-- rman:documented-up-to 3fe2d95abb3cafce7ff00ca261276217766eb56a -->
+
+## v2.5.0 (2026-09-30)
+
+### ✨ Features
+
+- export mergeConfig, for a config assembled in JavaScript (3fe2d95)
+
+### 🧹 Chores
+
+- write a changelog, from v2.0.0 onward (ff77d48)
+
+---
 
 ## v2.4.0 (2026-09-30)
 
