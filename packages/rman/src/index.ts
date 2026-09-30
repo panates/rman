@@ -34,6 +34,32 @@ import type { RmanConfig as CommandDeclaration } from './interfaces/rman-config.
 
 export { defineConfig } from './interfaces/rman-config.interface.js';
 /**
+ * Merges `source` onto `target` the way rman layers an `extends` base, a directory level or a
+ * `"[selector]"` block - returning `target`, mutated.
+ */
+/* **Exported for a config assembled in JavaScript**, which `@panates/rman-preset` is: it composes
+ * one config from a platform-neutral part and a Node one, and a plain object spread gets that
+ * wrong in two ways a reader would not expect.
+ *
+ * A spread is shallow, so two objects both declaring `changelog` keep only the later one's -
+ * silently, and wholesale. A deep merge from a general-purpose library fixes that half and breaks
+ * the other: measured with `@jsopen/objects`' `merge({deep: true})`, `commands: ['a','b']` merged
+ * with `['c']` gives `['c']`, while rman appends those - `commands`, `plugins`, `platforms` and
+ * `publishTargets` are `ALWAYS_APPEND` keys precisely because naming one of your own never means
+ * "and drop the ones my base brought". A generic merge would drop a preset's commands the day
+ * anything else declared one.
+ *
+ * `origin` is the file `source` was read from, recorded per key so a failing expression can name
+ * it. A caller merging an object it built rather than read passes nothing, and the error then
+ * names whatever file the surrounding config came from.
+ *
+ * **`extends` remains the better answer where it fits**, and it is worth trying first: a config
+ * module can carry `extends: ['./other.js']` and let rman do the merging, which costs no API
+ * surface at all and keeps the origins exact. Measured to work for a JS module extending a JS
+ * module, nested inside a config that is itself an `extends` target. This export is for the case
+ * where one module has to hand back a single finished object. */
+export { mergeConfig } from './core/config/merge-config.js';
+/**
  * **A config value written as a function**, and the scope it is handed. Exported because a config
  * author could not name either: `interpolateConfig` calls a function wherever a `${{ }}` could
  * stand, but the only function form the types admitted was a *step* - so the primary spelling of
