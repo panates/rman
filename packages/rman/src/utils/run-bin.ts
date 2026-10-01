@@ -32,6 +32,16 @@ export interface RunBinOptions {
    *   even then. An explicit `stdio` still wins over all of this.
    */
   logLevel?: LogLevel;
+  /**
+   * Called once per line of the child's output **instead of writing it to the terminal**.
+   */
+  /* **This is what makes a function step behave like a shell one.** `RunService` gives `exec` an
+   * `onLine` so a shell step's output lands in the progress panel's item log and shows as that
+   * row's last line; `runBin` had no equivalent, so a function step calling it streamed its child
+   * straight to the screen through the live region. Measured on a failing build: a shell step
+   * showed `✔ check 554ms` on its row while a function step's `tsc` filled the terminal with every
+   * error it had, pushing the panel down the screen. Same panel, two contracts. */
+  onLine?: (line: string) => void;
   env?: Record<string, string | undefined>;
 }
 
@@ -77,7 +87,11 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
   const region = options.app?.statusRegion?.live ? options.app.statusRegion : undefined;
   /** Below 'info' the output is captured rather than streamed, so a quiet run stays quiet and a
    *  failing one can still say what went wrong. */
-  const stdio = options.stdio ?? (region ? 'pipe' : atLeast('info') ? 'inherit' : 'pipe');
+  /** **`onLine` forces `pipe` the same way a live region does.** Left to the default, a caller at
+   *  `info` would get `inherit` - the child writes straight to the terminal, `child.stdout` is
+   *  null, and the callback is never called at all. An option that silently does nothing is worse
+   *  than one that does not exist. */
+  const stdio = options.stdio ?? (options.onLine || region ? 'pipe' : atLeast('info') ? 'inherit' : 'pipe');
   if (atLeast('verbose')) console.log(colors.magenta('verbose'), colors.gray('$'), bin, argv.join(' '));
   const child = spawn(process.platform === 'win32' ? `${bin}.cmd` : bin, argv, {
     cwd,
@@ -112,6 +126,12 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
   const collect = (d: Buffer) => {
     const text = d.toString();
     output += text;
+    /** A caller taking the lines owns them - it is showing them somewhere of its own, and writing
+     *  them here as well would both double them and scroll whatever it is drawing. */
+    if (options.onLine) {
+      for (const line of text.split(/\r?\n/)) if (line) options.onLine(line);
+      return;
+    }
     if (region && atLeast('info')) region.passThrough(text);
   };
   child.stdout?.on('data', collect);
@@ -128,7 +148,7 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
       /** Captured output has to be surfaced here or it is lost with the process - the one thing
        *  worse than a noisy failure is a silent one. 'silent' is the caller saying otherwise. */
       /** Already streamed through the region, so printing it again would double it. */
-      if (stdio === 'pipe' && output && logLevel !== 'silent' && !(region && atLeast('info'))) {
+      if (stdio === 'pipe' && output && logLevel !== 'silent' && !options.onLine && !(region && atLeast('info'))) {
         process.stderr.write(output);
       }
       const err: any = new Error(`"${bin} ${argv.join(' ')}" exited with code ${code}`);

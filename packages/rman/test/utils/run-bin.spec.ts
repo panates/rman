@@ -127,4 +127,65 @@ describe('utils/run-bin', () => {
      *  for every script it runs. */
     expect(result.output).toContain('nested');
   });
+
+  /**
+   * **`onLine` is what makes a function step behave like a shell one.** `RunService` gives `exec` an
+   * `onLine` so a shell step's output lands in the progress panel's item log and shows as that
+   * row's last line; `runBin` had no equivalent, so a function step calling it streamed its child
+   * straight to the screen through the live region. Measured on a failing build: a shell step showed
+   * one line on its row while a function step's compiler filled the terminal with every error it
+   * had, pushing the panel down the screen.
+   */
+  describe('onLine', () => {
+    it('hands each line to the caller instead of writing it anywhere', async () => {
+      const lines: string[] = [];
+      const written = captureStderr(async () => {
+        await runBin('node', ['-e', "for(let i=0;i<3;i++)console.log('OUT '+i)"], { onLine: l => lines.push(l) });
+      });
+
+      expect(await written).not.toContain('OUT 0');
+      expect(lines).toEqual(['OUT 0', 'OUT 1', 'OUT 2']);
+    });
+
+    /** The caller is showing the lines somewhere of its own; writing them here too would both
+     *  double them and scroll whatever it is drawing. */
+    it('does not reprint the captured output when the child fails', async () => {
+      const lines: string[] = [];
+      const written = captureStderr(async () => {
+        await expect(
+          runBin('node', ['-e', "console.log('BOOM');process.exit(3)"], { onLine: l => lines.push(l) }),
+        ).rejects.toThrow();
+      });
+
+      /** Awaited first: `captureStderr` only resolves once the child has closed, and asserting on
+       *  `lines` before that reads it half-filled. */
+      expect(await written).not.toContain('BOOM');
+      expect(lines).toEqual(['BOOM']);
+    });
+
+    it('still carries the output on the error, so a caller that wants it can have it', async () => {
+      await expect(
+        runBin('node', ['-e', "console.log('BOOM');process.exit(3)"], { onLine: () => {} }),
+      ).rejects.toMatchObject({
+        output: expect.stringContaining('BOOM'),
+      });
+    });
+  });
 });
+
+/** What reached stderr while `fn` ran - `runBin` writes a failing child's captured output there,
+ *  and these cases are about it *not* doing so. */
+async function captureStderr(fn: () => Promise<void>): Promise<string> {
+  const original = process.stderr.write.bind(process.stderr);
+  let out = '';
+  (process.stderr as NodeJS.WriteStream).write = ((chunk: any) => {
+    out += String(chunk);
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await fn();
+  } finally {
+    (process.stderr as NodeJS.WriteStream).write = original;
+  }
+  return out;
+}

@@ -512,6 +512,7 @@ export namespace RunService {
     pkg: Package,
     cwd: string,
     onCommand?: (command: string | undefined) => void,
+    onLine?: (line: string) => void,
   ): RunStepContext {
     const logLevel = resolveRootLogLevel(pkg.repository);
     return {
@@ -521,7 +522,7 @@ export namespace RunService {
       runBin: async (bin, argv, opts) => {
         onCommand?.([bin, ...argv].join(' '));
         try {
-          return await runBin(bin, argv, { cwd, logLevel, app: pkg.repository.app, ...opts });
+          return await runBin(bin, argv, { cwd, logLevel, app: pkg.repository.app, onLine, ...opts });
         } finally {
           /** Back to whatever the caller had, or a step that spawns once would wear that command
            *  for the rest of its run. */
@@ -725,7 +726,7 @@ async function runFunctionStep(
   onLine?: (line: string) => void,
   onCommand?: (command: string | undefined) => void,
 ): Promise<void> {
-  const context = RunService.createStepContext(pkg, cwd, onCommand);
+  const context = RunService.createStepContext(pkg, cwd, onCommand, onLine);
   if (!onLine) {
     try {
       await run(context);

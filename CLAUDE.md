@@ -2073,6 +2073,18 @@ four behaviours still fire.
   different column on every row and pushed it off the end once a command was long. Everything
   fixed-width reads down a straight edge now and the variable part runs off to the right, where
   `truncate` cuts it.
+- **A function step's child output is *captured*, not passed through to the screen** (`runBin`'s
+  `onLine`, threaded from `runFunctionStep` through `createStepContext`). `RunService` already gave
+  `exec` an `onLine` so a shell step's output lands in the panel's item log and shows as that row's
+  last line; `runBin` had no equivalent, so it streamed its child straight to the terminal through
+  the live region. Same panel, two contracts - measured on a failing build of a twenty-package
+  repository: a shell step showed `✔ check 554ms` on its row while a function step's `tsc` wrote
+  every one of its errors to the screen, scrolling the panel. A failed step's log is still printed
+  once, at the end, which is what the shell path already did.
+  - **`onLine` forces `pipe`.** Left to the default a caller at `info` gets `inherit`, so
+    `child.stdout` is null and the callback never fires - an option that silently does nothing.
+  - It also suppresses the reprint on failure: the caller is showing those lines somewhere of its
+    own, and writing them again would double them and scroll whatever it is drawing.
 - **A function step reports what it *spawns*, not only its own name** (`createStepContext`'s
   `onCommand`, wrapped around the bound `runBin`). `buildWithTsc()` is all the slot knows, and it is
   what the row showed for the whole of a build; the reader wants the `tsc -b <tsconfig>` inside it.
