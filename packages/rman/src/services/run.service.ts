@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
 import { inspect } from 'node:util';
 import colors from 'ansi-colors';
@@ -501,6 +502,55 @@ export namespace RunService {
   }
 
   /**
+   * Runs `fn` with `console` captured into `onLine`, and leaves the real `console` behind when the
+   * last concurrent step is done.
+   */
+  /* **One patch for the whole run, routed per step - and the obvious alternative is broken under
+   * concurrency.** Patching per step and restoring "the original" works for one step and corrupts the
+   * console for every run with two:
+   *
+   *     A patches   -> A's "original" is the real console
+   *     B patches   -> B's "original" is *A's patch*
+   *     A restores  -> console is real again
+   *     B restores  -> console is A's patch, for the rest of the process
+   *
+   * Measured on a twenty-package build with sixteen running at once: afterwards `printSummary`'s own
+   * `console.log` calls went into a finished package's log array, so the run printed **no recap and
+   * no failure logs at all** - every error silently swallowed, which is the opposite of what the
+   * capture is for. The depth counter is what restores the pristine console rather than whatever was
+   * installed when this step started.
+   *
+   * `AsyncLocalStorage` is what makes one shared patch route to the right step: the steps interleave
+   * on the event loop, so the call stack cannot say which package a `console.log` belongs to, and
+   * `await` inside an author's function is exactly what it propagates through. A log from outside any
+   * step - a timer a step left running - finds no store and goes to the real console, which is right.
+   */
+  export function withCapturedConsole<T>(onLine: (line: string) => void, fn: () => T | Promise<T>): Promise<T> {
+    const console_ = globalThis.console as unknown as Record<string, (...args: any[]) => void>;
+    if (consoleDepth++ === 0) {
+      const pristine: Record<string, (...args: any[]) => void> = {};
+      for (const method of CAPTURED_CONSOLE) {
+        pristine[method] = console_[method];
+        console_[method] = (...args: any[]) => {
+          const sink = consoleSink.getStore();
+          if (!sink) return pristine[method]!(...args);
+          /** Split, because one `console.log` may carry several lines and the panel's log is a list
+           *  of them - a multi-line entry would render as one unreadable row. */
+          for (const line of format(args).split('\n')) sink(line);
+        };
+      }
+      pristineConsole = pristine;
+    }
+    /** `Promise.resolve`, because a step may be a plain function - `RunStepFn` returns
+     *  `void | Promise<void>` and only the promise form can be awaited. */
+    return Promise.resolve(consoleSink.run(onLine, fn)).finally(() => {
+      if (--consoleDepth > 0 || !pristineConsole) return;
+      for (const method of CAPTURED_CONSOLE) console_[method] = pristineConsole[method]!;
+      pristineConsole = undefined;
+    });
+  }
+
+  /**
    * `onCommand` is told what the step is spawning, for as long as it runs - the argv while a child
    * is up, `undefined` when it returns.
    */
@@ -736,27 +786,20 @@ async function runFunctionStep(
     }
     return;
   }
-  const console_ = globalThis.console as unknown as Record<string, (...args: any[]) => void>;
-  const original: Record<string, (...args: any[]) => void> = {};
-  for (const method of CAPTURED_CONSOLE) {
-    original[method] = console_[method];
-    console_[method] = (...args: any[]) => {
-      /** Split, because one `console.log` may carry several lines and the panel's log is a list of
-       *  them - a multi-line entry would render as one unreadable row. */
-      for (const line of format(args).split('\n')) onLine(line);
-    };
-  }
   try {
-    await run(context);
+    await RunService.withCapturedConsole(onLine, () => run(context));
   } catch (e: any) {
-    /** Through the patched `console` deliberately - `onLine` is still installed at this point, so
-     *  the message lands in this step's log rather than over the panel it is drawn inside. */
+    /** Straight to `onLine`, so the message lands in this step's log rather than over the panel it
+     *  is drawn inside. */
     for (const line of messageOf(e).split('\n')) onLine(line);
     throw e;
-  } finally {
-    for (const method of CAPTURED_CONSOLE) console_[method] = original[method];
   }
 }
+
+/** Which step a captured `console` call belongs to - see `withCapturedConsole`. */
+const consoleSink = new AsyncLocalStorage<(line: string) => void>();
+let consoleDepth = 0;
+let pristineConsole: Record<string, (...args: any[]) => void> | undefined;
 
 /** What a thrown value has to say for itself. A step may throw anything, and `String(undefined)`
  *  reading as `undefined` in a run log is worse than saying nothing was said. */

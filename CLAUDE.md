@@ -2404,6 +2404,27 @@ so none of them has anything a function could replace.
     gives you - printed **success** and exited 0. Normalized to an `Error` now. Only the panel-off
     path had it; with the panel on there is no local catch. Found by the spec written for the
     message fix above, which is the only reason it is not still there.
+- **One console patch for the whole run, routed per step by `AsyncLocalStorage`**
+  (`RunService.withCapturedConsole`). Patching per step and restoring "the original" works for one
+  step and corrupts the console for every run with two:
+
+      A patches   -> A's "original" is the real console
+      B patches   -> B's "original" is *A's patch*
+      A restores  -> console is real again
+      B restores  -> console is A's patch, for the rest of the process
+
+  Measured on a twenty-package build with sixteen running at once: afterwards `printSummary`'s own
+  `console.log` calls went into a finished package's log array, so the run printed **no recap and
+  no failure logs at all** - 16 failures, and the only thing on screen was `✖ build 30.9s`. The
+  depth counter is what restores the *pristine* console rather than whatever was installed when
+  this step started.
+  - **`AsyncLocalStorage` is what makes one shared patch route correctly.** The steps interleave on
+    the event loop, so the call stack cannot say which package a `console.log` belongs to, and
+    `await` inside an author's function is exactly what it propagates through. A log from outside
+    any step - a timer a step left running - finds no store and reaches the real console.
+  - **Exported from the namespace as a seam.** A spec cannot reach it through `run()`: the panel is
+    `isTTY && progress`, so under a test runner it is off and no capture happens at all. The three
+    cases drive it directly, and the control (per-step restore) turns the concurrency one red.
 - **`console` is redirected only while the progress panel is on**, which is the same split `exec`
   already makes (`stdio: 'pipe'` + `onLine` with the panel, `'inherit'` without). A function writing
   to the real stdout would print *over* the panel it is being rendered inside. Steps should prefer

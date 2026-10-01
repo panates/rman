@@ -1023,3 +1023,100 @@ describe('RunService.createStepContext() reports what a step spawns', () => {
     await expect(ctx.runBin('node', ['-e', 'process.exit(0)'])).resolves.toBeDefined();
   });
 });
+
+/**
+ * **Patching `console` per step corrupts it under concurrency**, which is what this replaces. Each
+ * step used to save "the original" and restore it, so with two running at once the second restored
+ * the *first one's patch* and the real console never came back:
+ *
+ *     A patches  -> A's "original" is the real console
+ *     B patches  -> B's "original" is A's patch
+ *     A restores -> real console
+ *     B restores -> A's patch, for the rest of the process
+ *
+ * Measured on a twenty-package build with sixteen running at once: afterwards `printSummary`'s own
+ * `console.log` calls went into a finished package's log array, so the run printed **no recap and
+ * no failure logs at all**.
+ */
+describe('RunService.withCapturedConsole()', () => {
+  /** A stub this spec owns, so "was the console handed back" is a question about identity rather
+   *  than about behaviour. */
+  function withStubbedConsole<T>(fn: (stub: typeof console.log) => Promise<T>): Promise<T> {
+    const pristine = console.log;
+    const stub = (() => {}) as typeof console.log;
+    console.log = stub;
+    return fn(stub).finally(() => {
+      console.log = pristine;
+    });
+  }
+
+  it('hands the real console back after the last of several concurrent steps', async () => {
+    await withStubbedConsole(async stub => {
+      const a: string[] = [];
+      const b: string[] = [];
+      await Promise.all([
+        RunService.withCapturedConsole(
+          l => a.push(l),
+          async () => {
+            console.log('a-1');
+            await wait(60);
+            console.log('a-2');
+          },
+        ),
+        RunService.withCapturedConsole(
+          l => b.push(l),
+          async () => {
+            await wait(20);
+            console.log('b-1');
+            await wait(60);
+            console.log('b-2');
+          },
+        ),
+      ]);
+
+      /** **The assertion the old code fails.** It left whichever patch happened to be installed
+       *  when the last step started. */
+      expect(console.log).toBe(stub);
+      /** And each step's lines went to its own sink, not into whichever one patched last. */
+      expect(a).toEqual(['a-1', 'a-2']);
+      expect(b).toEqual(['b-1', 'b-2']);
+    });
+  });
+
+  it('hands it back even when a step throws', async () => {
+    await withStubbedConsole(async stub => {
+      await expect(
+        RunService.withCapturedConsole(
+          () => {},
+          async () => {
+            throw new Error('boom');
+          },
+        ),
+      ).rejects.toThrow('boom');
+      expect(console.log).toBe(stub);
+    });
+  });
+
+  it('a log from outside any step reaches the real console', async () => {
+    await withStubbedConsole(async () => {
+      const captured: string[] = [];
+      const seen: unknown[][] = [];
+      console.log = ((...args: unknown[]) => void seen.push(args)) as typeof console.log;
+      await RunService.withCapturedConsole(
+        l => captured.push(l),
+        async () => {
+          console.log('inside');
+        },
+      );
+      console.log('outside');
+
+      expect(captured).toEqual(['inside']);
+      expect(seen).toEqual([['outside']]);
+    });
+  });
+});
+
+/** Resolves after `ms` - the concurrency cases need the two steps to overlap. */
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
