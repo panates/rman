@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 298353da00d013db9a1fd05c1c5d10a9748e162c -->
+<!-- rman:documented-up-to 0774edfd142e11c7821d2f5e702525a958bf13d3 -->
+
+## v2.6.1 (2026-10-01)
+
+### 🐛 Bug Fixes
+
+- **progress:** one region draws at a time, so the bottom lines stop swapping (0774edf)
+
+---
 
 ## v2.6.0 (2026-09-30)
 
