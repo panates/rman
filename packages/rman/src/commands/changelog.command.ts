@@ -284,6 +284,7 @@ const changelogCommand = registerCommand(app => {
         progress: panelReporter(panel),
       };
       const changelog = app.getService('changelog');
+      panel.detail = repository.name;
       panel.start(app.statusRegion);
       let entries: ChangelogService.Entry[];
       try {

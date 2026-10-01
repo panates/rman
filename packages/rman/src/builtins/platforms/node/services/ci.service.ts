@@ -93,6 +93,7 @@ export namespace CiService {
     const progress = options.progress ?? true;
     const panel = new ProgressPanel('CI', !!process.stdout.isTTY && progress);
     const runStartedAt = Date.now();
+    panel.detail = repository.name;
     panel.start(repository.app.statusRegion);
 
     const items: ProgressItem[] = [];

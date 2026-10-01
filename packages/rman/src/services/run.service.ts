@@ -254,6 +254,7 @@ export class RunService extends Service {
       throw err;
     }
 
+    panel.detail = repository.name;
     panel.start(repository.app.statusRegion);
 
     try {

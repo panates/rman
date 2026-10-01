@@ -76,6 +76,7 @@ export class ExecService extends Service {
       );
     });
 
+    panel.detail = repository.name;
     panel.start(repository.app.statusRegion);
     let failed = false;
     try {

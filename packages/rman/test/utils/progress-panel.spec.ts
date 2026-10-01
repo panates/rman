@@ -419,4 +419,47 @@ describe('utils/ProgressPanel', () => {
       expect(calls).toEqual([]);
     });
   });
+
+  /**
+   * **The header carries what the suspended status line used to say.** That line was `ci opra` -
+   * the command and the repository - and taking it off the screen without moving its content here
+   * lost both. The badge already names the command, so the repository is what moved.
+   */
+  describe('detail in the header', () => {
+    async function headerOf(detail?: string): Promise<string> {
+      let header = '';
+      await withCapturedStdout(
+        async writes => {
+          const panel = new ProgressPanel('EXEC', true);
+          panel.detail = detail;
+          const item = panel.addItem('pkg-a');
+          item.status = 'running';
+          item.startedAt = Date.now();
+          panel.start();
+          await wait(150);
+          panel.stop();
+          header =
+            stripAnsi(writes.join(''))
+              .split('\n')
+              .find(l => l.includes('EXEC')) ?? '';
+        },
+        { columns: 200, rows: 24 },
+      );
+      return header;
+    }
+
+    it('shows it, after the elapsed time rather than before the bar', async () => {
+      const header = await headerOf('my-repo');
+      expect(header).toContain('my-repo');
+      /** **At the tail.** Between the badge and the bar it would push every column right by the
+       *  length of a repository name, so the bar would sit somewhere different in each one. */
+      expect(header.indexOf('my-repo')).toBeGreaterThan(header.indexOf('running'));
+    });
+
+    it('leaves the header exactly as it was when nothing set one', async () => {
+      const header = await headerOf(undefined);
+      expect(header).toContain('EXEC');
+      expect(header.trimEnd()).toBe(header.trimEnd().replace(/\s+$/, ''));
+    });
+  });
 });

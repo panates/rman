@@ -56,6 +56,12 @@ export class ProgressPanel implements TerminalRegion {
   private renderLoop?: ReturnType<typeof setInterval>;
   /** The region this panel took the terminal from, handed back in `stop`. */
   private statusRegion?: StatusRegion;
+  /**
+   * What the run is about - the repository name, shown beside the title. Assigned rather than
+   * constructed with, the way a `ProgressItem`'s fields are: it keeps `stream` from needing an
+   * `undefined` placeholder at four of the five call sites.
+   */
+  detail?: string;
   private spinnerFrame = 0;
   private startedAt = 0;
 
@@ -155,8 +161,21 @@ export class ProgressPanel implements TerminalRegion {
     const totalElapsed = formatDuration(Date.now() - this.startedAt);
     const failedText =
       failedSoFar > 0 ? colors.red.bold(`${failedSoFar} failed`) : colors.gray(`${failedSoFar} failed`);
+    /**
+     * **The header says what is running, because nothing else does any more.** The status line used
+     * to carry `ci opra` beside this panel; it is suspended now so the two stop redrawing over each
+     * other, and suppressing it without moving its content here took the command and the repository
+     * off the screen entirely. The badge already names the command, so what had to move is the
+     * repository.
+     *
+     * **At the right end, where the line has room.** Between the badge and the bar it would push
+     * every column right by the length of a repository name - so the bar, the counts and the clock
+     * would sit at a different place in each repository, and the bar would shift the moment a
+     * panel's detail were set. The tail is empty space in every terminal this fits in.
+     */
+    const detail = this.detail ? `   ${colors.gray(this.detail)}` : '';
     const lines: string[] = [
-      `${header} ${bar} ${colors.bold(`${done}/${total}`)}  ${colors.cyan(`${running} running`)}  ${failedText}  ${colors.yellow(totalElapsed)}`,
+      `${header} ${bar} ${colors.bold(`${done}/${total}`)}  ${colors.cyan(`${running} running`)}  ${failedText}  ${colors.yellow(totalElapsed)}${detail}`,
     ];
 
     const runningList = [...this.items.values()].filter(i => i.status === 'running');

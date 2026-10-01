@@ -1074,6 +1074,13 @@ counting up while it runs; a `✔`/`✖` line with the elapsed time when it ends
     screen; the answer to *which* region is `takeover`, which `passThrough` forwards to. Making
     `live` false instead would have let every `runBin` child inherit the terminal and scroll over
     the panel - the failure the piping exists to prevent.
+  - **The panel's header carries the suspended line's content** (`ProgressPanel.detail`, set to
+    `repository.name` at all five sites). Suppressing the status line without moving its content
+    took the command and the repository off the screen, which was reported immediately. The badge
+    already names the command, so what moved is the repository - **at the right end of the header,
+    not between the badge and the bar**: there it would push every column right by the length of a
+    repository name, so the bar, the counts and the clock would sit somewhere different in each
+    repository. The tail is empty space in every terminal the panel fits in.
   - **`TerminalRegion` is `passThrough` and nothing else.** `StatusRegion.live` and
     `ProgressPanel.enabled` are the same question under two names, and `ProgressPanel.live` is the
     `LiveRegion` itself - putting `live` in the contract would force a rename for no gain.
