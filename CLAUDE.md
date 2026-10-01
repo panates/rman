@@ -2098,6 +2098,18 @@ four behaviours still fire.
   set from `step.command` or a function step's own name). `before (2/9)` answers "which slot",
   which the reader already knows; a row sitting there for ten seconds with nothing on stdout is
   what the panel was hiding, and for a build it is the common case.
+  - **A row forgets its last line when the step or the command changes** (`PanelItem`'s accessors).
+    Stale output under a new command is the one kind of wrong that does not look wrong - reported
+    from `ci`, where the row read `install (2/2) | npm install` over
+    `removed node_modules, package-lock.json`, the wipe's line sitting under the install's command
+    as though it were its output.
+    - **Accessors rather than a line at each call site.** The sites are four services and a command,
+      and the one that forgets leaves no trace.
+    - **Cleared where it changes, never at render time.** The panel redraws every 100ms, so
+      comparing there would race a line that arrived between the change and the next frame and throw
+      away real output.
+    - Assigning the same value is not a change, or a driver that re-sets the step on every tick
+      would discard the output it just captured.
   - The second line stays the last captured *output*. The command belongs on the first because it
     has to be stable - replacing it the moment the step prints something takes it away exactly when
     a long step is still worth identifying.

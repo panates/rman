@@ -86,7 +86,7 @@ export class ProgressPanel implements TerminalRegion {
   /** Registers an item and returns it - callers mutate the returned object directly (`status`,
    *  `currentStep`, `lastLine`, ...) to drive the next render tick. */
   addItem(name: string, stepsTotal?: number): ProgressItem {
-    const item: ProgressItem = { name, status: 'pending', stepsTotal, log: [] };
+    const item = new PanelItem(name, stepsTotal);
     this.items.set(name, item);
     return item;
   }
@@ -308,4 +308,57 @@ function renderProgressBar(done: number, total: number, width = 24): string {
   const cells = total ? Math.round((done / total) * width) : 0;
   const filled = Math.max(0, Math.min(width, cells));
   return colors.green('█'.repeat(filled)) + colors.gray('░'.repeat(width - filled));
+}
+
+/**
+ * What `addItem` hands back - a `ProgressItem` whose `currentStep` and `currentCommand` clear
+ * `lastLine` when they change.
+ */
+/* **Accessors rather than a line at each call site**, because the call sites are four services and
+ * a command and the one that forgets is invisible: stale output under a new command does not look
+ * like a bug, it looks like output. Reported from `ci`, where the row read
+ * `install (2/2) | npm install` over `removed node_modules, package-lock.json` - the wipe's line,
+ * sitting under the install's command as though it belonged to it.
+ *
+ * **Cleared where it changes, not at render time.** The panel redraws every 100ms, so comparing
+ * there would race a line that arrived between the change and the next frame and throw away real
+ * output. This is synchronous with the assignment.
+ */
+class PanelItem implements ProgressItem {
+  status: ProgressStatus = 'pending';
+  stepIndex?: number;
+  stepsTotal?: number;
+  lastLine?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  readonly log: string[] = [];
+  private _currentStep?: string;
+  private _currentCommand?: string;
+
+  constructor(
+    readonly name: string,
+    stepsTotal?: number,
+  ) {
+    this.stepsTotal = stepsTotal;
+  }
+
+  get currentStep(): string | undefined {
+    return this._currentStep;
+  }
+
+  set currentStep(value: string | undefined) {
+    if (value === this._currentStep) return;
+    this._currentStep = value;
+    this.lastLine = undefined;
+  }
+
+  get currentCommand(): string | undefined {
+    return this._currentCommand;
+  }
+
+  set currentCommand(value: string | undefined) {
+    if (value === this._currentCommand) return;
+    this._currentCommand = value;
+    this.lastLine = undefined;
+  }
 }

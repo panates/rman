@@ -462,4 +462,78 @@ describe('utils/ProgressPanel', () => {
       expect(header.trimEnd()).toBe(header.trimEnd().replace(/\s+$/, ''));
     });
   });
+
+  /**
+   * **Stale output under a new command reads as that command's output**, which is the one kind of
+   * wrong that does not look wrong. Reported from `ci`, where a row read
+   * `install (2/2) | npm install` over `removed node_modules, package-lock.json` - the wipe step's
+   * line, sitting under the install's command as though it belonged to it.
+   */
+  describe('a row forgets its last line when the work changes', () => {
+    it('clears it when the step changes', () => {
+      const item = new ProgressPanel('X', false).addItem('pkg-a');
+      item.currentStep = 'wipe';
+      item.lastLine = 'removed node_modules';
+
+      item.currentStep = 'install';
+
+      expect(item.lastLine).toBeUndefined();
+    });
+
+    it('clears it when the command changes', () => {
+      const item = new ProgressPanel('X', false).addItem('pkg-a');
+      item.currentCommand = 'rm -rf build';
+      item.lastLine = 'removed 24 files';
+
+      item.currentCommand = 'npm install';
+
+      expect(item.lastLine).toBeUndefined();
+    });
+
+    /** Assigning the same value is not a change - a driver that re-sets the step on every tick
+     *  would otherwise throw away the output it just captured. */
+    it('keeps it when the same value is assigned again', () => {
+      const item = new ProgressPanel('X', false).addItem('pkg-a');
+      item.currentStep = 'install';
+      item.currentCommand = 'npm install';
+      item.lastLine = 'added 2 packages';
+
+      item.currentStep = 'install';
+      item.currentCommand = 'npm install';
+
+      expect(item.lastLine).toBe('added 2 packages');
+    });
+
+    /** The other half: a line set *during* a step is shown, so the clearing above is about staleness
+     *  and not about suppressing output. */
+    it('shows a line that belongs to the step that is running', async () => {
+      await withCapturedStdout(
+        async writes => {
+          const panel = new ProgressPanel('CI', true);
+          const item = panel.addItem('root', 2);
+          item.status = 'running';
+          item.startedAt = Date.now();
+          item.currentStep = 'wipe';
+          item.currentCommand = 'rm -rf node_modules';
+          item.lastLine = 'removed node_modules, package-lock.json';
+          panel.start();
+          await wait(150);
+          panel.stop();
+          const plain = stripAnsi(writes.join(''));
+          expect(plain).toContain('rm -rf node_modules');
+          expect(plain).toContain('removed node_modules, package-lock.json');
+        },
+        { columns: 200, rows: 24 },
+      );
+    });
+
+    it('still reads back what was set', () => {
+      const item = new ProgressPanel('X', false).addItem('pkg-a');
+      item.currentStep = 'build';
+      item.currentCommand = 'tsc -b';
+
+      expect(item.currentStep).toBe('build');
+      expect(item.currentCommand).toBe('tsc -b');
+    });
+  });
 });
