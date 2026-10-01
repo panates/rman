@@ -30,16 +30,31 @@ export class NodeManifestProvider implements ManifestProvider {
    * npm's four dependency fields, and only the entries naming a package of this repository -
    * an external dependency is not an edge in rman's graph.
    *
+   * A peer marked `"optional": true` in `peerDependenciesMeta` is **not** an edge: an optional peer
+   * is by definition one the package works without, so it states no order. It still counts where
+   * another field declares it too - the fields are read together, and `devDependencies` naming it
+   * is a real build-time need whatever the peer block says.
+   *
    * Matched by name, which is npm's own identifier and unique by construction; an ecosystem where
    * that does not hold resolves its own way, which is why this is the provider's job.
    */
+  /* **Measured on `panates/opra`, which is why the second half of that rule is written out.**
+   * Seven of its edges are optional peers, and *every one* of them is also a `devDependencies`
+   * entry - so excluding optional peers removed no edge at all, and the `@opra/cli` <-> `@opra/api-ui`
+   * cycle that was destroying its build order stood untouched. Reading the peer block alone would
+   * have looked like a fix and changed nothing. */
   dependencies(manifest: Manifest, candidates: readonly Package[]): Package[] {
-    const declared = Object.assign({}, ...DEPENDENCY_KEYS.map(key => manifest.raw[key]));
+    const optionalPeers = this.optionalPeerNames(manifest);
     const byName = new Map(candidates.map(p => [p.name, p]));
     const result: Package[] = [];
-    for (const name of Object.keys(declared)) {
-      const pkg = byName.get(name);
-      if (pkg && !result.includes(pkg)) result.push(pkg);
+    for (const key of DEPENDENCY_KEYS) {
+      const declared = manifest.raw[key];
+      if (!declared || typeof declared !== 'object') continue;
+      for (const name of Object.keys(declared)) {
+        if (key === 'peerDependencies' && optionalPeers.has(name)) continue;
+        const pkg = byName.get(name);
+        if (pkg && !result.includes(pkg)) result.push(pkg);
+      }
     }
     return result;
   }
@@ -112,6 +127,16 @@ export class NodeManifestProvider implements ManifestProvider {
      */
     const raw = { ...manifest.raw, version: manifest.version };
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(raw, undefined, 2) + '\n', 'utf-8');
+  }
+
+  /** The peers this manifest marks `"optional": true`, which `dependencies` leaves out of the
+   *  graph. `optionalDependencies` is deliberately *not* read the same way: an optional peer says
+   *  "works without it", while an optional dependency is one the package means to use and may fail
+   *  to install. */
+  protected optionalPeerNames(manifest: Manifest): Set<string> {
+    const meta = manifest.raw.peerDependenciesMeta;
+    if (!meta || typeof meta !== 'object') return new Set();
+    return new Set(Object.keys(meta).filter(name => meta[name]?.optional === true));
   }
 }
 

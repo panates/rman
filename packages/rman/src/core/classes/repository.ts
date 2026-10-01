@@ -49,6 +49,17 @@ export class Repository extends Package {
   private readonly _files = new ConfigFileScope();
 
   /**
+   * Every dependency cycle found in the **declared** graph, each one a path of package names that
+   * returns to where it started (`['@opra/cli', '@opra/api-ui', '@opra/cli']`). Empty for a graph
+   * that can be ordered.
+   *
+   * Recorded while the graph is built, from the *direct* edges - `Package.dependencies` is expanded
+   * transitively straight afterwards, and in the closure every member of a cycle depends on every
+   * other, so a path read back from it would name edges nobody declared.
+   */
+  protected _dependencyCycles: readonly (readonly string[])[] = [];
+
+  /**
    * The application this repository belongs to - its services, its technologies, its logger.
    *
    * **Non-enumerable**, like `_repoScope` and `_git` beside it: the two things that walk a
@@ -87,6 +98,18 @@ export class Repository extends Package {
    * the repository root itself, or isn't inside any known package (e.g. a non-monorepo checkout,
    * or a stray directory the workspace glob doesn't cover).
    */
+  /**
+   * Every dependency cycle in the repository, each a path of package names returning to its start.
+   * Empty when the graph can be ordered.
+   *
+   * A cycle is not an error on its own - `list`, `info` and `config` answer perfectly well without
+   * an order, and refusing them would take away the commands you would use to find the cycle. It
+   * becomes one where something actually needs the order: see `getPackages({ toposort: true })`.
+   */
+  get dependencyCycles(): readonly (readonly string[])[] {
+    return this._dependencyCycles;
+  }
+
   get currentPackage(): Package | undefined {
     if (path.resolve(this.cwd) === path.resolve(this.dirname)) return undefined;
     let best: Package | undefined;
@@ -283,12 +306,87 @@ export class Repository extends Package {
     if (this.monorepo) this.rootPackage.config = this.config;
   }
 
+  /**
+   * Reorders `packages` in place so every package comes after the ones it depends on, keeping the
+   * given order among packages that do not constrain each other. Throws when they cannot be
+   * ordered - see `_describeCycle`.
+   *
+   * Only the edges *inside* `packages` count, so a `--scope` narrowing to part of the repository is
+   * ordered on its own terms.
+   */
+  /* **This was a `packages.sort(...)` comparator and it did not sort topologically.** A comparator
+   * answering `0` for two packages that do not depend on each other is not a total order, and
+   * `Array.sort` is free to never compare two elements it has placed through a third - so an order
+   * can come out that no single comparison contradicts and that is still wrong. Measured on the
+   * smallest case there is: three packages `[c, b, a]` with the one edge `c -> a` came back
+   * `c b a`, the dependency last. `publish` and `docker-publish` take this order as their publish
+   * order, so a package shipped before the sibling it is built against.
+   *
+   * Kahn's algorithm instead, taking the lowest-numbered ready package each round so the input
+   * order survives among independents - which is what makes `rman list --toposort` stable and its
+   * output diffable. `Package.dependencies` is the transitive closure by the time this runs; the
+   * closure of a DAG is a DAG with the same topological orders, so the extra edges cost a little
+   * bookkeeping and change no answer. */
   protected _topoSortPackages(packages: Package[]): void {
-    packages.sort((a, b) => {
-      if (b.dependencies.includes(a)) return -1;
-      if (a.dependencies.includes(b)) return 1;
-      return 0;
-    });
+    const inSubset = new Set(packages);
+    const position = new Map(packages.map((pkg, i) => [pkg, i]));
+    const waitingOn = new Map<Package, number>(packages.map(pkg => [pkg, 0]));
+    const dependents = new Map<Package, Package[]>();
+    for (const pkg of packages) {
+      for (const dep of pkg.dependencies) {
+        if (!inSubset.has(dep)) continue;
+        waitingOn.set(pkg, waitingOn.get(pkg)! + 1);
+        const list = dependents.get(dep);
+        if (list) list.push(pkg);
+        else dependents.set(dep, [pkg]);
+      }
+    }
+
+    const ordered: Package[] = [];
+    const ready = packages.filter(pkg => waitingOn.get(pkg) === 0);
+    while (ready.length) {
+      ready.sort((a, b) => position.get(a)! - position.get(b)!);
+      const pkg = ready.shift()!;
+      ordered.push(pkg);
+      for (const dependent of dependents.get(pkg) ?? []) {
+        const left = waitingOn.get(dependent)! - 1;
+        waitingOn.set(dependent, left);
+        if (left === 0) ready.push(dependent);
+      }
+    }
+
+    /** Anything left is in or above a cycle - the one thing a topological order cannot express. */
+    if (ordered.length < packages.length) {
+      const stuck = packages.filter(pkg => !ordered.includes(pkg));
+      throw new Error(this._describeCycle(stuck));
+    }
+
+    packages.length = 0;
+    packages.push(...ordered);
+  }
+
+  /**
+   * The message for a graph that cannot be ordered, naming the cycle rather than the packages that
+   * happened to be caught behind it.
+   *
+   * `stuck` is what Kahn's algorithm could not place, which is the cycle **plus everything
+   * downstream of it** - on `panates/opra` that was sixteen of twenty packages for one pair that
+   * named each other. So a recorded cycle lying entirely inside `stuck` is preferred, and the list
+   * is the fallback for the case a recorded path cannot cover: a cycle whose intermediate packages
+   * were filtered out by `--scope`, where the closure still pairs two of the survivors.
+   */
+  protected _describeCycle(stuck: Package[]): string {
+    const names = new Set(stuck.map(pkg => pkg.name));
+    const cycle = this._dependencyCycles.find(known => known.every(name => names.has(name)));
+    const what = cycle
+      ? `Dependency cycle: ${cycle.join(' -> ')}`
+      : `Dependency cycle among: ${stuck.map(pkg => pkg.name).join(', ')}`;
+    return (
+      `${what}\n` +
+      `  Packages that depend on each other cannot be put in build order. Break the cycle in the\n` +
+      `  manifests (a peer marked "optional" is not an edge) or in .rmanrc "dependencies", or run\n` +
+      `  without ordering where the command offers it (--no-topo).`
+    );
   }
 
   protected _packageScope(pkg: Package, targetVersion?: string): PackageScope {
@@ -376,10 +474,13 @@ export class Repository extends Package {
 
   protected _updateDependencies() {
     const deps = {};
+    const direct = new Map<Package, Package[]>();
     for (const pkg of this.packages) {
       /** Which manifest fields hold dependencies is the ecosystem's business, so the provider
        *  reads them - npm's four field names used to be spelled out right here. */
-      const dependencies = [...Manifest.dependenciesOf(pkg, this.packages)];
+      /** A package naming *itself* is dropped here, the same way the declared entries below are:
+       *  it constrains nothing, and left in it would read as a one-package cycle. */
+      const dependencies = [...Manifest.dependenciesOf(pkg, this.packages)].filter(d => d !== pkg);
 
       /** `.rmanrc "dependencies"` on top, and it works with no provider at all: a repository rman
        *  cannot read the manifests of can still declare its graph by hand. */
@@ -391,7 +492,12 @@ export class Repository extends Package {
 
       deps[pkg.name] = dependencies.map(d => d.name);
       pkg.dependencies = dependencies;
+      /** Copied, because the expansion below mutates `pkg.dependencies` in place - and what a
+       *  reader needs to see is the edge somebody wrote, not the closure's. */
+      direct.set(pkg, [...dependencies]);
     }
+
+    this._dependencyCycles = this._findDependencyCycles(direct);
 
     let circularCheck: Package[];
     const deepFindDependencies = (pkg: Package, target: Package[]) => {
@@ -412,6 +518,36 @@ export class Repository extends Package {
       circularCheck = [];
       deepFindDependencies(pkg, pkg.dependencies);
     }
+  }
+
+  /**
+   * Every cycle in the declared graph, as a path of names returning to its start. Depth-first, so
+   * the path is the one a reader can follow edge by edge in the manifests.
+   *
+   * Each cycle is reported once: a package is left `done` after its subtree is walked, so a second
+   * route into it is not a second finding. The cost of that is real and deliberate - two cycles
+   * sharing a package may come back as one path - and the aim here is to *name* a cycle, not to
+   * enumerate them; the first one has to be broken either way.
+   */
+  protected _findDependencyCycles(direct: ReadonlyMap<Package, Package[]>): readonly (readonly string[])[] {
+    const cycles: string[][] = [];
+    const state = new Map<Package, 'open' | 'done'>();
+    const trail: Package[] = [];
+    const visit = (pkg: Package) => {
+      const seen = state.get(pkg);
+      if (seen === 'done') return;
+      if (seen === 'open') {
+        cycles.push([...trail.slice(trail.indexOf(pkg)), pkg].map(p => p.name));
+        return;
+      }
+      state.set(pkg, 'open');
+      trail.push(pkg);
+      for (const dep of direct.get(pkg) ?? []) visit(dep);
+      trail.pop();
+      state.set(pkg, 'done');
+    };
+    for (const pkg of this.packages) visit(pkg);
+    return cycles;
   }
 
   /** `git` facts for a `${{ git.* }}` expression. Synchronous on purpose: it backs a lazy

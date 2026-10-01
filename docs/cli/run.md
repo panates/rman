@@ -28,6 +28,17 @@ options, in addition to:
 
 `--changed` and `--changed-since` conflict (pick one).
 
+**Packages that depend on each other are an error, not a silent fallback.** A cycle has no build
+order, so the run stops before anything starts and names it:
+
+```
+Dependency cycle: @scope/a -> @scope/b -> @scope/a
+```
+
+Break it in the manifests - note that a peer marked `"optional": true` in `peerDependenciesMeta` is
+not an edge - or in `.rmanrc "dependencies"`. `--no-topo` runs anyway, for a script that genuinely
+needs no order.
+
 ## Examples
 
 ```bash

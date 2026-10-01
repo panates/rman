@@ -432,8 +432,22 @@ repository.currentPackage?.name; // 'pkg-a'
 
 **`repository.getPackages(options?)`** returns the resolved package list, optionally narrowed by
 exact name (`scope`) and/or topologically sorted (`toposort: true` - dependencies before
-dependents). This is a lower-level primitive than the glob-based
+dependents, keeping the given order among packages that do not constrain each other). This is a
+lower-level primitive than the glob-based
 [`filterPackages`](#package-filtering-scopeignoreplatformdepsdependents) most services use internally.
+
+`toposort: true` **throws** when the selected packages cannot be ordered, naming the cycle:
+
+```
+Dependency cycle: @opra/cli -> @opra/api-ui -> @opra/cli
+```
+
+Only the edges inside the selection count, so a `scope` that leaves a cycle out is still ordered.
+
+**`repository.dependencyCycles`** is that same answer without the throw - every cycle in the
+declared graph as a path of names returning to its start, and `[]` for a graph that can be ordered.
+A cycle is not an error in itself: `list`, `info` and `config` need no order and keep working, which
+is what lets you find it. It becomes one in `run`/`build`, `exec`, `publish` and `list --toposort`.
 
 **`repository.listStatus(options?)`** reports every package's git change status in one pass:
 
@@ -2691,6 +2705,15 @@ the preset's contribution keys. rman ships one preset, so none of that is visibl
 | **Publish target** | `npm` - see [`PublishTarget`](#publishtarget). |
 | **Config keys** | `packageManager`, `clean.*`, `publish.npm.*`. |
 | **`SystemInfo`** | the npm half - see [`SystemInfo`](#systeminfo). |
+
+**Which declarations become graph edges**: all four of `dependencies`, `devDependencies`,
+`peerDependencies` and `optionalDependencies`, limited to names belonging to the repository - an
+external dependency is not an edge. One exception: a peer marked `"optional": true` in
+`peerDependenciesMeta` states no order, since the package works without it, and is left out. It
+still counts where another field declares it too - `devDependencies` naming it is a real build-time
+need whatever the peer block says. `optionalDependencies` is *not* read as optional here: an
+optional peer says "works without it", while an optional dependency is one the package means to use
+and may fail to install.
 
 Its services are exported from `rman` itself: `PublishService`, `CiService`, `CleanService`,
 `NodeVersionPlanService`, `NpmPublishTarget`, `NPM_TARGET`. A repository never constructs any of

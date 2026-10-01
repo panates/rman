@@ -192,6 +192,46 @@ describe('core/Repository', () => {
       expect(order.indexOf('pkg-b')).toBeLessThan(order.indexOf('pkg-c'));
     });
 
+    /**
+     * **The case the old comparator sort got wrong, and the smallest one there is.** It answered
+     * `0` for two packages with no edge between them, which is not a total order - so `Array.sort`
+     * could place all three through comparisons none of which contradict the result. Measured on
+     * exactly this input: `[pkg-c, pkg-b, pkg-a]` with the one edge `pkg-c -> pkg-a` came back
+     * unchanged, the dependency last. `publish` takes this order as its publish order.
+     *
+     * The directory names carry the input order, since discovery is the workspace glob's.
+     */
+    it('orders a dependency first even when nothing compares it against the package between them', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/1-c/package.json', {
+        name: 'pkg-c',
+        version: '1.0.0',
+        dependencies: { 'pkg-a': '1.0.0' },
+      });
+      writeJson(dir, 'packages/2-b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      writeJson(dir, 'packages/3-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+
+      const repo = await createRepository(dir);
+      expect(repo.getPackages().map(p => p.name)).toEqual(['pkg-c', 'pkg-b', 'pkg-a']);
+      const order = repo.getPackages({ toposort: true }).map(p => p.name);
+      expect(order.indexOf('pkg-a')).toBeLessThan(order.indexOf('pkg-c'));
+    });
+
+    /** Among packages that constrain each other in no way, the order it was given survives - which
+     *  is what makes `rman list --toposort` stable and its output diffable. */
+    it('keeps the input order among packages that do not depend on each other', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      for (const [i, name] of ['pkg-z', 'pkg-m', 'pkg-a'].entries()) {
+        writeJson(dir, `packages/${i}/package.json`, { name, version: '1.0.0' });
+      }
+      const repo = await createRepository(dir);
+      expect(repo.getPackages({ toposort: true }).map(p => p.name)).toEqual(['pkg-z', 'pkg-m', 'pkg-a']);
+    });
+
     it('getPackages({scope}) filters to just the named package(s)', async () => {
       const repo = await fixtureRepo();
       expect(repo.getPackages({ scope: 'pkg-b' }).map(p => p.name)).toEqual(['pkg-b']);
@@ -399,6 +439,115 @@ describe('core/Repository', () => {
           ?.dependencies.map(d => d.name)
           .sort(),
       ).toEqual(['pkg-a', 'pkg-b']);
+    });
+
+    /**
+     * **A cycle is reported where an order is asked for, and nowhere else.** Silently falling back
+     * to no ordering is what made this worth finding: on `panates/opra` sixteen of twenty packages
+     * started at once and `tsc` failed with `Cannot find module '@opra/common'` - a missing-module
+     * error, which sends the reader to look at the imports rather than at the graph.
+     *
+     * `list`, `info` and `config` need no order and keep working, because refusing them would take
+     * away the commands you would use to find the cycle.
+     */
+    it('refuses to produce an order for a cycle, and names it', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        dependencies: { 'pkg-b': '1.0.0' },
+      });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        dependencies: { 'pkg-a': '1.0.0' },
+      });
+
+      const repo = await createRepository(dir);
+      expect(
+        repo
+          .getPackages()
+          .map(p => p.name)
+          .sort(),
+      ).toEqual(['pkg-a', 'pkg-b']);
+      expect(() => repo.getPackages({ toposort: true })).toThrow(/Dependency cycle: pkg-a -> pkg-b -> pkg-a/);
+    });
+
+    /**
+     * The path names the **declared** edges. `Package.dependencies` is expanded transitively right
+     * after the graph is built, and in that closure every member of a cycle depends on every other
+     * - so a path read back from it would name edges nobody wrote, and point the reader at the
+     * wrong manifest.
+     */
+    it('reports the cycle as the edges that were declared, not the closure', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.0.0',
+        dependencies: { 'pkg-b': '1.0.0' },
+      });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        dependencies: { 'pkg-c': '1.0.0' },
+      });
+      writeJson(dir, 'packages/c/package.json', {
+        name: 'pkg-c',
+        version: '1.0.0',
+        dependencies: { 'pkg-a': '1.0.0' },
+      });
+
+      const repo = await createRepository(dir);
+      expect(repo.dependencyCycles).toEqual([['pkg-a', 'pkg-b', 'pkg-c', 'pkg-a']]);
+    });
+
+    it('reports no cycle for a graph that can be ordered', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        dependencies: { 'pkg-a': '1.0.0' },
+      });
+      const repo = await createRepository(dir);
+      expect(repo.dependencyCycles).toEqual([]);
+    });
+
+    /** A cycle whose packages are not all selected leaves the rest orderable - the ordering is done
+     *  on the edges inside the subset, so `--scope` is not held hostage by a cycle elsewhere. */
+    it('still orders a scope that leaves the cycle out', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        dependencies: { 'pkg-a': '1.0.0' },
+      });
+      writeJson(dir, 'packages/x/package.json', {
+        name: 'pkg-x',
+        version: '1.0.0',
+        dependencies: { 'pkg-y': '1.0.0' },
+      });
+      writeJson(dir, 'packages/y/package.json', {
+        name: 'pkg-y',
+        version: '1.0.0',
+        dependencies: { 'pkg-x': '1.0.0' },
+      });
+
+      const repo = await createRepository(dir);
+      expect(repo.getPackages({ toposort: true, scope: ['pkg-b', 'pkg-a'] }).map(p => p.name)).toEqual([
+        'pkg-a',
+        'pkg-b',
+      ]);
+      expect(() => repo.getPackages({ toposort: true })).toThrow(/Dependency cycle/);
     });
 
     it('adds extra dependencies declared via a root .rmanrc selector', async () => {

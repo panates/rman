@@ -51,7 +51,11 @@ my-repo     1.2.0    node      yes      dirty    .
 sits - a package nested inside another indents twice. Discovery descends now, so a repository *is* a
 tree, and the root is the row the rest hangs from. Indentation rather than box-drawing, so a name
 stays copy-pasteable into `--scope`. The nesting is `Item.depth`, a fact about the package, so
-`--toposort` reorders the rows and each one's indentation still tells the truth.
+`--toposort` reorders the rows and each one's indentation still tells the truth. Packages that do
+not constrain each other keep their lexical order, so the output is diffable between runs.
+
+**`--toposort` fails on a dependency cycle**, naming it; plain `rman list` does not, which is what
+makes it the command to reach for when one is reported.
 
 **The count is the workspace members**, root excluded - which is what `repository.packages` means,
 and what every other form of this command reports.
