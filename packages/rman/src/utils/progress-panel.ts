@@ -193,12 +193,19 @@ export class ProgressPanel implements TerminalRegion {
           : item.currentStep || '';
       /** Measured against the *plain* text: every piece below is wrapped in escape sequences, and
        *  `String.length` counts those, so budgeting on the rendered string wraps a row that fits. */
-      const fixed = `  ${item.name}  ${step}  ${elapsed}`.length;
+      const fixed = `  ${item.name}  ${step}  ${elapsed} | `.length;
       const command = truncate(item.currentCommand ?? '', (process.stdout.columns || 80) - fixed - 2);
+      /**
+       * **The command last, after a `|`, and that is not only layout.** It is the one field with no
+       * bound on its length - a `tsc -b` line carries a path, a `run` step carries whatever the
+       * author wrote - so between the step and the clock it pushed the elapsed time to a different
+       * column on every row, and off the end entirely once a command was long. Everything fixed-width
+       * now reads down a straight edge and the variable part runs off to the right, where `truncate`
+       * cuts it.
+       */
       const group = [
-        `${spinner} ${colors.bold(item.name)}  ${colors.gray(step)}` +
-          (command ? `  ${colors.cyan(command)}` : '') +
-          `  ${colors.yellow(elapsed)}`,
+        `${spinner} ${colors.bold(item.name)}  ${colors.gray(step)}  ${colors.yellow(elapsed)}` +
+          (command ? `  ${colors.gray('|')} ${colors.cyan(command)}` : ''),
       ];
       if (item.lastLine) group.push(`    ${colors.dim(item.lastLine)}`);
       if (used + group.length > budget) break;

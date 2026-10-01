@@ -151,6 +151,9 @@ async function runStep(
   command: string,
   logLine: () => void,
 ): Promise<void> {
+  /** **Set here rather than at each of the three call sites**, which is also what keeps `wipe` out
+   *  of it: a wipe runs no command, and this is the one place a `ci` step has one. */
+  item.currentCommand = command;
   if (panelEnabled) {
     await exec(command, {
       app,

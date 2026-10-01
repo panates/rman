@@ -86,14 +86,20 @@ export class RunService extends Service {
            *  does not distinguish a JS step from a shell one. `step.label` is not used directly
            *  because for a function it already folds the slot in (`before (js)`), which the row
            *  prints two characters to its left. */
-          ctx.currentCommand = step.command ?? (step.run?.name ? `${step.run.name}()` : '(js function)');
+          const stepLabel = step.command ?? (step.run?.name ? `${step.run.name}()` : '(js function)');
+          ctx.currentCommand = stepLabel;
+          /** A function step names itself until it spawns something, and takes its name back when
+           *  that returns - so the row says `tsc -b tsconfig.json` for as long as tsc is up. */
+          const onCommand = (command: string | undefined) => {
+            ctx.currentCommand = command ?? stepLabel;
+          };
           ctx.stepIndex = i;
           if (panel.enabled) {
             const onLine = (line: string) => {
               ctx.log.push(line);
               ctx.lastLine = line;
             };
-            if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine);
+            if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine, onCommand);
             else await exec(step.command, { cwd, stdio: 'pipe', onLine, app: pkg.repository.app });
           } else {
             /** Match the classic rman output: raw command output streams straight through
@@ -104,7 +110,7 @@ export class RunService extends Service {
             try {
               /** No capture with the panel off: the step owns the terminal, exactly as a shell
                *  step's `stdio: 'inherit'` does. */
-              if (step.run) await runFunctionStep(step.run, pkg, cwd);
+              if (step.run) await runFunctionStep(step.run, pkg, cwd, undefined, onCommand);
               else await exec(step.command, { cwd, stdio: 'inherit', app: pkg.repository.app });
             } catch (e) {
               /**
@@ -494,13 +500,34 @@ export namespace RunService {
     return steps;
   }
 
-  export function createStepContext(pkg: Package, cwd: string): RunStepContext {
+  /**
+   * `onCommand` is told what the step is spawning, for as long as it runs - the argv while a child
+   * is up, `undefined` when it returns.
+   */
+  /* **Without it a function step can only name itself.** The row showed `buildWithTsc()` for the
+   * whole of a build, because that is all the slot knows; what a reader wants is the `tsc -b
+   * <tsconfig>` it is sitting in. A function step is the shape every shared config uses, so this is
+   * the common case rather than an edge one. */
+  export function createStepContext(
+    pkg: Package,
+    cwd: string,
+    onCommand?: (command: string | undefined) => void,
+  ): RunStepContext {
     const logLevel = resolveRootLogLevel(pkg.repository);
     return {
       pkg,
       repository: pkg.repository,
       cwd,
-      runBin: (bin, argv, opts) => runBin(bin, argv, { cwd, logLevel, app: pkg.repository.app, ...opts }),
+      runBin: async (bin, argv, opts) => {
+        onCommand?.([bin, ...argv].join(' '));
+        try {
+          return await runBin(bin, argv, { cwd, logLevel, app: pkg.repository.app, ...opts });
+        } finally {
+          /** Back to whatever the caller had, or a step that spawns once would wear that command
+           *  for the rest of its run. */
+          onCommand?.(undefined);
+        }
+      },
       logger: new Logger(logLevel),
     };
   }
@@ -696,8 +723,9 @@ async function runFunctionStep(
   pkg: Package,
   cwd: string,
   onLine?: (line: string) => void,
+  onCommand?: (command: string | undefined) => void,
 ): Promise<void> {
-  const context = RunService.createStepContext(pkg, cwd);
+  const context = RunService.createStepContext(pkg, cwd, onCommand);
   if (!onLine) {
     try {
       await run(context);

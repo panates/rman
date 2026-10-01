@@ -974,3 +974,52 @@ describe('run: Run.normalizeScriptValue()', () => {
     expect(() => RunService.normalizeScriptValue(['ok', 42], 'run.build.exec')).toThrow(/"run\.build\.exec\[1\]"/);
   });
 });
+
+/**
+ * **A function step names itself until it spawns something.** `buildWithTsc()` is all the slot
+ * knows, and it is what the panel row showed for the whole of a build; what a reader wants is the
+ * `tsc -b <tsconfig>` it is sitting in. A function step is the shape every shared config uses, so
+ * this is the common case rather than an edge one.
+ */
+describe('RunService.createStepContext() reports what a step spawns', () => {
+  useTestEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  async function stepContextFor(onCommand?: (c: string | undefined) => void) {
+    const dir = mkTmp();
+    dirs.push(dir);
+    writeFixture(dir, { 'pkg-a': {} });
+    const repository = await createRepository(dir);
+    const pkg = repository.getPackage('pkg-a')!;
+    return RunService.createStepContext(pkg, pkg.dirname, onCommand);
+  }
+
+  it('names the argv while a child runs, and takes the name back when it returns', async () => {
+    const seen: (string | undefined)[] = [];
+    const ctx = await stepContextFor(c => seen.push(c));
+
+    await ctx.runBin('node', ['-e', 'process.exit(0)']);
+
+    expect(seen).toEqual(['node -e process.exit(0)', undefined]);
+  });
+
+  /** `finally`, so a failing child still hands the name back - otherwise the row wears that
+   *  command for the rest of the run. */
+  it('takes it back even when the child fails', async () => {
+    const seen: (string | undefined)[] = [];
+    const ctx = await stepContextFor(c => seen.push(c));
+
+    await expect(ctx.runBin('node', ['-e', 'process.exit(1)'])).rejects.toThrow();
+
+    expect(seen).toEqual(['node -e process.exit(1)', undefined]);
+  });
+
+  it('is optional - a caller that does not want it passes nothing', async () => {
+    const ctx = await stepContextFor();
+    await expect(ctx.runBin('node', ['-e', 'process.exit(0)'])).resolves.toBeDefined();
+  });
+});

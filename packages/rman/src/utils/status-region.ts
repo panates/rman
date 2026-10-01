@@ -103,11 +103,24 @@ export class StatusRegion implements TerminalRegion {
     this.region.clear();
   }
 
-  /** Takes the terminal back and starts drawing again - a no-op when it was never suspended. */
+  /**
+   * Takes the terminal back - a no-op when it was never suspended.
+   *
+   * **The first frame waits for the timer rather than being drawn now**, which `start` does. A
+   * command is usually seconds from finishing when its panel comes down, and drawing immediately
+   * put one spinner frame on screen between the panel's recap and the result line that replaces it
+   * - a single flash, which is the thing this whole mechanism exists to remove. Anything still
+   * working is drawn 80ms later and nobody waits for it.
+   */
   resume(): void {
     if (!this.takeover && this.timer) return;
     this.takeover = undefined;
-    this.start();
+    if (!this.region.enabled || this.timer) return;
+    this.timer = setInterval(() => {
+      this.frame++;
+      this.draw();
+    }, FRAME_MS);
+    this.timer.unref();
   }
 
   /** Writes `text` without corrupting the block: erase, write, redraw underneath. */

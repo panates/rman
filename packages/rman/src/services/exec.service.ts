@@ -60,6 +60,10 @@ export class ExecService extends Service {
     const names = new Set(packages.map(p => p.name));
     const children = packages.map(pkg => {
       const ctx = panel.addItem(pkg.name);
+      /** One command for every package and it never changes, so it is set once here rather than
+       *  threaded into `execForPackage` - the row is the only thing that was not saying what `exec`
+       *  is actually running. */
+      ctx.currentCommand = command;
       const dependencies = topo ? pkg.dependencies.filter(d => names.has(d.name)).map(d => d.name) : [];
       return new Task(
         () =>

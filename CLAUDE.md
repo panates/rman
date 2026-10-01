@@ -2067,6 +2067,21 @@ four behaviours still fire.
 
 ### `list` / `run`
 
+- **The row is `<name> <step> <elapsed> | <command>`, and the command is last for a reason.** It is
+  the one field with no bound on its length - a `tsc -b` line carries a path, a `run` step carries
+  whatever the author wrote - so between the step and the clock it put the elapsed time in a
+  different column on every row and pushed it off the end once a command was long. Everything
+  fixed-width reads down a straight edge now and the variable part runs off to the right, where
+  `truncate` cuts it.
+- **A function step reports what it *spawns*, not only its own name** (`createStepContext`'s
+  `onCommand`, wrapped around the bound `runBin`). `buildWithTsc()` is all the slot knows, and it is
+  what the row showed for the whole of a build; the reader wants the `tsc -b <tsconfig>` inside it.
+  The name comes back in a `finally`, or a step that spawns once wears that command for the rest of
+  its run. A function step is the shape every shared config uses, so this is the common case.
+- **`exec` and `ci` set `currentCommand` too, and used to set neither** - `exec`'s is the one command
+  it runs everywhere (set once where the item is made), `ci`'s is set inside `runStep`, which is also
+  what keeps `wipe` out of it: a wipe runs no command. `clean` still sets none, because its `ts`/
+  `glob` labels already say what is happening and there is no shell command behind them.
 - **The progress panel's row names the command, not just the slot** (`ProgressItem.currentCommand`,
   set from `step.command` or a function step's own name). `before (2/9)` answers "which slot",
   which the reader already knows; a row sitting there for ten seconds with nothing on stdout is
