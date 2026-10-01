@@ -1,5 +1,6 @@
 import type { Argv, CommandModule } from 'yargs';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
+import type { CommandContext } from './interfaces/custom-command.js';
 
 /**
  * Turns a command's **declaration** into the yargs registration it describes.
@@ -10,7 +11,16 @@ import type { RmanConfig } from '../interfaces/rman-config.interface.js';
  * switches - arrives as data now, so a typo in any of it is a compile error at the command rather
  * than a flag that silently never existed.
  */
-export function toYargsCommand(meta: RmanConfig.CommandMetadata): CommandModule {
+export function toYargsCommand(
+  meta: RmanConfig.CommandMetadata,
+  /**
+   * Builds the `CommandContext` the handler gets as its **second** parameter, per invocation.
+   *
+   * Optional because a caller with no repository in hand (a spec listing the registrations) has
+   * nothing to build one from, and a handler that never reads it cannot tell.
+   */
+  contextFor?: (args: any) => CommandContext,
+): CommandModule {
   return {
     command: meta.command,
     aliases: meta.aliases,
@@ -50,23 +60,32 @@ export function toYargsCommand(meta: RmanConfig.CommandMetadata): CommandModule 
      * narrower one is the useful one, and this is the single place the widening is admitted -
      * previously it was an `as` per option read, in every handler.
      */
-    handler: withCommandPlatforms(meta) as CommandModule['handler'],
+    handler: wrapHandler(meta, contextFor) as CommandModule['handler'],
   };
 }
 
 /**
- * Carries `CommandMetadata.platforms` into argv, where `readPackageFilterOptions` picks it up.
+ * The handler yargs is given: carries `CommandMetadata.platforms` into argv, and hands the command
+ * its `CommandContext` as a second parameter.
  *
- * Through argv rather than a parameter because `filterPackages` is called by ten *services*, none
- * of which knows which command is running - `options` is all they see. One wrap here reaches every
- * one of them and changes none.
+ * **`(args, context)`, not `(context, args)`** - the opposite order to `CustomCommand.handler`, and
+ * decided by compatibility rather than taste: every declared command in existence is `handler(args)`,
+ * so appending a parameter breaks none of them while prepending one breaks all of them. The two
+ * authoring forms therefore disagree about the order and agree about everything in the object,
+ * which is the cheaper of the two inconsistencies.
+ *
+ * `platforms` goes through argv rather than a parameter because `filterPackages` is called by ten
+ * *services*, none of which knows which command is running - `options` is all they see. One wrap
+ * here reaches every one of them and changes none.
  */
-function withCommandPlatforms(meta: RmanConfig.CommandMetadata): CommandModule['handler'] {
-  const handler = meta.handler as CommandModule['handler'];
-  if (!meta.platforms?.length) return handler;
+function wrapHandler(
+  meta: RmanConfig.CommandMetadata,
+  contextFor?: (args: any) => CommandContext,
+): CommandModule['handler'] {
+  const handler = meta.handler as (args: any, context?: CommandContext) => any;
   return (args: any) => {
-    args.commandPlatforms = meta.platforms;
-    return handler(args);
+    if (meta.platforms?.length) args.commandPlatforms = meta.platforms;
+    return handler(args, contextFor?.(args));
   };
 }
 

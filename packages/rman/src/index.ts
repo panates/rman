@@ -185,7 +185,7 @@ export {
  * relative import; a preset adding `compile` or `docs` had no way to, so it would restate the six
  * flags and the reader - two lists free to disagree, which is how a flag ends up meaning one thing
  * on `rman build` and nothing on the alias beside it. */
-export { readRunOptions, runOptions } from './utils/run-options.js';
+export { parallelOptions, readParallelOptions, readRunOptions, runOptions } from './utils/run-options.js';
 /** Where a repository's locally installed binaries live - the core spells the PATH variable, a
  *  plugin says which directories go on it (see `Plugin.binPaths`). */
 export { BinPath } from './utils/bin-path.js';

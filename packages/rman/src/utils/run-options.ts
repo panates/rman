@@ -5,6 +5,60 @@ import type { LogLevel } from './logger.js';
 import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from './package-filter.js';
 
 /**
+ * The three scheduling flags any command that sweeps packages can take - `--parallel`, `--bail`,
+ * `--progress`.
+ *
+ * **Exported as a group for the reason `packageFilterOptions` is**: a command spreading it gets the
+ * flags spelled and behaving exactly as `run`'s, where restating them means `--parallel` quietly
+ * accepting a number on one command and not on another. `--parallel`'s `coerce` is the part nobody
+ * would copy correctly - it takes a boolean *or* a number, and the type of the parsed value is read
+ * off that function.
+ *
+ * **`--topo` is deliberately not in it.** `run`'s default is ordering on; a command reaching for
+ * this is sweeping packages with an independent tool, where a wait nobody asked for costs the whole
+ * point. A command that does want it declares it, and `forEachPackage` takes `topo` as an option.
+ *
+ * The `describe` texts here name no `.rmanrc run.<script>` key, because a command using them owns
+ * its own (`check.concurrency`) - which is also why `runOptions` keeps its own wording rather than
+ * spreading this.
+ */
+export const parallelOptions = {
+  parallel: {
+    target: 'cli',
+    describe: 'Max packages at once: omit/true for CPU count, a number for that many, false to run serially',
+    /** No `type`: the flag takes a boolean *or* a number, and `coerce` is what says so - which is
+     *  also where `OptionValue` reads this option's type from. */
+    coerce: (v: unknown): boolean | number | undefined => {
+      if (v === undefined) return undefined;
+      if (v === 'false' || v === false) return false;
+      if (v === 'true' || v === true) return true;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : true;
+    },
+  },
+  bail: {
+    target: 'cli',
+    describe: 'Stop at the first failure. Default true.',
+    type: 'boolean',
+  },
+  progress: {
+    target: 'cli',
+    describe: 'Show a live progress panel (default: true; auto-disabled when not a TTY)',
+    type: 'boolean',
+  },
+} satisfies Record<string, RmanConfig.CommandOption>;
+
+/** The scheduling half of `forEachPackage`'s options, read off argv - the mirror of
+ *  `readRunOptions` for a command that declared `parallelOptions`. */
+export function readParallelOptions(args: any): { parallel?: boolean | number; bail?: boolean; progress?: boolean } {
+  return {
+    parallel: args.parallel as boolean | number | undefined,
+    bail: args.bail as boolean | undefined,
+    progress: args.progress as boolean | undefined,
+  };
+}
+
+/**
  * Everything `run`, `build` and `test` accept - the package filter, the branch guard, `--from-root`, and
  * the scheduling flags on top.
  *

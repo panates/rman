@@ -337,6 +337,108 @@ describe('cli: global --config', () => {
 });
 
 /**
+ * **A command gets its run's context, whichever form it was written in.**
+ *
+ * `app` is the application and this is *this invocation* - which is why `runBin` and `logger` are
+ * handed over rather than imported, and why `forEachPackage` is a bound call rather than the
+ * service. Both forms are checked here because `cli.ts` builds the object once for both, and a
+ * member added for one of them silently reaching only the other is exactly what that sharing is for.
+ */
+describe('cli: the command context', () => {
+  useTestEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  function fixtureRepo(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-cmd-context-test-'));
+    dirs.push(dir);
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: 'root', version: '1.0.0', private: true, workspaces: ['packages/*'] }),
+    );
+    for (const name of ['pkg-a', 'pkg-b']) {
+      fs.mkdirSync(path.join(dir, 'packages', name), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'packages', name, 'package.json'), JSON.stringify({ name, version: '1.0.0' }));
+    }
+    return dir;
+  }
+
+  /** The members a command is promised, listed rather than spot-checked: this object is a public
+   *  surface, and one quietly missing is a command that cannot be written. */
+  const MEMBERS = ['repository', 'package', 'runBin', 'logger', 'forEachPackage', 'parallel'];
+
+  it('hands a declared command the context as its SECOND parameter', async () => {
+    const dir = fixtureRepo();
+    fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+    /** `(args, context)` - appending the parameter is what keeps every `handler(args)` already
+     *  written working, which is the whole reason the order differs from `CustomCommand`'s. */
+    fs.writeFileSync(
+      path.join(dir, 'tools', 'probe.mjs'),
+      `export default () => ({
+         command: 'probe',
+         describe: 'probe',
+         handler: (args, context) => {
+           console.log('members:' + ${JSON.stringify(MEMBERS)}.filter(m => m in (context ?? {})).join(','));
+           console.log('names:' + context.repository.getPackages().map(p => p.name).join(','));
+         },
+       });\n`,
+    );
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ commands: 'tools/*.mjs' }));
+
+    const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['probe'] }))).join('\n');
+    expect(out).toContain(`members:${MEMBERS.join(',')}`);
+    expect(out).toContain('names:pkg-a,pkg-b');
+  });
+
+  it("hands a repository's own .rman command the same object, as its first", async () => {
+    const dir = fixtureRepo();
+    fs.mkdirSync(path.join(dir, '.rman'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.rman', 'probe.mjs'),
+      `export default {
+         describe: 'probe',
+         handler: (context) => {
+           console.log('members:' + ${JSON.stringify(MEMBERS)}.filter(m => m in (context ?? {})).join(','));
+         },
+       };\n`,
+    );
+    fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+
+    const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['probe'] }))).join('\n');
+    expect(out).toContain(`members:${MEMBERS.join(',')}`);
+  });
+
+  /** End to end through the CLI, which is the only way to see that the bound `forEachPackage`
+   *  reaches a command at all - the service's own behaviour is `run.service.spec.ts`'s. */
+  it("runs a command's work per package through the scheduler", async () => {
+    const dir = fixtureRepo();
+    fs.mkdirSync(path.join(dir, '.rman'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.rman', 'sweep.mjs'),
+      `export default {
+         describe: 'sweep',
+         handler: async (context) => {
+           const seen = [];
+           await context.forEachPackage(
+             context.repository.getPackages(),
+             async ({ pkg }) => { seen.push(pkg.name); },
+             { progress: false, parallel: false, label: 'sweep' },
+           );
+           console.log('swept:' + seen.join(','));
+         },
+       };\n`,
+    );
+    fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+
+    const out = (await captureLogs(() => runCli({ cwd: dir, argv: ['sweep'] }))).join('\n');
+    expect(out).toContain('swept:pkg-a,pkg-b');
+  });
+});
+
+/**
  * **`ArgsOf` types a `<required>` positional as present, and this is the half that makes that
  * honest.** The type is a claim about argv, and only yargs can keep it - so the claim and the
  * parsing are pinned together, in one place, rather than the type asserting something no test ever

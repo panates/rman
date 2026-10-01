@@ -50,17 +50,129 @@ export class RunService extends Service {
       packages = packages.filter(p => status[p.name] !== 'clean');
     }
 
-    const concurrency =
-      options.parallel === false
-        ? 1
-        : typeof options.parallel === 'number'
-          ? options.parallel
-          : options.parallel === true
-            ? os.cpus().length
-            : resolveNumber(undefined, repository.rootPackage, script, 'concurrency', os.cpus().length);
-
+    const concurrency = resolveConcurrency(
+      options.parallel,
+      resolveNumber(undefined, repository.rootPackage, script, 'concurrency', os.cpus().length),
+    );
     const progress = resolveBool(options.progress, repository.rootPackage, script, 'progress', true);
     const panel = new ProgressPanel(`RUN ${script}`, !!process.stdout.isTTY && progress);
+
+    /** Shared across all `if: changed[ = hash]` evaluations so the same reference is only `git`-queried once. */
+    const ifStatusCache = new Map<string, Record<string, Repository.PackageStatus>>();
+
+    /** Repo-wide bookend: root's own pre/post hooks run once each, exclusively, around every package
+     *  (unless root itself opts out via `run.<script>.skip`, fails its own `run.<script>.if`, or the
+     *  run is scoped to a single package by `cwdScope` - a repo-wide bookend has no place there).
+     *
+     *  Only in a monorepo. Without one the root *is* the single package, already in the loop below
+     *  with the same hooks and the same directory - a bookend would simply run each of them a
+     *  second time. */
+    /** Short-circuited deliberately: a root already out of the run for a structural reason must not
+     *  have its `if` evaluated, now that evaluating one can mean calling the repository's own code. */
+    const rootSkipped =
+      !!cwdScope ||
+      !repository.monorepo ||
+      rootCfg.skip === true ||
+      !(await passesIf(repository, repository.rootPackage, rootCfg.if, repository.dirname, ifStatusCache));
+    const rootSteps = rootSkipped ? [] : getScriptSteps(repository.rootPackage, script);
+    /** Filtered on the slot, not on `'pre' + script`: the step labels are `before`/`exec`/`after`
+     *  now - the same words the config uses - rather than npm's `pre<script>` naming, which moved
+     *  out with the package.json source. */
+    const bookend = (slot: 'before' | 'after', name: string): RunService.PackagePlan | undefined => {
+      const steps = rootSteps.filter(s => s.name === slot);
+      if (!steps.length) return undefined;
+      return {
+        pkg: repository.rootPackage,
+        name,
+        label: 'root',
+        steps,
+        cwd: repository.dirname,
+        topo: false,
+        bail: resolveBail(options.bail, repository.rootPackage, script, true),
+        logLevel: resolveLogLevel(options.logLevel, repository.rootPackage, script, logLevelDefault),
+      };
+    };
+    const before = bookend('before', 'root (pre)');
+    const after = bookend('after', 'root (post)');
+
+    const plans: RunService.PackagePlan[] = [];
+    for (const pkg of packages) {
+      const pkgCfg = RunService.getConfig(pkg, script);
+      if (pkgCfg.skip === true) continue;
+      if (!(await passesIf(repository, pkg, pkgCfg.if, pkg.dirname, ifStatusCache))) continue;
+      const steps = getScriptSteps(pkg, script);
+      if (!steps.length) continue;
+      plans.push({
+        pkg,
+        name: pkg.name,
+        label: pkg.name,
+        steps,
+        cwd: pkg.dirname,
+        topo: resolveBool(options.topo, pkg, script, 'topo', topo),
+        bail: resolveBail(options.bail, pkg, script, true),
+        logLevel: resolveLogLevel(options.logLevel, pkg, script, logLevelDefault),
+      });
+    }
+
+    if (!plans.length && !before && !after) {
+      /**
+       * Two different nothings, and only one of them is fine.
+       *
+       * Nobody in the repository defines this script at all: the name is a mistake - a typo, or a
+       * script that used to exist - and `npm run` fails on exactly this. Staying silent is how
+       * `rman run qc` sat in a CI pipeline for months reporting success while running nothing, with
+       * `qc` defined only on the root (whose own scripts a monorepo never runs, only its
+       * `pre`/`post` bookends).
+       *
+       * Everything was filtered out instead - `--scope`, `--changed`, `run.<script>.skip`, an
+       * `if:` that didn't match: zero is the correct answer to what was asked, and asking "build
+       * only what changed" when nothing changed must not fail a pipeline.
+       */
+      /** `getPackages()` and nothing else - in a monorepo that excludes the root, which is the
+       *  point: the root contributes only `pre`/`post` bookends, never the script itself, so a
+       *  `qc` defined *only* there is exactly the mistake above rather than an excuse for it. (And
+       *  had the root contributed a bookend, there would be a plan.) In a single-package
+       *  repository the root *is* the one package, and is covered. */
+      const definedSomewhere = repository.getPackages().some(pkg => getScriptSteps(pkg, script).length > 0);
+      if (definedSomewhere) {
+        console.log(colors.gray(`Nothing to run - every package was filtered out of "${script}".`));
+        return;
+      }
+      const message = `No package defines a "${script}" script.`;
+      console.log(colors.red(message));
+      const err: any = new Error(message);
+      err.logged = true;
+      throw err;
+    }
+
+    await this.schedule({ panel, concurrency, commandName, failureLabel: `"${script}"`, before, plans, after });
+  }
+
+  /**
+   * **The scheduler, shared by every driver that runs work per package.**
+   *
+   * `runScript` is one driver and `forEachPackage` is the other; both hand over a plan per package
+   * and get the same machinery, which is the point of this being a method rather than a shape each
+   * one builds for itself. Four things have had to be fixed in it this month alone - the status
+   * region handover, the depth-counted console patch, the per-row command, the failed list - and a
+   * second copy would have needed each fix twice, with nothing reporting the one that was missed.
+   *
+   * Throws when any package failed, with `logged` set: the panel has already printed the recap.
+   */
+  protected async schedule(options: {
+    panel: ProgressPanel;
+    concurrency: number;
+    /** What the panel-off log lines call this run (`run`, `build`, `check`). */
+    commandName: string;
+    /** Named in the failure thrown when a package fails - `"build" failed`. */
+    failureLabel: string;
+    /** A repo-wide bookend run first, alone, which every package then waits for. */
+    before?: RunService.PackagePlan;
+    plans: RunService.PackagePlan[];
+    /** A repo-wide bookend run last, alone, after every package. */
+    after?: RunService.PackagePlan;
+  }): Promise<void> {
+    const { panel, concurrency, commandName } = options;
 
     /** Set once the aggregate Task exists, so a package's own failure can trigger a manual
      *  abort using *its own* resolved bail setting (see `runSteps` below) - power-tasks' own
@@ -69,12 +181,8 @@ export class RunService extends Service {
 
     const runSteps = async (
       ctx: ProgressItem,
-      pkg: Package,
-      pkgLabel: string,
+      plan: RunService.PackagePlan,
       steps: RunService.ScriptStep[],
-      cwd: string,
-      pkgBail: boolean,
-      pkgLogLevel: LogLevel,
       /**
        * Which slice of the package's steps this call runs, when a `topo` step split it in two.
        * `from` keeps `stepIndex` counting across the pair, so one panel row spans both tasks and
@@ -83,6 +191,7 @@ export class RunService extends Service {
        */
       part?: { from: number; more?: boolean },
     ) => {
+      const { pkg, cwd, bail: pkgBail, logLevel: pkgLogLevel, label: pkgLabel } = plan;
       const from = part?.from ?? 0;
       /** Only the first part starts the clock: the row's elapsed time is the package's, and a
        *  package waiting at a `topo` barrier is waiting as part of its own run. */
@@ -165,66 +274,26 @@ export class RunService extends Service {
     };
 
     const children: Task[] = [];
-    /** Shared across all `if: changed[ = hash]` evaluations so the same reference is only `git`-queried once. */
-    const ifStatusCache = new Map<string, Record<string, Repository.PackageStatus>>();
 
-    /** Repo-wide bookend: root's own pre/post hooks run once each, exclusively, around every package
-     *  (unless root itself opts out via `run.<script>.skip`, fails its own `run.<script>.if`, or the
-     *  run is scoped to a single package by `cwdScope` - a repo-wide bookend has no place there).
-     *
-     *  Only in a monorepo. Without one the root *is* the single package, already in the loop below
-     *  with the same hooks and the same directory - a bookend would simply run each of them a
-     *  second time. */
-    /** Short-circuited deliberately: a root already out of the run for a structural reason must not
-     *  have its `if` evaluated, now that evaluating one can mean calling the repository's own code. */
-    const rootSkipped =
-      !!cwdScope ||
-      !repository.monorepo ||
-      rootCfg.skip === true ||
-      !(await passesIf(repository, repository.rootPackage, rootCfg.if, repository.dirname, ifStatusCache));
-    const rootSteps = rootSkipped ? [] : getScriptSteps(repository.rootPackage, script);
-    /** Filtered on the slot, not on `'pre' + script`: the step labels are `before`/`exec`/`after`
-     *  now - the same words the config uses - rather than npm's `pre<script>` naming, which moved
-     *  out with the package.json source. */
-    const rootPre = rootSteps.filter(s => s.name === 'before');
-    const rootPost = rootSteps.filter(s => s.name === 'after');
+    /** Row and task names are the plan's, and a package's is its package name - which is what lets
+     *  the dependency edges below be handed to power-tasks as names. Mapped rather than assumed, so
+     *  a driver labelling its rows differently does not silently lose its ordering. */
+    const taskOf = new Map(options.plans.map(plan => [plan.pkg.name, plan.name]));
 
-    const rootPreName = 'root (pre)';
-    const rootPostName = 'root (post)';
-
-    if (rootPre.length) {
-      const ctx = panel.addItem(rootPreName, rootPre.length);
-      const pkgBail = resolveBail(options.bail, repository.rootPackage, script, true);
-      const pkgLogLevel = resolveLogLevel(options.logLevel, repository.rootPackage, script, logLevelDefault);
-      children.push(
-        new Task(
-          () => runSteps(ctx, repository.rootPackage, 'root', rootPre, repository.dirname, pkgBail, pkgLogLevel),
-          {
-            name: ctx.name,
-            exclusive: true,
-          },
-        ),
-      );
+    if (options.before) {
+      const plan = options.before;
+      const ctx = panel.addItem(plan.name, plan.steps.length);
+      children.push(new Task(() => runSteps(ctx, plan, plan.steps), { name: plan.name, exclusive: true }));
     }
 
-    const stepsByPackage = new Map<string, RunService.ScriptStep[]>();
-    for (const pkg of packages) {
-      const pkgCfg = RunService.getConfig(pkg, script);
-      if (pkgCfg.skip === true) continue;
-      if (!(await passesIf(repository, pkg, pkgCfg.if, pkg.dirname, ifStatusCache))) continue;
-      const steps = getScriptSteps(pkg, script);
-      if (steps.length) stepsByPackage.set(pkg.name, steps);
-    }
-    for (const pkg of packages) {
-      const steps = stepsByPackage.get(pkg.name);
-      if (!steps) continue;
-      const ctx = panel.addItem(pkg.name, steps.length);
-      const pkgTopo = resolveBool(options.topo, pkg, script, 'topo', topo);
-      const pkgBail = resolveBail(options.bail, pkg, script, true);
-      const pkgLogLevel = resolveLogLevel(options.logLevel, pkg, script, logLevelDefault);
+    for (const plan of options.plans) {
+      const ctx = panel.addItem(plan.name, plan.steps.length);
+      const steps = plan.steps;
       /** power-tasks identifies a task by its name string, so the graph is handed over as names -
        *  the references are what rman reasons with, the names are what the scheduler wants. */
-      const waitsFor = pkgTopo ? pkg.dependencies.filter(d => stepsByPackage.has(d.name)).map(d => d.name) : [];
+      const waitsFor = plan.topo
+        ? plan.pkg.dependencies.map(d => taskOf.get(d.name)).filter((name): name is string => !!name)
+        : [];
 
       /**
        * **Where this package starts waiting for its dependencies**, or `-1` for not at all.
@@ -238,7 +307,7 @@ export class RunService extends Service {
        * marked at all" are different answers (no wait against the old wait at step 0), and reading
        * `-1` as either one alone gets the other wrong.
        */
-      const barrier = !pkgTopo ? -1 : steps.some(s => s.topo !== undefined) ? steps.findIndex(s => s.topo) : 0;
+      const barrier = !plan.topo ? -1 : steps.some(s => s.topo !== undefined) ? steps.findIndex(s => s.topo) : 0;
 
       /**
        * **Split only when the wait is in the middle of the package and there is something to wait
@@ -247,24 +316,19 @@ export class RunService extends Service {
        * an empty wait and a second panel transition for it.
        */
       if (barrier > 0 && waitsFor.length) {
-        /** A name of its own, because power-tasks addresses tasks by name and `pkg.name` has to
+        /** A name of its own, because power-tasks addresses tasks by name and the plan's name has to
          *  stay the *whole* package: a dependency waiting on it, and the root's post bookend
          *  waiting on all of them, both mean "everything this package does". */
-        const freeName = `${pkg.name} (pre-topo)`;
-        const freeDeps = rootPre.length ? [rootPreName] : [];
+        const freeName = `${plan.name} (pre-topo)`;
         children.push(
-          new Task(
-            () =>
-              runSteps(ctx, pkg, pkg.name, steps.slice(0, barrier), pkg.dirname, pkgBail, pkgLogLevel, {
-                from: 0,
-                more: true,
-              }),
-            { name: freeName, dependencies: freeDeps },
-          ),
+          new Task(() => runSteps(ctx, plan, steps.slice(0, barrier), { from: 0, more: true }), {
+            name: freeName,
+            dependencies: options.before ? [options.before.name] : [],
+          }),
         );
         children.push(
-          new Task(() => runSteps(ctx, pkg, pkg.name, steps, pkg.dirname, pkgBail, pkgLogLevel, { from: barrier }), {
-            name: ctx.name,
+          new Task(() => runSteps(ctx, plan, steps, { from: barrier }), {
+            name: plan.name,
             dependencies: [freeName, ...waitsFor],
           }),
         );
@@ -272,65 +336,25 @@ export class RunService extends Service {
       }
 
       const dependencies = barrier < 0 ? [] : [...waitsFor];
-      if (rootPre.length) dependencies.push(rootPreName);
+      if (options.before) dependencies.push(options.before.name);
+      children.push(new Task(() => runSteps(ctx, plan, steps), { name: plan.name, dependencies }));
+    }
+
+    if (options.after) {
+      const plan = options.after;
+      const ctx = panel.addItem(plan.name, plan.steps.length);
       children.push(
-        new Task(() => runSteps(ctx, pkg, pkg.name, steps, pkg.dirname, pkgBail, pkgLogLevel), {
-          name: ctx.name,
-          dependencies,
+        new Task(() => runSteps(ctx, plan, plan.steps), {
+          name: plan.name,
+          exclusive: true,
+          /** Must wait for every package task to finish, not just be "exclusive" once it starts. */
+          dependencies: [...taskOf.values()],
         }),
       );
     }
 
-    if (rootPost.length) {
-      const ctx = panel.addItem(rootPostName, rootPost.length);
-      const pkgBail = resolveBail(options.bail, repository.rootPackage, script, true);
-      const pkgLogLevel = resolveLogLevel(options.logLevel, repository.rootPackage, script, logLevelDefault);
-      children.push(
-        new Task(
-          () => runSteps(ctx, repository.rootPackage, 'root', rootPost, repository.dirname, pkgBail, pkgLogLevel),
-          {
-            name: ctx.name,
-            exclusive: true,
-            /** Must wait for every package task to finish, not just be "exclusive" once it starts. */
-            dependencies: [...stepsByPackage.keys()],
-          },
-        ),
-      );
-    }
-
-    if (!children.length) {
-      /**
-       * Two different nothings, and only one of them is fine.
-       *
-       * Nobody in the repository defines this script at all: the name is a mistake - a typo, or a
-       * script that used to exist - and `npm run` fails on exactly this. Staying silent is how
-       * `rman run qc` sat in a CI pipeline for months reporting success while running nothing, with
-       * `qc` defined only on the root (whose own scripts a monorepo never runs, only its
-       * `pre`/`post` bookends).
-       *
-       * Everything was filtered out instead - `--scope`, `--changed`, `run.<script>.skip`, an
-       * `if:` that didn't match: zero is the correct answer to what was asked, and asking "build
-       * only what changed" when nothing changed must not fail a pipeline.
-       */
-      /** `getPackages()` and nothing else - in a monorepo that excludes the root, which is the
-       *  point: the root contributes only `pre`/`post` bookends, never the script itself, so a
-       *  `qc` defined *only* there is exactly the mistake above rather than an excuse for it. (And
-       *  had the root contributed a bookend, `children` wouldn't be empty.) In a single-package
-       *  repository the root *is* the one package, and is covered. */
-      const definedSomewhere = repository.getPackages().some(pkg => getScriptSteps(pkg, script).length > 0);
-      if (definedSomewhere) {
-        console.log(colors.gray(`Nothing to run - every package was filtered out of "${script}".`));
-        return;
-      }
-      const message = `No package defines a "${script}" script.`;
-      console.log(colors.red(message));
-      const err: any = new Error(message);
-      err.logged = true;
-      throw err;
-    }
-
-    panel.detail = repository.name;
-    panel.start(repository.app.statusRegion);
+    panel.detail = this.repository.name;
+    panel.start(this.repository.app.statusRegion);
 
     try {
       /** bail:false here - each package's own resolved bail setting decides whether to call
@@ -357,11 +381,115 @@ export class RunService extends Service {
      *  run it had just reported as failed - non-deterministically, since it came down to which
      *  packages happened to still be running (measured: `1 0 1 1 0` across five identical runs).
      *  A single failed package must fail the command, every time. */
+    /** The tallies, never `rootTask.toPromise()`'s own outcome: with a sibling still in flight at
+     *  the moment one package failed, that promise *resolves*, and this command used to exit 0 on a
+     *  run it had just reported as failed - non-deterministically, since it came down to which
+     *  packages happened to still be running (measured: `1 0 1 1 0` across five identical runs).
+     *  A single failed package must fail the command, every time. */
     if (summary.failedCount > 0) {
-      const err: any = new Error(`"${script}" failed`);
+      const err: any = new Error(`${options.failureLabel} failed`);
       err.logged = true;
       throw err;
     }
+  }
+
+  /**
+   * Runs `fn` once per package, under the same scheduler `run` uses - concurrency, `--bail`,
+   * dependency order, the progress panel, and `console` routed to the right row.
+   *
+   * **This is what a command reaches for instead of a `for` loop.** `check` was that loop: `await
+   * runBin(...)` per package, which ignores `--parallel` outright, draws no panel, and had
+   * re-implemented `--bail`, the package filters, the two-endings rule and a summary line - about
+   * sixty lines of this service, already drifted (its own tally counted packages a bail had skipped
+   * as successes, a bug fixed here separately). Measured on `panates/opra`: nineteen packages at
+   * 0.4-0.9s each, so eleven seconds of wall clock where the work is entirely independent.
+   *
+   * `fn` is handed exactly what a **function step** gets - `pkg`, `cwd`, a `runBin` already bound to
+   * that package's directory and this run's log level, and a `logger`. That is the answer to the
+   * complaint this exists for: an imported `runBin` knows neither, and a command reaching for one
+   * had to thread `cwd`, `app` and `logLevel` through by hand at every call.
+   *
+   * Ordering is **off** unless `topo` asks for it: a command sweeping packages with an independent
+   * tool is the common case, and a wait nobody asked for is the more expensive mistake here.
+   */
+  async forEachPackage(
+    packages: readonly Package[],
+    fn: RunStepFn,
+    options: RunService.ForEachOptions = {},
+  ): Promise<void> {
+    const repository = this.repository;
+    const label = options.label ?? 'each';
+    const logLevel = options.logLevel ?? resolveRootLogLevel(repository);
+    const concurrency = resolveConcurrency(options.parallel, os.cpus().length);
+    const panel = new ProgressPanel(label.toUpperCase(), !!process.stdout.isTTY && options.progress !== false);
+
+    /** Nothing to do is not a failure, and the caller is the one that can tell the two endings
+     *  apart - it knows why its list is empty. `check` says so itself and returns. */
+    if (!packages.length) return;
+
+    const steps: RunService.ScriptStep[] = [{ name: label, label: fn.name || label, run: fn }];
+    const plans = packages.map(pkg => ({
+      pkg,
+      name: pkg.name,
+      label: pkg.name,
+      /** One step object per package, not one shared: `ScriptStep` is read for `topo` and the row's
+       *  own labels, and a shared object would be fine today and a race the day a driver writes to
+       *  it. */
+      steps: [...steps],
+      cwd: pkg.dirname,
+      topo: options.topo === true,
+      bail: options.bail !== false,
+      logLevel,
+    }));
+
+    await this.schedule({
+      panel,
+      concurrency,
+      commandName: label,
+      failureLabel: `"${label}"`,
+      plans,
+    });
+  }
+
+  /**
+   * Runs `tasks` with at most `parallel` of them in flight - `Promise.all` under the repository's
+   * own concurrency rule.
+   *
+   * **The low-level half of `forEachPackage`, for work that is not per package** - sharding a file
+   * list across cores, say. It buys the concurrency limit and nothing else: a bare list of functions
+   * carries no name, so there is no panel row to label, nothing to name in a failure, and no
+   * dependency to order by. That is why it is the second thing to reach for, not the first.
+   *
+   * **Settles the tasks already in flight before rejecting.** A plain `Promise.all` rejects on the
+   * first failure while its siblings keep running - with child processes behind them, that leaves
+   * output arriving after the command has reported and exited.
+   */
+  async parallel<T>(tasks: readonly (() => Promise<T>)[], options: { parallel?: boolean | number } = {}): Promise<T[]> {
+    const limit = Math.max(1, resolveConcurrency(options.parallel, os.cpus().length));
+    const results: T[] = new Array(tasks.length);
+    const running = new Set<Promise<void>>();
+    let failure: unknown;
+    let failed = false;
+
+    for (let i = 0; i < tasks.length; i++) {
+      if (failed) break;
+      const index = i;
+      const started = (async () => {
+        results[index] = await tasks[index]!();
+      })().catch(error => {
+        if (!failed) {
+          failed = true;
+          failure = error;
+        }
+      });
+      running.add(started);
+      void started.finally(() => running.delete(started));
+      if (running.size >= limit) await Promise.race(running);
+    }
+
+    await Promise.allSettled(running);
+    if (failed) throw failure;
+    return results;
   }
 }
 
@@ -387,6 +515,51 @@ export namespace RunService {
      *  bookend - see `Repository.currentPackage`). Has no effect when already at the repository
      *  root, or outside any known package. */
     fromRoot?: boolean;
+  }
+
+  /** What `forEachPackage` takes - the scheduling half of `Options`, with no script to read it from
+   *  the config and no package filtering, which the caller has already done. */
+  export interface ForEachOptions {
+    /** Max packages at once: `true`/omitted = CPU count, a number = that many, `false` = serial. */
+    parallel?: boolean | number;
+    /** Stop the batch at the first failure. Default `true`, as `run`'s is. */
+    bail?: boolean;
+    /**
+     * Wait for a package's dependencies before running it. **Default `false`**, unlike `run`'s: a
+     * command sweeping packages with an independent tool is the common case here, and a wait nobody
+     * asked for costs the whole point of the call.
+     */
+    topo?: boolean;
+    /** Show the live progress panel. Default true; auto-disabled when stdout isn't a TTY. */
+    progress?: boolean;
+    logLevel?: LogLevel;
+    /** The panel's title, the row's step name and the word in the failure - the command's own name
+     *  (`check`) reads best. */
+    label?: string;
+  }
+
+  /**
+   * One package's share of a scheduled run: what to do, where, and under which rules.
+   *
+   * **The unit the scheduler takes, and why it is a package rather than a bare function.** A row has
+   * to be named for the panel to label it, for the summary to say which package failed, and for the
+   * failed list to have something to list; a dependency edge has to name a package for ordering to
+   * mean anything. A `(() => Promise<void>)[]` carries neither, which is what makes it the wrong
+   * shape for this even though it is the obvious one.
+   */
+  export interface PackagePlan {
+    pkg: Package;
+    /** The panel row's name and the task's - unique within the run, and a package's own name, which
+     *  is what lets dependency edges be handed to power-tasks as names. */
+    name: string;
+    /** What the panel-off log line calls it: the package's name, or `root` for a bookend. */
+    label: string;
+    steps: ScriptStep[];
+    /** The directory the steps run in - the package's own, or the repository root for a bookend. */
+    cwd: string;
+    topo: boolean;
+    bail: boolean;
+    logLevel: LogLevel;
   }
 
   /**
@@ -1160,6 +1333,26 @@ export function resolveNumber(
   if (cliValue !== undefined) return cliValue;
   const v = RunService.getConfig(pkg, script)[key];
   return typeof v === 'number' ? v : fallback;
+}
+
+/**
+ * How many packages run at once: what the flag said, or `whenUnset` where it said nothing.
+ *
+ * **`--parallel` and `concurrency` are deliberately different names**, so this is where the two
+ * meet: the flag is `boolean | number` (omit/`true` = CPU count, `false` = serially), the key is the
+ * number it resolves to. It was written out at `runScript`'s top and two more callers need the same
+ * answer - three copies of a four-branch ternary is how a flag comes to mean something slightly
+ * different depending on which command you typed.
+ *
+ * **Where the unset case comes from is the caller's**, and deliberately not read here: `run`'s is
+ * `run.<script>.concurrency`, while a command calling `forEachPackage` owns a key of its own
+ * (`check.concurrency`) that this function has no business guessing the name of.
+ */
+export function resolveConcurrency(parallel: boolean | number | undefined, whenUnset: number): number {
+  if (parallel === false) return 1;
+  if (typeof parallel === 'number') return parallel;
+  if (parallel === true) return os.cpus().length;
+  return whenUnset;
 }
 
 export function resolveLogLevel(

@@ -183,7 +183,11 @@ export async function runCli(options?: {
         { ...declared, command: declared.command?.trim() || c.name },
         describeCommandSource(c.file),
       );
-      return { name: commandName(meta.command), file: c.file, module: toYargsCommand(meta) };
+      return {
+        name: commandName(meta.command),
+        file: c.file,
+        module: toYargsCommand(meta, args => commandContext(repository, app, args)),
+      };
     });
     /**
      * **One command per name, keeping the last** - which is the precedence that already applied,
@@ -242,7 +246,7 @@ export async function runCli(options?: {
     const shadowed = builtIns.filter(meta => meta.shadowable && taken.has(commandName(meta.command)));
     for (const meta of builtIns) {
       if (shadowed.includes(meta)) continue;
-      program.command(toYargsCommand(meta));
+      program.command(toYargsCommand(meta, args => commandContext(repository, app, args)));
     }
     /** Said out loud at `verbose`, for the reason the contributed-on-contributed note above gives:
      *  an override is correct and should not nag, but "rman test does something else here" needs a
@@ -586,17 +590,32 @@ function toCustomModule(custom: CustomCommand, repository: Repository, app: Rman
     describe: custom.describe,
     configKeys: custom.configKeys,
     builder: custom.builder ?? ((y: Argv) => y),
-    handler: (args: ArgumentsCamelCase) => {
-      /** Resolved per invocation, not once at registration: `--log-level` is only known now. */
-      const logLevel = (args.logLevel as LogLevel | undefined) ?? resolveRootLogLevel(repository);
-      const context: CommandContext = {
-        repository,
-        package: repository.currentPackage,
-        runBin: (bin, argv, opts) => runBin(bin, argv, { cwd: repository.dirname, logLevel, app, ...opts }),
-        logger: new Logger(logLevel),
-      };
-      return custom.handler(context, args);
-    },
+    handler: (args: ArgumentsCamelCase) => custom.handler(commandContext(repository, app, args), args),
+  };
+}
+
+/**
+ * What a command is handed beside its argv - **one object, built in one place, for both authoring
+ * forms.** A `.rman/*.mjs` command takes it as its first parameter and a declared command as its
+ * second; what is in it is the same either way, so a facility added here reaches both.
+ *
+ * **Built per invocation rather than once at registration**, which is the whole reason it exists
+ * separately from `app`: `app` is the application, this is *this run*. `--log-level` is only known
+ * now, and `runBin`/`logger` carry it - an imported `runBin` knows neither, so `--log-level silent`
+ * would quietly fail to apply to the one part of a command that produces output.
+ */
+function commandContext(repository: Repository, app: RmanApplication, args: ArgumentsCamelCase): CommandContext {
+  const logLevel = (args.logLevel as LogLevel | undefined) ?? resolveRootLogLevel(repository);
+  const run = app.getService('run');
+  return {
+    repository,
+    package: repository.currentPackage,
+    runBin: (bin, argv, opts) => runBin(bin, argv, { cwd: repository.dirname, logLevel, app, ...opts }),
+    logger: new Logger(logLevel),
+    /** Bound, not passed as the service: a command should not have to know which service owns the
+     *  scheduler, and `logLevel` is this run's rather than the repository's default. */
+    forEachPackage: (packages, fn, options) => run.forEachPackage(packages, fn, { logLevel, ...options }),
+    parallel: (tasks, options) => run.parallel(tasks, options ?? {}),
   };
 }
 

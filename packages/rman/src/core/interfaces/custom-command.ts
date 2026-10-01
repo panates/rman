@@ -3,10 +3,12 @@ import { pathToFileURL } from 'node:url';
 import fastGlob from 'fast-glob';
 import type { ArgumentsCamelCase, Argv } from 'yargs';
 import type { RmanConfig as CommandDeclaration } from '../../interfaces/rman-config.interface.js';
+import type { RunService } from '../../services/run.service.js';
 import type { Logger } from '../../utils/logger.js';
 import type { RunBinOptions, RunBinResult } from '../../utils/run-bin.js';
 import type { Package } from '../classes/package.js';
 import type { Repository } from '../classes/repository.js';
+import type { RunStepFn } from './run-step.js';
 
 /** Where a repository keeps its own commands - one module per command, named after it. */
 export const CUSTOM_COMMAND_DIR = '.rman';
@@ -44,6 +46,41 @@ export interface CommandContext {
   runBin: (bin: string, argv: string[], options?: RunBinOptions) => Promise<RunBinResult>;
   /** Logger at this run's resolved level, for a command's own narration. */
   logger: Logger;
+  /**
+   * Runs `fn` once per package under the scheduler `run` uses - `--parallel`, `--bail`, dependency
+   * order on request, the progress panel, and `console` routed to the right row. Throws when any
+   * package failed, with the recap already printed.
+   *
+   * **A `for` loop is what this replaces, and the loop is worse in more ways than it looks.** It
+   * ignores `--parallel` outright, draws no panel, and leaves the command to re-implement `--bail`
+   * and a summary line. `rman check` was that loop: measured on a nineteen-package repository at
+   * 0.4-0.9s per package, eleven seconds of wall clock for work that is entirely independent.
+   *
+   * `fn` is handed exactly what a **function step** gets - `pkg`, `cwd`, a `runBin` already bound to
+   * that package's directory and this run's log level, and a `logger`. An imported `runBin` knows
+   * none of that, which is why a command using one had to thread `cwd`, `app` and `logLevel`
+   * through by hand at every call.
+   *
+   * ```js
+   * await context.forEachPackage(checkable, async ({ pkg, runBin }) => {
+   *   await runBin('dpdm', [...FLAGS, entry]);
+   * }, { label: 'check', parallel: args.parallel, bail: args.bail });
+   * ```
+   */
+  forEachPackage: (packages: readonly Package[], fn: RunStepFn, options?: RunService.ForEachOptions) => Promise<void>;
+  /**
+   * Runs `tasks` with at most `parallel` of them in flight - `Promise.all` under the repository's
+   * own concurrency rule.
+   *
+   * **The lower-level half, and the second thing to reach for.** It is the answer for work that is
+   * not per package (sharding a file list), and it buys nothing else: a bare list of functions
+   * carries no name, so there is no panel row to label, no package to name in a failure, and no
+   * dependency to order by. Anything per package wants `forEachPackage`.
+   *
+   * Rejects with the first failure once the tasks already started have settled, so nothing is left
+   * running behind the throw.
+   */
+  parallel: <T>(tasks: readonly (() => Promise<T>)[], options?: { parallel?: boolean | number }) => Promise<T[]>;
 }
 
 /**

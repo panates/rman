@@ -1217,6 +1217,211 @@ describe('RunService.createStepContext() reports what a step spawns', () => {
  * `console.log` calls went into a finished package's log array, so the run printed **no recap and
  * no failure logs at all**.
  */
+/**
+ * **The scheduler, offered to a command that is not running a script.**
+ *
+ * `rman check` was `for (const pkg of ...) await runBin(...)`: no `--parallel`, no panel, and
+ * `--bail`, the package filters and a summary line re-implemented beside rman's own. Measured on
+ * `panates/opra` after this existed - nineteen packages, **8.6s serial against 1.7s** at CPU
+ * concurrency, for work with no dependencies between any of it.
+ */
+describe('RunService.forEachPackage()', () => {
+  useTestEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  async function repoOf(packages: Record<string, PackageDef>): Promise<Repository> {
+    const dir = mkTmp();
+    dirs.push(dir);
+    writeFixture(dir, packages);
+    return createRepository(dir);
+  }
+
+  /** Three packages that each sleep, so wall-clock time answers "did these overlap" without a
+   *  clock the test has to read. */
+  const three = { 'pkg-a': {}, 'pkg-b': {}, 'pkg-c': {} };
+
+  it('runs the packages concurrently by default, and serially when told to', async () => {
+    const repo = await repoOf(three);
+    const sleep = () => new Promise<void>(resolve => setTimeout(resolve, 150));
+
+    const concurrent = Date.now();
+    await captureLogs(() => service('run').forEachPackage(repo.getPackages(), sleep, { progress: false }));
+    const concurrentMs = Date.now() - concurrent;
+
+    const serial = Date.now();
+    await captureLogs(() =>
+      service('run').forEachPackage(repo.getPackages(), sleep, { progress: false, parallel: false }),
+    );
+    const serialMs = Date.now() - serial;
+
+    expect(concurrentMs).toBeLessThan(300);
+    expect(serialMs).toBeGreaterThan(400);
+  });
+
+  /**
+   * **What the callback is handed is a function step's own context**, which is the point: an
+   * imported `runBin` knows neither the package's directory nor this run's log level, so a command
+   * using one had to thread `cwd`, `app` and `logLevel` through by hand at every call.
+   */
+  it('hands each package a runBin already bound to its own directory', async () => {
+    const repo = await repoOf(three);
+    const seen: string[] = [];
+    await captureLogs(() =>
+      service('run').forEachPackage(
+        repo.getPackages(),
+        async ctx => {
+          seen.push(`${ctx.pkg.name}:${ctx.cwd === ctx.pkg.dirname}`);
+          expect(typeof ctx.runBin).toBe('function');
+          expect(ctx.logger).toBeDefined();
+        },
+        { progress: false, parallel: false },
+      ),
+    );
+    expect(seen).toEqual(['pkg-a:true', 'pkg-b:true', 'pkg-c:true']);
+  });
+
+  it('throws when a package fails, and stops the rest when bail is on', async () => {
+    const repo = await repoOf(three);
+    const ran: string[] = [];
+    /** `captureLogs` returns the rejection rather than re-throwing it, so the assertion reads the
+     *  error off the result - see its own doc. */
+    const { error } = await captureLogs(() =>
+      service('run').forEachPackage(
+        repo.getPackages(),
+        async ({ pkg }) => {
+          ran.push(pkg.name);
+          if (pkg.name === 'pkg-a') throw new Error('nope');
+        },
+        { progress: false, parallel: false },
+      ),
+    );
+    expect(error?.message).toMatch(/failed/);
+    expect(ran).toEqual(['pkg-a']);
+  });
+
+  it('runs every package when bail is off, and still throws', async () => {
+    const repo = await repoOf(three);
+    const ran: string[] = [];
+    const { error } = await captureLogs(() =>
+      service('run').forEachPackage(
+        repo.getPackages(),
+        async ({ pkg }) => {
+          ran.push(pkg.name);
+          if (pkg.name === 'pkg-a') throw new Error('nope');
+        },
+        { progress: false, parallel: false, bail: false },
+      ),
+    );
+    expect(error?.message).toMatch(/failed/);
+    expect(ran.sort()).toEqual(['pkg-a', 'pkg-b', 'pkg-c']);
+  });
+
+  /**
+   * **Ordering is off unless asked for, the opposite of `run`'s default.** A command sweeping
+   * packages with a tool that reads each one's own sources is the common case here, and a wait
+   * nobody asked for costs exactly what this call was reached for.
+   */
+  it('does not wait for dependencies unless topo is asked for', async () => {
+    const repo = await repoOf({ 'pkg-a': {}, 'pkg-b': { dependencies: { 'pkg-a': '1.0.0' } } });
+    const order: string[] = [];
+    const step = async ({ pkg }: { pkg: Package }) => {
+      if (pkg.name === 'pkg-a') await new Promise<void>(r => setTimeout(r, 150));
+      order.push(pkg.name);
+    };
+
+    await captureLogs(() => service('run').forEachPackage(repo.getPackages(), step, { progress: false }));
+    expect(order).toEqual(['pkg-b', 'pkg-a']);
+
+    order.length = 0;
+    await captureLogs(() => service('run').forEachPackage(repo.getPackages(), step, { progress: false, topo: true }));
+    expect(order).toEqual(['pkg-a', 'pkg-b']);
+  });
+
+  it('does nothing, and does not throw, for an empty list', async () => {
+    await repoOf(three);
+    await captureLogs(() => service('run').forEachPackage([], async () => {}, { progress: false }));
+  });
+});
+
+/**
+ * The low-level half: `Promise.all` under the repository's concurrency rule, for work that is not
+ * per package. It buys the limit and nothing else - no row to name, nothing to order by - which is
+ * why `forEachPackage` is the one a command should reach for first.
+ */
+describe('RunService.parallel()', () => {
+  useTestEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  async function svc() {
+    const dir = mkTmp();
+    dirs.push(dir);
+    writeFixture(dir, { 'pkg-a': {} });
+    await createRepository(dir);
+    return service('run');
+  }
+
+  it('returns the results in the order the tasks were given, whatever order they finish in', async () => {
+    const run = await svc();
+    const results = await run.parallel([
+      async () => {
+        await new Promise<void>(r => setTimeout(r, 60));
+        return 'slow';
+      },
+      async () => 'fast',
+    ]);
+    expect(results).toEqual(['slow', 'fast']);
+  });
+
+  it('never has more than `parallel` tasks in flight', async () => {
+    const run = await svc();
+    let inFlight = 0;
+    let peak = 0;
+    const task = async () => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise<void>(r => setTimeout(r, 30));
+      inFlight--;
+    };
+    await run.parallel(
+      Array.from({ length: 8 }, () => task),
+      { parallel: 2 },
+    );
+    expect(peak).toBe(2);
+  });
+
+  /**
+   * **A plain `Promise.all` rejects while its siblings keep running**, and with child processes
+   * behind them that leaves output arriving after the command has reported and exited. This settles
+   * what is already in flight first - pinned by a task that writes *after* its await.
+   */
+  it('settles the tasks already in flight before it throws', async () => {
+    const run = await svc();
+    const finished: string[] = [];
+    await expect(
+      run.parallel(
+        [
+          async () => {
+            throw new Error('first');
+          },
+          async () => {
+            await new Promise<void>(r => setTimeout(r, 40));
+            finished.push('sibling');
+          },
+        ],
+        { parallel: 2 },
+      ),
+    ).rejects.toThrow('first');
+    expect(finished).toEqual(['sibling']);
+  });
+});
+
 describe('RunService.withCapturedConsole()', () => {
   /** A stub this spec owns, so "was the console handed back" is a question about identity rather
    *  than about behaviour. */

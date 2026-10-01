@@ -1,7 +1,7 @@
 import type * as yargs from 'yargs';
 import type { RmanApplication } from '../core/application.js';
 import type { CodeSubtree } from '../core/config/config-paths.js';
-import type { CustomCommand } from '../core/interfaces/custom-command.js';
+import type { CommandContext, CustomCommand } from '../core/interfaces/custom-command.js';
 import type { Platform, Plugin } from '../core/interfaces/plugin.js';
 import type { PublishTarget } from '../core/interfaces/publish-target.js';
 import type { RunConditionFn, RunStepFn, RunStepValue } from '../core/interfaces/run-step.js';
@@ -630,7 +630,16 @@ export namespace RmanConfig {
      * `toYargsCommand` casts the handler to yargs' own and that cast is the single place the two
      * descriptions of argv are admitted to disagree.
      */
-    handler: (argv: never) => void;
+    /**
+     * The second parameter is the [`CommandContext`](../core/interfaces/custom-command.ts) - this
+     * run's `runBin`, `logger`, `forEachPackage` and `parallel` - and is **optional**, so a command
+     * that does not take it still satisfies this.
+     *
+     * `(args, context)` is the opposite order to `CustomCommand.handler`'s `(context, args)`, and
+     * the reason is compatibility rather than taste: every declared command in existence was
+     * `handler(args)`, so appending a parameter breaks none and prepending one breaks all.
+     */
+    handler: (argv: never, context?: CommandContext) => void;
   };
 
   /**
