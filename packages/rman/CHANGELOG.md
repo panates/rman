@@ -1,6 +1,20 @@
 # Changelog
 
-<!-- rman:documented-up-to b3682f27db37948f0f400e64dae1455c6299322d -->
+<!-- rman:documented-up-to 35f9992482fd5b9627010853f59f24ac9cf89ab6 -->
+
+## v2.8.0 (2026-10-01)
+
+### ✨ Features
+
+- **progress:** keep failed packages on the list, naming what failed (35f9992)
+
+### 🐛 Bug Fixes
+
+- **progress:** capture a function step's child output instead of printing it (c973f7c)
+- **run:** one console patch per run, not per step - the recap was being swallowed (50297c1)
+- **progress:** a row forgets its last line when the work changes (70e7bc4)
+
+---
 
 ## v2.7.0 (2026-10-01)
 
