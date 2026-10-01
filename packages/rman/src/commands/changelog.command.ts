@@ -284,7 +284,7 @@ const changelogCommand = registerCommand(app => {
         progress: panelReporter(panel),
       };
       const changelog = app.getService('changelog');
-      panel.start();
+      panel.start(app.statusRegion);
       let entries: ChangelogService.Entry[];
       try {
         entries = write ? await changelog.generateToFile(options) : await changelog.getEntries(options);

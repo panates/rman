@@ -382,4 +382,41 @@ describe('utils/ProgressPanel', () => {
       }
     });
   });
+
+  /**
+   * **The panel takes the terminal from the status region and hands it back.** Two live regions
+   * each redraw by moving the cursor up by their own line count, so interleaved they land on each
+   * other's rows - on screen, the bottom lines swap places several times a second. Reported on
+   * `rman ci`; `rman build` had it too, through `runBin`'s pass-through.
+   */
+  describe('takeover of the status region', () => {
+    it('suspends it on start and resumes it on stop', async () => {
+      const calls: string[] = [];
+      const region = {
+        suspend: (t?: unknown) => calls.push(t ? 'suspend(panel)' : 'suspend()'),
+        resume: () => calls.push('resume'),
+      };
+      await withCapturedStdout(
+        async () => {
+          const panel = new ProgressPanel('X', true);
+          panel.start(region as never);
+          await wait(120);
+          panel.stop();
+        },
+        { columns: 80, rows: 24 },
+      );
+      expect(calls).toEqual(['suspend(panel)', 'resume']);
+    });
+
+    /** A disabled panel draws nothing, so taking the terminal from the status line would remove the
+     *  one thing a non-TTY run still shows. */
+    it('leaves it alone when the panel is not drawing', async () => {
+      const calls: string[] = [];
+      const region = { suspend: () => calls.push('suspend'), resume: () => calls.push('resume') };
+      const panel = new ProgressPanel('X', false);
+      panel.start(region as never);
+      panel.stop();
+      expect(calls).toEqual([]);
+    });
+  });
 });

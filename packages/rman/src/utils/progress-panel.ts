@@ -1,5 +1,6 @@
 import colors from 'ansi-colors';
 import { LiveRegion } from './live-region.js';
+import type { StatusRegion, TerminalRegion } from './status-region.js';
 
 export type ProgressStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped';
 
@@ -49,10 +50,12 @@ export function formatDuration(ms: number): string {
  * callers are expected to fall back to their own plain logging in that case, the way `run`
  * falls back to its "classic" per-step log.
  */
-export class ProgressPanel {
+export class ProgressPanel implements TerminalRegion {
   readonly live: LiveRegion;
   private readonly items = new Map<string, ProgressItem>();
   private renderLoop?: ReturnType<typeof setInterval>;
+  /** The region this panel took the terminal from, handed back in `stop`. */
+  private statusRegion?: StatusRegion;
   private spinnerFrame = 0;
   private startedAt = 0;
 
@@ -82,11 +85,35 @@ export class ProgressPanel {
     return item;
   }
 
-  /** Starts the redraw loop. No-op (and no timer) when disabled. */
-  start(): void {
+  /**
+   * Starts the redraw loop. No-op (and no timer) when disabled.
+   *
+   * **Pass `statusRegion` wherever one exists** - `app.statusRegion`, which every command has while
+   * it runs. The panel takes the terminal over for as long as it draws and hands it back in `stop`;
+   * without that, two regions redraw on top of each other and the bottom lines visibly swap places
+   * several times a second. See `StatusRegion.suspend`.
+   */
+  start(statusRegion?: StatusRegion): void {
     this.startedAt = Date.now();
     if (!this.live.enabled) return;
+    /** Only when this panel is actually drawing: a disabled panel owns nothing, and suspending the
+     *  status line for it would take away the one thing a non-TTY run still shows. */
+    this.statusRegion = statusRegion;
+    this.statusRegion?.suspend(this);
     this.renderLoop = setInterval(() => this.render(), 100);
+  }
+
+  /** Writes `text` above the panel without corrupting it - erase, write, redraw underneath. The
+   *  `TerminalRegion` half of the takeover, so a `runBin` child's output goes somewhere sane while
+   *  a panel is up. */
+  passThrough(text: string): void {
+    if (!this.live.enabled) {
+      process.stdout.write(text);
+      return;
+    }
+    this.live.clear();
+    process.stdout.write(text);
+    this.render();
   }
 
   private render(): void {
@@ -171,6 +198,11 @@ export class ProgressPanel {
     if (this.renderLoop) clearInterval(this.renderLoop);
     this.renderLoop = undefined;
     this.live.clear();
+    /** **Handed back, not left suspended.** A command keeps working after its panel comes down -
+     *  `ci` prints its summary, `run` its recap - and those writes have to go through a region
+     *  again, or they scroll the status line's own block. */
+    this.statusRegion?.resume();
+    this.statusRegion = undefined;
   }
 
   /**

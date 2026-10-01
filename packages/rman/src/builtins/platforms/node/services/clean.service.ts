@@ -73,7 +73,7 @@ export namespace CleanService {
     const progress = options.progress ?? true;
     const logger = new Logger(options.logLevel ?? resolveRootLogLevel(repository));
     const panel = new ProgressPanel(dryRun ? 'CLEAN (dry-run)' : 'CLEAN', !!process.stdout.isTTY && progress);
-    panel.start();
+    panel.start(repository.app.statusRegion);
 
     let failed = false;
     try {

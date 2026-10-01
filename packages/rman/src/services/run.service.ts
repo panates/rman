@@ -254,7 +254,7 @@ export class RunService extends Service {
       throw err;
     }
 
-    panel.start();
+    panel.start(repository.app.statusRegion);
 
     try {
       /** bail:false here - each package's own resolved bail setting decides whether to call

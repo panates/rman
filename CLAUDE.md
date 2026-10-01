@@ -1056,6 +1056,27 @@ counting up while it runs; a `✔`/`✖` line with the elapsed time when it ends
     child that spawns a *shell* - `npm run` being the one every repository types - so the preset's
     `lint`, `check` and `format` were green while `test` was not. **A spec covering a `runBin` env
     has to run something that spawns `sh` itself**, which is what `run-bin.spec.ts` does.
+- **Only one region draws at a time, and `suspend`/`resume` is what enforces it.** `LiveRegion`'s
+  doc has claimed this since it grew a `stream` parameter and nothing held it: every command gets a
+  status region, and `run`/`build`/`exec`/`clean`/`ci`/`changelog` additionally start a
+  `ProgressPanel`, so two regions redrew on one terminal. Each moves the cursor up by **its own**
+  line count, so interleaved every redraw lands on the other's rows - on screen the bottom lines
+  swap places several times a second. Reported on `rman ci`; `rman build` had it too, by a second
+  route (`runBin`'s pass-through went to the status region while the panel was drawing).
+  - `ProgressPanel.start(statusRegion)` takes the terminal and `stop()` hands it back. **Every
+    panel site passes `app.statusRegion`** - five of them, and a new one that forgets reintroduces
+    the flicker with nothing reporting it.
+  - **Only when the panel is actually drawing.** A disabled panel (non-TTY, `--no-progress`) owns
+    nothing, and suspending the status line for it would remove the one thing such a run still
+    shows.
+  - **`live` stays `true` while suspended, deliberately.** It answers "does something own this
+    terminal", which is what `runBin` reads to decide to pipe a child rather than let it scroll the
+    screen; the answer to *which* region is `takeover`, which `passThrough` forwards to. Making
+    `live` false instead would have let every `runBin` child inherit the terminal and scroll over
+    the panel - the failure the piping exists to prevent.
+  - **`TerminalRegion` is `passThrough` and nothing else.** `StatusRegion.live` and
+    `ProgressPanel.enabled` are the same question under two names, and `ProgressPanel.live` is the
+    `LiveRegion` itself - putting `live` in the contract would force a rename for no gain.
 - **The region lives on `RmanApplication.statusRegion`**, not in a module-level singleton. `runBin`
   and `exec` are handed an `app` already - the same seam `BinPath` uses - so nothing reaches for
   ambient state and one spec's application cannot affect another's. That is what the removed root

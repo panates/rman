@@ -110,4 +110,74 @@ describe('utils/StatusRegion', () => {
     expect(formatElapsed(4123)).toBe('4.1s');
     expect(formatElapsed(123_000)).toBe('2m 03s');
   });
+
+  /**
+   * **Two live regions on one terminal cannot both work**, and `suspend`/`resume` is what enforces
+   * the one-owner rule `LiveRegion`'s own doc has always claimed. Reported on `rman ci`: the panel
+   * and this line each redraw by moving the cursor up by *their own* line count, so interleaved
+   * they land on each other's rows and the bottom lines visibly swap places.
+   */
+  describe('handing the terminal over (suspend/resume)', () => {
+    it('stops drawing its own line while suspended', () => {
+      const out = capture(written => {
+        const region = new StatusRegion('ci', 'my-repo', true);
+        region.start();
+        region.suspend();
+        const before = written().length;
+        /** Longer than one frame (80ms), so a surviving timer would have drawn at least once.
+         *  Busy, because `capture` restores the stream synchronously and an awaited gap would
+         *  put the assertion outside it. */
+        const until = Date.now() + 200;
+        while (Date.now() < until) {
+          /* spin */
+        }
+        expect(written().length).toBe(before);
+        region.stop('ok');
+      });
+      /** The result line still prints - suspension is about the spinner, not about the outcome. */
+      expect(visible(out)).toContain('ci');
+    });
+
+    it('forwards passThrough to whoever took over', () => {
+      const taken: string[] = [];
+      const out = capture(() => {
+        const region = new StatusRegion('ci', 'my-repo', true);
+        region.start();
+        region.suspend({ passThrough: text => taken.push(text) });
+        region.passThrough('a child line\n');
+        region.stop('ok');
+      });
+
+      expect(taken).toEqual(['a child line\n']);
+      /** And not written here as well - one copy, in the region that owns the terminal. */
+      expect(visible(out)).not.toContain('a child line');
+    });
+
+    /** `runBin` reads this to decide whether to pipe a child rather than let it scroll the screen,
+     *  and a panel owning the terminal needs that just as much as this line does. */
+    it('still reports live while suspended', () => {
+      capture(() => {
+        const region = new StatusRegion('ci', 'my-repo', true);
+        region.start();
+        region.suspend();
+        expect(region.live).toBe(true);
+        region.stop('ok');
+      });
+    });
+
+    it('draws again once resumed, and takes passThrough back', () => {
+      const taken: string[] = [];
+      const out = capture(() => {
+        const region = new StatusRegion('ci', 'my-repo', true);
+        region.start();
+        region.suspend({ passThrough: text => taken.push(text) });
+        region.resume();
+        region.passThrough('back here\n');
+        region.stop('ok');
+      });
+
+      expect(taken).toEqual([]);
+      expect(visible(out)).toContain('back here');
+    });
+  });
 });

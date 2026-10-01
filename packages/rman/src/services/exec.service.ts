@@ -76,7 +76,7 @@ export class ExecService extends Service {
       );
     });
 
-    panel.start();
+    panel.start(repository.app.statusRegion);
     let failed = false;
     try {
       /** bail:false here - each item's own task decides whether to call `rootTask.abort()`

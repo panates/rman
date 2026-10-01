@@ -28,11 +28,31 @@ import { LiveRegion } from './live-region.js';
  *
  * **No-op when stderr is not a TTY** (CI, a pipe), where the escape codes mean nothing. There the
  * caller still gets the result line, which is the part that carries information. */
-export class StatusRegion {
+/**
+ * What a region has to offer to take the terminal over from `StatusRegion` - and `passThrough` is
+ * the whole of it.
+ *
+ * **Deliberately not `live`.** `StatusRegion.live` answers "does something own this terminal", which
+ * is what `runBin` reads and which stays true across a takeover; `ProgressPanel` spells the same
+ * question `enabled` and uses `live` for the `LiveRegion` itself. Putting it in the contract would
+ * force one of the two to be renamed for no gain - the handover needs somewhere to write, nothing
+ * more.
+ */
+export interface TerminalRegion {
+  /** Write `text` without corrupting the block: erase, write, redraw underneath. */
+  passThrough(text: string): void;
+}
+
+export class StatusRegion implements TerminalRegion {
   private readonly region: LiveRegion;
   private readonly startedAt = Date.now();
   private timer?: NodeJS.Timeout;
   private frame = 0;
+  /**
+   * Who owns the terminal while this region is suspended - see `suspend`. Pass-through is forwarded
+   * there, so `runBin` keeps asking one object (`app.statusRegion`) whatever is actually drawing.
+   */
+  private takeover?: TerminalRegion;
 
   constructor(
     private readonly label: string,
@@ -61,8 +81,41 @@ export class StatusRegion {
     this.timer.unref();
   }
 
+  /**
+   * **Hands the terminal to another region**, usually a `ProgressPanel` - the spinner stops, its
+   * line is erased, and pass-through is forwarded to `takeover` until `resume`.
+   *
+   * **Two live regions on one terminal cannot both work, and this is what enforces that.** Each
+   * redraws by moving the cursor up by *its own* line count; interleaved, every redraw lands on the
+   * other's rows. On screen that reads as the last line and the status line swapping places several
+   * times a second - reported on `rman ci`, and `rman build` has it too through `runBin`, whose
+   * pass-through went to this region while the panel was drawing. `LiveRegion`'s own doc has said
+   * "only one region is ever live" since it grew a `stream` parameter; nothing enforced it.
+   *
+   * `live` deliberately stays `true` while suspended: it answers "does something own this
+   * terminal", which is what `runBin` needs to decide to pipe rather than let a child scroll the
+   * screen. The answer to *which* region is the forwarding above.
+   */
+  suspend(takeover?: TerminalRegion): void {
+    this.takeover = takeover;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+    this.region.clear();
+  }
+
+  /** Takes the terminal back and starts drawing again - a no-op when it was never suspended. */
+  resume(): void {
+    if (!this.takeover && this.timer) return;
+    this.takeover = undefined;
+    this.start();
+  }
+
   /** Writes `text` without corrupting the block: erase, write, redraw underneath. */
   passThrough(text: string): void {
+    if (this.takeover) {
+      this.takeover.passThrough(text);
+      return;
+    }
     if (!this.region.enabled) {
       process.stderr.write(text);
       return;
@@ -74,6 +127,7 @@ export class StatusRegion {
 
   /** Erases the spinner and leaves one line saying how it went. */
   stop(outcome: 'ok' | 'fail'): void {
+    this.takeover = undefined;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.region.clear();
