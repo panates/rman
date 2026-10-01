@@ -571,13 +571,17 @@ export namespace RunService {
       cwd,
       runBin: async (bin, argv, opts) => {
         onCommand?.([bin, ...argv].join(' '));
-        try {
-          return await runBin(bin, argv, { cwd, logLevel, app: pkg.repository.app, onLine, ...opts });
-        } finally {
-          /** Back to whatever the caller had, or a step that spawns once would wear that command
-           *  for the rest of its run. */
-          onCommand?.(undefined);
-        }
+        const result = await runBin(bin, argv, { cwd, logLevel, app: pkg.repository.app, onLine, ...opts });
+        /**
+         * **Handed back on success only, so a failure leaves the command that failed on the row.**
+         */
+        /* A rejection skips this line, which is the whole point: the step is over, its row becomes
+         * a failed one, and `buildWithTsc()` is a worse thing to read there than the
+         * `tsc -b <tsconfig>` that actually exited non-zero. On the way out of a *successful* call
+         * the name does have to come back, or a step that spawns once would wear that command for
+         * the rest of its run. */
+        onCommand?.(undefined);
+        return result;
       },
       logger: new Logger(logLevel),
     };

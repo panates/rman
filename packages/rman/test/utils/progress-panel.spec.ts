@@ -536,4 +536,86 @@ describe('utils/ProgressPanel', () => {
       expect(item.currentCommand).toBe('tsc -b');
     });
   });
+
+  /**
+   * **A package that failed stays on the list, under the ones still working.** It used to vanish
+   * the moment it failed, so on a long run the only sign anything had gone wrong was a count in the
+   * header, and what it printed went unread until the recap.
+   */
+  describe('failed rows', () => {
+    async function render(prepare: (panel: ProgressPanel) => void, rows = 24): Promise<string[]> {
+      let out: string[] = [];
+      await withCapturedStdout(
+        async writes => {
+          const panel = new ProgressPanel('RUN build', true);
+          prepare(panel);
+          panel.start();
+          await wait(150);
+          panel.stop();
+          out = stripAnsi(writes.join(''))
+            .split('\n')
+            .filter(l => l.trim());
+        },
+        { columns: 200, rows },
+      );
+      return out;
+    }
+
+    function running(panel: ProgressPanel, name: string) {
+      const i = panel.addItem(name);
+      i.status = 'running';
+      i.startedAt = Date.now();
+      i.currentCommand = `work ${name}`;
+      return i;
+    }
+
+    function failed(panel: ProgressPanel, name: string) {
+      const i = panel.addItem(name);
+      i.status = 'failed';
+      i.startedAt = Date.now() - 1000;
+      i.finishedAt = Date.now();
+      i.currentCommand = `tsc ${name}`;
+      return i;
+    }
+
+    it('keeps a failed package on the list instead of dropping it', async () => {
+      const out = await render(p => {
+        running(p, 'pkg-ok');
+        failed(p, 'pkg-bad');
+      });
+      expect(out.some(l => l.includes('pkg-bad'))).toBe(true);
+      expect(out.some(l => l.includes('✖') && l.includes('pkg-bad'))).toBe(true);
+    });
+
+    /** Work in progress is what the panel is for; a repository that fails early would otherwise
+     *  fill the block with corpses and push the live rows off the screen. */
+    it('puts every failed row below every running one', async () => {
+      const out = await render(p => {
+        failed(p, 'pkg-bad');
+        running(p, 'pkg-ok');
+      });
+      const frame = out.slice(out.findIndex(l => l.includes('RUN build')));
+      expect(frame.findIndex(l => l.includes('pkg-ok'))).toBeLessThan(frame.findIndex(l => l.includes('pkg-bad')));
+    });
+
+    it('drops failed rows first when the block will not fit, and says how many', async () => {
+      const out = await render(p => {
+        for (let i = 0; i < 3; i++) running(p, `run-${i}`);
+        for (let i = 0; i < 6; i++) failed(p, `bad-${i}`);
+      }, 8);
+      /** The running rows survive... */
+      expect(out.some(l => l.includes('run-0'))).toBe(true);
+      /** ...and what did not fit is counted rather than silently gone. */
+      expect(out.some(l => /… and .*more failed/.test(l))).toBe(true);
+    });
+
+    it('a failed row carries its own elapsed time, frozen at the finish', async () => {
+      const out = await render(p => {
+        const i = failed(p, 'pkg-bad');
+        i.startedAt = Date.now() - 2500;
+        i.finishedAt = Date.now() - 500;
+      });
+      expect(out.some(l => l.includes('pkg-bad') && l.includes('2.0s'))).toBe(true);
+    });
+  });
 });

@@ -1007,15 +1007,16 @@ describe('RunService.createStepContext() reports what a step spawns', () => {
     expect(seen).toEqual(['node -e process.exit(0)', undefined]);
   });
 
-  /** `finally`, so a failing child still hands the name back - otherwise the row wears that
-   *  command for the rest of the run. */
-  it('takes it back even when the child fails', async () => {
+  /** **Not handed back on a failure**, deliberately: the step is over, its row becomes a failed one,
+   *  and the function's own name is a worse thing to read there than the command that exited
+   *  non-zero. */
+  it('leaves the failing command in place when the child fails', async () => {
     const seen: (string | undefined)[] = [];
     const ctx = await stepContextFor(c => seen.push(c));
 
     await expect(ctx.runBin('node', ['-e', 'process.exit(1)'])).rejects.toThrow();
 
-    expect(seen).toEqual(['node -e process.exit(1)', undefined]);
+    expect(seen).toEqual(['node -e process.exit(1)']);
   });
 
   it('is optional - a caller that does not want it passes nothing', async () => {

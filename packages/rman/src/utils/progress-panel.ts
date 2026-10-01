@@ -179,29 +179,49 @@ export class ProgressPanel implements TerminalRegion {
     ];
 
     const runningList = [...this.items.values()].filter(i => i.status === 'running');
-    /** Leave room for the header, a safety margin, and a possible "N more running" line - a
-     *  block taller than the terminal breaks cursor-up math (the terminal scrolls instead of
-     *  the cursor moving, so redraws land in the wrong place and pile up). */
+    /**
+     * **A package that failed stays on the list, under the ones still working.**
+     * It used to vanish the moment it failed, so on a long run the only sign that anything had gone
+     * wrong was a count in the header - and whatever it printed was not read until the recap, by
+     * which time the run had been going for another half-minute.
+     *
+     * **Below the running rows, and only with the space they leave.** Work in progress is what the
+     * panel is for; a repository that fails early would otherwise fill the block with corpses and
+     * push the live rows off the screen. One line each rather than two, so more of them fit - a
+     * failed row's value is that it is *named*, and its output is replayed in full at the end.
+     */
+    const failedList = [...this.items.values()].filter(i => i.status === 'failed');
+    /** Leave room for the header, a safety margin, and a possible "N more" line - a block taller
+     *  than the terminal breaks cursor-up math (the terminal scrolls instead of the cursor moving,
+     *  so redraws land in the wrong place and pile up). */
     const budget = Math.max(0, (process.stdout.rows || 24) - 3);
+    const width = process.stdout.columns || 80;
     let used = 0;
-    let shown = 0;
-    for (const item of runningList) {
-      const elapsed = item.startedAt ? formatDuration(Date.now() - item.startedAt) : '';
+    let shownRunning = 0;
+    let shownFailed = 0;
+
+    /** The fixed-width half of a row, plus the command truncated into whatever is left. */
+    const describe = (item: ProgressItem, elapsed: string) => {
       const step =
         item.stepsTotal && item.stepsTotal > 1 && item.stepIndex != null
           ? `${item.currentStep} (${item.stepIndex + 1}/${item.stepsTotal})`
           : item.currentStep || '';
-      /** Measured against the *plain* text: every piece below is wrapped in escape sequences, and
+      /** Measured against the *plain* text: every piece is wrapped in escape sequences, and
        *  `String.length` counts those, so budgeting on the rendered string wraps a row that fits. */
       const fixed = `  ${item.name}  ${step}  ${elapsed} | `.length;
-      const command = truncate(item.currentCommand ?? '', (process.stdout.columns || 80) - fixed - 2);
+      return { step, command: truncate(item.currentCommand ?? '', width - fixed - 2) };
+    };
+
+    for (const item of runningList) {
+      const elapsed = item.startedAt ? formatDuration(Date.now() - item.startedAt) : '';
+      const { step, command } = describe(item, elapsed);
       /**
        * **The command last, after a `|`, and that is not only layout.** It is the one field with no
        * bound on its length - a `tsc -b` line carries a path, a `run` step carries whatever the
        * author wrote - so between the step and the clock it pushed the elapsed time to a different
-       * column on every row, and off the end entirely once a command was long. Everything fixed-width
-       * now reads down a straight edge and the variable part runs off to the right, where `truncate`
-       * cuts it.
+       * column on every row, and off the end entirely once a command was long. Everything
+       * fixed-width now reads down a straight edge and the variable part runs off to the right,
+       * where `truncate` cuts it.
        */
       const group = [
         `${spinner} ${colors.bold(item.name)}  ${colors.gray(step)}  ${colors.yellow(elapsed)}` +
@@ -211,10 +231,27 @@ export class ProgressPanel implements TerminalRegion {
       if (used + group.length > budget) break;
       lines.push(...group);
       used += group.length;
-      shown++;
+      shownRunning++;
     }
-    const remaining = runningList.length - shown;
-    if (remaining > 0) lines.push(colors.gray(`… and ${remaining} more running`));
+
+    for (const item of failedList) {
+      if (used + 1 > budget) break;
+      const elapsed = item.startedAt && item.finishedAt ? formatDuration(item.finishedAt - item.startedAt) : '';
+      const { step, command } = describe(item, elapsed);
+      lines.push(
+        `${colors.red.bold('✖')} ${colors.bold(item.name)}  ${colors.gray(step)}  ${colors.yellow(elapsed)}` +
+          (command ? `  ${colors.gray('|')} ${colors.red(command)}` : ''),
+      );
+      used++;
+      shownFailed++;
+    }
+
+    /** One line for both, or a run with rows cut from each would need two and the block is already
+     *  budgeted to the row. */
+    const hidden: string[] = [];
+    if (runningList.length > shownRunning) hidden.push(`${runningList.length - shownRunning} more running`);
+    if (failedList.length > shownFailed) hidden.push(`${failedList.length - shownFailed} more failed`);
+    if (hidden.length) lines.push(colors.gray(`… and ${hidden.join(', ')}`));
 
     this.live.render(lines);
   }

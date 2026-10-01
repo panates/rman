@@ -2098,6 +2098,18 @@ four behaviours still fire.
   set from `step.command` or a function step's own name). `before (2/9)` answers "which slot",
   which the reader already knows; a row sitting there for ten seconds with nothing on stdout is
   what the panel was hiding, and for a build it is the common case.
+  - **A failed package stays on the list, under the ones still running.** It used to vanish the
+    moment it failed, so on a long run the only sign anything had gone wrong was a count in the
+    header. Below the running rows and only with the space they leave - work in progress is what
+    the panel is for, and a repository that fails early would otherwise fill the block with corpses
+    and push the live rows off the screen. One line each rather than two: a failed row's value is
+    that it is *named*, and its output is replayed in full at the end. What does not fit is counted
+    in the one trailing `… and N more` line, which now covers both kinds.
+  - **A failed row names the command that failed, not the step's own name.** `createStepContext`
+    hands the step label back on a *successful* `runBin` only; a rejection skips it, so the row
+    keeps the `tsc -b <tsconfig>` that exited non-zero rather than reverting to `buildWithTsc()`.
+    The success path still has to restore it, or a step that spawns once wears that command for the
+    rest of its run.
   - **A row forgets its last line when the step or the command changes** (`PanelItem`'s accessors).
     Stale output under a new command is the one kind of wrong that does not look wrong - reported
     from `ci`, where the row read `install (2/2) | npm install` over
