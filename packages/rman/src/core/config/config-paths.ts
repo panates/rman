@@ -68,24 +68,29 @@ export const STEP_PATHS = [
   'version.exec',
   'version.after',
   /**
-   * The function inside a step's **object** form (`{ topo: true, run: fn }`).
+   * The step inside a step's **object** form (`{ topo: true, command: buildWithTsc() }`).
    *
-   * Array indices are dropped before matching but object keys are not, so `run.build.after[0].run`
-   * arrives as `run.build.after.run` - one segment longer than `run.*.after`, which matches by
+   * Array indices are dropped before matching but object keys are not, so `run.build.after[0].command`
+   * arrives as `run.build.after.command` - one segment longer than `run.*.after`, which matches by
    * length. Without these the function would be taken for a *value* function and called while the
-   * repository loads, which is the exact failure the step/value split exists to prevent, and it
-   * would happen on `rman list`.
+   * repository loads, which is the exact failure the step/value split exists to prevent.
    *
-   * `command` needs no entry: only functions are asked, and a string at any path is interpolated
-   * either way - which is what keeps `command: 'tsc -b ${{ file.resolve(...) }}'` working.
+   * **Measured on `@panates/rman-preset`**, whose build hook is a function under `command`: without
+   * these entries every command in a repository extending it died with
+   * `Config function in "run.build.after.command" (node/config.js) failed: Cannot read properties
+   * of undefined (reading 'vars')` - the hook called with the config scope instead of a step
+   * context, while merely resolving the config.
+   *
+   * A string at these paths is interpolated either way, which is what keeps
+   * `command: 'tsc -b ${{ file.resolve(...) }}'` working.
    */
-  'run.*.run',
-  'run.*.before.run',
-  'run.*.exec.run',
-  'run.*.after.run',
-  'version.before.run',
-  'version.exec.run',
-  'version.after.run',
+  'run.*.command',
+  'run.*.before.command',
+  'run.*.exec.command',
+  'run.*.after.command',
+  'version.before.command',
+  'version.exec.command',
+  'version.after.command',
 ];
 
 /**

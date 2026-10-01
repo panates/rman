@@ -1281,39 +1281,43 @@ dependencies.
   run:
     build:
       before:
-        - eslint .                                     # runs alongside every other package's
-        - { topo: true, command: node ./codegen.js }    # from here on, wait for the dependencies
-      exec: tsc -b
+        - { topo: false, command: eslint . }   # nothing to wait for
+      exec: { topo: true, command: tsc -b }    # cannot start before the dependencies are built
 ```
 
 | | |
 | --- | --- |
-| `command` | a shell command, exactly as the plain string form - `${{ }}` in it is interpolated as usual |
-| `run` | a function step, exactly as the plain function form (JS config only) |
-| `topo` | `true`: do not start this step until every package this one depends on has finished |
+| `command` | the step itself - a shell command **or a function**, exactly as the plain value form. `${{ }}` in a string is interpolated as usual |
+| `topo` | whether this step waits for every package this one depends on to finish |
 
-Exactly one of `command` and `run`, and **an unknown key is refused** - `script` names the
-*lifecycle* (`run.<script>`), not the step, and a plausible-looking step that silently ran nothing
-while the run reported success is what that refusal prevents.
+One key for the step, because `run.<script>.exec` is already one key taking both forms - a second
+name for the function case would be two spellings of one thing plus a rule about which to use.
+**An unknown key is refused**: `script` names the *lifecycle* (`run.<script>`), not the step, and a
+plausible-looking step that silently ran nothing while the run reported success is what that
+refusal prevents.
 
 `run.<script>.topo` says whether a package waits at all; a step's `topo` says **where**. The rules,
 and their costs:
 
-- **The first marked step is the barrier, and `true` is the only accepted value.** Everything before
-  it already runs without waiting and everything after it is already past the wait, so a second mark
-  adds nothing and `false` has nothing to undo. The cost, stated: a package cannot go back to
-  running freely once it has waited. Turning ordering off is `run.<script>.topo: false`/`--no-topo`.
 - **The wait is for each dependency's whole script**, not for the same step in it - wider than
   strictly needed, and chosen over the alternative, which requires two packages' step lists to line
   up and has no answer when they do not.
-- **With no step marked, nothing changes**: the wait is before the first step, where it has always
-  been. This moves a barrier that exists rather than adding one.
+- **So the first `topo: true` is where the package actually blocks.** Everything after it has its
+  dependencies behind it already, which makes a later `topo: false` a true statement about the step
+  that changes nothing about when it runs - worth writing as intent, not a lever.
+- **A script whose steps mention `topo` at all is taken as the whole statement**: the first `true`
+  is the barrier, and if no step says `true` there is no wait. The alternative is
+  `run.<script>.topo` - on by default - overruling every line the author wrote.
+- **A script where no step mentions it is unchanged**: the wait is before the first step, where it
+  has always been. `run.<script>.topo: false` and `--no-topo` still turn ordering off outright.
 - **`run.<script>` only.** A `version` hook runs for one package around its own version write, with
   no package graph to wait on, and the key is refused there instead of quietly doing nothing.
 
-The step-vs-value rule extends to the object: a function under `run`, at any depth inside a step
-slot, is still a **step**. `command` needs no such rule, because a string at any path is
-interpolated either way.
+The step-vs-value rule extends to the object: a function under `command`, at any depth inside a step
+slot, is still a **step**. Measured on `@panates/rman-preset`, whose build hook is exactly that:
+without the rule, every command in a repository extending it died with `Config function in
+"run.build.after.command" ... failed`, the hook called with the config scope while the config was
+merely being resolved.
 
 ### Function values
 

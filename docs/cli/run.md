@@ -138,26 +138,26 @@ written as an object says where the waiting begins:
   run:
     build:
       before:
-        - eslint .                                  # runs alongside every other package's
-        - { topo: true, command: node ./codegen.js } # from here on, wait for the dependencies
-      exec: tsc -b
+        - { topo: false, command: eslint . }   # nothing to wait for
+      exec: { topo: true, command: tsc -b }    # cannot start before the dependencies are built
 ```
 
-A step object takes `command` (a shell command) **or** `run` (a function, in a JS config), plus
-`topo`. An unknown key is refused rather than ignored - `script` is the name of the lifecycle, not
-of the step, and a step that silently ran nothing while the run reported success is the failure this
-refusal exists to prevent.
+A step object takes `command` - the step itself, a shell command **or a function** - plus `topo`.
+One key for both forms, because `exec` is already one key taking both. An unknown key is refused
+rather than ignored: `script` is the name of the lifecycle, not of the step, and a step that
+silently ran nothing while the run reported success is the failure this refusal exists to prevent.
 
-- **The first marked step is the barrier**, and `true` is the only value it takes. Everything before
-  it already runs without waiting and everything after it is already past the wait, so a second mark
-  says nothing new and `false` has nothing to undo. Stated rather than hidden: **a package cannot go
-  back to running freely once it has waited.** To turn ordering off entirely, that is
-  `run.<script>.topo: false` or `--no-topo`.
 - **The wait is for the dependency package's whole script**, not for the same step in it. Wider than
   strictly necessary, and deliberately so: the alternative needs the two packages' step lists to
   line up, which has no answer when they differ and no way to report that they did not.
-- **With no step marked, nothing changes** - the wait is before the first step, where it has always
-  been. This moves a barrier that already exists rather than introducing one.
+- **So the first `topo: true` is where the package actually blocks.** Everything after it has its
+  dependencies behind it already, which makes a later `topo: false` a true statement about the step
+  that changes nothing about when it runs - worth writing as intent, not a lever.
+- **A script whose steps mention `topo` at all is read as the whole statement**: the first `true` is
+  the barrier, and if no step says `true` the script does not wait. Otherwise
+  `run.<script>.topo` - on by default - would overrule every line you wrote.
+- **A script where no step mentions it is unchanged**: the wait is before the first step, where it
+  has always been. `run.<script>.topo: false` and `--no-topo` still turn ordering off outright.
 - **Only in `run.<script>`.** A `version` hook runs for one package around its own version write,
   with no package graph to wait on, so `topo` is refused there.
 

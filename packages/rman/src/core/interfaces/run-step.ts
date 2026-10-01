@@ -66,45 +66,50 @@ export interface RunStepContext {
 export type RunStepFn = (context: RunStepContext) => void | Promise<void>;
 
 /**
- * One step written as an object, which is how a step says something *about itself* - today, that it
- * has to wait for the package's dependencies.
+ * One step written as an object, which is how a step says something *about itself* - today, whether
+ * it has to wait for the package's dependencies.
  *
  * ```yml
  * run:
  *   build:
  *     before:
- *       - lint                              # no ordering needed, runs with everyone else's
- *       - { topo: true, command: codegen }   # from here on, wait for the dependencies
- *     exec: tsc -b
+ *       - { topo: false, command: eslint . }   # nothing to wait for
+ *     exec: { topo: true, command: tsc -b }    # cannot start before the dependencies are built
  * ```
  *
- * Exactly one of `command` and `run` - the same two forms the plain value has, so the object adds
- * the marker and takes nothing away. An unknown key is refused rather than ignored.
+ * `command` is the step itself and takes the same two forms the plain value does - a shell command
+ * or a function - so the object adds the marker and takes nothing away. An unknown key is refused
+ * rather than ignored.
  */
 export interface RunStepObject {
-  /** A shell command, exactly as the plain string form. `${{ }}` in it is interpolated as usual. */
-  command?: string;
-  /** A function step, exactly as the plain function form. */
-  run?: RunStepFn;
   /**
-   * **`true` means: do not start this step until every package this one depends on has finished.**
-   * The steps before it run with no such wait, which is the whole point - a `lint` has no reason to
-   * wait for anything, and a `tsc -b` cannot start before the packages it compiles against are
-   * built.
+   * What the step runs: a shell command, or a function ([`RunStepFn`](#RunStepFn)), exactly as the
+   * plain value form. `${{ }}` in a string is interpolated as usual.
    *
-   * **One barrier per package, and only `true` is accepted.** The first step marked `topo` is where
-   * the package starts waiting; everything from there on is after the wait, so a second mark says
-   * nothing new and `false` has nothing to undo. The cost of that, stated rather than hidden: a
-   * package cannot go back to running freely once it has waited.
-   *
-   * Only in `run.<script>` - a `version` hook has no package ordering to join, and the key is
-   * refused there rather than quietly doing nothing.
-   *
-   * With no step marked at all, the wait is where it has always been: before the first step, when
-   * `run.<script>.topo` is on (its default). So this moves a barrier that already exists; it does
-   * not introduce one.
+   * One key for both, because `run.<script>.exec` is already one key taking both - a second name
+   * for the function case would mean two spellings of one thing and a rule about which to use.
    */
-  topo?: true;
+  command?: string | RunStepFn;
+  /**
+   * Whether this step waits for every package this one depends on to finish. `true` is the useful
+   * one - a `tsc -b` cannot start before the packages it compiles against are built, while an
+   * `eslint .` beside it has nothing to wait for.
+   *
+   * **The wait is for a dependency's whole script, so the *first* `true` is where the package
+   * actually blocks.** Everything after that has its dependencies behind it already, which makes a
+   * later `topo: false` a true statement about the step that changes nothing about when it runs -
+   * worth writing as intent, not a lever.
+   *
+   * **A script whose steps mention `topo` at all is taken as the whole statement**: the first
+   * `true` is the barrier, and if no step says `true` there is no wait. A script where no step
+   * mentions it falls back to `run.<script>.topo` - on by default - waiting before its first step,
+   * which is where the wait has always been. `run.<script>.topo: false` and `--no-topo` still turn
+   * ordering off outright.
+   *
+   * Only in `run.<script>`: a `version` hook runs for one package around its own version write,
+   * with no package graph to join, and the key is refused there rather than quietly doing nothing.
+   */
+  topo?: boolean;
 }
 
 /** One entry of a `before`/`exec`/`after` slot: a shell command, a function, or a

@@ -260,7 +260,9 @@ describe('run: Run.runScript() integration', () => {
             run: {
               build: {
                 before: [
-                  `sleep 0.2 && ${stamp(log, 'lint')}`,
+                  mark
+                    ? { topo: false, command: `sleep 0.2 && ${stamp(log, 'lint')}` }
+                    : `sleep 0.2 && ${stamp(log, 'lint')}`,
                   mark ? { topo: true, command: stamp(log, 'gen') } : stamp(log, 'gen'),
                 ],
                 exec: stamp(log, 'tsc'),
@@ -299,6 +301,42 @@ describe('run: Run.runScript() integration', () => {
       it('control: with no step marked, the whole package waits as before', async () => {
         const order = await runOrdered(false);
         expect(order.indexOf('pkg-a tsc')).toBeLessThan(order.indexOf('pkg-b lint'));
+      });
+
+      /**
+       * **A script whose steps all say `topo: false` does not wait at all**, although the script's
+       * own `topo` is on by default. The steps are read as the whole statement once any of them
+       * mentions the key - the alternative is `run.<script>.topo` overruling every line the author
+       * wrote, which is the shape of a setting that cannot be turned off from where it is used.
+       *
+       * This is the half a single `findIndex` cannot express: "no step said true" and "no step said
+       * anything" are different answers.
+       */
+      it('does not wait at all when every step says topo: false', async () => {
+        const dir = mkTmp();
+        dirs.push(dir);
+        const log = path.join(dir, 'order.log');
+        writeFixture(
+          dir,
+          { 'pkg-a': {}, 'pkg-b': { dependencies: { 'pkg-a': '1.0.0' } } },
+          {
+            rmanrc: {
+              '[*]': {
+                run: {
+                  build: {
+                    before: { topo: false, command: `sleep 0.2 && ${stamp(log, 'lint')}` },
+                    exec: { topo: false, command: stamp(log, 'tsc') },
+                  },
+                },
+              },
+            },
+          },
+        );
+        await createRepository(dir);
+        await captureLogs(() => service('run').runScript('build', { progress: false }));
+        const order = fs.readFileSync(log, 'utf-8').trim().split('\n');
+        // Both packages' slow first step ran before either finished - nothing waited.
+        expect(order.slice(0, 2).sort()).toEqual(['pkg-a lint', 'pkg-b lint']);
       });
     });
 
@@ -1069,13 +1107,16 @@ describe('run: Run.normalizeScriptValue()', () => {
   });
 
   describe('the object form', () => {
-    it('accepts { command } and { run }, with or without topo', () => {
+    it('takes a command or a function under one key, with or without topo', () => {
       const fn = () => {};
       expect(RunService.normalizeScriptValue({ command: 'tsc -b' }, 'run.build.exec')).toEqual([
         { command: 'tsc -b', topo: undefined },
       ]);
-      expect(RunService.normalizeScriptValue([{ topo: true, run: fn }], 'run.build.after')).toEqual([
-        { run: fn, topo: true },
+      expect(RunService.normalizeScriptValue([{ topo: true, command: fn }], 'run.build.after')).toEqual([
+        { command: fn, topo: true },
+      ]);
+      expect(RunService.normalizeScriptValue([{ topo: false, command: 'eslint .' }], 'run.build.before')).toEqual([
+        { command: 'eslint .', topo: false },
       ]);
     });
 
@@ -1090,18 +1131,12 @@ describe('run: Run.normalizeScriptValue()', () => {
       );
     });
 
-    it('refuses a step that sets neither command nor run, and one that sets both', () => {
-      expect(() => RunService.normalizeScriptValue({ topo: true }, 'run.build.exec')).toThrow(/and it sets neither/);
-      expect(() => RunService.normalizeScriptValue({ command: 'x', run: () => {} }, 'run.build.exec')).toThrow(
-        /not both/,
+    it('refuses a step with no command, and a topo that is not a boolean', () => {
+      expect(() => RunService.normalizeScriptValue({ topo: true }, 'run.build.exec')).toThrow(
+        /must set "command" to a shell command or a function/,
       );
-    });
-
-    /** Only `true` is meaningful: the barrier is the first marked step, so everything before one
-     *  already runs without waiting and everything after one is already past the wait. */
-    it('refuses topo: false, pointing at the key that does turn ordering off', () => {
-      expect(() => RunService.normalizeScriptValue([{ topo: false, command: 'x' }], 'run.build.before')).toThrow(
-        /Only "true" is meaningful[\s\S]*run\.<script>\.topo: false/,
+      expect(() => RunService.normalizeScriptValue({ command: 'x', topo: 'yes' }, 'run.build.exec')).toThrow(
+        /must set "topo" to true or false/,
       );
     });
 

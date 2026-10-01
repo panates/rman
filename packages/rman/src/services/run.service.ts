@@ -227,19 +227,18 @@ export class RunService extends Service {
       const waitsFor = pkgTopo ? pkg.dependencies.filter(d => stepsByPackage.has(d.name)).map(d => d.name) : [];
 
       /**
-       * **Where this package starts waiting for its dependencies.**
+       * **Where this package starts waiting for its dependencies**, or `-1` for not at all.
        *
-       * `0` is where the wait has always been, and stays the answer whenever no step says
-       * otherwise - `findIndex` returning `-1` for "none marked" is exactly that case, which is why
-       * it is clamped up rather than treated as "no barrier". `-1` means no wait at all, and only
-       * `topo: false` on the script (or `--no-topo`) produces it.
+       * A script whose steps mention `topo` at all is taken as the whole statement: the first step
+       * saying `true` is where the package blocks, and a script where every step says `false` does
+       * not wait. Only where **no** step mentions it does `run.<script>.topo` decide, and then the
+       * wait is before the first step - where it has always been.
+       *
+       * The two halves cannot be collapsed into one `findIndex`: "no step marked true" and "no step
+       * marked at all" are different answers (no wait against the old wait at step 0), and reading
+       * `-1` as either one alone gets the other wrong.
        */
-      const barrier = pkgTopo
-        ? Math.max(
-            0,
-            steps.findIndex(s => s.topo),
-          )
-        : -1;
+      const barrier = !pkgTopo ? -1 : steps.some(s => s.topo !== undefined) ? steps.findIndex(s => s.topo) : 0;
 
       /**
        * **Split only when the wait is in the middle of the package and there is something to wait
@@ -433,9 +432,10 @@ export namespace RunService {
     /** What the progress panel and the per-step log print: the command itself, or the function's
      *  own name. */
     label: string;
-    /** Set by a step written as `{ topo: true, ... }`: the package waits for its dependencies
-     *  before this step rather than before its first. See `RunStepObject.topo`. */
-    topo?: true;
+    /** What a step written as an object said about waiting, `undefined` for one that said nothing -
+     *  and the three are three different answers, which is why this is not a plain boolean. See
+     *  `RunStepObject.topo`. */
+    topo?: boolean;
   }
 
   export interface CommandStep extends StepBase {
@@ -825,22 +825,27 @@ function describeValue(value: unknown): string {
  *  `function copyDocs()` and `const copyDocs = () => {}` both read as `copyDocs` - falling back to
  *  the slot's own word for one passed inline, which has no name at all. */
 function toStep(slot: string, value: RunStepValue): RunService.ScriptStep {
-  if (typeof value === 'function') return { name: slot, label: value.name || `${slot} (js)`, run: value };
-  if (typeof value === 'string') return { name: slot, label: value, command: value };
-  if (value.run) return { name: slot, label: value.run.name || `${slot} (js)`, run: value.run, topo: value.topo };
-  return { name: slot, label: value.command!, command: value.command!, topo: value.topo };
+  const topo = typeof value === 'object' ? value.topo : undefined;
+  const step = typeof value === 'object' ? value.command! : value;
+  if (typeof step === 'function') return { name: slot, label: step.name || `${slot} (js)`, run: step, topo };
+  return { name: slot, label: step, command: step, topo };
 }
 
 /**
- * Checks a step written as an object and hands it back - exactly one of `command`/`run`, and
- * `topo: true` where ordering means anything.
+ * Checks a step written as an object and hands it back - a `command` that is a shell command or a
+ * function, and a boolean `topo` where ordering means anything.
  *
  * **An unknown key is refused, which is most of what this is for.** The object form exists to carry
- * one marker, so anything else in it is a mistake with no effect - and the mistake is a plausible
- * one: `{ topo: true, script: 'tsc -b' }` reads perfectly well and names the key rman uses for the
- * *lifecycle* (`run.<script>`) rather than the step. Ignored, that step would silently run nothing
- * while the run reported success, which is the failure `normalizeScriptValue` was already rewritten
- * once to stop.
+ * one marker beside the step, so anything else in it is a mistake with no effect - and the mistake
+ * is a plausible one: `{ topo: true, script: 'tsc -b' }` reads perfectly well and names the key rman
+ * uses for the *lifecycle* (`run.<script>`) rather than the step. Ignored, that step would silently
+ * run nothing while the run reported success, which is the failure `normalizeScriptValue` was
+ * already rewritten once to stop.
+ *
+ * **`command` takes a function as well as a string**, because `run.<script>.exec` already does: a
+ * second key for the function case would be two spellings of one thing plus a rule about which to
+ * use. The first draft of this did have one (`run`), and the config that drove the feature -
+ * `@panates/rman-preset`'s build hook - reached for `command` without being asked.
  *
  * `allowTopo` is false for `version`'s hooks: they belong to one package's version write, with no
  * package graph to wait on, so the key means nothing there and says so rather than being dropped.
@@ -850,16 +855,13 @@ function assertStepObject(item: Record<string, unknown>, where: string, allowTop
     if (!STEP_OBJECT_KEYS.includes(key)) {
       throw new Error(
         `"${where}" has an unknown key "${key}". A step object takes ${STEP_OBJECT_KEYS.join(', ')}.\n` +
-          `  The shell command goes in "command" - "script" is the name of the lifecycle, not the step.`,
+          `  The step itself goes in "command" - "script" is the name of the lifecycle, not the step.`,
       );
     }
   }
-  const hasCommand = typeof item.command === 'string' && item.command !== '';
-  const hasRun = typeof item.run === 'function';
-  if (hasCommand === hasRun) {
+  if (typeof item.command !== 'function' && (typeof item.command !== 'string' || item.command === '')) {
     throw new Error(
-      `"${where}" must set exactly one of "command" (a shell command) and "run" (a function), ` +
-        `${hasCommand ? 'not both' : 'and it sets neither'}.`,
+      `"${where}" must set "command" to a shell command or a function, but it is ` + `${describeValue(item.command)}.`,
     );
   }
   if (item.topo !== undefined) {
@@ -869,24 +871,15 @@ function assertStepObject(item: Record<string, unknown>, where: string, allowTop
           `  dependency order to wait for. The key belongs to run.<script> steps.`,
       );
     }
-    /** **Only `true`.** The barrier is the first step marked `topo`, so everything before one is
-     *  already running without a wait and everything after one is already past it - `false` has
-     *  nothing to turn off, and accepting it would mean accepting a line that does nothing. */
-    if (item.topo !== true) {
-      throw new Error(
-        `"${where}" has topo: ${inspect(item.topo)}. Only "true" is meaningful: it marks where the\n` +
-          `  package starts waiting for its dependencies, and the steps before it already do not wait.\n` +
-          `  To turn ordering off for the whole script, set run.<script>.topo: false.`,
-      );
+    if (typeof item.topo !== 'boolean') {
+      throw new Error(`"${where}" must set "topo" to true or false, but it is ${describeValue(item.topo)}.`);
     }
   }
-  return hasRun
-    ? { run: item.run as RunStepFn, topo: item.topo }
-    : { command: item.command as string, topo: item.topo };
+  return { command: item.command as string | RunStepFn, topo: item.topo as boolean | undefined };
 }
 
-/** What a step object may hold - the two forms a plain step value already has, plus the marker. */
-const STEP_OBJECT_KEYS = ['command', 'run', 'topo'];
+/** What a step object may hold - the step itself, and the marker beside it. */
+const STEP_OBJECT_KEYS = ['command', 'topo'];
 
 /**
  * Runs a function step.
