@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to 0774edfd142e11c7821d2f5e702525a958bf13d3 -->
+<!-- rman:documented-up-to b3682f27db37948f0f400e64dae1455c6299322d -->
+
+## v2.7.0 (2026-10-01)
+
+### ✨ Features
+
+- **progress:** show the command each row is running, at the end of the line (b3682f2)
+
+### 🐛 Bug Fixes
+
+- **progress:** put the running command's repository back on screen (b72b0a4)
+
+---
 
 ## v2.6.1 (2026-10-01)
 
