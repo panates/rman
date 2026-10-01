@@ -67,6 +67,25 @@ export const STEP_PATHS = [
   'version.before',
   'version.exec',
   'version.after',
+  /**
+   * The function inside a step's **object** form (`{ topo: true, run: fn }`).
+   *
+   * Array indices are dropped before matching but object keys are not, so `run.build.after[0].run`
+   * arrives as `run.build.after.run` - one segment longer than `run.*.after`, which matches by
+   * length. Without these the function would be taken for a *value* function and called while the
+   * repository loads, which is the exact failure the step/value split exists to prevent, and it
+   * would happen on `rman list`.
+   *
+   * `command` needs no entry: only functions are asked, and a string at any path is interpolated
+   * either way - which is what keeps `command: 'tsc -b ${{ file.resolve(...) }}'` working.
+   */
+  'run.*.run',
+  'run.*.before.run',
+  'run.*.exec.run',
+  'run.*.after.run',
+  'version.before.run',
+  'version.exec.run',
+  'version.after.run',
 ];
 
 /**

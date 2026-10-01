@@ -102,6 +102,9 @@ export class VersionService extends Service {
              *  without it a function here was called while the hook was being prepared. */
             interpolator.interpolate({ config: pkg.config?.version?.[slot], scope, at: ['version', slot] }),
             `version.${slot}`,
+            /** A version hook runs for one package around its own version write - there is no
+             *  package graph here to wait on, so `topo` is refused rather than silently ignored. */
+            { topo: false },
           ),
         );
       await hook('before');
@@ -364,8 +367,10 @@ export namespace VersionService {
    * never run. (The doc comment also still named `.script`/`.preScript`/`.postScript`, three keys
    * that have been `before`/`exec`/`after` for a long time.)
    */
+  /** `topo` is refused by default here, which is the one way this differs from `RunService`'s: a
+   *  version hook has no package ordering to join. */
   export function normalizeScriptValue(value: unknown, at: string): RunStepValue[] {
-    return RunService.normalizeScriptValue(value, at);
+    return RunService.normalizeScriptValue(value, at, { topo: false });
   }
 
   /**

@@ -94,7 +94,13 @@ export {
   targetsOf,
   unknownTargets,
 } from './core/interfaces/publish-target.js';
-export type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from './core/interfaces/run-step.js';
+export type {
+  RunConditionFn,
+  RunStepContext,
+  RunStepFn,
+  RunStepObject,
+  RunStepValue,
+} from './core/interfaces/run-step.js';
 /**
  * **`Platform` is one technology, whole**; **`Plugin` is whatever a package contributes**, platforms
  * among them.

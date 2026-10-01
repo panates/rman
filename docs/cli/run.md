@@ -104,7 +104,7 @@ ignored - there is no schema to catch it in a JSON or YAML config:
 | Key | Read from | Belongs under |
 | --- | --- | --- |
 | `concurrency`, `progress`, `changed`, `changedSince` | the **root package only** - one scheduler, one answer for the whole batch | `"[/]"` |
-| `topo` | **both**, meaning different things: the root's picks the sort (dependency order vs alphabetical), a package's own decides whether *it* waits for its dependencies | either, or both |
+| `topo` | **both**, meaning different things: the root's picks the sort (dependency order vs alphabetical), a package's own decides whether *it* waits for its dependencies - and a step may say *where* it waits, see [below](#where-a-package-starts-waiting-topo-per-step) | either, or both |
 | `bail` | **both**: the root's is the default, a package's own is its own rule | either, or both |
 | `logLevel`, `skip`, `if`, `override`, `exec`/`before`/`after` | the package it is about | `"[*]"` |
 
@@ -125,6 +125,45 @@ declaration can still say something package-specific (`../../coverage/${{ pkg.ba
 bail` outranks even an explicit CLI `--bail`/`--no-bail` - "this package's failure must always stop
 the batch" is a more specific, intentional statement than a broad flag meant for the whole run, and
 shouldn't be silently overridden by it.
+
+### Where a package starts waiting (`topo`, per step)
+
+`run.<script>.topo` turns dependency ordering on or off for a whole script, and a package then
+waits before its **first** step. That is too coarse for a build: `lint` has no reason to wait for
+anything, while `tsc -b` cannot start before the packages it compiles against are built. A step
+written as an object says where the waiting begins:
+
+```yaml
+"[*]":
+  run:
+    build:
+      before:
+        - eslint .                                  # runs alongside every other package's
+        - { topo: true, command: node ./codegen.js } # from here on, wait for the dependencies
+      exec: tsc -b
+```
+
+A step object takes `command` (a shell command) **or** `run` (a function, in a JS config), plus
+`topo`. An unknown key is refused rather than ignored - `script` is the name of the lifecycle, not
+of the step, and a step that silently ran nothing while the run reported success is the failure this
+refusal exists to prevent.
+
+- **The first marked step is the barrier**, and `true` is the only value it takes. Everything before
+  it already runs without waiting and everything after it is already past the wait, so a second mark
+  says nothing new and `false` has nothing to undo. Stated rather than hidden: **a package cannot go
+  back to running freely once it has waited.** To turn ordering off entirely, that is
+  `run.<script>.topo: false` or `--no-topo`.
+- **The wait is for the dependency package's whole script**, not for the same step in it. Wider than
+  strictly necessary, and deliberately so: the alternative needs the two packages' step lists to
+  line up, which has no answer when they differ and no way to report that they did not.
+- **With no step marked, nothing changes** - the wait is before the first step, where it has always
+  been. This moves a barrier that already exists rather than introducing one.
+- **Only in `run.<script>`.** A `version` hook runs for one package around its own version write,
+  with no package graph to wait on, so `topo` is refused there.
+
+Measured on two packages where `pkg-b` depends on `pkg-a`, with a slow first step: marked, both
+packages' first step runs at once and `pkg-b`'s codegen starts after `pkg-a` finishes; unmarked, the
+whole of `pkg-b` waits (227ms against 451ms for the same work).
 
 ### Conditional execution (`if`)
 

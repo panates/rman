@@ -5,6 +5,7 @@ import path from 'node:path';
 import { expect } from 'expect';
 import { Package, Repository, resolveRootLogLevel } from '../../src/index.js';
 import { resolveBool, resolveLogLevel, resolveNumber, RunService } from '../../src/services/run.service.js';
+import { VersionService } from '../../src/services/version.service.js';
 import { createRepository, service, useTestEcosystem } from '../_fixture.js';
 
 interface PackageDef {
@@ -235,6 +236,99 @@ describe('run: Run.runScript() integration', () => {
         service('run').runScript('build', { progress: false, topo: false, bail: false }),
       );
       expect(lines.some(l => l.includes('pkg-b-ran'))).toBe(true);
+    });
+
+    /**
+     * **Per-step `topo`: where a package starts waiting for its dependencies.**
+     *
+     * The run order is recorded by appending to one file, so the file *is* the order. `pkg-b`
+     * depends on `pkg-a`; the `lint` step sleeps, so if `pkg-b` were waiting for the whole of
+     * `pkg-a` its first line could not beat `pkg-a`'s last one.
+     *
+     * Only `pkg-b` is split: `pkg-a` has nothing in the run to wait for, so it stays one task
+     * whatever its config says - which is the optimization, and the reason the assertions below are
+     * all about `pkg-b`.
+     */
+    describe('a barrier in the middle of a package', () => {
+      /** Appends `<pkg> <step>` to one shared file. A shell step, so the order the lines land in is
+       *  the order the steps ran - no clock to read and nothing to make flaky. */
+      const stamp = (log: string, step: string) => `echo "\${{ pkg.name }} ${step}" >> ${log}`;
+
+      function orderFixture(log: string, mark: boolean) {
+        return {
+          '[*]': {
+            run: {
+              build: {
+                before: [
+                  `sleep 0.2 && ${stamp(log, 'lint')}`,
+                  mark ? { topo: true, command: stamp(log, 'gen') } : stamp(log, 'gen'),
+                ],
+                exec: stamp(log, 'tsc'),
+              },
+            },
+          },
+        };
+      }
+
+      async function runOrdered(mark: boolean): Promise<string[]> {
+        const dir = mkTmp();
+        dirs.push(dir);
+        const log = path.join(dir, 'order.log');
+        writeFixture(
+          dir,
+          { 'pkg-a': {}, 'pkg-b': { dependencies: { 'pkg-a': '1.0.0' } } },
+          { rmanrc: orderFixture(log, mark) },
+        );
+        await createRepository(dir);
+        await captureLogs(() => service('run').runScript('build', { progress: false }));
+        return fs.readFileSync(log, 'utf-8').trim().split('\n');
+      }
+
+      it('runs the steps before it without waiting, and the ones from it on after the dependency', async () => {
+        const order = await runOrdered(true);
+        // pkg-b's own first step beat pkg-a's last one: it did not wait for the package, only for
+        // the barrier.
+        expect(order.indexOf('pkg-b lint')).toBeLessThan(order.indexOf('pkg-a tsc'));
+        // ...and from the marked step on, it did wait.
+        expect(order.indexOf('pkg-a tsc')).toBeLessThan(order.indexOf('pkg-b gen'));
+        expect(order.indexOf('pkg-b gen')).toBeLessThan(order.indexOf('pkg-b tsc'));
+      });
+
+      /** The control, and the compatibility claim: with no step marked, the wait is where it has
+       *  always been - before the package's first step. */
+      it('control: with no step marked, the whole package waits as before', async () => {
+        const order = await runOrdered(false);
+        expect(order.indexOf('pkg-a tsc')).toBeLessThan(order.indexOf('pkg-b lint'));
+      });
+    });
+
+    it('a failure before the barrier still stops the package and its dependents', async () => {
+      const dir = mkTmp();
+      dirs.push(dir);
+      writeFixture(
+        dir,
+        { 'pkg-a': {}, 'pkg-b': { dependencies: { 'pkg-a': '1.0.0' } } },
+        {
+          rmanrc: {
+            '[*]': {
+              run: {
+                build: {
+                  before: ['exit 1', { topo: true, command: quiet('echo past-the-barrier') }],
+                  exec: quiet('echo exec-ran'),
+                },
+              },
+            },
+          },
+        },
+      );
+      await createRepository(dir);
+      const { lines } = await captureLogs(() =>
+        service('run')
+          .runScript('build', { progress: false, bail: false })
+          .catch(() => undefined),
+      );
+      expect(lines.some(l => l.includes('past-the-barrier'))).toBe(false);
+      expect(lines.some(l => l.includes('exec-ran'))).toBe(false);
     });
   });
 
@@ -964,14 +1058,63 @@ describe('run: Run.normalizeScriptValue()', () => {
   it('throws on a value it does not recognize, naming the config path', () => {
     // It used to `return []`, so an unrecognized value was dropped with no trace - a function here
     // (the obvious guess, and now the supported form) reported "1 succeeded" having run nothing.
-    expect(() => RunService.normalizeScriptValue({ cmd: 'x' }, 'run.build.after')).toThrow(
-      /"run\.build\.after" must be a shell command or a function/,
+    expect(() => RunService.normalizeScriptValue(42, 'run.build.after')).toThrow(
+      /"run\.build\.after" must be a shell command, a function, or \{ command \| run, topo \}/,
     );
     expect(() => RunService.normalizeScriptValue(42, 'version.before')).toThrow(/"version\.before"/);
   });
 
   it('names the offending index when the value is a list', () => {
     expect(() => RunService.normalizeScriptValue(['ok', 42], 'run.build.exec')).toThrow(/"run\.build\.exec\[1\]"/);
+  });
+
+  describe('the object form', () => {
+    it('accepts { command } and { run }, with or without topo', () => {
+      const fn = () => {};
+      expect(RunService.normalizeScriptValue({ command: 'tsc -b' }, 'run.build.exec')).toEqual([
+        { command: 'tsc -b', topo: undefined },
+      ]);
+      expect(RunService.normalizeScriptValue([{ topo: true, run: fn }], 'run.build.after')).toEqual([
+        { run: fn, topo: true },
+      ]);
+    });
+
+    /**
+     * **The reason unknown keys are refused rather than ignored.** `{ topo: true, script: 'tsc -b' }`
+     * reads perfectly well and names the key rman uses for the *lifecycle*; ignored, that step would
+     * run nothing while the run reported success.
+     */
+    it('refuses an unknown key, and says where the command goes', () => {
+      expect(() => RunService.normalizeScriptValue([{ topo: true, script: 'tsc -b' }], 'run.build.after')).toThrow(
+        /unknown key "script"[\s\S]*goes in "command"/,
+      );
+    });
+
+    it('refuses a step that sets neither command nor run, and one that sets both', () => {
+      expect(() => RunService.normalizeScriptValue({ topo: true }, 'run.build.exec')).toThrow(/and it sets neither/);
+      expect(() => RunService.normalizeScriptValue({ command: 'x', run: () => {} }, 'run.build.exec')).toThrow(
+        /not both/,
+      );
+    });
+
+    /** Only `true` is meaningful: the barrier is the first marked step, so everything before one
+     *  already runs without waiting and everything after one is already past the wait. */
+    it('refuses topo: false, pointing at the key that does turn ordering off', () => {
+      expect(() => RunService.normalizeScriptValue([{ topo: false, command: 'x' }], 'run.build.before')).toThrow(
+        /Only "true" is meaningful[\s\S]*run\.<script>\.topo: false/,
+      );
+    });
+
+    /** A version hook runs for one package around its own version write - no package graph, so the
+     *  key means nothing there and says so rather than being dropped. */
+    it('refuses topo in a version hook', () => {
+      expect(() => VersionService.normalizeScriptValue([{ topo: true, command: 'x' }], 'version.before')).toThrow(
+        /cannot set "topo"[\s\S]*belongs to run\.<script> steps/,
+      );
+      expect(VersionService.normalizeScriptValue([{ command: 'x' }], 'version.before')).toEqual([
+        { command: 'x', topo: undefined },
+      ]);
+    });
   });
 });
 

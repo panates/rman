@@ -53,6 +53,7 @@ utilities (`ChangeHashService`, `Logger`). For the CLI itself (commands, flags,
   - [Scoped `vars`](#scoped-vars)
   - [Reading a file (`read`)](#reading-a-file-read)
   - [Function steps](#function-steps)
+  - [Step objects](#step-objects)
   - [Function values](#function-values)
   - [Editor support (types)](#editor-support-types)
 - [Services](#services)
@@ -1269,6 +1270,51 @@ use them on behalf of repositories that stay in YAML.
 
 `rman config` prints a function as `[Function: copyDocs]`, which is why naming them is worth it.
 
+### Step objects
+
+A step may also be written as an object, which is how it says something **about itself** rather than
+about what it does. One such thing exists today: where the package starts waiting for its
+dependencies.
+
+```yaml
+"[*]":
+  run:
+    build:
+      before:
+        - eslint .                                     # runs alongside every other package's
+        - { topo: true, command: node ./codegen.js }    # from here on, wait for the dependencies
+      exec: tsc -b
+```
+
+| | |
+| --- | --- |
+| `command` | a shell command, exactly as the plain string form - `${{ }}` in it is interpolated as usual |
+| `run` | a function step, exactly as the plain function form (JS config only) |
+| `topo` | `true`: do not start this step until every package this one depends on has finished |
+
+Exactly one of `command` and `run`, and **an unknown key is refused** - `script` names the
+*lifecycle* (`run.<script>`), not the step, and a plausible-looking step that silently ran nothing
+while the run reported success is what that refusal prevents.
+
+`run.<script>.topo` says whether a package waits at all; a step's `topo` says **where**. The rules,
+and their costs:
+
+- **The first marked step is the barrier, and `true` is the only accepted value.** Everything before
+  it already runs without waiting and everything after it is already past the wait, so a second mark
+  adds nothing and `false` has nothing to undo. The cost, stated: a package cannot go back to
+  running freely once it has waited. Turning ordering off is `run.<script>.topo: false`/`--no-topo`.
+- **The wait is for each dependency's whole script**, not for the same step in it - wider than
+  strictly needed, and chosen over the alternative, which requires two packages' step lists to line
+  up and has no answer when they do not.
+- **With no step marked, nothing changes**: the wait is before the first step, where it has always
+  been. This moves a barrier that exists rather than adding one.
+- **`run.<script>` only.** A `version` hook runs for one package around its own version write, with
+  no package graph to wait on, and the key is refused there instead of quietly doing nothing.
+
+The step-vs-value rule extends to the object: a function under `run`, at any depth inside a step
+slot, is still a **step**. `command` needs no such rule, because a string at any path is
+interpolated either way.
+
 ### Function values
 
 **Any other config value may also be a function** - and that one is the JS spelling of a
@@ -1429,7 +1475,7 @@ step there is mistaken for a value.
 | `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
 | `version.stampDockerfile` | `boolean` | `true` | Per-package cascaded. Rewrite this package's Dockerfile `org.opencontainers.image.version` label to the version being written, in the same commit as the bump. Only ever rewrites a label already declared; reads `publish.docker.dockerfile`. |
 | `version.stamp` | `string \| {file, constant?, optional?} \| (…)[]` | none | Per-package cascaded. Source files (relative to the package's own directory) whose `version` constant is rewritten to the version being written, in the same commit. `constant` names the identifier when it is not spelled `version`. A listed file a package doesn't **have** is a silent no-op; one that exists and holds nothing rewritable is an **error**, raised before anything is written - that is what catches a typo'd path or a renamed identifier before it ships a stale constant on every release. `optional: true` waives that refusal, for a **shared preset** naming one path for every package of a technology, which is saying "stamp it where there is one" and cannot know which repositories keep a constant there. |
-| `version.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. Hooks around a version bump's write. **The same composition rule `run` uses** - npm's `preversion`/`postversion` run *inside* the config's `before`/`after` rather than replacing them, and only `version` (the `exec` slot) is replaced by the package's own. Left **unevaluated** at load (`DEFERRED_PATHS`), which is what lets `${{ pkg.targetVersion }}` bind here and nowhere else. A `RunStepValue` is a shell command **or a function** - see [Function steps](#function-steps). |
+| `version.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. Hooks around a version bump's write. **The same composition rule `run` uses** - npm's `preversion`/`postversion` run *inside* the config's `before`/`after` rather than replacing them, and only `version` (the `exec` slot) is replaced by the package's own. Left **unevaluated** at load (`DEFERRED_PATHS`), which is what lets `${{ pkg.targetVersion }}` bind here and nowhere else. A `RunStepValue` is a shell command **or a function** - see [Function steps](#function-steps). A step object's `topo` is refused here: a version hook runs for one package and has no dependency order to join. |
 | `changelog.titles` | `Record<string, string>` | one heading per **standard** Conventional Commits type, in this order: `feat` ✨ Features, `fix` 🐛 Bug Fixes, `perf` ⚡ Performance and Optimizations, `revert` ⏪ Reverts, `refactor` 🔧 Refactoring, `docs` 📚 Documentation, `test` 🧪 Tests, `build` 📦 Build System, `ci` 🤖 Continuous Integration, `chore` 🧹 Chores, `style` 🎨 Code Style, `*` 💬 General Changes | Per-package cascaded. The heading each commit type is listed under, and the order the sections come out in. **Merged over the defaults per key**, so naming one type does not cost you the others. A type rman does not ship a heading for - `dev`, `bench` - falls in the catch-all until you give it one. `'*'` is the catch-all and always renders last. Two types sharing a heading share one section. These add sections and hide nothing: `ignoreTypes` is what drops a type. |
 | `changelog.sortTitles` | `string[]` (commit types) | none | Per-package cascaded. The order the sections come out in. A sort, not a filter: an unlisted type keeps its place after the listed ones, a listed type with no heading of its own sorts nothing, and `'*'` is always last. |
 | `changelog.ignoreTypes` | `string[]` | `[]` | Per-package cascaded. Conventional Commit `type`s dropped entirely from changelog output. |
@@ -1459,14 +1505,14 @@ step there is mistaken for a value.
 | `githubRelease.prerelease` | `boolean` | whether the version is a semver prerelease | Root-level only. Mark the release as a prerelease. |
 | `publish.skip` | `boolean` | `false` | Per-package cascaded - excludes this package from `publish` entirely (every target), regardless of `target`/`"private"`. `changelog` also skips it by default (its own `--include-skipped` overrides). `version` never consults this. |
 | `run.<script>.concurrency` | `number` | CPU count | See [`RunService`](#runservice) below. |
-| `run.<script>.topo` | `boolean` | `true` | Precedence: CLI flag > package config > fallback. |
+| `run.<script>.topo` | `boolean` | `true` | Precedence: CLI flag > package config > fallback. Whether the package waits for its dependencies at all; **which step it waits at** is a step's own `topo` - see [Step objects](#step-objects). |
 | `run.<script>.bail` | `boolean` | `true` | **Unusual precedence:** package config > CLI flag > fallback (see below). |
 | `run.<script>.progress` | `boolean` | `true` | Per-package cascaded (the panel itself is one shared instance per run). |
 | `run.<script>.logLevel` | `LogLevel` | root's resolved log level | Per-package cascaded. |
 | `run.<script>.changedSince` | `string` | none | Root-level fallback, used only when CLI `--changed-since` isn't given. |
 | `run.<script>.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of running this script entirely. |
 | `run.<script>.if` | `string` (small expression grammar) \| `RunConditionFn` | none (always runs) | Per-package cascaded. See [`RunService`'s conditional execution](#conditional-execution-if) and [Function steps](#function-steps). |
-| `run.<script>.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. **`before`/`after` compose with the package's own `pre<script>`/`post<script>`; only `exec` replaces** - the config brackets the package's own, `config.before -> prebuild -> build -> postbuild -> config.after`. A `RunStepValue` is a shell command **or a function** ([Function steps](#function-steps)); a list may mix them. A bare value in place of the whole `run.<script>` object is shorthand for `exec`. |
+| `run.<script>.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. **`before`/`after` compose with the package's own `pre<script>`/`post<script>`; only `exec` replaces** - the config brackets the package's own, `config.before -> prebuild -> build -> postbuild -> config.after`. A `RunStepValue` is a shell command, **a function** ([Function steps](#function-steps)), or **an object** ([Step objects](#step-objects)); a list may mix them. A bare value in place of the whole `run.<script>` object is shorthand for `exec` - a string, a function or a list, never a single step object, which at that position is the options block. |
 | `run.<script>.changed` | `boolean` | `false` | Root-level fallback, used only when CLI `--changed` isn't given. Read since forever and declared never, which made it unreachable from a typed config. |
 | `run.<script>.override` | `boolean` | `false` | Per-package cascaded - when `true`, the config's script replaces the package's own definition even when it has one. |
 | `extends` | `string \| string[]` | none | Root of each file only. Configs to inherit from - see [above](#inheriting-a-shared-config-extends). |

@@ -75,11 +75,23 @@ export class RunService extends Service {
       cwd: string,
       pkgBail: boolean,
       pkgLogLevel: LogLevel,
+      /**
+       * Which slice of the package's steps this call runs, when a `topo` step split it in two.
+       * `from` keeps `stepIndex` counting across the pair, so one panel row spans both tasks and
+       * still reports `(4/9)` rather than restarting; `more` says another call is coming, so this
+       * one must not mark the package finished.
+       */
+      part?: { from: number; more?: boolean },
     ) => {
-      ctx.status = 'running';
-      ctx.startedAt = Date.now();
+      const from = part?.from ?? 0;
+      /** Only the first part starts the clock: the row's elapsed time is the package's, and a
+       *  package waiting at a `topo` barrier is waiting as part of its own run. */
+      if (!from) {
+        ctx.status = 'running';
+        ctx.startedAt = Date.now();
+      }
       try {
-        for (let i = 0; i < steps.length; i++) {
+        for (let i = from; i < steps.length; i++) {
           const step = steps[i];
           ctx.currentStep = step.name;
           /** The command for a shell step, the function's own name for a JS one - and a bare
@@ -133,13 +145,22 @@ export class RunService extends Service {
             if (stepError) throw stepError;
           }
         }
+        /** Another part is coming, so the package is not done - and it is about to sit at the
+         *  barrier, which the row says out loud rather than leaving the last step's command on
+         *  screen as though it were still running. (The setter clears the row's last output line,
+         *  which would otherwise read as that step's.) */
+        if (part?.more) {
+          ctx.currentStep = 'waiting';
+          ctx.currentCommand = 'waiting for dependencies';
+          return;
+        }
         ctx.status = 'success';
       } catch (e) {
         ctx.status = 'failed';
         if (pkgBail) rootTask?.abort();
         throw e;
       } finally {
-        ctx.finishedAt = Date.now();
+        if (!part?.more || ctx.status === 'failed') ctx.finishedAt = Date.now();
       }
     };
 
@@ -203,7 +224,55 @@ export class RunService extends Service {
       const pkgLogLevel = resolveLogLevel(options.logLevel, pkg, script, logLevelDefault);
       /** power-tasks identifies a task by its name string, so the graph is handed over as names -
        *  the references are what rman reasons with, the names are what the scheduler wants. */
-      const dependencies = pkgTopo ? pkg.dependencies.filter(d => stepsByPackage.has(d.name)).map(d => d.name) : [];
+      const waitsFor = pkgTopo ? pkg.dependencies.filter(d => stepsByPackage.has(d.name)).map(d => d.name) : [];
+
+      /**
+       * **Where this package starts waiting for its dependencies.**
+       *
+       * `0` is where the wait has always been, and stays the answer whenever no step says
+       * otherwise - `findIndex` returning `-1` for "none marked" is exactly that case, which is why
+       * it is clamped up rather than treated as "no barrier". `-1` means no wait at all, and only
+       * `topo: false` on the script (or `--no-topo`) produces it.
+       */
+      const barrier = pkgTopo
+        ? Math.max(
+            0,
+            steps.findIndex(s => s.topo),
+          )
+        : -1;
+
+      /**
+       * **Split only when the wait is in the middle of the package and there is something to wait
+       * for.** A barrier at step 0 is one task, as it always was; a package with no in-run
+       * dependencies has nothing to wait for wherever its barrier sits, and a second task would buy
+       * an empty wait and a second panel transition for it.
+       */
+      if (barrier > 0 && waitsFor.length) {
+        /** A name of its own, because power-tasks addresses tasks by name and `pkg.name` has to
+         *  stay the *whole* package: a dependency waiting on it, and the root's post bookend
+         *  waiting on all of them, both mean "everything this package does". */
+        const freeName = `${pkg.name} (pre-topo)`;
+        const freeDeps = rootPre.length ? [rootPreName] : [];
+        children.push(
+          new Task(
+            () =>
+              runSteps(ctx, pkg, pkg.name, steps.slice(0, barrier), pkg.dirname, pkgBail, pkgLogLevel, {
+                from: 0,
+                more: true,
+              }),
+            { name: freeName, dependencies: freeDeps },
+          ),
+        );
+        children.push(
+          new Task(() => runSteps(ctx, pkg, pkg.name, steps, pkg.dirname, pkgBail, pkgLogLevel, { from: barrier }), {
+            name: ctx.name,
+            dependencies: [freeName, ...waitsFor],
+          }),
+        );
+        continue;
+      }
+
+      const dependencies = barrier < 0 ? [] : [...waitsFor];
       if (rootPre.length) dependencies.push(rootPreName);
       children.push(
         new Task(() => runSteps(ctx, pkg, pkg.name, steps, pkg.dirname, pkgBail, pkgLogLevel), {
@@ -364,6 +433,9 @@ export namespace RunService {
     /** What the progress panel and the per-step log print: the command itself, or the function's
      *  own name. */
     label: string;
+    /** Set by a step written as `{ topo: true, ... }`: the package waits for its dependencies
+     *  before this step rather than before its first. See `RunStepObject.topo`. */
+    topo?: true;
   }
 
   export interface CommandStep extends StepBase {
@@ -443,11 +515,15 @@ export namespace RunService {
   ): Promise<void> {
     const values = slotValues(slot, contributedSlots(pkg, script)?.[slot] ?? [], fallback ?? [], false);
     for (const value of values) {
-      if (typeof value === 'function') {
-        await value(createStepContext(pkg, pkg.dirname));
+      /** Through `toStep` rather than reading the value's own shape, so the object form
+       *  (`{ command }` / `{ run }`) reaches here too and only one place knows the three spellings.
+       *  `topo` cannot be set on this path - `normalizeScriptValue` refuses it for a version hook. */
+      const step = toStep(slot, value);
+      if (step.run) {
+        await step.run(createStepContext(pkg, pkg.dirname));
         continue;
       }
-      await exec(value, { cwd: pkg.dirname, stdio: 'inherit', app: pkg.repository.app });
+      await exec(step.command, { cwd: pkg.dirname, stdio: 'inherit', app: pkg.repository.app });
     }
   }
 
@@ -480,7 +556,7 @@ export namespace RunService {
    * Exported, and the only implementation: `VersionService` used to carry a second one that behaved
    * differently, which is how `version.<slot>` came to join its array with `' && '`.
    */
-  export function normalizeScriptValue(value: unknown, at: string): RunStepValue[] {
+  export function normalizeScriptValue(value: unknown, at: string, options?: { topo?: boolean }): RunStepValue[] {
     const items = Array.isArray(value) ? value : [value];
     const steps: RunStepValue[] = [];
     for (let i = 0; i < items.length; i++) {
@@ -488,14 +564,19 @@ export namespace RunService {
       /** An empty string and an absent value are both "nothing here", which is how a `"[*]"` block
        *  declaring a slot some packages don't use has always behaved. */
       if (item === undefined || item === null || item === '') continue;
+      const where = Array.isArray(value) ? `${at}[${i}]` : at;
       if (typeof item === 'string' || typeof item === 'function') {
         steps.push(item as RunStepValue);
         continue;
       }
-      const where = Array.isArray(value) ? `${at}[${i}]` : at;
+      if (item && typeof item === 'object' && !Array.isArray(item)) {
+        steps.push(assertStepObject(item as Record<string, unknown>, where, options?.topo !== false));
+        continue;
+      }
       throw new Error(
-        `"${where}" must be a shell command or a function, but it is ${describeValue(item)}.\n` +
-          `  A list of either (or both) runs them in sequence.`,
+        `"${where}" must be a shell command, a function, or { command | run, topo }, ` +
+          `but it is ${describeValue(item)}.\n` +
+          `  A list of any of them runs them in sequence.`,
       );
     }
     return steps;
@@ -745,8 +826,67 @@ function describeValue(value: unknown): string {
  *  the slot's own word for one passed inline, which has no name at all. */
 function toStep(slot: string, value: RunStepValue): RunService.ScriptStep {
   if (typeof value === 'function') return { name: slot, label: value.name || `${slot} (js)`, run: value };
-  return { name: slot, label: value, command: value };
+  if (typeof value === 'string') return { name: slot, label: value, command: value };
+  if (value.run) return { name: slot, label: value.run.name || `${slot} (js)`, run: value.run, topo: value.topo };
+  return { name: slot, label: value.command!, command: value.command!, topo: value.topo };
 }
+
+/**
+ * Checks a step written as an object and hands it back - exactly one of `command`/`run`, and
+ * `topo: true` where ordering means anything.
+ *
+ * **An unknown key is refused, which is most of what this is for.** The object form exists to carry
+ * one marker, so anything else in it is a mistake with no effect - and the mistake is a plausible
+ * one: `{ topo: true, script: 'tsc -b' }` reads perfectly well and names the key rman uses for the
+ * *lifecycle* (`run.<script>`) rather than the step. Ignored, that step would silently run nothing
+ * while the run reported success, which is the failure `normalizeScriptValue` was already rewritten
+ * once to stop.
+ *
+ * `allowTopo` is false for `version`'s hooks: they belong to one package's version write, with no
+ * package graph to wait on, so the key means nothing there and says so rather than being dropped.
+ */
+function assertStepObject(item: Record<string, unknown>, where: string, allowTopo: boolean): RunStepValue {
+  for (const key of Object.keys(item)) {
+    if (!STEP_OBJECT_KEYS.includes(key)) {
+      throw new Error(
+        `"${where}" has an unknown key "${key}". A step object takes ${STEP_OBJECT_KEYS.join(', ')}.\n` +
+          `  The shell command goes in "command" - "script" is the name of the lifecycle, not the step.`,
+      );
+    }
+  }
+  const hasCommand = typeof item.command === 'string' && item.command !== '';
+  const hasRun = typeof item.run === 'function';
+  if (hasCommand === hasRun) {
+    throw new Error(
+      `"${where}" must set exactly one of "command" (a shell command) and "run" (a function), ` +
+        `${hasCommand ? 'not both' : 'and it sets neither'}.`,
+    );
+  }
+  if (item.topo !== undefined) {
+    if (!allowTopo) {
+      throw new Error(
+        `"${where}" cannot set "topo": it is a version hook, which runs for one package and has no\n` +
+          `  dependency order to wait for. The key belongs to run.<script> steps.`,
+      );
+    }
+    /** **Only `true`.** The barrier is the first step marked `topo`, so everything before one is
+     *  already running without a wait and everything after one is already past it - `false` has
+     *  nothing to turn off, and accepting it would mean accepting a line that does nothing. */
+    if (item.topo !== true) {
+      throw new Error(
+        `"${where}" has topo: ${inspect(item.topo)}. Only "true" is meaningful: it marks where the\n` +
+          `  package starts waiting for its dependencies, and the steps before it already do not wait.\n` +
+          `  To turn ordering off for the whole script, set run.<script>.topo: false.`,
+      );
+    }
+  }
+  return hasRun
+    ? { run: item.run as RunStepFn, topo: item.topo }
+    : { command: item.command as string, topo: item.topo };
+}
+
+/** What a step object may hold - the two forms a plain step value already has, plus the marker. */
+const STEP_OBJECT_KEYS = ['command', 'run', 'topo'];
 
 /**
  * Runs a function step.

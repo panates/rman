@@ -853,7 +853,16 @@ export namespace RmanConfig {
    * (`{ [K in string as K extends 'vars' ? never : K]: ... }`) was tried and does not help - the
    * remap still produces an index signature that claims `vars`.
    */
-  export type RunConfig = Record<string, RunStepValue | RunStepValue[] | RunScriptOptions>;
+  /**
+   * **The bare shorthand is a command, a function or a list - never a single step *object*.** At
+   * this position an object is the long form (`{ exec, before, after, topo, ... }`), so admitting a
+   * `RunStepObject` beside it would make `run: { build: { topo: true, command: 'tsc -b' } }`
+   * type-check and then do nothing: `getConfig` reads an object as the options block, finds no
+   * `exec`, and the package reports declaring no such script. A list keeps the step object
+   * (`run: { build: [{ topo: true, command: 'tsc -b' }] }`), where there is nothing to confuse it
+   * with.
+   */
+  export type RunConfig = Record<string, string | RunStepFn | RunStepValue[] | RunScriptOptions>;
 
   export interface RunScriptOptions extends RunScriptOptionsKeys, ScopedVars {}
 

@@ -65,9 +65,52 @@ export interface RunStepContext {
  */
 export type RunStepFn = (context: RunStepContext) => void | Promise<void>;
 
-/** One entry of a `before`/`exec`/`after` slot: a shell command, or a function. A list of them runs
- *  in sequence, and the two forms mix freely within one list. */
-export type RunStepValue = string | RunStepFn;
+/**
+ * One step written as an object, which is how a step says something *about itself* - today, that it
+ * has to wait for the package's dependencies.
+ *
+ * ```yml
+ * run:
+ *   build:
+ *     before:
+ *       - lint                              # no ordering needed, runs with everyone else's
+ *       - { topo: true, command: codegen }   # from here on, wait for the dependencies
+ *     exec: tsc -b
+ * ```
+ *
+ * Exactly one of `command` and `run` - the same two forms the plain value has, so the object adds
+ * the marker and takes nothing away. An unknown key is refused rather than ignored.
+ */
+export interface RunStepObject {
+  /** A shell command, exactly as the plain string form. `${{ }}` in it is interpolated as usual. */
+  command?: string;
+  /** A function step, exactly as the plain function form. */
+  run?: RunStepFn;
+  /**
+   * **`true` means: do not start this step until every package this one depends on has finished.**
+   * The steps before it run with no such wait, which is the whole point - a `lint` has no reason to
+   * wait for anything, and a `tsc -b` cannot start before the packages it compiles against are
+   * built.
+   *
+   * **One barrier per package, and only `true` is accepted.** The first step marked `topo` is where
+   * the package starts waiting; everything from there on is after the wait, so a second mark says
+   * nothing new and `false` has nothing to undo. The cost of that, stated rather than hidden: a
+   * package cannot go back to running freely once it has waited.
+   *
+   * Only in `run.<script>` - a `version` hook has no package ordering to join, and the key is
+   * refused there rather than quietly doing nothing.
+   *
+   * With no step marked at all, the wait is where it has always been: before the first step, when
+   * `run.<script>.topo` is on (its default). So this moves a barrier that already exists; it does
+   * not introduce one.
+   */
+  topo?: true;
+}
+
+/** One entry of a `before`/`exec`/`after` slot: a shell command, a function, or a
+ *  [`RunStepObject`](#RunStepObject) saying something about the step. A list of them runs in
+ *  sequence, and the forms mix freely within one list. */
+export type RunStepValue = string | RunStepFn | RunStepObject;
 
 /**
  * A `run.<script>.if` written as JavaScript, deciding whether the script runs for this package.
