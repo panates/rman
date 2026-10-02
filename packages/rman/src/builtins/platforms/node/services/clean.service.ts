@@ -99,9 +99,22 @@ export namespace CleanService {
   }
 }
 
-/** Directories a package's TypeScript output gets cleaned from, mirroring `ts-cleanup -s src`
- *  and `-s test` (the only way it was ever actually invoked in this project's own scripts). */
-const TS_SOURCE_DIRS = ['src', 'test'];
+/**
+ * Where a package's own build output lives, so the sweep below can leave it alone - the resolved
+ * `publish.npm.directory`, falling back to `build`.
+ *
+ * **Read from the config, never hardcoded.** The directory is the repository's to name: the shared
+ * preset drives it from a `vars.buildDir`, and a repository that renames it moves
+ * `publish.npm.directory`, `clean.include` and the build itself together. A literal `build` here
+ * would sweep a repository that calls it `dist` - deleting every emitted file in it, one at a time,
+ * because each sits beside nothing and the guard below would not fire. `publish`'s own generated
+ * manifest reads the same key, which is what keeps the two from disagreeing about where a package
+ * is built.
+ */
+function buildDirOf(pkg: Package): string {
+  const configured = pkg.config?.publish?.npm?.directory;
+  return typeof configured === 'string' && configured ? configured : 'build';
+}
 
 /** A package's (cascaded) `.rmanrc clean.include`/`clean.exclude`/`clean.skip` - a package that
  *  declares its own `clean` block replaces the root's entirely for itself (same as any other
@@ -177,29 +190,100 @@ async function cleanGlobs(dirname: string, include: string[], exclude: string[],
 }
 
 /**
- * Removes compiled TypeScript output (`.js`, `.js.map`, `.d.ts`) sitting next to its `.ts`
- * source under `src`/`test` - the same job `ts-cleanup -s <dir> --all` did (the only mode this
- * project ever actually used it in). A `.d.ts` with no matching `.ts`/`.tsx` is left alone - it's
- * presumably a hand-written declaration file, not build output. Prunes directories left empty
- * afterward.
+ * Removes compiled TypeScript output (`.js`, `.js.map`, `.d.ts`) sitting next to its `.ts` source,
+ * anywhere in the package except `node_modules` and the build directory. Prunes directories left
+ * empty afterward.
+ *
+ * **Two tiers, because how much a directory tells you differs.** Under `src`/`test` everything is
+ * TypeScript, so a compiled file is swept whether or not its source is still there - which keeps
+ * the orphan case working, a `.js` whose `.ts` was renamed or deleted. Anywhere else in the package
+ * a file is swept **only when a matching `.ts`/`.tsx` sits beside it**, because that is the only
+ * thing that distinguishes output from something somebody wrote.
  */
-async function cleanTsArtifacts(dirname: string, dryRun: boolean): Promise<string[]> {
+/* **It used to look only in `src/` and `test/`**, inherited from `ts-cleanup -s src` - and that is
+ * the half this exists to fix. `tsc` writes its output beside the source whenever a config does not
+ * send it elsewhere, which is exactly the accident `clean` is reached for, and a package keeping
+ * `index.ts` at its own root was therefore never swept. Measured on `panates/opra`: ten emitted
+ * files in `examples/**` survived every `rman clean`, and `rman lint` there died inside
+ * `eslint-plugin-import-x` on one of them - a crash that looks like an eslint problem and is a stale
+ * artifact.
+ *
+ * **Widening the search without a guard outside `src`/`test` would have been destructive**, which
+ * is why the two tiers arrived together. Under `src/` a bare `.js` is deleted unconditionally and
+ * should be; over a whole package the same rule reaches `index.js`, `*.config.js`, `scripts/*.js` -
+ * hand-written files with no `.ts` behind them. The `.d.ts` rule was already the right one for that
+ * ground and now covers all three extensions there. The cost, stated rather than hidden: outside a
+ * source root, a compiled `.js` whose `.ts` has since been deleted is left alone, because nothing
+ * on disk says it was ever generated.
+ *
+ * **The build directory is excluded by name from the config, never as the literal `build`** - see
+ * `buildDirOf`. Its contents are the *point* of a build and are removed by `clean.include` when the
+ * repository asks, not by a rule about stray files. */
+async function cleanTsArtifacts(pkg: Package, dryRun: boolean): Promise<string[]> {
+  const dirname = pkg.dirname;
+  const buildDir = buildDirOf(pkg);
+  const files = await fg('**/*.{js,js.map,d.ts}', {
+    cwd: dirname,
+    ignore: ['**/node_modules/**', `${buildDir}/**`, `**/${buildDir}/**`],
+    onlyFiles: true,
+    dot: true,
+    absolute: true,
+  });
+
   const removed: string[] = [];
+  for (const f of files) {
+    if (!isBuildOutput(dirname, f)) continue;
+    await remove(f, dryRun);
+    removed.push(path.relative(dirname, f));
+  }
+  /** Pruned from the source roots, exactly as before - `pruneEmptyDirs` with `includeSelf: false`
+   *  clears what is *under* a directory and keeps the directory itself, so `src/sub` left empty is
+   *  removed and `src` is not. Nothing is pruned elsewhere in the package: a directory that was
+   *  only searched is not one the caller asked to delete. */
   for (const sub of TS_SOURCE_DIRS) {
     const dir = path.join(dirname, sub);
-    if (!fs.existsSync(dir)) continue;
-    const files = await fg('**/*.{js,js.map,d.ts}', { cwd: dir, onlyFiles: true, dot: true, absolute: true });
-    for (const f of files) {
-      if (f.endsWith('.d.ts')) {
-        const base = f.slice(0, -'.d.ts'.length);
-        if (!fs.existsSync(base + '.ts') && !fs.existsSync(base + '.tsx')) continue;
-      }
-      await remove(f, dryRun);
-      removed.push(path.relative(dirname, f));
-    }
-    pruneEmptyDirs(dir, false, dryRun);
+    if (fs.existsSync(dir)) pruneEmptyDirs(dir, false, dryRun);
   }
   return removed;
+}
+
+/**
+ * Whether a compiled file is this package's own build output, and so may go.
+ *
+ * Three rules, and each is a different amount of evidence:
+ *
+ * - **A `.d.ts` always needs its `.ts`/`.tsx` beside it**, everywhere including `src` - a
+ *   hand-written declaration is an ordinary thing to keep in a source tree, and this is the rule
+ *   that has always been here.
+ * - **A `.js`/`.js.map` under `src`/`test` goes regardless.** Everything there is TypeScript, so an
+ *   orphan - output whose source was renamed or deleted - is still output, and sweeping it is the
+ *   `ts-cleanup --all` behaviour this replaced.
+ * - **A `.js`/`.js.map` anywhere else needs its source beside it**, because out there it could just
+ *   as easily be `index.js`, `*.config.js` or `scripts/*.js`, which nobody generated.
+ */
+function isBuildOutput(dirname: string, file: string): boolean {
+  if (file.endsWith('.d.ts')) return hasTsSource(file, '.d.ts');
+  if (insideTsSourceDir(dirname, file)) return true;
+  return hasTsSource(file, file.endsWith('.js.map') ? '.js.map' : '.js');
+}
+
+/** Directories where everything is TypeScript, so a compiled file needs no source beside it to be
+ *  recognized as one - the two `ts-cleanup -s <dir>` was ever invoked with here. */
+const TS_SOURCE_DIRS = ['src', 'test'];
+
+/** Whether `file` sits under one of the package's TypeScript source roots. Compared on the path
+ *  segments rather than with `startsWith`, so a `source/` directory is not read as `src`. */
+function insideTsSourceDir(dirname: string, file: string): boolean {
+  const rel = path.relative(dirname, file).split(path.sep);
+  return TS_SOURCE_DIRS.includes(rel[0]!);
+}
+
+/** Whether a compiled file has its `.ts`/`.tsx` source sitting beside it - which is what makes it
+ *  compiled output rather than something somebody wrote. `suffix` is the compiled extension to
+ *  strip, passed in because `.js.map` and `.js` both end in `.js` and the caller already knows. */
+function hasTsSource(file: string, suffix: string): boolean {
+  const base = file.slice(0, -suffix.length);
+  return fs.existsSync(base + '.ts') || fs.existsSync(base + '.tsx');
 }
 
 /**
@@ -231,7 +315,7 @@ async function cleanPackage(
   item.startedAt = Date.now();
   try {
     item.currentStep = 'ts';
-    const tsRemoved = await cleanTsArtifacts(pkg.dirname, dryRun);
+    const tsRemoved = await cleanTsArtifacts(pkg, dryRun);
     const buildInfoRemoved = await cleanTsBuildInfo(pkg.dirname, dryRun);
 
     item.currentStep = 'glob';

@@ -112,6 +112,92 @@ describe('services/clean', () => {
       expect(exists(dir, 'packages/a/src/globals.d.ts')).toBe(true);
     });
 
+    /**
+     * **Compiled output outside `src`/`test` is swept too, which it was not.** The search was
+     * `src`/`test` only, inherited from `ts-cleanup -s src` - and `tsc` writes beside the source
+     * whenever a config does not send it elsewhere, which is the accident `clean` is reached for.
+     * A package keeping `index.ts` at its own root was therefore never swept at all.
+     *
+     * Measured on `panates/opra`: ten emitted files under `examples/**` survived every `rman
+     * clean`, and `rman lint` there died inside `eslint-plugin-import-x` on one of them - a crash
+     * that reads as an eslint problem and is a stale artifact.
+     */
+    it('removes compiled output beside its source at the package root, not only under src/test', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeFile(dir, 'packages/a/index.ts', 'export {}');
+      writeFile(dir, 'packages/a/index.js');
+      writeFile(dir, 'packages/a/index.js.map');
+      writeFile(dir, 'packages/a/index.d.ts');
+      const repo = await createRepository(dir);
+
+      await captureLogs(() => CleanService.clean(repo));
+
+      expect(exists(dir, 'packages/a/index.ts')).toBe(true);
+      expect(exists(dir, 'packages/a/index.js')).toBe(false);
+      expect(exists(dir, 'packages/a/index.js.map')).toBe(false);
+      expect(exists(dir, 'packages/a/index.d.ts')).toBe(false);
+    });
+
+    /**
+     * **The guard that makes the widening safe, and it only applies outside a source root.** Under
+     * `src`/`test` everything is TypeScript and a bare `.js` goes; out here it could just as easily
+     * be something somebody wrote, and the only evidence either way is whether a `.ts` sits beside
+     * it. Without this, widening the search would delete `index.js`, `*.config.js` and
+     * `scripts/*.js` from every package in the repository.
+     */
+    it('leaves a .js at the package root alone when no .ts sits beside it', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeFile(dir, 'packages/a/index.js', 'hand written');
+      writeFile(dir, 'packages/a/eslint.config.js', 'hand written');
+      writeFile(dir, 'packages/a/scripts/release.js', 'hand written');
+      /** The orphan rule still holds where it always did: under `src`, a `.js` with no source is
+       *  output whose `.ts` was renamed or deleted, and goes. */
+      writeFile(dir, 'packages/a/src/orphan.js');
+      const repo = await createRepository(dir);
+
+      await captureLogs(() => CleanService.clean(repo));
+
+      expect(exists(dir, 'packages/a/index.js')).toBe(true);
+      expect(exists(dir, 'packages/a/eslint.config.js')).toBe(true);
+      expect(exists(dir, 'packages/a/scripts/release.js')).toBe(true);
+      expect(exists(dir, 'packages/a/src/orphan.js')).toBe(false);
+    });
+
+    /**
+     * **The build directory is named by the config, never assumed to be `build`.** A repository
+     * that calls it `dist` would otherwise have every emitted file in it swept one at a time - each
+     * sits beside nothing, so the guard above would not fire either. Its contents are the *point*
+     * of a build; `clean.include` removes them when the repository asks.
+     */
+    it('leaves the configured build directory alone, whatever it is called', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[*]': { publish: { npm: { directory: 'dist' } } } }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeFile(dir, 'packages/a/dist/index.js');
+      writeFile(dir, 'packages/a/dist/index.d.ts');
+      /** A control: the default name is not special either - with `dist` configured, a stray
+       *  `build/` is ordinary ground and its contents follow the usual rule. */
+      writeFile(dir, 'packages/a/build/leftover.ts', 'export {}');
+      writeFile(dir, 'packages/a/build/leftover.js');
+      const repo = await createRepository(dir);
+
+      await captureLogs(() => CleanService.clean(repo));
+
+      expect(exists(dir, 'packages/a/dist/index.js')).toBe(true);
+      expect(exists(dir, 'packages/a/dist/index.d.ts')).toBe(true);
+      expect(exists(dir, 'packages/a/build/leftover.js')).toBe(false);
+    });
+
     it('prunes a directory left empty by the cleanup, but leaves a directory with remaining files', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
