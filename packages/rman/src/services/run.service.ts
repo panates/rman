@@ -427,7 +427,14 @@ export class RunService extends Service {
      *  apart - it knows why its list is empty. `check` says so itself and returns. */
     if (!packages.length) return;
 
-    const steps: RunService.ScriptStep[] = [{ name: label, label: fn.name || label, run: fn }];
+    /**
+     * **The step's label is the function's own name, and empty for an anonymous one** - never the
+     * run's label repeated. A sweep has one step whose slot name is already the label, so falling
+     * back to it printed the same word three times on the panel-off line:
+     * `info check @opra/testing ┆ check success ┆ check`. The panel path never had it - a row shows
+     * whatever `runBin` spawned (`dpdm -T ...`) as soon as there is one.
+     */
+    const steps: RunService.ScriptStep[] = [{ name: label, label: fn.name, run: fn }];
     const plans = packages.map(pkg => ({
       pkg,
       name: pkg.name,
@@ -957,8 +964,7 @@ function printLegacyExecutingLine(commandName: string, pkgLabel: string, step: R
     sep,
     colors.cyanBright.bold(step.name),
     colors.cyanBright.bold('executing'),
-    sep,
-    step.label,
+    ...describing(step),
   );
 }
 
@@ -982,10 +988,16 @@ function printLegacyStepLine(
     sep,
     colors.cyanBright.bold(step.name),
     status,
-    sep,
-    step.label,
+    ...describing(step),
     colors.yellow(` (${durationMs} ms)`),
   );
+}
+
+/** The `┆ <what it runs>` tail of a legacy log line, **or nothing at all** when the step has no
+ *  label of its own - an anonymous function handed to `forEachPackage`, where the slot name already
+ *  said everything there is to say and a separator with nothing after it is just noise. */
+function describing(step: RunService.ScriptStep): string[] {
+  return step.label ? [colors.gray('┆'), step.label] : [];
 }
 
 function describeValue(value: unknown): string {
