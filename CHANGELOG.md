@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 30e8b87d4fb3ebdfd918d815a7118700088d1904 -->
+<!-- rman:documented-up-to e51cfb83fee8013231ecbc6ca8c5df67e3239b42 -->
+
+## v2.10.0 (2026-10-02)
+
+### ✨ Features
+
+- **changelog:** changelog.groupFiles - put a named group's file where it belongs (e51cfb8)
+
+---
 
 ## v2.9.0 (2026-10-02)
 
