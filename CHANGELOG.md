@@ -1,6 +1,20 @@
 # Changelog
 
-<!-- rman:documented-up-to 35f9992482fd5b9627010853f59f24ac9cf89ab6 -->
+<!-- rman:documented-up-to 30e8b87d4fb3ebdfd918d815a7118700088d1904 -->
+
+## v2.9.0 (2026-10-02)
+
+### ✨ Features
+
+- **run:** a step can say where the package starts waiting for its dependencies (273f82f)
+- **run:** a command can hand its per-package work to rman's own scheduler (97715ee)
+
+### 🐛 Bug Fixes
+
+- **graph:** order packages topologically, and refuse a cycle instead of ignoring it (d1c4ebd)
+- **run:** a step object is one `command` taking both forms, and topo is a boolean (f08c70e)
+
+---
 
 ## v2.8.0 (2026-10-01)
 
