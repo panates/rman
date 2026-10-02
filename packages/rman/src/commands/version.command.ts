@@ -8,7 +8,7 @@ import type { VersionService } from '../services/version.service.js';
 import { VersionPlanService } from '../services/version-plan.service.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
-import { isSoloGroupKey } from '../utils/version-group.js';
+import { isNamedGroupKey, isSoloGroupKey, ROOT_GROUP_KEY } from '../utils/version-group.js';
 
 /**
  * Hoisted out of the metadata literal so the handler can be annotated against them - see
@@ -408,10 +408,10 @@ function printApplied(result: VersionService.ApplyResult): void {
 function printPlan(entries: VersionPlanService.Entry[]): void {
   const table = new EasyTable();
   let first = true;
-  for (const { members, shared } of planBlocks(entries)) {
+  for (const { members } of planBlocks(entries)) {
     if (!first) table.pushDelimeter(PLAN_COLUMNS);
     first = false;
-    for (const e of members) printPlanRow(table, e, shared);
+    for (const e of members) printPlanRow(table, e);
   }
   console.log(table.toString().trim());
 }
@@ -439,9 +439,9 @@ function printPlan(entries: VersionPlanService.Entry[]): void {
  * repository that has nothing to group - noise standing in for structure. They share a block
  * because what they have in common is real: none of them is tied to anyone else.
  *
- * `shared` travels with each block because it is also what decides whether the `Group` column is
- * written at all - see `printPlanRow`. One partition, asked once, answering both questions; working
- * it out again at the cell would be a second rule that could disagree with the blocks beside it.
+ * The Group column is decided per row from the group key (`groupCell`), not from the block: both ask
+ * the same key the same question - is this package in a group, and did anybody name it - so they
+ * cannot disagree.
  */
 function planBlocks(entries: VersionPlanService.Entry[]): PlanBlock[] {
   /**
@@ -474,47 +474,24 @@ function planBlocks(entries: VersionPlanService.Entry[]): PlanBlock[] {
   const solo: VersionPlanService.Entry[] = [];
   for (const [key, group] of byGroup) {
     if (isSoloGroupKey(key)) solo.push(...group);
-    else shared.push({ members: group, shared: true });
+    else shared.push({ members: group });
   }
 
-  return [
-    ...(root.length ? [{ members: root, shared: false }] : []),
-    ...shared,
-    ...(solo.length ? [{ members: solo, shared: false }] : []),
-  ];
+  return [...(root.length ? [{ members: root }] : []), ...shared, ...(solo.length ? [{ members: solo }] : [])];
 }
 
 interface PlanBlock {
   members: VersionPlanService.Entry[];
-  /** Whether these entries share a version line with each other - a real group, rather than the
-   *  collection of packages that belong to none. */
-  shared: boolean;
 }
-
-/** `buildRootEntry`'s display label. Named here because `printPlanRow` has to recognize the one
- *  singleton whose group is worth printing, and a bare `'root'` in a condition reads as a guess. */
-const ROOT_GROUP = 'root';
 
 /** The column names in the order `printPlanRow` writes them - `pushDelimeter` has to be handed the
  *  same set, or the dashes appear under a column that does not exist yet. */
 const PLAN_COLUMNS = ['Status', 'Package', 'Group', 'From', '', 'To', 'Reason'];
 
-function printPlanRow(table: EasyTable, e: VersionPlanService.Entry, shared: boolean): void {
+function printPlanRow(table: EasyTable, e: VersionPlanService.Entry): void {
   table.cell('Status', statusLabel(e.status));
   table.cell('Package', colors.cyan(e.package.name));
-  /**
-   * **Blank for a package that shares its version line with nobody.** `resolveGroupKey` gives an
-   * ungrouped package a group of one named after the package, so the cell printed the Package
-   * column again, one column to the right - a word that looks like information and carries none.
-   * Worse, it made `(default)` and `(@panates/tsconfig)` read as the same *kind* of answer when one
-   * names a line four packages move along and the other names nothing at all.
-   *
-   * The root keeps its label: `root` is not its package name but what the row *is*, and it is the
-   * only thing on the line saying that the number below is the repository's identity rather than a
-   * release. So the test is `shared`, plus that one entry - not "does this string repeat the name",
-   * which would blank a genuine group that happened to be called after one of its members.
-   */
-  table.cell('Group', shared || e.group === ROOT_GROUP ? colors.gray(`(${e.group})`) : '');
+  table.cell('Group', groupCell(e));
   table.cell('From', e.from);
   /**
    * Gated on `to`, not on `status === 'bump'`, which is what kept the column blank on the one
@@ -528,6 +505,36 @@ function printPlanRow(table: EasyTable, e: VersionPlanService.Entry, shared: boo
   table.cell('To', e.to ? (e.status === 'bump' ? colors.yellow(e.to) : colors.gray(e.to)) : '');
   table.cell('Reason', e.status === 'error' ? colors.red(e.reason ?? '') : colors.gray(e.reason ?? ''));
   table.newRow();
+}
+
+/**
+ * What the Group column says for one row - a **name** where the repository gave the group one, a
+ * **description** in grey parentheses where it did not, and nothing where there is no group at all.
+ */
+/* **A name and a description are different kinds of thing, and the cell says which.** `(default)`
+ * and `(root)` are not names anybody wrote - the default group is the line every package is on until
+ * told otherwise, and `root` is what the row *is*: the repository's release identity rather than a
+ * release. Both are notes about the row, so they read as notes. A named group (`group: "core"`) is a
+ * value the repository chose, decides its changelog file and its tag, and is printed as a value -
+ * bare, in the ordinary colour. Asked for directly: printed `(abisena-iomt)` in grey, a real group
+ * read like an annotation beside the default one.
+ *
+ * **Decided by the group key, never by the label.** A group may be *named* `default` or `root` - both
+ * pass `assertGroupName` - and testing the label would print it as the description it is spelling.
+ *
+ * **Blank for a package in no group** (`group: false`): its group of one is named after the package,
+ * so the cell would repeat the Package column - a word that looks like information and carries none.
+ *
+ * **Blank for a single-package repository's one package** too, which is the root and is in the
+ * default group: there is nothing there to group, and `(default)` on the only row would be noise. It
+ * was blank before this cell distinguished names from descriptions, and stays so. */
+function groupCell(e: VersionPlanService.Entry): string {
+  if (e.groupKey === ROOT_GROUP_KEY) return colors.gray(`(${e.group})`);
+  if (e.package.isRoot || isSoloGroupKey(e.groupKey)) return '';
+  if (isNamedGroupKey(e.groupKey)) return e.group;
+  /** The default group - and any key a custom planner's `resolveGroupKey` returns, which is a
+   *  description of its own making rather than a name the repository wrote. */
+  return colors.gray(`(${e.group})`);
 }
 
 function statusLabel(status: VersionPlanService.Entry['status']): string {

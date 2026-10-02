@@ -6,7 +6,7 @@ import { assertOneScheme, type ChangeKind, semverScheme, VersionScheme } from '.
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { findLastReleaseVersion, formatCalendarVersion, usesCalendarVersion } from '../utils/release-version.js';
-import { groupKeyOf } from '../utils/version-group.js';
+import { groupKeyOf, ROOT_GROUP_KEY } from '../utils/version-group.js';
 import { ConventionalCommitsService } from './conventional-commits.service.js';
 
 /**
@@ -551,7 +551,7 @@ export abstract class VersionPlanService {
     const root = repository.rootPackage;
     const anyBumped = memberEntries.some(e => e.status === 'bump');
     if (!anyBumped) {
-      return { package: root, groupKey: '__root__', group: 'root', status: 'no-change', from: root.version };
+      return { package: root, groupKey: ROOT_GROUP_KEY, group: 'root', status: 'no-change', from: root.version };
     }
     const calendar = usesCalendarVersion({
       groupCount: context.groupCount,
@@ -564,7 +564,7 @@ export abstract class VersionPlanService {
       : (root.versionScheme.highestVersion(finalVersions) ?? root.version);
     return {
       package: root,
-      groupKey: '__root__',
+      groupKey: ROOT_GROUP_KEY,
       group: 'root',
       status: 'bump',
       from: root.version,

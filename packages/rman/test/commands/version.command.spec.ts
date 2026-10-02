@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import colors from 'ansi-colors';
 import { expect } from 'expect';
 import { runCli, useTestEcosystem } from '../_fixture.js';
 
@@ -32,6 +33,25 @@ async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
     console.log = original;
   }
   return lines;
+}
+
+/**
+ * `captureLogs` without the `stripAnsi`, for a case **about** colour. Reading through the stripping
+ * one makes such a case vacuous - it compares the brackets and nothing else, and passes with the
+ * colour reverted.
+ */
+async function captureRawLogs(fn: () => Promise<void>): Promise<string[]> {
+  const original = console.log;
+  const lines: string[] = [];
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map(a => (typeof a === 'string' ? a : String(a))).join(' '));
+  };
+  try {
+    await fn();
+  } finally {
+    console.log = original;
+  }
+  return lines.flatMap(l => l.split('\n'));
 }
 
 /** A run that ends up needing to abort (uncommitted changes without --ignore-dirty) hits cli.ts's
@@ -445,9 +465,10 @@ describe('commands/version', () => {
       const lines = await rows(groupedFixture());
       const row = (name: string) => lines.find(l => l.includes(name))!;
 
-      expect(row('pkg-b')).not.toContain('(pkg-b)');
+      expect(row('pkg-b')).not.toContain('pkg-b)');
+      expect(row('pkg-b').match(/pkg-b/g)).toHaveLength(1);
       /** The genuine group still names itself - this is the half that must not be lost. */
-      expect(row('pkg-a')).toContain('(shared)');
+      expect(row('pkg-a')).toContain(' shared ');
       /** `root` is what the row *is*, not the package's name, and it is the only thing saying the
        *  number beside it is the repository's identity rather than a release. */
       expect(row('root')).toContain('(root)');
@@ -490,8 +511,82 @@ describe('commands/version', () => {
       const lines = await rows(dir);
       const row = (name: string) => lines.find(l => l.includes(name))!;
 
-      expect(row('pkg-b')).toContain('(lonely)');
-      expect(row('pkg-a')).toContain('(shared)');
+      expect(row('pkg-b')).toContain(' lonely ');
+      expect(row('pkg-a')).toContain(' shared ');
+    });
+
+    /**
+     * **A name is printed as a value; a description is printed as a note.** `(default)` and `(root)`
+     * are not names anybody wrote - the default group is where every package is until told otherwise,
+     * and `root` is what the row *is* - so they stay in grey parentheses. A group the repository named
+     * decides its changelog file and its tag, and printed `(core)` in grey it read like an annotation
+     * beside the default one. Asked for directly, on a real repository.
+     *
+     * Colour is forced on: ansi-colors turns itself off without a TTY, so with it off this would only
+     * be checking the brackets.
+     */
+    it('prints a named group bare in the ordinary colour, and the default and root as grey notes', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[pkg-a]': { group: 'core' } }));
+      for (const [d, name] of [
+        ['a', 'pkg-a'],
+        ['b', 'pkg-b'],
+      ]) {
+        writeJson(dir, `packages/${d}/package.json`, { name, version: '1.0.0' });
+      }
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      for (const d of ['a', 'b']) fs.writeFileSync(path.join(dir, `packages/${d}/x.txt`), 'x');
+      commitAll(dir, 'fix: touches both');
+
+      /** Forced on, and read raw: ansi-colors turns itself off without a TTY, and `rows` strips
+       *  escapes - either alone leaves this checking only the brackets. Restored in `finally`, since
+       *  `enabled` is module-global and a leaked `true` would colour every later spec's output. */
+      const wasEnabled = colors.enabled;
+      colors.enabled = true;
+      let lines: string[];
+      try {
+        lines = await captureRawLogs(() => runCli({ cwd: dir, argv: ['version', '--show'] }));
+      } finally {
+        colors.enabled = wasEnabled;
+      }
+      const row = (name: string) => lines.find(l => l.includes(name))!;
+      const grey = (text: string) => colors.gray(text);
+
+      expect(row('pkg-a')).toContain(' core ');
+      expect(row('pkg-a')).not.toContain(grey('core'));
+      expect(row('pkg-a')).not.toContain('(core)');
+      expect(row('pkg-b')).toContain(grey('(default)'));
+    });
+
+    /** Decided by the group **key**, never by the label: a group may be called `default` or `root` -
+     *  both pass `assertGroupName` - and testing the label would print it as the description it
+     *  happens to spell. */
+    it('prints a group named "default" as a name, not as the default group', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[pkg-a]': { group: 'default' } }));
+      for (const [d, name] of [
+        ['a', 'pkg-a'],
+        ['b', 'pkg-b'],
+      ]) {
+        writeJson(dir, `packages/${d}/package.json`, { name, version: '1.0.0' });
+      }
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      for (const d of ['a', 'b']) fs.writeFileSync(path.join(dir, `packages/${d}/x.txt`), 'x');
+      commitAll(dir, 'fix: touches both');
+
+      const lines = await rows(dir);
+      const row = (name: string) => lines.find(l => l.includes(name))!;
+
+      expect(row('pkg-a')).toContain(' default ');
+      expect(row('pkg-a')).not.toContain('(default)');
+      /** The *implicit* default group still reads as the description it is. */
+      expect(row('pkg-b')).toContain('(default)');
     });
 
     /**

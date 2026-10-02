@@ -37,6 +37,19 @@ export function isSoloGroupKey(key: string): boolean {
   return key.startsWith('solo:');
 }
 
+/** Whether a group key is one the repository **named** (`group: "core"`) - a real value, as opposed
+ *  to the implicit default group or the root's own entry, which have descriptions rather than names. */
+export function isNamedGroupKey(key: string): boolean {
+  return key.startsWith('named:');
+}
+
+/**
+ * The group key of a monorepo root's own plan entry. Not something `groupKeyOf` ever returns: the
+ * root is never a member of a release group - its number is the repository's identity - so the
+ * planner gives it a key of its own, and this is that key's one spelling.
+ */
+export const ROOT_GROUP_KEY = '__root__';
+
 /**
  * How many distinct version lines this package's repository releases along - 1 when every package
  * moves together, more once anything is grouped apart.
