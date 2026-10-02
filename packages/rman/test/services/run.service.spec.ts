@@ -254,15 +254,37 @@ describe('run: Run.runScript() integration', () => {
        *  the order the steps ran - no clock to read and nothing to make flaky. */
       const stamp = (log: string, step: string) => `echo "\${{ pkg.name }} ${step}" >> ${log}`;
 
-      function orderFixture(log: string, mark: boolean) {
+      /**
+       * A step that does not finish until **every** package has reached it, then stamps the log.
+       *
+       * **A rendezvous rather than a sleep, because a sleep measures the runner and not the code.**
+       * "Did these two overlap" was asserted by ordering a `sleep 0.2` against a later step, and on
+       * a loaded CI runner `pkg-a` got through *both* of its steps before `pkg-b`'s shell had
+       * started: the suite failed on Node 22 and 24, passed on 23, and passed on every local run.
+       * Here, two packages that run together both finish and two that are serialized cannot - the
+       * waiter times out and exits non-zero, which fails the package and shows up in the log as a
+       * missing line rather than as a flake.
+       *
+       * `total` is how many packages are expected; the bound is ~5s, long enough that no scheduler
+       * delay reaches it and short enough to report rather than hang.
+       */
+      const rendezvous = (log: string, dir: string, step: string, total: number) =>
+        `touch ${dir}/\${{ pkg.name }}.at-${step}; n=0; ` +
+        `while [ "$(ls ${dir}/*.at-${step} 2>/dev/null | wc -l)" -lt ${total} ] && [ $n -lt 500 ]; ` +
+        `do sleep 0.01; n=$((n+1)); done; ` +
+        `[ "$(ls ${dir}/*.at-${step} 2>/dev/null | wc -l)" -ge ${total} ] && ${stamp(log, step)}`;
+
+      function orderFixture(log: string, dir: string, mark: boolean) {
+        /** The first step is the rendezvous only in the marked case: that is the one claiming the
+         *  packages run it together. Unmarked, they are serialized on purpose and waiting for each
+         *  other would deadlock - so the control stamps and returns. */
+        const first = mark ? rendezvous(log, dir, 'lint', 2) : stamp(log, 'lint');
         return {
           '[*]': {
             run: {
               build: {
                 before: [
-                  mark
-                    ? { topo: false, command: `sleep 0.2 && ${stamp(log, 'lint')}` }
-                    : `sleep 0.2 && ${stamp(log, 'lint')}`,
+                  mark ? { topo: false, command: first } : first,
                   mark ? { topo: true, command: stamp(log, 'gen') } : stamp(log, 'gen'),
                 ],
                 exec: stamp(log, 'tsc'),
@@ -279,7 +301,7 @@ describe('run: Run.runScript() integration', () => {
         writeFixture(
           dir,
           { 'pkg-a': {}, 'pkg-b': { dependencies: { 'pkg-a': '1.0.0' } } },
-          { rmanrc: orderFixture(log, mark) },
+          { rmanrc: orderFixture(log, dir, mark) },
         );
         await createRepository(dir);
         await captureLogs(() => service('run').runScript('build', { progress: false }));
@@ -288,9 +310,10 @@ describe('run: Run.runScript() integration', () => {
 
       it('runs the steps before it without waiting, and the ones from it on after the dependency', async () => {
         const order = await runOrdered(true);
-        // pkg-b's own first step beat pkg-a's last one: it did not wait for the package, only for
-        // the barrier.
-        expect(order.indexOf('pkg-b lint')).toBeLessThan(order.indexOf('pkg-a tsc'));
+        /** Both `lint` lines are there at all, which is the claim: the step is a rendezvous, so a
+         *  package that waited for the other's whole script would have timed out and stamped
+         *  nothing. Nothing here is read from a clock. */
+        expect(order.filter(l => l.endsWith(' lint')).sort()).toEqual(['pkg-a lint', 'pkg-b lint']);
         // ...and from the marked step on, it did wait.
         expect(order.indexOf('pkg-a tsc')).toBeLessThan(order.indexOf('pkg-b gen'));
         expect(order.indexOf('pkg-b gen')).toBeLessThan(order.indexOf('pkg-b tsc'));
@@ -324,7 +347,7 @@ describe('run: Run.runScript() integration', () => {
               '[*]': {
                 run: {
                   build: {
-                    before: { topo: false, command: `sleep 0.2 && ${stamp(log, 'lint')}` },
+                    before: { topo: false, command: rendezvous(log, dir, 'lint', 2) },
                     exec: { topo: false, command: stamp(log, 'tsc') },
                   },
                 },
@@ -335,8 +358,9 @@ describe('run: Run.runScript() integration', () => {
         await createRepository(dir);
         await captureLogs(() => service('run').runScript('build', { progress: false }));
         const order = fs.readFileSync(log, 'utf-8').trim().split('\n');
-        // Both packages' slow first step ran before either finished - nothing waited.
-        expect(order.slice(0, 2).sort()).toEqual(['pkg-a lint', 'pkg-b lint']);
+        /** Both reached the rendezvous, so neither waited for the other - a serialized pair would
+         *  have deadlocked until the step's own bound and stamped nothing. */
+        expect(order.filter(l => l.endsWith(' lint')).sort()).toEqual(['pkg-a lint', 'pkg-b lint']);
       });
     });
 
