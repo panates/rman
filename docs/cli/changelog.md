@@ -170,6 +170,43 @@ asked for.
 and folds the group's changelog into that group's own release commit - so `git show <tag>` carries
 the notes for the release that tag names.
 
+### Putting a group's file somewhere else (`changelog.groupFiles`)
+
+The default group's file is already movable - it is `changelog.filePath`. A **named** group's file
+is set per group, relative to the repository root:
+
+```yaml
+changelog:
+  groupBy: group
+  filePath: CHANGELOG.md               # the default group
+  groupFiles:
+    core: packages/core/CHANGELOG.md   # a named group, wherever it belongs
+    dialects: docs/dialects/HISTORY.md
+```
+
+A group left out keeps the rule above (`CHANGELOG-<group>.md`, beside the default file), so nothing
+changes until a group is named. Read off the repository root only, for the reason `groupBy` is:
+which file a group shares is one layout, and per package two members of a group could disagree.
+
+**Refused before anything is written**, because each of these is silent otherwise:
+
+- **A key naming no group** - rman drops an unknown config key in silence, so a typo would leave the
+  group on the default rule. The error lists the groups that exist.
+- **A path outside the repository** - `version --changelog` commits the file with the release.
+- **Two groups resolving to one file**, the default group and a package that is a group of itself
+  included. Each file carries one `documented-up-to` marker, so two groups sharing it would each read
+  the other's boundary - entries missing or written twice. This also catches an *unlisted* group whose
+  default name lands on a listed path, and is checked across the whole repository, so a `--scope` that
+  leaves one of the two out does not let it through.
+
+An explicit `--file-path` overrides the whole map for that run, as it already overrides
+`changelog.filePath`; named groups are still suffixed under it.
+
+**Move an existing file with `git mv`, not only by changing the path.** The marker is what the next
+`--write` starts from; at a new path there is none, and that write reads the group's entire history
+- the cost [Migrating a repository that already has per-package files](#migrating-a-repository-that-already-has-per-package-files)
+describes.
+
 ### Migrating a repository that already has per-package files
 
 Turning this on does not move or merge what is already there: the per-package files are simply no

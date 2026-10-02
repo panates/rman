@@ -808,5 +808,49 @@ describe('commands/version', () => {
       const tagged = git(dir, 'show', '--name-only', '--pretty=format:', 'v1.0.1');
       expect(tagged).toContain('CHANGELOG.md');
     });
+
+    /**
+     * **A group whose file `changelog.groupFiles` moved still has it committed with its release.**
+     * `version` keys the file to the group's commit by the path the changelog call *returned*, so a
+     * path inside a package directory has to arrive in the same commit as a root one does - not be
+     * left an uncommitted edit, and not ride the root's version sync a commit early.
+     */
+    it("commits a group's mapped changelog file in the commit the tag names", async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({
+          '[*]': { group: 'core' },
+          version: { changelog: true },
+          changelog: { groupBy: 'group', groupFiles: { core: 'packages/a/CHANGELOG.md' } },
+        }),
+      );
+      for (const name of ['a', 'b']) {
+        writeJson(dir, `packages/${name}/package.json`, { name: `pkg-${name}`, version: '1.0.0' });
+        fs.writeFileSync(path.join(dir, `packages/${name}/src.txt`), 'x');
+      }
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      fs.appendFileSync(path.join(dir, 'packages/a/src.txt'), 'one\n');
+      commitAll(dir, 'fix(a): something pkg-a cares about');
+      fs.appendFileSync(path.join(dir, 'packages/b/src.txt'), 'two\n');
+      commitAll(dir, 'fix(b): something pkg-b cares about');
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+
+      const mapped = fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf8');
+      expect(mapped).toContain('something pkg-a cares about');
+      expect(mapped).toContain('something pkg-b cares about');
+      expect(fs.existsSync(path.join(dir, 'CHANGELOG-core.md'))).toBe(false);
+
+      expect(git(dir, 'status', '--porcelain')).toBe('');
+      const tag = git(dir, 'tag', '--points-at', 'HEAD')
+        .split('\n')
+        .find(t => t.includes('1.0.1'))!;
+      expect(tag).toBeDefined();
+      expect(git(dir, 'show', '--name-only', '--pretty=format:', tag)).toContain('packages/a/CHANGELOG.md');
+    });
   });
 });

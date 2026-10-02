@@ -681,31 +681,157 @@ function partitionTargets(
   options: ChangelogService.Options,
 ): ChangelogGroup[] {
   const grouping = changelogGroupBy(repository, options);
+  const groupFiles = grouping === 'group' ? readGroupFiles(repository, options) : {};
+  /** Checked against the **whole** repository, not against `targets`: a collision is a fact about
+   *  the configuration, and a `--scope` that happens to leave one of the two groups out must not be
+   *  what lets it through. */
+  if (grouping === 'group') assertGroupFiles(repository, groupFiles, options);
+
+  const repositoryLabel = `${path.basename(repository.dirname)} repository`;
+  return [...groupTargets(targets, grouping)].map(([key, members]) => {
+    /** `targets` starts at the root, so a group holding it has it first - which is what makes the
+     *  root the `home` of the default group without a second rule saying so. */
+    const home = members[0];
+    const grouped = !key.startsWith('solo:');
+    const named = namedGroupOf(key);
+    return {
+      home,
+      filePkg: grouped ? repository.rootPackage : home,
+      grouped,
+      members: new Set(members),
+      label: named ?? (home === repository.rootPackage ? repositoryLabel : home.name),
+      file: groupFile(repository, key, home, groupFiles, options),
+    };
+  });
+}
+
+/** The packages cut into what each file is about - by `.rmanrc group` under `groupBy: 'group'`, one
+ *  package each otherwise. Insertion order, so the first member of each group is the first of
+ *  `packages` to belong to it. */
+function groupTargets(packages: Package[], grouping: 'package' | 'group'): Map<string, Package[]> {
   const byKey = new Map<string, Package[]>();
-  for (const pkg of targets) {
+  for (const pkg of packages) {
     const key = grouping === 'group' ? groupKeyOf(pkg) : `solo:${pkg.name}`;
     const members = byKey.get(key);
     if (members) members.push(pkg);
     else byKey.set(key, [pkg]);
   }
+  return byKey;
+}
 
-  const repositoryLabel = `${path.basename(repository.dirname)} repository`;
-  return [...byKey].map(([key, members]) => {
-    /** `targets` starts at the root, so a group holding it has it first - which is what makes the
-     *  root the `home` of the default group without a second rule saying so. */
-    const home = members[0];
-    const grouped = !key.startsWith('solo:');
-    const named = key.startsWith('named:') ? key.slice('named:'.length) : undefined;
-    const filePkg = grouped ? repository.rootPackage : home;
-    return {
-      home,
-      filePkg,
-      grouped,
-      members: new Set(members),
-      label: named ?? (home === repository.rootPackage ? repositoryLabel : home.name),
-      file: path.join(filePkg.dirname, suffixFileName(resolveFilePath(home, options.filePath), named)),
-    };
-  });
+/** `named:core` -> `core`; `undefined` for the default group and for a package that is its own. */
+function namedGroupOf(key: string): string | undefined {
+  return key.startsWith('named:') ? key.slice('named:'.length) : undefined;
+}
+
+/**
+ * Where one group's changelog is written, absolute.
+ *
+ * In order: a named group listed in `changelog.groupFiles` goes where it says, relative to the
+ * repository root; any other named group takes the default file's name with its own suffixed
+ * (`CHANGELOG-core.md`), at the root; the default group takes the root's `changelog.filePath`; and a
+ * package that is a group of itself takes its own, in its own directory.
+ *
+ * **An explicit `--file-path` beats `groupFiles`**, as it already beats `changelog.filePath`: it
+ * names this run's file, and a run asking for one shape of name should not find half its groups
+ * somewhere a config put them. Named groups are still suffixed under it, so two cannot collide.
+ */
+function groupFile(
+  repository: Repository,
+  key: string,
+  home: Package,
+  groupFiles: Record<string, string>,
+  options: ChangelogService.Options,
+): string {
+  if (key.startsWith('solo:')) return path.join(home.dirname, resolveFilePath(home, options.filePath));
+  const named = namedGroupOf(key);
+  const listed = named && !options.filePath ? groupFiles[named] : undefined;
+  if (listed) return path.resolve(repository.dirname, listed);
+  return path.join(repository.dirname, suffixFileName(resolveFilePath(home, options.filePath), named));
+}
+
+/**
+ * `.rmanrc changelog.groupFiles`, off the repository root and nowhere else - a map from a named
+ * group to the file its changelog is written to, relative to the repository root.
+ *
+ * **The root's for the reason `groupBy` is the root's**: which file a group shares is a layout, and
+ * cascaded per package two members of one group could disagree about it, which has no answer.
+ */
+function readGroupFiles(repository: Repository, options: ChangelogService.Options): Record<string, string> {
+  /** `--file-path` takes the whole decision - see `groupFile` - so the map is not even read. A
+   *  mistake in it is still a mistake, but not one this run acts on. */
+  if (options.filePath) return {};
+  const declared = repository.rootPackage.config?.changelog?.groupFiles;
+  if (declared === undefined || declared === null) return {};
+  if (typeof declared !== 'object' || Array.isArray(declared)) {
+    throw new Error(
+      `.rmanrc "changelog.groupFiles" must map a group name to a file path, ` +
+        `e.g. { core: "packages/core/CHANGELOG.md" }.`,
+    );
+  }
+  for (const [group, file] of Object.entries(declared)) {
+    if (typeof file !== 'string' || !file) {
+      throw new Error(`.rmanrc "changelog.groupFiles.${group}" must be a file path, relative to the repository root.`);
+    }
+  }
+  return declared as Record<string, string>;
+}
+
+/**
+ * Refuses a `changelog.groupFiles` that would write somewhere wrong - before anything is written.
+ *
+ * Three ways, and each is silent otherwise:
+ *
+ * - **A key naming no group.** rman drops an unknown config key without a word, so a typo here would
+ *   leave the group on the default rule and nothing would say so. Here the groups are known, so the
+ *   key can be checked against them.
+ * - **A path leaving the repository.** `version --changelog` commits the file with the release; a
+ *   file outside the working tree is one it cannot add.
+ * - **Two groups sharing one file**, including the default group and any package that is a group of
+ *   itself. The `rman:documented-up-to` marker is one per file, so two groups writing into it would
+ *   each read the other's marker as its own boundary - entries missing or written twice, with
+ *   nothing failing. The default rule cannot produce a collision; an explicit map can, and an
+ *   unlisted group's suffixed name can land on a listed one's path.
+ */
+function assertGroupFiles(
+  repository: Repository,
+  groupFiles: Record<string, string>,
+  options: ChangelogService.Options,
+): void {
+  const all = groupTargets([repository.rootPackage, ...repository.packages], 'group');
+  const named = [...all.keys()].map(namedGroupOf).filter((name): name is string => !!name);
+
+  for (const [group, file] of Object.entries(groupFiles)) {
+    if (!named.includes(group)) {
+      throw new Error(
+        `.rmanrc "changelog.groupFiles" names a group "${group}" that no package belongs to. ` +
+          (named.length ? `Named groups here: ${named.join(', ')}.` : 'This repository has no named groups.'),
+      );
+    }
+    const rel = path.relative(repository.dirname, path.resolve(repository.dirname, file));
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      throw new Error(
+        `.rmanrc "changelog.groupFiles.${group}" points outside the repository (${file}). ` +
+          `The file is committed with the release, so it has to be inside the working tree.`,
+      );
+    }
+  }
+
+  const owner = new Map<string, string>();
+  for (const [key, members] of all) {
+    const file = groupFile(repository, key, members[0], groupFiles, options);
+    const label = namedGroupOf(key) ?? (key === 'default' ? 'the default group' : members[0].name);
+    const other = owner.get(file);
+    if (other) {
+      throw new Error(
+        `Two changelogs would be written to one file: ${other} and ${label} both resolve to ` +
+          `${path.relative(repository.dirname, file)}.\n` +
+          `  Each file carries one "documented up to" marker, so two groups sharing it would read each ` +
+          `other's boundary. Give each its own path in .rmanrc "changelog.groupFiles".`,
+      );
+    }
+    owner.set(file, label);
+  }
 }
 
 /** `CHANGELOG.md` + `core` -> `CHANGELOG-core.md`, keeping whatever directory and extension

@@ -1207,6 +1207,144 @@ describe('services/changelog', () => {
       expect(written.match(/- \*\*pkg-a:\*\* add a feature/g)).toHaveLength(1);
       expect(fs.existsSync(path.join(dir, 'packages/a/CHANGELOG.md'))).toBe(false);
     });
+
+    /**
+     * **`changelog.groupFiles` - a named group's file wherever the repository wants it.** Without it
+     * a named group always went to the root as `CHANGELOG-<group>.md`; the default group's file was
+     * already movable through `changelog.filePath`, so the map covers named groups and nothing else.
+     */
+    describe('changelog.groupFiles', () => {
+      /** Two named groups, the root left in the default one - the shape every case below needs to
+       *  tell "listed", "unlisted" and "default" apart. */
+      const twoGroups = { '[pkg-a]': { group: 'core' }, '[pkg-b]': { group: 'dialects' } };
+
+      it('writes a listed group where the map says, relative to the repository root', async () => {
+        const { dir, baseHash } = groupFixture({
+          ...twoGroups,
+          changelog: { groupFiles: { core: 'packages/a/CHANGELOG.md' } },
+        });
+        await createRepository(dir);
+
+        const entries = await service('changelog').getEntries({ from: baseHash, groupBy: 'group' });
+
+        expect(entries.find(e => e.label === 'core')!.file).toBe(path.join(dir, 'packages/a/CHANGELOG.md'));
+        /** An unlisted group is untouched - which is what makes the key additive: no repository's
+         *  layout changes until it names a group. */
+        expect(entries.find(e => e.label === 'dialects')!.file).toBe(path.join(dir, 'CHANGELOG-dialects.md'));
+      });
+
+      it('writes the file and its marker at the mapped path, end to end', async () => {
+        const { dir } = groupFixture({
+          ...twoGroups,
+          changelog: { groupFiles: { core: 'docs/core/HISTORY.md' } },
+        });
+        await createRepository(dir);
+
+        await service('changelog').generateToFile({ groupBy: 'group' });
+
+        const written = fs.readFileSync(path.join(dir, 'docs/core/HISTORY.md'), 'utf-8');
+        expect(written).toContain('- **pkg-a:** add a feature');
+        /** The marker is what the next `--write` starts from, so it has to be in *this* file. */
+        expect(written).toMatch(/rman:documented-up-to [0-9a-f]+/);
+        expect(fs.existsSync(path.join(dir, 'CHANGELOG-core.md'))).toBe(false);
+      });
+
+      /** rman drops an unknown config key in silence, so a typo here would leave the group on the
+       *  default rule with nothing saying so. The groups are known, so the key is checked. */
+      it('refuses a key naming no group, and lists the groups there are', async () => {
+        const { dir, baseHash } = groupFixture({ ...twoGroups, changelog: { groupFiles: { cor: 'x.md' } } });
+        await createRepository(dir);
+
+        await expect(service('changelog').getEntries({ from: baseHash, groupBy: 'group' })).rejects.toThrow(
+          /names a group "cor" that no package belongs to\. Named groups here: core, dialects/,
+        );
+      });
+
+      it('refuses a path outside the repository', async () => {
+        const { dir, baseHash } = groupFixture({
+          ...twoGroups,
+          changelog: { groupFiles: { core: '../elsewhere/CHANGELOG.md' } },
+        });
+        await createRepository(dir);
+
+        await expect(service('changelog').getEntries({ from: baseHash, groupBy: 'group' })).rejects.toThrow(
+          /points outside the repository/,
+        );
+      });
+
+      /**
+       * **The collision this exists to refuse.** The `documented-up-to` marker is one per file, so two
+       * groups writing into one would each read the other's marker as its own boundary - entries
+       * missing or written twice, and nothing failing.
+       */
+      it('refuses two groups mapped to one file', async () => {
+        const { dir, baseHash } = groupFixture({
+          ...twoGroups,
+          changelog: { groupFiles: { core: 'CHANGES.md', dialects: 'CHANGES.md' } },
+        });
+        await createRepository(dir);
+
+        await expect(service('changelog').getEntries({ from: baseHash, groupBy: 'group' })).rejects.toThrow(
+          /core and dialects both resolve to CHANGES\.md/,
+        );
+      });
+
+      it("refuses a group mapped onto the default group's file", async () => {
+        const { dir, baseHash } = groupFixture({ ...twoGroups, changelog: { groupFiles: { core: 'CHANGELOG.md' } } });
+        await createRepository(dir);
+
+        await expect(service('changelog').getEntries({ from: baseHash, groupBy: 'group' })).rejects.toThrow(
+          /the default group and core both resolve to CHANGELOG\.md/,
+        );
+      });
+
+      /** The subtle one: nobody wrote two equal paths, but an *unlisted* group's suffixed default
+       *  lands on a listed group's path. Only checking the map against itself would miss it. */
+      it("refuses a listed path that an unlisted group's default name already takes", async () => {
+        const { dir, baseHash } = groupFixture({
+          ...twoGroups,
+          changelog: { groupFiles: { core: 'CHANGELOG-dialects.md' } },
+        });
+        await createRepository(dir);
+
+        await expect(service('changelog').getEntries({ from: baseHash, groupBy: 'group' })).rejects.toThrow(
+          /both resolve to CHANGELOG-dialects\.md/,
+        );
+      });
+
+      /** A collision is a fact about the configuration, so a `--scope` leaving one of the two groups
+       *  out of this run must not be what lets it through. */
+      it('refuses a collision even when the run is scoped to one of the two groups', async () => {
+        const { dir, baseHash } = groupFixture({
+          ...twoGroups,
+          changelog: { groupFiles: { core: 'CHANGES.md', dialects: 'CHANGES.md' } },
+        });
+        await createRepository(dir);
+
+        await expect(
+          service('changelog').getEntries({ from: baseHash, groupBy: 'group', scope: 'pkg-a', fromRoot: true }),
+        ).rejects.toThrow(/both resolve to CHANGES\.md/);
+      });
+
+      /** `--file-path` names this run's file and already beats `changelog.filePath`; it beats the map
+       *  the same way, and still suffixes named groups so two of them cannot collide under it. */
+      it('lets an explicit --file-path override the map for that run', async () => {
+        const { dir, baseHash } = groupFixture({
+          ...twoGroups,
+          changelog: { groupFiles: { core: 'packages/a/CHANGELOG.md' } },
+        });
+        await createRepository(dir);
+
+        const entries = await service('changelog').getEntries({
+          from: baseHash,
+          groupBy: 'group',
+          filePath: 'NOTES.md',
+        });
+
+        expect(entries.find(e => e.label === 'core')!.file).toBe(path.join(dir, 'NOTES-core.md'));
+        expect(entries.find(e => e.label === 'dialects')!.file).toBe(path.join(dir, 'NOTES-dialects.md'));
+      });
+    });
   });
 
   /**

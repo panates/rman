@@ -199,6 +199,21 @@ const config = {
  */
 export interface ChangelogExtraKeys {
   /**
+   * Where each **named** group's changelog is written under `groupBy: 'group'`, relative to the
+   * repository root - `{ core: 'packages/core/CHANGELOG.md', dialects: 'docs/dialects.md' }`.
+   * Read off the repository root only.
+   *
+   * A group not listed keeps the default rule, `CHANGELOG-<group>.md` beside the default file; the
+   * default group's own file is `changelog.filePath`. A key naming no group, a path outside the
+   * repository, and two groups resolving to one file are all refused before anything is written.
+   * An explicit `--file-path` overrides the whole map for that run.
+   *
+   * **Move an existing file with `git mv`, not by changing the path here.** A file's
+   * `documented-up-to` marker is what the next `--write` starts from; at a new path there is none,
+   * and the write reads the group's entire history.
+   */
+  groupFiles?: ConfigValue<Record<string, string>>;
+  /**
    * The heading each Conventional Commits type is listed under - `{ feat: 'New Features', dev:
    * 'Development Changes' }`. Per-package cascaded.
    *
