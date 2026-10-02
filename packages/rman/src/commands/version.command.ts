@@ -8,6 +8,7 @@ import type { VersionService } from '../services/version.service.js';
 import { VersionPlanService } from '../services/version-plan.service.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
+import { isSoloGroupKey } from '../utils/version-group.js';
 
 /**
  * Hoisted out of the metadata literal so the handler can be annotated against them - see
@@ -461,11 +462,19 @@ function planBlocks(entries: VersionPlanService.Entry[]): PlanBlock[] {
     else byGroup.set(e.groupKey, [e]);
   }
 
+  /**
+   * **Classified by the key, not by how many members a group has.** This was `group.length > 1`,
+   * which stands in for "is this a group" and is wrong in exactly one case: a group the repository
+   * *named* that happens to have a single member. Reported on a real repository - a package alone in
+   * `group: "abisena-iomt"` landed among the ungrouped and printed an empty Group cell, reading
+   * exactly like a package that had opted out. Its name decides its changelog file and its tag, so
+   * it is a line of its own whatever its size.
+   */
   const shared: PlanBlock[] = [];
   const solo: VersionPlanService.Entry[] = [];
-  for (const group of byGroup.values()) {
-    if (group.length > 1) shared.push({ members: group, shared: true });
-    else solo.push(group[0]);
+  for (const [key, group] of byGroup) {
+    if (isSoloGroupKey(key)) solo.push(...group);
+    else shared.push({ members: group, shared: true });
   }
 
   return [

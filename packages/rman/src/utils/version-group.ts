@@ -25,6 +25,19 @@ export function groupKeyOf(pkg: Package): string {
 }
 
 /**
+ * Whether a group key belongs to a package that is in **no** group - `group: false`, a line of its
+ * own that nobody named.
+ *
+ * Here beside `groupKeyOf` so the key's shape is known in one place. The plan table asks it to decide
+ * whether the Group column is worth printing, and it has to ask *this* rather than count members: a
+ * group the repository named is a version line of its own whatever its size, while a package that
+ * opted out of grouping has no group to name.
+ */
+export function isSoloGroupKey(key: string): boolean {
+  return key.startsWith('solo:');
+}
+
+/**
  * How many distinct version lines this package's repository releases along - 1 when every package
  * moves together, more once anything is grouped apart.
  *

@@ -454,6 +454,47 @@ describe('commands/version', () => {
     });
 
     /**
+     * **A named group with one member still names itself.** The blank above is for a package that
+     * belongs to *no* group (`group: false`); a group the repository named is a version line of its
+     * own whatever its size - the name decides its changelog file and its tag. Reported on a real
+     * repository: a package alone in `group: "abisena-iomt"` printed an empty Group cell, so the
+     * one row on its own line read exactly like a package that had opted out of grouping.
+     *
+     * The partition used to classify by **member count** (`> 1`), which is a proxy for "is this a
+     * group" that is wrong in exactly this case. It classifies by the group key now.
+     */
+    it('names a named group in the Group column even when it has a single member', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({
+          '[pkg-a]': { group: 'shared' },
+          '[pkg-c]': { group: 'shared' },
+          '[pkg-b]': { group: 'lonely' },
+        }),
+      );
+      for (const [d, name] of [
+        ['a', 'pkg-a'],
+        ['b', 'pkg-b'],
+        ['c', 'pkg-c'],
+      ]) {
+        writeJson(dir, `packages/${d}/package.json`, { name, version: '1.0.0' });
+      }
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v1.0.0');
+      for (const d of ['a', 'b', 'c']) fs.writeFileSync(path.join(dir, `packages/${d}/x.txt`), 'x');
+      commitAll(dir, 'fix: touches all three');
+
+      const lines = await rows(dir);
+      const row = (name: string) => lines.find(l => l.includes(name))!;
+
+      expect(row('pkg-b')).toContain('(lonely)');
+      expect(row('pkg-a')).toContain('(shared)');
+    });
+
+    /**
      * There was a spec here reading "the root prints last", back when it did, and it is worth
      * recording why it went rather than simply being inverted: it passed with the block order
      * reversed *and* with the sort that was supposed to guarantee it deleted. `buildRootEntry`
