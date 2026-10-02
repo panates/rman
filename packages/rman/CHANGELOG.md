@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to e51cfb83fee8013231ecbc6ca8c5df67e3239b42 -->
+<!-- rman:documented-up-to b93aaa1478288e1c8e0aa9e206907ab7f7db199f -->
+
+## v2.10.1 (2026-10-02)
+
+### 🐛 Bug Fixes
+
+- **version:** a named group with one member still names itself in the plan (b93aaa1)
+
+---
 
 ## v2.10.0 (2026-10-02)
 
