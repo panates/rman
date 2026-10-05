@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to c9603c1fca75b7d72f7dcf2b11fc0a5a64b20e81 -->
+<!-- rman:documented-up-to a1427a629fb69ca47cb9fa21f2abf46da235d65f -->
+
+## v2.11.3 (2026-10-05)
+
+### 🐛 Bug Fixes
+
+- **publish:** a failed publish blocks only what a consumer's install needs (a1427a6)
+
+---
 
 ## v2.11.2 (2026-10-05)
 
