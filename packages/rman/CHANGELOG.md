@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 96fd26adb95a0a4270730a958dd24146faabd60c -->
+<!-- rman:documented-up-to d026cc89cd28b25fbc6d63bcbbacc86c845e6c01 -->
+
+## v2.11.1 (2026-10-05)
+
+### 🐛 Bug Fixes
+
+- **publish:** decide private from the manifest that will be published (d026cc8)
+
+---
 
 ## v2.11.0 (2026-10-05)
 
