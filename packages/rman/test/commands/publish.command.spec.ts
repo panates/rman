@@ -16,16 +16,21 @@ function writeJson(dir: string, rel: string, data: unknown) {
   fs.writeFileSync(path.join(dir, rel), JSON.stringify(data));
 }
 
+/** `console.log` and `console.error` together - `publish`'s own failure line goes to stderr, so a
+ *  `--json` stdout stays one document, and these cases are about what was said, not where. */
 async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
-  const original = console.log;
+  const original = { log: console.log, error: console.error };
   const lines: string[] = [];
-  console.log = (...args: unknown[]) => {
+  const capture = (...args: unknown[]) => {
     lines.push(args.map(a => (typeof a === 'string' ? a : String(a))).join(' '));
   };
+  console.log = capture;
+  console.error = capture;
   try {
     await fn();
   } finally {
-    console.log = original;
+    console.log = original.log;
+    console.error = original.error;
   }
   return lines;
 }

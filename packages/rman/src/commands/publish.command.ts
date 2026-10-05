@@ -358,8 +358,11 @@ function printApplied(applied: PublishTarget.Entry[], plan: PublishTarget.Entry[
 }
 
 /** The `logged` convention: printed here, so `runCli`'s catch does not print it a second time. */
+/* On stderr, because under `--json` stdout is one JSON document: measured on opra's release, the
+ * failure line printed below the plan and a reader parsing it got `Unexpected non-whitespace
+ * character after JSON`. */
 function logged(message: string): Error {
-  console.log(colors.red(message));
+  console.error(colors.red(message));
   const err: any = new Error(message);
   err.logged = true;
   return err;

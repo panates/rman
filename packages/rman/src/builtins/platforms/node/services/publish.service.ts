@@ -230,11 +230,11 @@ export namespace PublishService {
    * queries it to decide, so it's safe to call any time, including as the plan a bare `rman
    * publish` shows before asking for confirmation.
    *
-   * **Whether a package is private is read from the manifest that would be published** - the one in
-   * its build directory when it publishes from one, its own otherwise. A build directory with no
-   * `package.json` is an `'error'`: nothing has been built to publish. A package `private` in its
-   * source with no `publishConfig` is skipped before that is asked, since it stays private in any
-   * manifest derived from it. Each remaining package's **dist-tag**
+   * **Whether a package is private is decided from the manifest that would be published.** From a
+   * build directory that is the one `publish` derives (see `derivePublishManifest`): `private` there
+   * only when the source has it and no `publishConfig`. In place it is the source's own. A build
+   * directory that is missing or holds nothing but a `package.json` is an `'error'`: nothing has been
+   * built to publish. Each remaining package's **dist-tag**
    * is settled next (`distTagFor`): usually derived from the version itself, `'error'` in the two
    * cases with nothing to derive - that one is about the invocation rather than the package, so it
    * is answered before anything touches the network. A package with uncommitted local changes is
@@ -295,15 +295,15 @@ export namespace PublishService {
         });
       } else if (privateBySource(pkg)) {
         entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'skip', reason: 'private package' });
-      } else if (!fs.existsSync(path.join(resolvePublishDir(pkg, options.contents), 'package.json'))) {
+      } else if (!hasBuildOutput(pkg, options.contents)) {
         const dir = path.relative(pkg.dirname, resolvePublishDir(pkg, options.contents)) || '.';
         entries.set(pkg.name, {
           package: pkg,
           version: pkg.version,
           status: 'error',
-          reason: `nothing to publish in "${dir}" - it has no package.json; build the package first`,
+          reason: `nothing to publish in "${dir}" - it is missing or empty; build the package first`,
         });
-      } else if (publishedManifestOf(pkg, options.contents).private) {
+      } else if (publishesInPlace(pkg, options.contents) && pkg.manifest.raw.private) {
         entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'skip', reason: 'private package' });
       } else if (distTag.error) {
         entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'error', reason: distTag.error });
@@ -431,26 +431,41 @@ function resolvePublishDir(pkg: Package, contentsOverride: string | undefined): 
   return rel ? path.resolve(pkg.dirname, rel) : pkg.dirname;
 }
 
-/** The manifest `npm publish` will read for `pkg` - its build directory's, or its own when it
- *  publishes in place. */
-/* **Decided from the artifact, not the source**, because the two disagree about `private` and only
- * one of them is published. Read before any build, the plan answered `skip - private package` for a
- * single-package repository whose source carries `private: true` as a guard against a stray
- * `npm publish` - while `derivePublishManifest` was removing that very flag from what it ships.
- * Reported from `postgrejs-kysely`: version, tag and GitHub release all went through, and the
- * registry got nothing. */
-function publishedManifestOf(pkg: Package, contentsOverride: string | undefined): Record<string, any> {
-  const dir = resolvePublishDir(pkg, contentsOverride);
-  if (path.resolve(dir) === path.resolve(pkg.dirname)) return pkg.manifest.raw;
-  return JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'));
-}
-
-/** `private` in the source with no `publishConfig` - private in every manifest derived from it too,
- *  so it is known without a build. */
-/* Asked first so an unbuilt private package is skipped rather than reported as unbuilt: opra's
- * examples inherit `publish.npm.directory` from the shared preset and skip their build. */
+/** `private` in the source with no `publishConfig` - private in every manifest derived from it too. */
+/* **Decided from the manifest `npm publish` reads, which rman writes.** Publishing from a build
+ * directory, that is `derivePublishManifest`'s output - written over whatever is there at publish time
+ * - so `private` is the source's, kept only without a `publishConfig`. Reported from
+ * `postgrejs-kysely`: its source carried `private: true` as a guard against a stray `npm publish`,
+ * the plan answered `skip - private package`, and version, tag and GitHub release went through with
+ * nothing on the registry.
+ *
+ * **2.11.1 read `build/package.json` instead, and that file is not what is published.** It is
+ * whatever the build left there - the shared preset writes one, but only from the build `after` step
+ * a package can replace, and `@opra/common`/`@opra/client` replace it with their own esbuild step. Both
+ * had 625 and 52 built files and no `package.json`, the plan answered `error` for both, and opra's
+ * release stopped after the version had been pushed.
+ *
+ * Asked before the build is looked for, so an unbuilt private package is skipped rather than
+ * reported as unbuilt: opra's examples inherit `publish.npm.directory` and skip their build. */
 function privateBySource(pkg: Package): boolean {
   return !!pkg.manifest.raw.private && !pkg.manifest.raw.publishConfig;
+}
+
+/** Whether `pkg` is published from its own directory, whose `package.json` is then the manifest. */
+/* In place, `private` is the source's whatever `publishConfig` says - npm refuses to publish it. */
+function publishesInPlace(pkg: Package, contentsOverride: string | undefined): boolean {
+  return path.resolve(resolvePublishDir(pkg, contentsOverride)) === path.resolve(pkg.dirname);
+}
+
+/** Whether the directory `pkg` is published from holds something to publish - anything besides a
+ *  `package.json`, which `publish` writes itself. Always true in place. */
+/* Without it `applyPlan` creates the directory, writes the derived manifest and publishes a tarball
+ * holding nothing else. Not "has a package.json": that is the build's to write or not (see
+ * `privateBySource`). */
+function hasBuildOutput(pkg: Package, contentsOverride: string | undefined): boolean {
+  if (publishesInPlace(pkg, contentsOverride)) return true;
+  const dir = resolvePublishDir(pkg, contentsOverride);
+  return fs.existsSync(dir) && fs.readdirSync(dir).some(name => name !== 'package.json');
 }
 
 /**

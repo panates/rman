@@ -19,16 +19,21 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
+/** `console.log` and `console.error` together - `publish`'s own failure line goes to stderr, so a
+ *  `--json` stdout stays one document, and these cases are about what was said, not where. */
 async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
-  const original = console.log;
+  const original = { log: console.log, error: console.error };
   const lines: string[] = [];
-  console.log = (...args: unknown[]) => {
+  const capture = (...args: unknown[]) => {
     lines.push(stripAnsi(args.map(a => (typeof a === 'string' ? a : String(a))).join(' ')));
   };
+  console.log = capture;
+  console.error = capture;
   try {
     await fn();
   } finally {
-    console.log = original;
+    console.log = original.log;
+    console.error = original.error;
   }
   return lines;
 }
@@ -122,6 +127,34 @@ describe('commands/publish', () => {
   });
 
   describe('--dry-run', () => {
+    /**
+     * **Under `--json` stdout is the plan and nothing else, even when the plan fails.** The failure
+     * line went to stdout below the document: measured on opra's release, a reader parsing it got
+     * `Unexpected non-whitespace character after JSON`, and the shared workflow - whose `bash -e`
+     * stopped at the failed `$(...)` - printed neither the plan nor the reason.
+     */
+    it('--json keeps stdout one JSON document when the plan has an error', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      /** Publishing from a build directory that was never built - an `error` row. */
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ publish: { npm: { directory: 'build' } } }));
+
+      await withStubbedNpm(dir, async () => {
+        const stdout: string[] = [];
+        const original = { log: console.log, error: console.error };
+        console.log = (...args: unknown[]) => void stdout.push(args.join(' '));
+        console.error = () => {};
+        try {
+          await expectCliFailure(() => runCli({ cwd: dir, argv: ['publish', '--dry-run', '--json'] }));
+        } finally {
+          console.log = original.log;
+          console.error = original.error;
+        }
+        const plan = JSON.parse(stdout.join('\n'));
+        expect(plan).toEqual([expect.objectContaining({ name: 'pkg-a', status: 'error' })]);
+      });
+    });
+
     it('shows the plan and never publishes, even with --yes', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });

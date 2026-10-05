@@ -2087,8 +2087,9 @@ saw one thing to release and it was the one thing that must never be published.
   those would silently break every native-module package); `private` **only when the package
   declares a `publishConfig`**; `publishConfig.directory` (it pointed *here*). `"workspace:"` ranges
   are resolved in it, and what the build left there is restored afterwards.
-  - **`getPlan` decides `private` from the manifest that will be published** (`publishedManifestOf`),
-    not from the source - the two disagreed and only one is shipped. Reported from
+  - **`getPlan` decides `private` from the manifest that will be published** - the derived one
+    (`privateBySource`: the source's `private`, kept only without a `publishConfig`), in place the
+    source's own - not from the bare source, since the two disagreed and only one is shipped. Reported from
     `postgrejs-kysely`: a single-package repository whose source carried `private: true` as a guard
     against a stray `npm publish` answered `skip - private package` while version, tag and GitHub
     release all went through, and the registry got nothing.
@@ -2098,14 +2099,20 @@ saw one thing to release and it was the one thing that must never be published.
     `{"access":"public"}`) publishes, opra's five `example-*` packages (`private`, no
     `publishConfig`) stay skipped. Reading the build manifest *without* the rule would have
     published them - every writer of it was deleting `private` unconditionally.
-  - **Two writers, one rule**: `derivePublishManifest` and `@panates/rman-preset`'s build-time
-    manifest writer. The preset's copy is what `getPlan` reads; rman's replaces it for the duration
-    of the publish. If they ever disagree about `private`, the plan and the artifact do.
+  - **`build/package.json` is not read, and 2.11.1 read it.** That file is whatever the build left
+    there and `applyPlan` writes over it, so it is never what is published. The preset writes one,
+    but from the build `after` step a package can replace - opra's `common` and `client` replace it
+    with their own esbuild step, had 625 and 52 built files and no `package.json`, and the plan
+    answered `error` for both: opra's release stopped after its version had been pushed. The
+    preset's writer applies the same `publishConfig` rule so the two agree, but decides nothing.
   - **`privateBySource` is asked first**: private with no `publishConfig` is skipped before the
     build directory is looked at, or an unbuilt private package errors as unbuilt - opra's examples
     inherit the preset's `publish.npm.directory` and skip their build.
-  - **No build manifest is an `'error'`**: before this, `applyPlan` would create the directory, write
-    the derived manifest and publish a tarball holding nothing else.
+  - **A build directory that is missing or holds only a `package.json` is an `'error'`**
+    (`hasBuildOutput`): before this, `applyPlan` would create the directory, write the derived
+    manifest and publish a tarball holding nothing else.
+  - **`publish`'s own failure line goes to stderr** (`logged`), so a `--json` stdout stays one
+    document; it was on stdout below the plan, which `jq` and `JSON.parse` both refuse.
   - **This whole section is the `npm` target's**, not `publish`'s: a build directory, a generated
     manifest and `"workspace:"` ranges are all facts about npm. `PublishService` in `rman-node` is
     where it lives, reached through `NpmPublishTarget`.

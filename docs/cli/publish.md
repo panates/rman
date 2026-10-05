@@ -363,15 +363,17 @@ neither see nor use:
 `"workspace:"` ranges are resolved in it too, and when the publish finishes the file is put back as
 the build left it - it is a publish-time artifact, not a build output.
 
-**Whether a package is private is decided from the manifest that will be published** - the one in
-its build directory, or its own when it publishes in place - not from its source `package.json`:
+**Whether a package is private is decided from the manifest that will be published** - the one
+above, which `publish` writes over whatever the build left in the directory; a `package.json` your
+build writes there decides nothing. In place, it is the package's own:
 
-- **The build directory has no `package.json`** - nothing has been built: the plan reports an
-  error for that package (`build the package first`). Build before you publish.
+- **The build directory is missing, or holds nothing but a `package.json`** - nothing has been
+  built: the plan reports an error for that package (`build the package first`).
 - **`private: true` in the source with no `publishConfig`** - skipped without looking for a build,
   since it stays private in anything derived from it.
 - **`private: true` in the source *with* a `publishConfig`, publishing from a build directory** -
-  published: the flag guards the source tree, and the build's manifest does not carry it.
+  published: the flag guards the source tree, and the generated manifest does not carry it.
+- **`private: true`, publishing in place** - skipped, whatever `publishConfig` says: npm refuses it.
 
 Generating it here rather than from a build script is what keeps it honest: a script writes it when
 the *build* runs, so bumping the version afterwards (or building before a bump) publishes a manifest

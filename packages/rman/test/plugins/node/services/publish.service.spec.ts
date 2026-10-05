@@ -74,7 +74,8 @@ describe('services/publish', () => {
     });
 
     /**
-     * **`private` is read from the manifest that would be published.** A single-package repository
+     * **`private` is decided from the manifest that would be published** - the one `publish` derives
+     * and writes over the build directory, not whatever the build left there. A single-package repository
      * whose source carries `private: true` as a guard against a stray `npm publish`, publishing
      * `build/`: the plan said `skip - private package` and the release published nothing while
      * version, tag and GitHub release all went through - reported from `postgrejs-kysely`.
@@ -85,7 +86,10 @@ describe('services/publish', () => {
         const dir = tmp();
         writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0', ...source });
         fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ publish: { npm: { directory: 'build' } } }));
-        if (built) writeJson(dir, 'build/package.json', { name: 'pkg-a', version: '1.0.0', ...built });
+        if (built) {
+          writeJson(dir, 'build/package.json', { name: 'pkg-a', version: '1.0.0', ...built });
+          fs.writeFileSync(path.join(dir, 'build/index.js'), '');
+        }
         return dir;
       }
 
@@ -95,19 +99,43 @@ describe('services/publish', () => {
         expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish' });
       });
 
-      it('skips one whose built manifest is private, whatever its source says', async () => {
+      /**
+       * **What the build left in `package.json` decides nothing**, because `publish` writes its own
+       * manifest over it. 2.11.1 read it, and a build that writes none - opra's `common` and `client`
+       * replace the preset's `after` step with their own esbuild step - was an `error` with 625 built
+       * files in the directory, which stopped a release after its version had been pushed.
+       */
+      it("ignores the build's own package.json, which publish writes over", async () => {
         const repo = await createRepository(singlePackage({}, { private: true }));
         const plan = await PublishService.getPlan(repo, {}, registry({}));
-        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'skip', reason: 'private package' });
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish' });
+      });
+
+      it('publishes a build directory that holds output but no package.json', async () => {
+        const dir = singlePackage({ private: true, publishConfig: { access: 'public' } });
+        fs.mkdirSync(path.join(dir, 'build'));
+        fs.writeFileSync(path.join(dir, 'build/index.js'), '');
+        const repo = await createRepository(dir);
+        const plan = await PublishService.getPlan(repo, {}, registry({}));
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish' });
       });
 
       /** Nothing built means nothing to publish - and the derived manifest written at publish time
        *  would otherwise have shipped a tarball holding a `package.json` and nothing else. */
-      it('errors when the build directory holds no package.json', async () => {
+      it('errors when the build directory is missing', async () => {
         const repo = await createRepository(singlePackage({ publishConfig: { access: 'public' } }));
         const plan = await PublishService.getPlan(repo, {}, registry({}));
         expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'error' });
         expect(entryFor(plan, 'pkg-a').reason).toContain('build the package first');
+      });
+
+      /** A `package.json` alone is not a build - `publish` writes that file itself. */
+      it('errors when the build directory holds nothing but a package.json', async () => {
+        const dir = singlePackage({ publishConfig: { access: 'public' } });
+        writeJson(dir, 'build/package.json', { name: 'pkg-a', version: '1.0.0' });
+        const repo = await createRepository(dir);
+        const plan = await PublishService.getPlan(repo, {}, registry({}));
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'error' });
       });
 
       /** Private with no `publishConfig` stays private in anything derived from it, so it is skipped
@@ -475,8 +503,9 @@ describe('services/publish', () => {
     it("respects the package's own package.json publishConfig.directory over --contents", async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0', publishConfig: { directory: 'dist' } });
-      /** What the build leaves - the plan decides from the manifest in the directory published. */
+      /** What a build leaves: output, and here a manifest of its own that `publish` writes over. */
       writeJson(dir, 'dist/package.json', { name: 'pkg-a', version: '1.0.0' });
+      fs.writeFileSync(path.join(dir, 'dist/index.js'), '');
       const repo = await createRepository(dir);
       const { logFile } = stubPublishBin(dir, 'npm');
 
@@ -497,7 +526,8 @@ describe('services/publish', () => {
         JSON.stringify({ '[*]': { publish: { npm: { directory: 'build' } } } }),
       );
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      writeJson(dir, 'packages/a/build/package.json', { name: 'pkg-a', version: '1.0.0' });
+      fs.mkdirSync(path.join(dir, 'packages/a/build'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'packages/a/build/index.js'), '');
       const repo = await createRepository(dir);
       const { logFile } = stubPublishBin(dir, 'npm');
 
@@ -522,7 +552,8 @@ describe('services/publish', () => {
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
       fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { publish: { directory: 'build' } } }));
       writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
-      writeJson(dir, 'packages/a/build/package.json', { name: 'pkg-a', version: '1.0.0' });
+      fs.mkdirSync(path.join(dir, 'packages/a/build'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'packages/a/build/index.js'), '');
       const repo = await createRepository(dir);
       const { logFile } = stubPublishBin(dir, 'npm');
 
@@ -556,6 +587,7 @@ describe('services/publish', () => {
        *  below can be told apart from the derived one. */
       const built = { name: 'pkg-b', version: '1.0.0', written: 'by the build' };
       writeJson(dir, 'packages/b/build/package.json', built);
+      fs.writeFileSync(path.join(dir, 'packages/b/build/index.js'), '');
       const repo = await createRepository(dir);
       // Capture the manifest as npm would see it - the stub runs while it is still on disk.
       const binDir = path.join(dir, 'node_modules', '.bin');
