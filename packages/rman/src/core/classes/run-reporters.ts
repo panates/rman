@@ -1,8 +1,8 @@
 import colors from 'ansi-colors';
-import type { ProgressPanel } from '../../utils/progress-panel.js';
 import { colorsPrintedOutput } from '../../utils/run-bin.js';
 import type { LogEvent, Reporter, ReportOrigin } from './log-sink.js';
 import { LOG_LEVELS, type LogLevel } from './logger.js';
+import type { ProgressPanel } from './progress-panel.js';
 
 /**
  * The screen with no live panel: each line a step prints, led by its package, and one line per step

@@ -5,12 +5,12 @@ import type { RmanApplication } from '../../../../core/application.js';
 import type { LogLevel } from '../../../../core/classes/logger.js';
 import { Logger, resolveRootLogLevel } from '../../../../core/classes/logger.js';
 import type { Package } from '../../../../core/classes/package.js';
+import type { ProgressItem } from '../../../../core/classes/progress-panel.js';
+import { formatDuration, ProgressPanel } from '../../../../core/classes/progress-panel.js';
 import type { Repository } from '../../../../core/classes/repository.js';
 import { exec } from '../../../../utils/exec.js';
 import type { PackageFilterOptions } from '../../../../utils/package-filter.js';
 import { filterPackages } from '../../../../utils/package-filter.js';
-import type { ProgressItem } from '../../../../utils/progress-panel.js';
-import { formatDuration, ProgressPanel } from '../../../../utils/progress-panel.js';
 
 export namespace CiService {
   /**
@@ -70,7 +70,7 @@ export namespace CiService {
    * `"ci"` script, runs that instead. Once every package is clean, installs once at the root
    * with the configured package manager (`npm`/`yarn`/`pnpm`/`bun`).
    *
-   * Uses the same live progress panel as `run`/`build` (see `../utils/progress-panel.ts`) while it
+   * Uses the same live progress panel as `run`/`build` (see `core/classes/progress-panel.ts`) while it
    * runs, falling back to a plain rmdir/clean/run/install log line per step when the panel is off.
    *
    * Unlike `run`/`build`, it does *not* end with a per-package success tally: `ci`'s packages don't

@@ -217,7 +217,7 @@ export {
   ProgressPanel,
   type ProgressStatus,
   type ProgressSummary,
-} from './utils/progress-panel.js';
+} from './core/classes/progress-panel.js';
 /** Version stamping helpers a `Plugin.stampVersion` can delegate to - the quoted-constant
  *  pattern most languages share, and the OCI Dockerfile label (which `version` stamps itself, since
  *  the label's value is by specification the package's version). */

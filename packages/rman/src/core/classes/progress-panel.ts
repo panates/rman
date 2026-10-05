@@ -1,6 +1,6 @@
 import colors from 'ansi-colors';
+import type { StatusRegion, TerminalRegion } from '../../utils/status-region.js';
 import { LiveRegion } from './live-region.js';
-import type { StatusRegion, TerminalRegion } from './status-region.js';
 
 export type ProgressStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped';
 

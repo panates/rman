@@ -1,6 +1,6 @@
 import colors from 'ansi-colors';
 import { expect } from 'expect';
-import { ProgressPanel } from '../../src/utils/progress-panel.js';
+import { ProgressPanel } from '../../src/core/classes/progress-panel.js';
 
 /**
  * **Every CSI sequence, not just the colours.** A redraw also writes cursor moves and erases

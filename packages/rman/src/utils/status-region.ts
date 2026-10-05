@@ -1,5 +1,5 @@
 import colors from 'ansi-colors';
-import { LiveRegion } from './live-region.js';
+import { LiveRegion } from '../core/classes/live-region.js';
 
 /**
  * One line at the bottom of the terminal while a command runs - a spinner, the command's name, the

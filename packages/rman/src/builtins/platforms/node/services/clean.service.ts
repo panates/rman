@@ -5,11 +5,11 @@ import fg from 'fast-glob';
 import type { LogLevel } from '../../../../core/classes/logger.js';
 import { Logger, resolveRootLogLevel } from '../../../../core/classes/logger.js';
 import type { Package } from '../../../../core/classes/package.js';
+import type { ProgressItem } from '../../../../core/classes/progress-panel.js';
+import { ProgressPanel } from '../../../../core/classes/progress-panel.js';
 import type { Repository } from '../../../../core/classes/repository.js';
 import type { PackageFilterOptions } from '../../../../utils/package-filter.js';
 import { filterPackages } from '../../../../utils/package-filter.js';
-import type { ProgressItem } from '../../../../utils/progress-panel.js';
-import { ProgressPanel } from '../../../../utils/progress-panel.js';
 
 export namespace CleanService {
   export interface Options extends PackageFilterOptions {
@@ -57,7 +57,7 @@ export namespace CleanService {
    * Run from inside a single package's own directory, it only cleans that package unless
    * `options.fromRoot` says otherwise (see `Repository.currentPackage`).
    *
-   * Uses the same live progress panel as `run`/`build` (see `../utils/progress-panel.ts`) - unlike
+   * Uses the same live progress panel as `run`/`build` (see `core/classes/progress-panel.ts`) - unlike
    * `ci`, cleaning genuinely is independent per-package work, so the final per-package tally stays.
    */
   export async function clean(repository: Repository, options: Options = {}): Promise<void> {

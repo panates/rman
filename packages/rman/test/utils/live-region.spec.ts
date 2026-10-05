@@ -1,5 +1,5 @@
 import { expect } from 'expect';
-import { LiveRegion } from '../../src/utils/live-region.js';
+import { LiveRegion } from '../../src/core/classes/live-region.js';
 
 // eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-9;]*m/g;

@@ -3,10 +3,10 @@ import colors from 'ansi-colors';
 import { Task } from 'power-tasks';
 import type { RmanApplication } from '../core/application.js';
 import { Logger, type LogLevel, resolveRootLogLevel } from '../core/classes/logger.js';
+import { type ProgressItem, ProgressPanel } from '../core/classes/progress-panel.js';
 import { Service } from '../core/classes/service.js';
 import { exec as execCommand } from '../utils/exec.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
-import { type ProgressItem, ProgressPanel } from '../utils/progress-panel.js';
 
 /**
  * A service class - see `ListService` for the shape and `Service` for the three measured

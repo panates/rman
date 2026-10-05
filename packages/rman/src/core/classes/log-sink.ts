@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { ProgressItem } from '../../utils/progress-panel.js';
 import type { LogLevel } from './logger.js';
+import type { ProgressItem } from './progress-panel.js';
 
 /**
  * One thing that happened during a run, in the order it happened. The JSON form is exactly this

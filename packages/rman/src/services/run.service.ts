@@ -7,13 +7,13 @@ import { Task } from 'power-tasks';
 import type { LogEvent, Reporter, ReportOrigin } from '../core/classes/log-sink.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from '../core/classes/logger.js';
 import type { Package } from '../core/classes/package.js';
+import { type ProgressItem, ProgressPanel } from '../core/classes/progress-panel.js';
 import type { Repository } from '../core/classes/repository.js';
 import { PanelReporter, PlainReporter } from '../core/classes/run-reporters.js';
 import { Service } from '../core/classes/service.js';
 import type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from '../core/interfaces/run-step.js';
 import { exec } from '../utils/exec.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
-import { type ProgressItem, ProgressPanel } from '../utils/progress-panel.js';
 import { runBin } from '../utils/run-bin.js';
 
 /**
