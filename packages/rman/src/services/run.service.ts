@@ -55,7 +55,10 @@ export class RunService extends Service {
       resolveNumber(undefined, repository.rootPackage, script, 'concurrency', os.cpus().length),
     );
     const progress = resolveBool(options.progress, repository.rootPackage, script, 'progress', true);
-    const panel = new ProgressPanel(`RUN ${script}`, !!process.stdout.isTTY && progress);
+    const panel = new ProgressPanel(
+      `RUN ${script}`,
+      !!process.stdout.isTTY && progress && !repository.app.logSink?.json,
+    );
 
     /** Shared across all `if: changed[ = hash]` evaluations so the same reference is only `git`-queried once. */
     const ifStatusCache = new Map<string, Record<string, Repository.PackageStatus>>();
@@ -135,11 +138,11 @@ export class RunService extends Service {
        *  repository the root *is* the one package, and is covered. */
       const definedSomewhere = repository.getPackages().some(pkg => getScriptSteps(pkg, script).length > 0);
       if (definedSomewhere) {
-        console.log(colors.gray(`Nothing to run - every package was filtered out of "${script}".`));
+        this.say('info', `Nothing to run - every package was filtered out of "${script}".`);
         return;
       }
       const message = `No package defines a "${script}" script.`;
-      console.log(colors.red(message));
+      this.say('error', message);
       const err: any = new Error(message);
       err.logged = true;
       throw err;
@@ -173,6 +176,11 @@ export class RunService extends Service {
     after?: RunService.PackagePlan;
   }): Promise<void> {
     const { panel, concurrency, commandName } = options;
+    /** The run's log, when the CLI asked for one - see `LogSink`. Under `--json` the panel is off and
+     *  stdout belongs to its events, so nothing else may print there. */
+    const sink = this.repository.app.logSink;
+    const json = !!sink?.json;
+    const runStarted = Date.now();
 
     /** Set once the aggregate Task exists, so a package's own failure can trigger a manual
      *  abort using *its own* resolved bail setting (see `runSteps` below) - power-tasks' own
@@ -216,20 +224,34 @@ export class RunService extends Service {
             ctx.currentCommand = command ?? stepLabel;
           };
           ctx.stepIndex = i;
-          if (panel.enabled) {
-            const onLine = (line: string) => {
-              ctx.log.push(line);
-              ctx.lastLine = line;
-            };
-            if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine, onCommand);
-            else await exec(step.command, { cwd, stdio: 'pipe', onLine, app: pkg.repository.app });
-          } else {
-            /** Match the classic rman output: raw command output streams straight through
-             *  (unbuffered, unprefixed), followed by our own one-line-per-step summary. */
-            printLegacyExecutingLine(commandName, pkgLabel, step, pkgLogLevel);
-            const stepStart = Date.now();
-            let stepError: Error | undefined;
-            try {
+          const stepStart = Date.now();
+          /** Every step is bracketed in the log - `start` before, `end` after whatever happened -
+           *  and every line it produces is an `output` event, in every mode. See `LogSink`. */
+          sink?.write({ event: 'start', package: pkgLabel, step: step.name, command: stepLabel });
+          const toSink = (line: string, stream: 'stdout' | 'stderr' = 'stdout') =>
+            sink?.write({ event: 'output', package: pkgLabel, stream, line });
+          let stepError: Error | undefined;
+          try {
+            if (panel.enabled || json) {
+              /** **Captured, never printed raw**: into the panel's row, and into the log. Under
+               *  `--json` stdout carries events and nothing else, so a child's lines and a function
+               *  step's own `console` must not reach it - which is exactly what the panel already
+               *  needed, so `--json` takes the panel's path with nothing drawn. */
+              const onLine = (line: string, stream?: 'stdout' | 'stderr') => {
+                ctx.log.push(line);
+                ctx.lastLine = line;
+                toSink(line, stream);
+              };
+              if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine, onCommand);
+              else await exec(step.command, { cwd, stdio: 'pipe', onLine, app: pkg.repository.app });
+            } else {
+              /** Match the classic rman output: raw command output streams straight through
+               *  (unbuffered, unprefixed), followed by our own one-line-per-step summary. */
+              printLegacyExecutingLine(commandName, pkgLabel, step, pkgLogLevel);
+              const print = (line: string, stream?: 'stdout' | 'stderr') => {
+                printChildLine(line, stream);
+                toSink(line, stream);
+              };
               /**
                * **Piped, not inherited - the child never sees a terminal.** Every line is printed by
                * rman instead, to the stream it came from. A child that finds a TTY draws its own live
@@ -247,35 +269,45 @@ export class RunService extends Service {
                *
                * The cost, stated: a child cannot prompt. Nothing in a run step should.
                */
-              if (step.run) await runFunctionStep(step.run, pkg, cwd, undefined, onCommand, printChildLine);
+              if (step.run) await runFunctionStep(step.run, pkg, cwd, undefined, onCommand, print);
               else {
                 await exec(step.command, {
                   cwd,
                   stdio: 'pipe',
-                  onLine: printChildLine,
+                  onLine: print,
                   env: colorsPrintedOutput() ? { FORCE_COLOR: '1' } : undefined,
                   app: pkg.repository.app,
                 });
               }
-            } catch (e) {
-              /**
-               * **Normalized to an `Error`, because a *falsy* throw was indistinguishable from no
-               * failure at all.** This was `let stepError: any` with `if (stepError) throw
-               * stepError` below, so a step doing `throw undefined` - legal JavaScript, and what a
-               * rejected promise carrying nothing gives you - left `stepError` falsy: the step
-               * line printed **success**, nothing was rethrown, and the run exited 0. Found by the
-               * spec written for the message-reporting fix above, which is the only reason it is
-               * not still there. A step that fails while reporting success is the one outcome this
-               * slot exists to rule out.
-               *
-               * Only the panel-off path had it: with the panel on there is no local catch, and the
-               * outer one runs whatever was thrown.
-               */
-              stepError = e instanceof Error ? e : new Error(messageOf(e));
             }
-            printLegacyStepLine(commandName, pkgLabel, step, Date.now() - stepStart, pkgLogLevel, stepError);
-            if (stepError) throw stepError;
+          } catch (e) {
+            /**
+             * **Normalized to an `Error`, because a *falsy* throw was indistinguishable from no
+             * failure at all.** This was `let stepError: any` with `if (stepError) throw
+             * stepError` below, so a step doing `throw undefined` - legal JavaScript, and what a
+             * rejected promise carrying nothing gives you - left `stepError` falsy: the step
+             * line printed **success**, nothing was rethrown, and the run exited 0. Found by the
+             * spec written for the message-reporting fix above, which is the only reason it is
+             * not still there. A step that fails while reporting success is the one outcome this
+             * slot exists to rule out.
+             *
+             * Only the panel-off path had it: with the panel on there is no local catch, and the
+             * outer one runs whatever was thrown.
+             */
+            stepError = e instanceof Error ? e : new Error(messageOf(e));
           }
+          sink?.write({
+            event: 'end',
+            package: pkgLabel,
+            step: step.name,
+            status: stepError ? 'failed' : 'success',
+            ms: Date.now() - stepStart,
+            error: stepError?.message,
+          });
+          if (!panel.enabled && !json) {
+            printLegacyStepLine(commandName, pkgLabel, step, Date.now() - stepStart, pkgLogLevel, stepError);
+          }
+          if (stepError) throw stepError;
         }
         /** Another part is coming, so the package is not done - and it is about to sit at the
          *  barrier, which the row says out loud rather than leaving the last step's command on
@@ -413,7 +445,16 @@ export class RunService extends Service {
       if (muted) statusRegion!.resume();
     }
 
-    const summary = panel.printSummary();
+    /** Under `--json` the recap is an event rather than prose - the same tally, counted the same
+     *  way (`tally` is what `printSummary` counts with), so the two cannot disagree. */
+    const summary = json ? panel.tally() : panel.printSummary();
+    sink?.write({
+      event: 'summary',
+      succeeded: summary.successCount,
+      failed: summary.failedCount,
+      skipped: summary.skippedCount,
+      ms: Date.now() - runStarted,
+    });
 
     /** The tallies, never `rootTask.toPromise()`'s own outcome: with a sibling still in flight at
      *  the moment one package failed, that promise *resolves*, and this command used to exit 0 on a
@@ -460,7 +501,10 @@ export class RunService extends Service {
     const label = options.label ?? 'each';
     const logLevel = options.logLevel ?? resolveRootLogLevel(repository);
     const concurrency = resolveConcurrency(options.parallel, os.cpus().length);
-    const panel = new ProgressPanel(label.toUpperCase(), !!process.stdout.isTTY && options.progress !== false);
+    const panel = new ProgressPanel(
+      label.toUpperCase(),
+      !!process.stdout.isTTY && options.progress !== false && !repository.app.logSink?.json,
+    );
 
     /** Nothing to do is not a failure, and the caller is the one that can tell the two endings
      *  apart - it knows why its list is empty. `check` says so itself and returns. */
@@ -536,6 +580,17 @@ export class RunService extends Service {
     await Promise.allSettled(running);
     if (failed) throw failure;
     return results;
+  }
+
+  /**
+   * A line of rman's own about the run - "nothing to run", "no package defines it" - on the console
+   * as prose, or as a `message` event under `--json`, where stdout belongs to the events. Also in the
+   * log file when there is one.
+   */
+  protected say(level: 'info' | 'error', message: string): void {
+    const sink = this.repository.app.logSink;
+    if (!sink?.json) console.log(level === 'error' ? colors.red(message) : colors.gray(message));
+    sink?.write({ event: 'message', level, message });
   }
 }
 

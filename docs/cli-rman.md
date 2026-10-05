@@ -262,6 +262,45 @@ These apply to every command, before the command name:
 | `--version` | `-v` | Prints the installed `rman` version. |
 | `--log-level <level>` | - | Default verbosity of the per-step log for `run`/`build`/`test`/`ci` (`silent`\|`error`\|`info`\|`verbose`). Default `info`, or `.rmanrc "logLevel"`. Per-package overridable via `.rmanrc run.<script>.logLevel`. Only affects the *classic* one-line-per-step log - it has no effect on the live progress panel's own output. |
 | `--config` | - | Print what this command would run with, and **run nothing**. See below. |
+| `--json` | - | Write the run's log to stdout as JSON Lines and nothing else - no panel, no status line, no prose. A command with its own JSON result (`list`, `version`, `publish`, `config`, `info`, `github-release`) prints that result instead, unchanged. See below. |
+| `--log-file <path>` | - | Also write the run's log to this file - JSON Lines under `--json`, text otherwise. Relative to where rman was invoked. See below. |
+
+### The run log: `--json` and `--log-file`
+
+A run's log is one event per step start, per line a step printed, per step end, and one summary:
+
+```bash
+$ rman build --json
+{"time":"…","event":"start","package":"pkg-a","step":"exec","command":"tsc -b"}
+{"time":"…","event":"output","package":"pkg-a","stream":"stdout","line":"…"}
+{"time":"…","event":"end","package":"pkg-a","step":"exec","status":"success","ms":874}
+{"time":"…","event":"summary","succeeded":1,"failed":0,"skipped":0,"ms":912}
+```
+
+| `event` | Fields |
+| --- | --- |
+| `start` | `package`, `step` (`before`/`exec`/`after`, or a command's own step name), `command` |
+| `output` | `package`, `stream` (`stdout`/`stderr`), `line` |
+| `end` | `package`, `step`, `status` (`success`/`failed`), `ms`, and `error` on a failure |
+| `summary` | `succeeded`, `failed`, `skipped`, `ms` |
+| `message` | `level` (`info`/`error`), `message` - e.g. "nothing to run" |
+
+Without `--json`, `--log-file` writes the same events as text, and the screen is unchanged:
+
+```
+2026-10-05T07:09:30.771Z [pkg-a] ▶ exec | tsc -b
+2026-10-05T07:09:31.063Z [pkg-a] src/index.ts(3,1): error TS2304: …
+2026-10-05T07:09:31.383Z [pkg-a] ✖ exec failed (612 ms)
+2026-10-05T07:09:31.384Z 0 succeeded, 1 failed (640 ms)
+```
+
+- **Escape codes are removed** from every line, in both forms.
+- **The file is replaced** on each run, and created only once something is written.
+- **Which commands write a log**: those whose steps run through rman's scheduler - `run`, `build`,
+  `test`, and a command using `forEachPackage`. Any other command given `--json` or `--log-file`
+  says so on stderr and runs as usual.
+- **A step that runs another `rman`** logs that child's own output as `output` lines; the child is
+  not told about `--json`.
 
 ### The status line
 
@@ -280,7 +319,8 @@ Four cases are silent, and each is about not corrupting something:
 
 - **A command whose output *is* its answer** - `config`, `list`, `info`, `diff`, `changelog`.
   `rman config` writes a loadable YAML document, and a line above it would make it unparseable.
-- **`--json`**, whichever command produced it, so `rman version --json | jq` never receives prose.
+- **`--json`**, so `rman version --json | jq` never receives prose and `rman build --json` writes
+  nothing but events.
 - **`--config`**, for the same reason.
 - **`--log-level silent`**.
 

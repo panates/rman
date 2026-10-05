@@ -31,6 +31,9 @@ export function toYargsCommand(
      *  a field nothing ever sees - measured, `rman config` printed a status line above its own YAML
      *  document while declaring `printsDocument: true`. */
     printsDocument: meta.printsDocument,
+    /** A command declaring `--json` itself prints its result that way, and owns the flag: under the
+     *  global `--json` its stdout is that result, never a stream of log events. */
+    ownsJson: !!meta.config && 'json' in meta.config,
     builder: (cmd: Argv) => {
       if (meta.parserConfiguration) cmd.parserConfiguration(meta.parserConfiguration);
       for (const [name, spec] of Object.entries(meta.positionals ?? {})) cmd.positional(name, spec);

@@ -126,6 +126,10 @@ declare module 'yargs' {
      *  `CommandMetadata.printsDocument`. Here as well as there because `cli.ts` reads it off the
      *  *registration*, which is the only shape that reaches `program.command`. */
     printsDocument?: boolean;
+    /** Whether the command declares its own `--json`, printing its *result* as JSON - in which case
+     *  the global `--json` is that, and its log is not written to stdout. Carried from the
+     *  declaration by `toYargsCommand`, for the reason `printsDocument` is. */
+    ownsJson?: boolean;
   }
 }
 

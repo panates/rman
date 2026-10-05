@@ -8,6 +8,7 @@ import { ListService } from '../services/list.service.js';
 import { RunService } from '../services/run.service.js';
 import { VersionService } from '../services/version.service.js';
 import type { VersionPlanService } from '../services/version-plan.service.js';
+import type { LogSink } from '../utils/log-sink.js';
 import { Logger, type LogLevel } from '../utils/logger.js';
 import type { StatusRegion } from '../utils/status-region.js';
 import { Registry } from './classes/registry.js';
@@ -57,6 +58,13 @@ export class RmanApplication {
    * state, and a spec that builds its own application cannot be affected by one that built
    * another. The root-hook era this repository removed is what that rule is about. */
   statusRegion?: StatusRegion;
+
+  /**
+   * Where the run's log goes besides the screen - the global `--json` and `--log-file`. Set and
+   * closed by `cli.ts` around each command, like `statusRegion`; absent for a caller that did not
+   * come through the CLI, which writes no log.
+   */
+  logSink?: LogSink;
 
   /**
    * The **plugins** themselves, in declaration order - what a config named, before the platforms

@@ -52,6 +52,8 @@ rman run build --bail=false           # keep going even if one package's build f
 rman run build --scope pkg-a --deps   # pkg-a plus everything it depends on
 rman run build --from-root            # whole repo, even from inside one package's directory
 rman run build --log-level verbose    # also print each step's "executing" line before it runs
+rman run build --json                 # the run's log as JSON Lines on stdout, and nothing else
+rman run build --log-file build.log   # also keep the log in a file (see ../cli-rman.md#the-run-log---json-and---log-file)
 ```
 
 A run with nothing in it ends two different ways, and the difference matters to a CI gate:

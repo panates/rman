@@ -26,6 +26,7 @@ import {
 import { checkCustomCommand } from './core/plugin-loader.js';
 import { commandRegistry, type RmanConfig } from './interfaces/rman-config.interface.js';
 import { colorYaml } from './utils/color-yaml.js';
+import { LogSink } from './utils/log-sink.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/logger.js';
 import { filterPackages, readFromRootOption, readPackageFilterOptions } from './utils/package-filter.js';
 import { printableConfig, withoutContributions } from './utils/printable-config.js';
@@ -80,6 +81,22 @@ export async function runCli(options?: {
           'on, and the .rmanrc keys it reads - and run nothing',
         type: 'boolean',
         default: false,
+      })
+      /** **Global, not per command** - the format of what rman writes, the way `--log-level` is its
+       *  volume. A command that declares its own `--json` (`list`, `version`, `publish`, ...) keeps
+       *  that declaration and its meaning: its *result* as JSON, which the shared release workflow
+       *  parses. See `LogSink`. */
+      .option('json', {
+        describe:
+          'Write the log as JSON Lines - one event per line on stdout, and no panel, spinner or prose. ' +
+          'A command that prints a result (list, version, publish, ...) prints that result as JSON',
+        type: 'boolean',
+      })
+      .option('log-file', {
+        describe:
+          'Also write the log to this file - JSON Lines under --json, plain text lines otherwise. ' +
+          'Overwritten each run; relative to the current directory',
+        type: 'string',
       })
       .showHelpOnFail(false, 'Run with --help for available options')
       .fail((msg: any, err: any) => {
@@ -412,39 +429,86 @@ function interceptStatusLines(repository: Repository, program: Argv): void {
     return register({
       ...spec,
       handler: async (args: any) => {
-        /** The flag when it was given, the repository's own `logLevel` otherwise - the same
-         *  precedence every other reader of it applies. `argvLogLevel` is not used here: that one
-         *  exists for diagnostics emitted *before* parsing, and by now yargs has the answer. */
-        const level = args.logLevel ?? repository.config?.logLevel;
-        if (spec.printsDocument || args.json || args.config || level === 'silent') return run(args);
-
         const name = commandName(spec.command ?? '');
-        /** Held on the application so `runBin` can find it through the `app` it already receives -
-         *  see `RmanApplication.statusRegion` for why that rather than ambient state.
-         *
-         *  **Not drawn under `--no-progress`**, which asks for *no* live output rather than "no
-         *  panel": the spinner is progress too, and it would redraw over the plain lines such a run
-         *  prints. Its result line still prints, as it does without a TTY. Children are not told -
-         *  they are run without a terminal instead, see `RunService`'s panel-off path. */
-        const region = new StatusRegion(name, repository.name ?? '', args.progress === false ? false : undefined);
-        repository.app.statusRegion = region;
-        region.start();
+        /** Built for every command, used by whichever writes a log - see `LogSink`. A command owning
+         *  `--json` prints its result as JSON, so the log must not be written to stdout beside it. */
+        const sink = new LogSink({ json: !!args.json && !spec.ownsJson, file: args.logFile, cwd: repository.cwd });
+        repository.app.logSink = sink;
         try {
-          const result = await run(args);
-          region.stop('ok');
-          return result;
-        } catch (e) {
-          /** **The bracket is closed even on a failure.** A spinner that simply stops, leaving its
-           *  last frame on screen, reads as a hang - which is the thing this exists to prevent. The
-           *  error itself is left to the caller, which already prints it. */
-          region.stop('fail');
-          throw e;
+          return await runWithStatusLine(args, name);
         } finally {
-          repository.app.statusRegion = undefined;
+          sink.close();
+          repository.app.logSink = undefined;
+          warnUnhonoured(name, args, sink, !!spec.ownsJson);
         }
       },
     });
+
+    async function runWithStatusLine(args: any, name: string) {
+      /** The flag when it was given, the repository's own `logLevel` otherwise - the same
+       *  precedence every other reader of it applies. `argvLogLevel` is not used here: that one
+       *  exists for diagnostics emitted *before* parsing, and by now yargs has the answer. */
+      const level = args.logLevel ?? repository.config?.logLevel;
+      if (spec.printsDocument || args.json || args.config || level === 'silent') return run(args);
+
+      /** Held on the application so `runBin` can find it through the `app` it already receives -
+       *  see `RmanApplication.statusRegion` for why that rather than ambient state.
+       *
+       *  **Not drawn under `--no-progress`**, which asks for *no* live output rather than "no
+       *  panel": the spinner is progress too, and it would redraw over the plain lines such a run
+       *  prints. Its result line still prints, as it does without a TTY. Children are not told -
+       *  they are run without a terminal instead, see `RunService`'s panel-off path. */
+      const region = new StatusRegion(name, repository.name ?? '', args.progress === false ? false : undefined);
+      repository.app.statusRegion = region;
+      region.start();
+      try {
+        const result = await run(args);
+        region.stop('ok');
+        return result;
+      } catch (e) {
+        /** **The bracket is closed even on a failure.** A spinner that simply stops, leaving its
+         *  last frame on screen, reads as a hang - which is the thing this exists to prevent. The
+         *  error itself is left to the caller, which already prints it. */
+        region.stop('fail');
+        throw e;
+      } finally {
+        repository.app.statusRegion = undefined;
+      }
+    }
   };
+}
+
+/**
+ * One line on stderr for a `--json` or `--log-file` that the command did not honour - so a flag that
+ * does nothing does not pass for one that worked.
+ *
+ * **Detected, not listed.** Whether a command writes a log is whatever went through the sink, so a
+ * command that starts writing one stops being warned about with no list to update - the rule
+ * `builtInNames` follows. On stderr because under `--json` stdout belongs to the events.
+ */
+/* **Why warn rather than refuse.** Both flags are global now, so yargs accepts them on every command,
+ * and `rman clean --json` - which `.strict()` used to reject as an unknown argument - would otherwise
+ * be quietly ignored. Refusing would turn a log option into a reason for a release step to fail. The
+ * commands that write a log so far are the ones whose steps run through `RunService` - `run`,
+ * `build`, `test`, and a command using `forEachPackage`. */
+function warnUnhonoured(
+  name: string,
+  args: { json?: boolean; logFile?: string; config?: boolean },
+  sink: LogSink,
+  ownsJson: boolean,
+) {
+  /** `--config` runs nothing by design, so nothing written is the right outcome there. */
+  if (sink.used || args.config) return;
+  if (args.logFile) {
+    process.stderr.write(
+      colors.yellow(`--log-file: "rman ${name}" does not write a log yet, so ${args.logFile} was not created.\n`),
+    );
+  }
+  if (args.json && !ownsJson) {
+    process.stderr.write(
+      colors.yellow(`--json: "rman ${name}" has no JSON output yet; what it printed is unchanged.\n`),
+    );
+  }
 }
 
 /**

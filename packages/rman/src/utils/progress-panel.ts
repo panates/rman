@@ -274,19 +274,34 @@ export class ProgressPanel implements TerminalRegion {
    * per-item recap lines are only printed when the live panel was actually on - with it off, the
    * caller's own plain logging already showed each item's outcome as it happened.
    */
-  printSummary(): ProgressSummary {
+  /**
+   * The tally `printSummary` reports, without printing anything - for a run whose output is not
+   * prose (`--json`). Settles every still-pending item as skipped, exactly as `printSummary` does, so
+   * the two can never count differently.
+   */
+  tally(): ProgressSummary {
     let successCount = 0;
     let failedCount = 0;
     let skippedCount = 0;
     for (const item of this.items.values()) {
       if (item.status === 'pending') item.status = 'skipped';
+      if (item.status === 'success') successCount++;
+      else if (item.status === 'failed') failedCount++;
+      else skippedCount++;
+    }
+    return { successCount, failedCount, skippedCount };
+  }
+
+  printSummary(): ProgressSummary {
+    /** Counted by `tally`, which also settles the pending items - so a `--json` run, which asks
+     *  `tally` alone, can never count differently from one that prints. */
+    const { successCount, failedCount, skippedCount } = this.tally();
+    for (const item of this.items.values()) {
       const duration =
         item.startedAt && item.finishedAt ? colors.gray(formatDuration(item.finishedAt - item.startedAt)) : '';
       if (item.status === 'success') {
-        successCount++;
         if (this.live.enabled) console.log(colors.green('✓'), item.name, duration);
       } else if (item.status === 'failed') {
-        failedCount++;
         if (this.live.enabled) {
           console.log(colors.red.bold('X'), item.name, duration);
           /* **The replayed log is printed as it was captured, never painted.** It holds the output
@@ -305,9 +320,8 @@ export class ProgressPanel implements TerminalRegion {
            * error. */
           if (item.log.length) console.log(item.log.join('\n'));
         }
-      } else {
-        skippedCount++;
-        if (this.live.enabled) console.log(colors.gray('○'), item.name, colors.gray('skipped'));
+      } else if (this.live.enabled) {
+        console.log(colors.gray('○'), item.name, colors.gray('skipped'));
       }
     }
     const totalElapsed = formatDuration(Date.now() - this.startedAt);

@@ -1011,6 +1011,36 @@ to whoever has the better answer for it.
   `describe` is skipped before it can shadow anything, so the refusal control was not controlling.
   A third case reads the registry and pins that **exactly** `build` and `test` carry the flag.
 
+## The run log: global `--json` and `--log-file`
+
+[`utils/log-sink.ts`](packages/rman/src/utils/log-sink.ts), built per invocation in `cli.ts`'s
+`interceptStatusLines` and held on `RmanApplication.logSink`. `--json` makes stdout JSON Lines
+events (`start`/`output`/`end`/`summary`/`message`) and nothing else; `--log-file` writes the same
+log to a file, JSON under `--json` and text otherwise.
+
+- **Global, not per command - the user's call, and the reason is the subject.** It decides the
+  *console's format*, which is a property of the invocation; a per-command `--json` would be a
+  second place to state it for every command that grows a log.
+- **A log is not an answer, and the six commands with their own `--json` keep theirs**
+  (`list`, `version`, `publish`, `config`, `info`, `github-release`, detected as `ownsJson` from
+  `'json' in meta.config` and carried through `toYargsCommand` like `printsDocument`). The shared
+  release workflow `jq`s `rman publish --dry-run --json` and `rman list --json`; their stdout must
+  stay one document. **The `!spec.ownsJson` guard is not reachable today** - none of those writes
+  to the log - so `cli-log.spec.ts` pins the contract and its control stays green (measured).
+- **Only `RunService.schedule` writes events**, so `run`/`build`/`test` and any `forEachPackage`
+  command. Everything else given either flag warns on stderr (`warnUnhonoured`), detected from
+  `sink.used` rather than listed. Warn, not refuse: a log option must not be the reason a release
+  step fails. Not under `--config`, which runs nothing on purpose.
+- **`--json` takes the panel's capture path with nothing drawn** (`panel.enabled || json`). The
+  plain path prints a child's lines to stdout, which would put prose between the events - the
+  negative control for that guard turns three cases red.
+- **Under `--json` the panel is constructed disabled and the recap is `panel.tally()`**, the same
+  count `printSummary` prints, so the summary event and the prose recap cannot disagree.
+- **A nested `rman` in a step is not told**, so its own status line and recap arrive as `output`
+  events. Measured in opra (`before: rman check`): correct, and visible in the log.
+- **Measured in opra under `script`**: 444 lines, every one parses, no escape codes, and the file is
+  byte-identical to stdout.
+
 ## The status line around every command
 
 [`utils/status-region.ts`](packages/rman/src/utils/status-region.ts), installed by
