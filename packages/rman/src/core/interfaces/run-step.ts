@@ -100,10 +100,10 @@ export interface RunStepObject {
    * later `topo: false` a true statement about the step that changes nothing about when it runs -
    * worth writing as intent, not a lever.
    *
-   * **A script whose steps mention `topo` at all is taken as the whole statement**: the first
-   * `true` is the barrier, and if no step says `true` there is no wait. A script where no step
-   * mentions it falls back to `run.<script>.topo` - on by default - waiting before its first step,
-   * which is where the wait has always been. `run.<script>.topo: false` and `--no-topo` still turn
+   * **The barrier is the first step marked `true`; with none, the first unmarked step**, which
+   * takes `run.<script>.topo` - on by default. A `false` frees its own step only, so a script waits
+   * nowhere only when every step says `false`. A package's own script replacing a marked `exec`
+   * (an npm `build`) keeps that mark. `run.<script>.topo: false` and `--no-topo` still turn
    * ordering off outright.
    *
    * Only in `run.<script>`: a `version` hook runs for one package around its own version write,

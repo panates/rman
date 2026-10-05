@@ -353,16 +353,17 @@ export class RunService extends Service {
       /**
        * **Where this package starts waiting for its dependencies**, or `-1` for not at all.
        *
-       * A script whose steps mention `topo` at all is taken as the whole statement: the first step
-       * saying `true` is where the package blocks, and a script where every step says `false` does
-       * not wait. Only where **no** step mentions it does `run.<script>.topo` decide, and then the
-       * wait is before the first step - where it has always been.
+       * The first step marked `true`. With none, the first step that says nothing - an unmarked
+       * step takes `run.<script>.topo`, which got here only by being on. Only a script whose every
+       * step says `false` does not wait.
        *
-       * The two halves cannot be collapsed into one `findIndex`: "no step marked true" and "no step
-       * marked at all" are different answers (no wait against the old wait at step 0), and reading
-       * `-1` as either one alone gets the other wrong.
+       * A step marked `false` frees itself and nothing else. It used to free the whole script: any
+       * mention of `topo` was read as the complete statement, so one `after: { topo: false }` from
+       * a shared preset left every unmarked step beside it - a repository's own `before`, a
+       * package's own `build` script - running with no wait at all. Measured on opra, where
+       * `@opra/angular`'s `ng build` started while `@opra/client` was still cleaning.
        */
-      const barrier = !plan.topo ? -1 : steps.some(s => s.topo !== undefined) ? steps.findIndex(s => s.topo) : 0;
+      const barrier = !plan.topo ? -1 : this.barrierOf(steps);
 
       /**
        * **Split only when the wait is in the middle of the package and there is something to wait
@@ -580,6 +581,19 @@ export class RunService extends Service {
     await Promise.allSettled(running);
     if (failed) throw failure;
     return results;
+  }
+
+  /**
+   * The index of the step a package waits for its dependencies before, or `-1` when every step is
+   * marked `topo: false`: the first step marked `true`, else the first unmarked one.
+   */
+  protected barrierOf(steps: readonly { topo?: boolean }[]): number {
+    /* No steps still waits, as it always did: dependents wait on this package's task, so one that
+     * skipped the wait would let them past its own dependencies. */
+    if (!steps.length) return 0;
+    const marked = steps.findIndex(s => s.topo === true);
+    if (marked >= 0) return marked;
+    return steps.findIndex(s => s.topo === undefined);
   }
 
   /**
@@ -1341,8 +1355,28 @@ function slotValues(
   override: boolean,
 ): RunStepValue[] {
   if (override) return configured.length ? configured : own;
-  if (slot === 'exec') return own.length ? own : configured;
+  if (slot === 'exec') return own.length ? withTopoOf(configured, own) : configured;
   return slot === 'before' ? [...configured, ...own] : [...own, ...configured];
+}
+
+/**
+ * The package's own `exec` steps, carrying the `topo` mark of the configured `exec` they replace.
+ */
+/* **The command is the package's; the ordering is the config's.** A `package.json` script cannot
+ * say `topo` at all, so replacing the configured `exec: { topo: true, command }` with it dropped the
+ * mark - and a shared preset marks `exec` precisely so the build waits for its dependencies.
+ * Measured on opra: `@opra/angular`'s own `"build": "ng build"` started while `@opra/client`, a
+ * peer it builds against, was still cleaning. Every package with its own build script had the same
+ * hole; angular is where a missing dependency output fails loudly. A `true` anywhere in the
+ * replaced slot wins, since a missed wait is the failure that does not look like one. */
+function withTopoOf(configured: RunStepValue[], own: RunStepValue[]): RunStepValue[] {
+  const marks = configured.map(v => (typeof v === 'object' ? v.topo : undefined)).filter(t => t !== undefined);
+  if (!marks.length) return own;
+  const topo = marks.includes(true);
+  return own.map(v => {
+    if (typeof v === 'object') return v.topo === undefined ? { ...v, topo } : v;
+    return { command: v, topo };
+  });
 }
 
 /**

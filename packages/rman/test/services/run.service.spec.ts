@@ -329,12 +329,9 @@ describe('run: Run.runScript() integration', () => {
 
       /**
        * **A script whose steps all say `topo: false` does not wait at all**, although the script's
-       * own `topo` is on by default. The steps are read as the whole statement once any of them
-       * mentions the key - the alternative is `run.<script>.topo` overruling every line the author
-       * wrote, which is the shape of a setting that cannot be turned off from where it is used.
-       *
-       * This is the half a single `findIndex` cannot express: "no step said true" and "no step said
-       * anything" are different answers.
+       * own `topo` is on by default - the alternative is `run.<script>.topo` overruling every line
+       * the author wrote, which is the shape of a setting that cannot be turned off from where it is
+       * used.
        */
       it('does not wait at all when every step says topo: false', async () => {
         const dir = mkTmp();
@@ -362,6 +359,80 @@ describe('run: Run.runScript() integration', () => {
         /** Both reached the rendezvous, so neither waited for the other - a serialized pair would
          *  have deadlocked until the step's own bound and stamped nothing. */
         expect(order.filter(l => l.endsWith(' lint')).sort()).toEqual(['pkg-a lint', 'pkg-b lint']);
+      });
+      /**
+       * **A `false` frees its own step and nothing else.** One `after: { topo: false }` from a shared
+       * preset used to be read as the whole script's statement, so the unmarked steps beside it ran
+       * with no wait at all - measured on opra, where `@opra/angular` built while `@opra/client` was
+       * still cleaning. An unmarked step takes `run.<script>.topo`, so the wait is before it.
+       */
+      it('waits before the first unmarked step when no step says true', async () => {
+        const dir = mkTmp();
+        dirs.push(dir);
+        const log = path.join(dir, 'order.log');
+        writeFixture(
+          dir,
+          { 'pkg-a': {}, 'pkg-b': { dependencies: { 'pkg-a': '1.0.0' } } },
+          {
+            rmanrc: {
+              '[*]': {
+                run: {
+                  build: {
+                    before: stamp(log, 'lint'),
+                    exec: stamp(log, 'tsc'),
+                    after: { topo: false, command: stamp(log, 'post') },
+                  },
+                },
+              },
+            },
+          },
+        );
+        await createRepository(dir);
+        await captureLogs(() => service('run').runScript('build', { progress: false }));
+        const order = fs.readFileSync(log, 'utf-8').trim().split('\n');
+        expect(order.indexOf('pkg-a post')).toBeLessThan(order.indexOf('pkg-b lint'));
+      });
+
+      /**
+       * **A package's own script keeps the `topo` of the configured `exec` it replaces.** A
+       * `package.json` script cannot say `topo`, and replacing `exec: { topo: true, ... }` with one
+       * dropped the mark - opra's angular again, whose `"build": "ng build"` replaced the preset's.
+       * The `before` is unmarked here and is a rendezvous: if the mark were lost the barrier would
+       * fall back to the first unmarked step, `pkg-b` would wait before it, and the pair would never
+       * meet - a missing line rather than a flake.
+       */
+      it("a package's own exec script keeps the configured exec's topo mark", async () => {
+        const dir = mkTmp();
+        dirs.push(dir);
+        const log = path.join(dir, 'order.log');
+        writeFixture(
+          dir,
+          {
+            'pkg-a': {},
+            'pkg-b': {
+              dependencies: { 'pkg-a': '1.0.0' },
+              scripts: { build: `echo "pkg-b own" >> ${log}` },
+            },
+          },
+          {
+            rmanrc: {
+              '[*]': {
+                run: {
+                  build: {
+                    before: rendezvous(log, dir, 'lint', 2),
+                    exec: { topo: true, command: stamp(log, 'tsc') },
+                    after: { topo: false, command: stamp(log, 'post') },
+                  },
+                },
+              },
+            },
+          },
+        );
+        await createRepository(dir);
+        await captureLogs(() => service('run').runScript('build', { progress: false }));
+        const order = fs.readFileSync(log, 'utf-8').trim().split('\n');
+        expect(order.filter(l => l.endsWith(' lint')).sort()).toEqual(['pkg-a lint', 'pkg-b lint']);
+        expect(order.indexOf('pkg-a post')).toBeLessThan(order.indexOf('pkg-b own'));
       });
     });
 

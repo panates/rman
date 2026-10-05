@@ -1305,11 +1305,13 @@ and their costs:
 - **So the first `topo: true` is where the package actually blocks.** Everything after it has its
   dependencies behind it already, which makes a later `topo: false` a true statement about the step
   that changes nothing about when it runs - worth writing as intent, not a lever.
-- **A script whose steps mention `topo` at all is taken as the whole statement**: the first `true`
-  is the barrier, and if no step says `true` there is no wait. The alternative is
-  `run.<script>.topo` - on by default - overruling every line the author wrote.
-- **A script where no step mentions it is unchanged**: the wait is before the first step, where it
-  has always been. `run.<script>.topo: false` and `--no-topo` still turn ordering off outright.
+- **With no `true`, the wait is before the first unmarked step.** An unmarked step takes
+  `run.<script>.topo`, on by default; a `false` frees its own step and nothing else. So a script
+  where no step mentions `topo` waits before its first step, as it always has, and one waits
+  nowhere only when **every** step says `false`.
+- **A package's own script keeps the mark of the `exec` it replaces.** A `package.json` `build`
+  cannot say `topo`, so it inherits the configured `exec: { topo: true, ... }` it takes the place
+  of. `run.<script>.topo: false` and `--no-topo` still turn ordering off outright.
 - **`run.<script>` only.** A `version` hook runs for one package around its own version write, with
   no package graph to wait on, and the key is refused there instead of quietly doing nothing.
 
