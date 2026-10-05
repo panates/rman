@@ -95,7 +95,6 @@ export class NpmPublishTarget implements PublishTarget {
       packageManager: ctx.args.packageManager,
       access: ctx.args.access,
       otp: ctx.args.otp,
-      contents: ctx.args.contents,
     });
   }
 
@@ -115,6 +114,9 @@ export class NpmPublishTarget implements PublishTarget {
        *  flag was not given, so each package's own `publish.npm.staged` still decides - `false`
        *  here would mean `--no-staged` and silently overrule the config. */
       staged: ctx.args.staged as boolean | undefined,
+      /** The plan decides from the manifest in the directory being published, so it has to know
+       *  which directory that is. */
+      contents: ctx.args.contents as string | undefined,
     };
   }
 }

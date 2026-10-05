@@ -357,11 +357,21 @@ neither see nor use:
 | --- | --- |
 | `devDependencies` | npm never installs a dependency's own - pure noise. |
 | `scripts`, except `preinstall`/`install`/`postinstall` | Those three are the only ones a consumer's install runs. The rest never reach them (`prepare` runs for a *git* dependency, which builds from the repository, not from this tarball). |
-| `private` | `publish` refuses a private package outright, so the flag can only be wrong in a manifest being published. |
+| `private` | **Only when the package declares a `publishConfig`.** A package set up to be published that is also `private` is guarding its source tree against a stray `npm publish`; one with no `publishConfig` means it, and keeps the flag. |
 | `publishConfig.directory` | It pointed *here*; kept, it would point one level deeper again. |
 
-`"workspace:"` ranges are resolved in it too, and the file is removed again when the publish
-finishes - it is a publish-time artifact, not a build output.
+`"workspace:"` ranges are resolved in it too, and when the publish finishes the file is put back as
+the build left it - it is a publish-time artifact, not a build output.
+
+**Whether a package is private is decided from the manifest that will be published** - the one in
+its build directory, or its own when it publishes in place - not from its source `package.json`:
+
+- **The build directory has no `package.json`** - nothing has been built: the plan reports an
+  error for that package (`build the package first`). Build before you publish.
+- **`private: true` in the source with no `publishConfig`** - skipped without looking for a build,
+  since it stays private in anything derived from it.
+- **`private: true` in the source *with* a `publishConfig`, publishing from a build directory** -
+  published: the flag guards the source tree, and the build's manifest does not carry it.
 
 Generating it here rather than from a build script is what keeps it honest: a script writes it when
 the *build* runs, so bumping the version afterwards (or building before a bump) publishes a manifest
