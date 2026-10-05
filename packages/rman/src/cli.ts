@@ -420,8 +420,13 @@ function interceptStatusLines(repository: Repository, program: Argv): void {
 
         const name = commandName(spec.command ?? '');
         /** Held on the application so `runBin` can find it through the `app` it already receives -
-         *  see `RmanApplication.statusRegion` for why that rather than ambient state. */
-        const region = new StatusRegion(name, repository.name ?? '');
+         *  see `RmanApplication.statusRegion` for why that rather than ambient state.
+         *
+         *  **Not drawn under `--no-progress`**, which asks for *no* live output rather than "no
+         *  panel": the spinner is progress too, and it would redraw over the plain lines such a run
+         *  prints. Its result line still prints, as it does without a TTY. Children are not told -
+         *  they are run without a terminal instead, see `RunService`'s panel-off path. */
+        const region = new StatusRegion(name, repository.name ?? '', args.progress === false ? false : undefined);
         repository.app.statusRegion = region;
         region.start();
         try {

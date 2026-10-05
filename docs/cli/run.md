@@ -21,7 +21,7 @@ options, in addition to:
 | `--parallel <n>` | - | boolean \| number | CPU count | Max packages built at once: omit/`true` for CPU count (or `.rmanrc run.<script>.concurrency`), a number for that many, `false` to run serially (one at a time). Packages always build in dependency order regardless. |
 | `--bail` | - | boolean | `true` | Stop the whole batch on the first failure. Overridable per-package via `.rmanrc run.<script>.bail` - see the precedence note below. |
 | `--topo` | - | boolean | `true` | Respect the package dependency graph: a package waits for its dependencies and is skipped if one fails. Set `false` for independent scripts (`lint`, `test`, ...) - order becomes alphabetical and one package's failure never skips another. Overridable per-package via `.rmanrc run.<script>.topo`. |
-| `--progress` | - | boolean | `true` | Show the live progress panel (auto-disabled when stdout isn't a TTY). Overridable via `.rmanrc run.<script>.progress`. |
+| `--progress` | - | boolean | `true` | Show the live progress panel (auto-disabled when stdout isn't a TTY). Overridable via `.rmanrc run.<script>.progress`. With `--no-progress` nothing is drawn live - no panel and no spinner - and each step's output is printed as plain lines: see [With no progress panel](#with-no-progress-panel). |
 | `--changed` | `-c` | boolean | `false` | Only run in packages that have changed since the last publish. |
 | `--changed-since <hash>` | - | string | - | Only run in packages that have changed since the given git commit/hash. Falls back to `.rmanrc run.<script>.changedSince` (root-level) when omitted. |
 | `--from-root` | `-r` | boolean | `false` | Run across the whole repository even when standing inside one package's own directory (which otherwise scopes the run to just that package, dropping the root pre/post hooks). No effect elsewhere. |
@@ -164,6 +164,24 @@ silently ran nothing while the run reported success is the failure this refusal 
 Measured on two packages where `pkg-b` depends on `pkg-a`, with a slow first step: marked, both
 packages' first step runs at once and `pkg-b`'s codegen starts after `pkg-a` finishes; unmarked, the
 whole of `pkg-b` waits (227ms against 451ms for the same work).
+
+### With no progress panel
+
+`--no-progress` (or `.rmanrc run.<script>.progress: false`) means **no live output at all** - no
+panel and no spinner. Each step's output is printed as plain lines, followed by a one-line result per
+step.
+
+**Every step runs without a terminal**: rman pipes the child and prints its lines itself, stdout to
+stdout and stderr to stderr. That is what keeps a step's own tools quiet. A build is mostly other
+CLIs - `rman check`, `eslint`, `tsc` - and a CLI that finds a terminal draws its own progress; with
+none, every well-behaved one prints plain lines instead. A nested `rman` behaves the same way, with
+nothing having to tell it about `--no-progress`.
+
+- **Colour is kept** where rman's own output is a terminal: the child is given `FORCE_COLOR=1`, which
+  turns colour back on without turning live output back on. Not when stdout is redirected, and not
+  under `NO_COLOR`.
+- **A step cannot prompt.** Nothing in a run step should; one that does will wait for input it
+  cannot receive.
 
 ### Conditional execution (`if`)
 

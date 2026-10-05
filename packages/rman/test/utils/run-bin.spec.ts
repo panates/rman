@@ -170,6 +170,33 @@ describe('utils/run-bin', () => {
         output: expect.stringContaining('BOOM'),
       });
     });
+
+    /**
+     * **A line arriving in two pieces is still one line.** A `data` event ends wherever the pipe's
+     * buffer did, not at a newline, and each chunk used to be split on its own - so a line written in
+     * two parts came out as two lines. Harmless while the only reader was a panel row showing the
+     * last line; wrong once a run prints every line, where it put a newline in the middle of the
+     * child's output. The child writes half a line, waits, then the rest - two `data` events.
+     */
+    it('joins a line written in two pieces, and passes on one with no newline at the end', async () => {
+      const lines: string[] = [];
+      await runBin(
+        'node',
+        ['-e', "process.stdout.write('first-');setTimeout(()=>{process.stdout.write('half\\nno newline')},50)"],
+        { onLine: l => lines.push(l) },
+      );
+      expect(lines).toEqual(['first-half', 'no newline']);
+    });
+
+    /** The stream comes with each line, so a caller printing them can keep stdout and stderr apart -
+     *  which is what `run` does with no panel. */
+    it('says which stream each line came from', async () => {
+      const lines: string[] = [];
+      await runBin('node', ['-e', "console.log('to out');console.error('to err')"], {
+        onLine: (l, stream) => lines.push(`${stream}:${l}`),
+      });
+      expect(lines.sort()).toEqual(['stderr:to err', 'stdout:to out']);
+    });
   });
 });
 

@@ -1066,9 +1066,32 @@ counting up while it runs; a `✔`/`✖` line with the elapsed time when it ends
   - `ProgressPanel.start(statusRegion)` takes the terminal and `stop()` hands it back. **Every
     panel site passes `app.statusRegion`** - five of them, and a new one that forgets reintroduces
     the flicker with nothing reporting it.
-  - **Only when the panel is actually drawing.** A disabled panel (non-TTY, `--no-progress`) owns
-    nothing, and suspending the status line for it would remove the one thing such a run still
-    shows.
+  - **A disabled panel hands the terminal to nobody, and the status line is silenced anyway.** This
+    said the opposite - "a disabled panel owns nothing, and suspending the status line would remove
+    the one thing such a run still shows" - and that held only while children inherited the
+    terminal. With no panel, `run` now pipes every child and prints its lines itself (below), and a
+    spinner redrawing in place moves the cursor up over whatever was printed since. Under
+    `--no-progress` the CLI never draws the line at all; `schedule` silences a live one for the run
+    in the other cases (config `progress: false`, or stdout redirected while stderr is a TTY).
+
+- **With no panel, a child runs without a terminal** (`pipe` + `onLine`, printed by rman to the
+  stream it came from). A child that finds a TTY draws its own live output, and a build is mostly
+  other CLIs - the shared preset's `run.build` is `rman check`, `rman lint`, `rman clean`, `tsc`.
+  Reported as `rman build --no-progress` printing progress and losing its logs; under a real
+  terminal one short build had **149 spinner frames and 154 cursor-ups, 0 and 0 after**.
+  - **No TTY rather than telling children about `--no-progress`.** An environment variable was
+    built first and dropped: it reaches nested rman and nothing else, while `npm`, a test runner's
+    reporter or `docker build` would go on drawing. No TTY is the convention every well-behaved CLI
+    already honours - nested rman included, whose panel reads `process.stdout.isTTY`.
+  - **`FORCE_COLOR` brings the colour back and nothing else** (`colorsPrintedOutput`: our stdout is
+    a terminal, `NO_COLOR` unset). Tools gate their live output on `isTTY`, which stays false.
+  - **`runBin`'s `onLine` buffers per stream now**, as `exec`'s always did. It split each `data`
+    chunk on its own, so a line arriving in two pieces became two lines - harmless while the only
+    reader was a panel row's last line, wrong once every line is printed.
+  - The cost, stated: a child cannot prompt. Nothing in a run step should.
+  - **Measuring it needs a pseudo-terminal** (`script -q out.txt <cmd>` on macOS) - without one
+    nothing draws either way. And count escape codes with `grep -E`: BSD grep's basic regex has no
+    `\|`, and a `\|` pattern reported zero colour codes in output holding 1800.
   - **`live` stays `true` while suspended, deliberately.** It answers "does something own this
     terminal", which is what `runBin` reads to decide to pipe a child rather than let it scroll the
     screen; the answer to *which* region is `takeover`, which `passThrough` forwards to. Making

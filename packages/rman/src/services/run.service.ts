@@ -12,7 +12,7 @@ import { exec } from '../utils/exec.js';
 import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { type ProgressItem, ProgressPanel } from '../utils/progress-panel.js';
-import { runBin } from '../utils/run-bin.js';
+import { colorsPrintedOutput, runBin } from '../utils/run-bin.js';
 
 /**
  * A service class - see `ListService` for the shape and `Service` for the three measured
@@ -230,10 +230,33 @@ export class RunService extends Service {
             const stepStart = Date.now();
             let stepError: Error | undefined;
             try {
-              /** No capture with the panel off: the step owns the terminal, exactly as a shell
-               *  step's `stdio: 'inherit'` does. */
-              if (step.run) await runFunctionStep(step.run, pkg, cwd, undefined, onCommand);
-              else await exec(step.command, { cwd, stdio: 'inherit', app: pkg.repository.app });
+              /**
+               * **Piped, not inherited - the child never sees a terminal.** Every line is printed by
+               * rman instead, to the stream it came from. A child that finds a TTY draws its own live
+               * output, and a build is mostly other CLIs: the shared preset's `run.build` is
+               * `rman check`, `rman lint`, `rman clean` and `tsc`. Reported as `rman build
+               * --no-progress` printing progress and losing its logs, and the raw output showed it:
+               * a nested `rman check` drawing its own panel inside a run asked not to draw one.
+               *
+               * **No TTY is the convention every well-behaved CLI already honours**, which is why it
+               * beats telling children about `--no-progress`: an environment variable would reach
+               * nested rman and nothing else, while `npm`, a test runner's reporter or `docker
+               * build` would go on drawing. `FORCE_COLOR` comes back where our own output is a
+               * terminal (`colorsPrintedOutput`) - it restores colour without restoring the live
+               * output, which tools gate on `isTTY`.
+               *
+               * The cost, stated: a child cannot prompt. Nothing in a run step should.
+               */
+              if (step.run) await runFunctionStep(step.run, pkg, cwd, undefined, onCommand, printChildLine);
+              else {
+                await exec(step.command, {
+                  cwd,
+                  stdio: 'pipe',
+                  onLine: printChildLine,
+                  env: colorsPrintedOutput() ? { FORCE_COLOR: '1' } : undefined,
+                  app: pkg.repository.app,
+                });
+              }
             } catch (e) {
               /**
                * **Normalized to an `Error`, because a *falsy* throw was indistinguishable from no
@@ -355,6 +378,21 @@ export class RunService extends Service {
 
     panel.detail = this.repository.name;
     panel.start(this.repository.app.statusRegion);
+    /**
+     * **With no panel, the status line is silenced for the run as well** - not handed over, silenced:
+     * the children's lines are printed straight to the terminal (see the panel-off path in
+     * `runSteps`), and a spinner redrawing in place moves the cursor up over whatever was printed
+     * since. This is the case `--no-progress` does not cover, since the CLI never draws the line under
+     * that flag: a panel turned off by `.rmanrc run.<script>.progress: false`, or by stdout being
+     * redirected while stderr is still a terminal.
+     *
+     * It used to be left drawing on the grounds that it was "the one thing such a run still shows".
+     * That held while the children inherited the terminal and nothing was printed past it; once the
+     * run prints their lines itself, the two cannot share the screen.
+     */
+    const statusRegion = this.repository.app.statusRegion;
+    const muted = !panel.enabled && !!statusRegion?.live;
+    if (muted) statusRegion!.suspend({ passThrough: text => process.stderr.write(text) });
 
     try {
       /** bail:false here - each package's own resolved bail setting decides whether to call
@@ -372,6 +410,7 @@ export class RunService extends Service {
        *  packages went on to succeed. */
       await Promise.allSettled(children.map(child => child.toPromise()));
       panel.stop();
+      if (muted) statusRegion!.resume();
     }
 
     const summary = panel.printSummary();
@@ -823,7 +862,7 @@ export namespace RunService {
     pkg: Package,
     cwd: string,
     onCommand?: (command: string | undefined) => void,
-    onLine?: (line: string) => void,
+    onLine?: (line: string, stream?: 'stdout' | 'stderr') => void,
   ): RunStepContext {
     const logLevel = resolveRootLogLevel(pkg.repository);
     return {
@@ -1000,6 +1039,13 @@ function describing(step: RunService.ScriptStep): string[] {
   return step.label ? [colors.gray('┆'), step.label] : [];
 }
 
+/** A piped child's line, printed to the stream it came from - stdout when the caller does not say,
+ *  which is a function step's own `console` output. The panel-off counterpart of a panel row's log:
+ *  the same `pipe` + `onLine`, with a sink that prints instead of storing. */
+function printChildLine(line: string, stream?: 'stdout' | 'stderr'): void {
+  (stream === 'stderr' ? process.stderr : process.stdout).write(line + '\n');
+}
+
 function describeValue(value: unknown): string {
   if (Array.isArray(value)) return 'a nested array';
   if (value && typeof value === 'object') return 'an object';
@@ -1095,10 +1141,17 @@ async function runFunctionStep(
   run: RunStepFn,
   pkg: Package,
   cwd: string,
-  onLine?: (line: string) => void,
+  onLine?: (line: string, stream?: 'stdout' | 'stderr') => void,
   onCommand?: (command: string | undefined) => void,
+  /**
+   * Where the lines of a child the step spawns through `ctx.runBin` go, **without** capturing the
+   * step's own `console` - which `onLine` also does, because the panel needs both. With no panel only
+   * the child needs it: it is the one that would find a terminal and draw on it, while the step's
+   * own `console.log` is rman's own process writing a line, which is fine as it is.
+   */
+  childLine?: (line: string, stream?: 'stdout' | 'stderr') => void,
 ): Promise<void> {
-  const context = RunService.createStepContext(pkg, cwd, onCommand, onLine);
+  const context = RunService.createStepContext(pkg, cwd, onCommand, onLine ?? childLine);
   if (!onLine) {
     try {
       await run(context);

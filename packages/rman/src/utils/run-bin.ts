@@ -41,7 +41,8 @@ export interface RunBinOptions {
    * straight to the screen through the live region. Measured on a failing build: a shell step
    * showed `✔ check 554ms` on its row while a function step's `tsc` filled the terminal with every
    * error it had, pushing the panel down the screen. Same panel, two contracts. */
-  onLine?: (line: string) => void;
+  /** The stream each line came from, so a caller printing them can keep stdout and stderr apart. */
+  onLine?: (line: string, stream: 'stdout' | 'stderr') => void;
   env?: Record<string, string | undefined>;
 }
 
@@ -109,7 +110,9 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
      * while a status region is live had it, which since 2.3.0 is every one of them. */
     env: BinPath.env({
       cwd,
-      env: region && atLeast('info') ? { FORCE_COLOR: '1', ...(options.env ?? process.env) } : options.env,
+      env: forceColor(region, options, atLeast('info'))
+        ? { FORCE_COLOR: '1', ...(options.env ?? process.env) }
+        : options.env,
       app: options.app,
     }) as NodeJS.ProcessEnv,
     windowsHide: true,
@@ -119,23 +122,33 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
   trackChild(child);
 
   let output = '';
+  /**
+   * **Split into lines per stream, holding the unfinished tail until the rest arrives** - the way
+   * `exec` already does. A `data` event ends wherever the pipe's buffer did, not at a newline, so
+   * splitting each chunk on its own cut a line arriving in two pieces into two lines. Harmless while
+   * the only reader was a panel row showing the last line; wrong once a caller prints every line, as
+   * the panel-off `run` does, where it put a newline in the middle of whatever the child wrote.
+   */
+  const pending = { stdout: '', stderr: '' };
+  const emit = (stream: 'stdout' | 'stderr', text: string, flush: boolean) => {
+    const lines = (pending[stream] + text).split(/\r?\n/);
+    pending[stream] = flush ? '' : lines.pop()!;
+    for (const line of lines) if (line) options.onLine!(line, stream);
+  };
   /** **Streamed through the region as it arrives, not held to the end.** Piping is how the region
    *  stays intact; buffering would additionally make a long command look silent, which is the very
    *  thing the region exists to fix. Only when a region is live - otherwise `pipe` keeps meaning
    *  "capture, and surface it if this fails". */
-  const collect = (d: Buffer) => {
+  const collect = (stream: 'stdout' | 'stderr') => (d: Buffer) => {
     const text = d.toString();
     output += text;
     /** A caller taking the lines owns them - it is showing them somewhere of its own, and writing
      *  them here as well would both double them and scroll whatever it is drawing. */
-    if (options.onLine) {
-      for (const line of text.split(/\r?\n/)) if (line) options.onLine(line);
-      return;
-    }
+    if (options.onLine) return emit(stream, text, false);
     if (region && atLeast('info')) region.passThrough(text);
   };
-  child.stdout?.on('data', collect);
-  child.stderr?.on('data', collect);
+  child.stdout?.on('data', collect('stdout'));
+  child.stderr?.on('data', collect('stderr'));
 
   return new Promise<RunBinResult>((resolve, reject) => {
     child.on('error', (e: any) => {
@@ -144,6 +157,8 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
       );
     });
     child.on('close', code => {
+      /** A last line with no newline after it is still a line. */
+      if (options.onLine) for (const stream of ['stdout', 'stderr'] as const) emit(stream, '', true);
       if (code === 0) return resolve({ code: 0, output });
       /** Captured output has to be surfaced here or it is lost with the process - the one thing
        *  worse than a noisy failure is a silent one. 'silent' is the caller saying otherwise. */
@@ -157,4 +172,33 @@ export async function runBin(bin: string, argv: string[], options: RunBinOptions
       reject(err);
     });
   });
+}
+
+/**
+ * Whether a piped child is told it may colour anyway.
+ *
+ * A child checks `isTTY` to decide whether to colour, and a pipe is not one - so a child whose output
+ * is shown rather than read loses the colour it had with the terminal. Two cases show it: a live
+ * region routing it through `passThrough`, and a caller taking the lines to print (`onLine`) while
+ * our own output really is a terminal. Not when stdout is redirected, where escapes would land in a
+ * file, and not under `NO_COLOR`, which is the user saying no.
+ *
+ * **`FORCE_COLOR` turns on colour and nothing else.** A tool's live output - a spinner, a progress
+ * bar - is gated on `isTTY`, which stays false, so a child piped this way prints plain lines in
+ * colour: exactly what a run with no progress panel is after.
+ */
+function forceColor(region: unknown, options: RunBinOptions, info: boolean): boolean {
+  if (!info) return false;
+  if (region) return true;
+  return !!options.onLine && colorsPrintedOutput();
+}
+
+/**
+ * Whether a child whose lines rman prints itself should be told to colour them: our own stdout is a
+ * terminal, and `NO_COLOR` is not set. The one rule for both kinds of step - `runBin`'s, above, and a
+ * shell step `exec` runs with its lines printed by `RunService` - so the two cannot disagree about
+ * when a piped child gets its colour back.
+ */
+export function colorsPrintedOutput(): boolean {
+  return !!process.stdout.isTTY && !process.env.NO_COLOR;
 }

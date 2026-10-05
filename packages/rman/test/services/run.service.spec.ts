@@ -6,6 +6,7 @@ import { expect } from 'expect';
 import { Package, Repository, resolveRootLogLevel } from '../../src/index.js';
 import { resolveBool, resolveLogLevel, resolveNumber, RunService } from '../../src/services/run.service.js';
 import { VersionService } from '../../src/services/version.service.js';
+import { StatusRegion } from '../../src/utils/status-region.js';
 import { createRepository, service, useTestEcosystem } from '../_fixture.js';
 
 interface PackageDef {
@@ -391,6 +392,90 @@ describe('run: Run.runScript() integration', () => {
       );
       expect(lines.some(l => l.includes('past-the-barrier'))).toBe(false);
       expect(lines.some(l => l.includes('exec-ran'))).toBe(false);
+    });
+  });
+
+  /**
+   * **With no panel, a child runs without a terminal and rman prints its lines.**
+   *
+   * A child that finds a TTY draws its own live output - and a build is mostly other CLIs. Reported
+   * as `rman build --no-progress` printing progress and losing its logs: under a real terminal a
+   * nested `rman check` drew its own panel inside the run, and two spinners moved the cursor up over
+   * each other's rows (149 spinner frames, 154 cursor-ups in one short build; 0 and 0 after).
+   *
+   * Mocha's stdout is not a terminal, so whether the child *sees* one cannot be asked here directly.
+   * What can: an inherited child writes to the file descriptor and never passes through
+   * `process.stdout.write`, while a piped one is printed by rman and does. So a line showing up in
+   * the stub is the line having been piped.
+   */
+  describe('with the panel off', () => {
+    function captureWrites<T>(fn: () => Promise<T>): Promise<{ out: string; err: string }> {
+      const write = { out: process.stdout.write.bind(process.stdout), err: process.stderr.write.bind(process.stderr) };
+      const got = { out: '', err: '' };
+      process.stdout.write = ((c: any) => ((got.out += String(c)), true)) as typeof process.stdout.write;
+      process.stderr.write = ((c: any) => ((got.err += String(c)), true)) as typeof process.stderr.write;
+      const restore = () => {
+        process.stdout.write = write.out;
+        process.stderr.write = write.err;
+      };
+      return fn().then(
+        () => (restore(), got),
+        e => (restore(), Promise.reject(e)),
+      );
+    }
+
+    /** The markers are computed by the shell (`OUT-$((1+1))` prints `OUT-2`) because the panel-off
+     *  log line prints the step's *command* on stdout - so a literal marker would turn up there
+     *  whichever stream the child actually wrote it to. */
+    it("prints a shell step's lines itself, each to the stream it came from", async () => {
+      await fixture({ 'pkg-a': { scripts: { build: 'echo OUT-$((1+1)) && echo ERR-$((2+2)) 1>&2' } } });
+
+      const { out, err } = await captureWrites(() => service('run').runScript('build', { progress: false }));
+
+      expect(out).toContain('OUT-2');
+      expect(err).toContain('ERR-4');
+      expect(err).not.toContain('OUT-2');
+      expect(out).not.toContain('ERR-4');
+    });
+
+    /** A function step's child goes through `runBin` rather than `exec`, so it is the other half. */
+    it("prints a function step's child the same way", async () => {
+      await fixture({
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { exec: async ({ runBin }) => {
+            await runBin('node', ['-e', "console.log('FN-OUT');console.error('FN-ERR')"]);
+          } } } }`,
+        },
+      });
+
+      const { out, err } = await captureWrites(() => service('run').runScript('build', { progress: false }));
+
+      expect(out).toContain('FN-OUT');
+      expect(err).toContain('FN-ERR');
+    });
+
+    /**
+     * **A live status line is silenced for the run**, for the case `--no-progress` does not reach:
+     * a panel turned off by config, or by stdout being redirected while stderr is still a terminal.
+     * The children's lines are printed straight to the terminal, and a spinner redrawing in place
+     * would move the cursor up over them. Resumed afterwards, so the command's result line still
+     * closes the bracket.
+     */
+    it('silences a live status line while it prints, and gives it back afterwards', async () => {
+      const repo = await fixture({ 'pkg-a': { scripts: { build: 'echo hi' } } });
+      const region = new StatusRegion('build', '', true);
+      const calls: string[] = [];
+      const suspend = region.suspend.bind(region);
+      const resume = region.resume.bind(region);
+      region.suspend = (t?: any) => (calls.push('suspend'), suspend(t));
+      region.resume = () => (calls.push('resume'), resume());
+      repo.app.statusRegion = region;
+      try {
+        await captureWrites(() => service('run').runScript('build', { progress: false }));
+      } finally {
+        repo.app.statusRegion = undefined;
+      }
+      expect(calls).toEqual(['suspend', 'resume']);
     });
   });
 
