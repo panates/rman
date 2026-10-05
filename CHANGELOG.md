@@ -1,6 +1,20 @@
 # Changelog
 
-<!-- rman:documented-up-to e51cfb83fee8013231ecbc6ca8c5df67e3239b42 -->
+<!-- rman:documented-up-to 96fd26adb95a0a4270730a958dd24146faabd60c -->
+
+## v2.11.0 (2026-10-05)
+
+### ✨ Features
+
+- **cli:** global --json and --log-file for a run's log (37f1782)
+- **run:** render a run through reporters; lead plain lines with their package (96fd26a)
+
+### 🐛 Bug Fixes
+
+- **run:** with no progress panel, run every step without a terminal and print its lines (43a58a7)
+- **run:** an unmarked step waits, and a package's own exec keeps the configured topo (1b2781c)
+
+---
 
 ## v2.10.0 (2026-10-02)
 
