@@ -389,9 +389,12 @@ consults this at all - a package can still be meaningfully versioned without eve
 
 ## Failure handling
 
-If a package fails to publish, every still-pending dependent (transitively) is marked as failed and
-skipped too - never publishes a package whose dependency range points at something that never
-actually reached the registry. Unrelated packages elsewhere in the plan are unaffected.
+If a package fails to publish, every still-pending package whose **consumers need it** is marked as
+failed and skipped too, transitively - never publishes a package whose dependency range points at
+something that never actually reached the registry. "Need" means a `dependencies` entry or a peer
+not marked optional; a package that lists the failed one only in `devDependencies` (removed from
+what is published), as an optional peer, or in `optionalDependencies` is published anyway.
+Unrelated packages elsewhere in the plan are unaffected.
 
 ## See also
 

@@ -2039,6 +2039,10 @@ saw one thing to release and it was the one thing that must never be published.
   - **It is the other half of npm Trusted Publishing's checkbox.** `npm stage publish` is always
     permitted for a trusted publisher; direct `npm publish` needs **Allow `npm publish`** ticked on
     the package's connection. A repository that leaves it unticked has to pass `--staged`.
+- **A failed publish blocks only what a consumer's install needs it for** (`consumerNeeds`): a
+  `dependencies` entry or a non-optional peer. Every edge used to count, and measured on opra's
+  1.31.0 release `@opra/api-ui` failing its first publish blocked `@opra/http` - which lists it as
+  an optional peer and a devDependency only - and elastic, mongodb and sqb behind it.
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
 - In CI, gate the release pipeline on **this** plan, not on `version --json`.

@@ -656,6 +656,55 @@ describe('services/publish', () => {
       expect(entryFor(applied, 'pkg-c').status).toBe('error'); // its own "npm publish" also fails (same fake bin)
     });
 
+    /**
+     * **Only what a consumer's install needs blocks a publish.** opra's `@opra/http` listed the failed
+     * `@opra/api-ui` as an optional peer and a devDependency only, and was blocked anyway - taking
+     * three packages that depend on http with it. A real `dependencies` entry still blocks: the case
+     * above.
+     */
+    it('a failed publish does not block a package that lists it only as a devDependency or optional peer', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'pkg-b',
+        version: '1.0.0',
+        devDependencies: { 'pkg-a': '1.0.0' },
+        peerDependencies: { 'pkg-a': '^1.0.0' },
+        peerDependenciesMeta: { 'pkg-a': { optional: true } },
+      });
+      writeJson(dir, 'packages/c/package.json', {
+        name: 'pkg-c',
+        version: '1.0.0',
+        peerDependencies: { 'pkg-a': '^1.0.0' },
+      });
+      const repo = await createRepository(dir);
+      /** `npm publish` fails for pkg-a and succeeds for everything else. */
+      const binDir = path.join(dir, 'node_modules', '.bin');
+      fs.mkdirSync(binDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(binDir, 'npm'),
+        `#!/usr/bin/env node\nconst fs = require('fs');\nprocess.exit(JSON.parse(fs.readFileSync('package.json', 'utf-8')).name === 'pkg-a' ? 1 : 0);\n`,
+      );
+      fs.chmodSync(path.join(binDir, 'npm'), 0o755);
+
+      const plan = await PublishService.getPlan(
+        repo,
+        {},
+        registry({ 'pkg-a': undefined, 'pkg-b': undefined, 'pkg-c': undefined }),
+      );
+      const applied = await PublishService.applyPlan(repo, plan);
+
+      expect(entryFor(applied, 'pkg-a').status).toBe('error');
+      expect(entryFor(applied, 'pkg-b').status).toBe('publish');
+      /** A peer that is *not* optional is what an install needs - still blocked. */
+      expect(entryFor(applied, 'pkg-c')).toMatchObject({
+        status: 'error',
+        reason: 'dependency "pkg-a" failed to publish',
+      });
+    });
+
     it('a skip/up-to-date entry passes through applyPlan untouched, never invoking the package manager', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });

@@ -363,10 +363,12 @@ export namespace PublishService {
    * landed on the registry first, and publishing is rare enough (once per release) that the
    * simplicity is worth more than the parallelism `run` gets from `power-tasks`.
    *
-   * If a package fails, every other still-pending entry depending on it (transitively) is marked
-   * `'error'` too and never attempted - publishing a package whose own new dependency range points
-   * at a version that never actually reached the registry would hand consumers a broken install.
-   * A package's own failure doesn't stop unrelated packages elsewhere in the plan, though.
+   * If a package fails, every other still-pending entry that **a consumer's install needs it for**
+   * (transitively) is marked `'error'` too and never attempted - publishing a package whose own new
+   * dependency range points at a version that never actually reached the registry would hand
+   * consumers a broken install. A package's own failure doesn't stop unrelated packages elsewhere in
+   * the plan, though, nor one that lists it only where an install does not need it (see
+   * `consumerNeeds`).
    */
   export async function applyPlan(repository: Repository, plan: Entry[], options: ApplyOptions = {}): Promise<Entry[]> {
     const packageManager = CiService.resolvePackageManager(repository, options.packageManager);
@@ -384,7 +386,7 @@ export namespace PublishService {
         continue;
       }
       const pkg = entry.package;
-      const blocker = pkg.dependencies.find(d => failed.has(d.name));
+      const blocker = pkg.dependencies.find(d => failed.has(d.name) && consumerNeeds(pkg, d.name));
       if (blocker) {
         failed.add(pkg.name);
         result.push({ ...entry, status: 'error', reason: `dependency "${blocker.name}" failed to publish` });
@@ -449,6 +451,24 @@ function resolvePublishDir(pkg: Package, contentsOverride: string | undefined): 
  * reported as unbuilt: opra's examples inherit `publish.npm.directory` and skip their build. */
 function privateBySource(pkg: Package): boolean {
   return !!pkg.manifest.raw.private && !pkg.manifest.raw.publishConfig;
+}
+
+/** Whether a consumer installing `pkg` needs `name` to resolve: a `dependencies` entry, or a peer
+ *  not marked optional. */
+/* **Not every edge blocks a publish**, and blocking on all of them cost a release. A failed publish
+ * stops its dependents because their published range would point at a version that is not there -
+ * which is only true of what reaches the consumer:
+ * - `devDependencies` are removed from the published manifest (`derivePublishManifest`);
+ * - an optional peer that cannot be satisfied does not fail an install;
+ * - `optionalDependencies` are the ones npm proceeds without "if it cannot be found or fails to
+ *   install" (npm's own documentation; not measured here).
+ * Measured on opra's 1.31.0 release: `@opra/api-ui` failed its first publish, and `@opra/http` -
+ * which lists it as an optional peer and a devDependency only - was blocked, taking elastic, mongodb
+ * and sqb with it, though none of their installs would have needed api-ui. */
+function consumerNeeds(pkg: Package, name: string): boolean {
+  const raw = pkg.manifest.raw;
+  if (raw.dependencies?.[name] !== undefined) return true;
+  return raw.peerDependencies?.[name] !== undefined && !raw.peerDependenciesMeta?.[name]?.optional;
 }
 
 /** Whether `pkg` is published from its own directory, whose `package.json` is then the manifest. */
