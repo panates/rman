@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
 import colors from 'ansi-colors';
 import type { RmanApplication } from '../core/application.js';
+import { LOG_LEVELS, type LogLevel } from '../core/classes/logger.js';
 import { BinPath } from './bin-path.js';
 import { trackChild } from './child-tracker.js';
-import { LOG_LEVELS, type LogLevel } from './logger.js';
 
 export interface RunBinOptions {
   /**

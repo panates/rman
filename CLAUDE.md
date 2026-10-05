@@ -1013,7 +1013,7 @@ to whoever has the better answer for it.
 
 ## The run log: global `--json` and `--log-file`
 
-[`utils/log-sink.ts`](packages/rman/src/utils/log-sink.ts), built per invocation in `cli.ts`'s
+[`core/classes/log-sink.ts`](packages/rman/src/core/classes/log-sink.ts), built per invocation in `cli.ts`'s
 `interceptStatusLines` and held on `RmanApplication.logSink`. `--json` makes stdout JSON Lines
 events (`start`/`output`/`end`/`summary`/`message`) and nothing else; `--log-file` writes the same
 log to a file, JSON under `--json` and text otherwise.
@@ -1031,11 +1031,38 @@ log to a file, JSON under `--json` and text otherwise.
   command. Everything else given either flag warns on stderr (`warnUnhonoured`), detected from
   `sink.used` rather than listed. Warn, not refuse: a log option must not be the reason a release
   step fails. Not under `--config`, which runs nothing on purpose.
-- **`--json` takes the panel's capture path with nothing drawn** (`panel.enabled || json`). The
-  plain path prints a child's lines to stdout, which would put prose between the events - the
-  negative control for that guard turns three cases red.
-- **Under `--json` the panel is constructed disabled and the recap is `panel.tally()`**, the same
-  count `printSummary` prints, so the summary event and the prose recap cannot disagree.
+- **Under `--json` there is no screen reporter at all** (`RunService.reportersFor`), so nothing
+  but the sink's events reaches stdout. The panel is constructed disabled, and the recap is counted
+  once with `panel.tally()` and then reported - a screen reporter prints it from that same tally,
+  so the summary event and the prose recap cannot disagree.
+
+### Reporters: an event is produced once, and rendered by each
+
+[`core/classes/log-sink.ts`](packages/rman/src/core/classes/log-sink.ts) (`Reporter`, `LogSink`),
+[`core/classes/run-reporters.ts`](packages/rman/src/core/classes/run-reporters.ts) (`PlainReporter`,
+`PanelReporter`). `RunService.schedule` builds `start`/`output`/`end`/`summary` events and hands each
+to every reporter the run has: the screen (the panel's rows, or plain lines, or nothing under
+`--json`) and `LogSink` (`--json` stdout and `--log-file`).
+
+- **It replaced four branches at the place a line was produced** - panel row, plain screen,
+  `--json`, file - and the package prefix is what showed the cost: one more thing to do with a line
+  meant touching each branch. A new destination is a reporter now, never another branch.
+- **winston and consola were weighed and not taken**, on the user's question. Both offer the shape;
+  both would mean translating these typed events into a log record and back, while the set of
+  destinations is closed. winston also writes files asynchronously, which loses the last lines of an
+  interrupted run - the ones that say why. pino writes from a worker thread, which loses ordering.
+  The panel and spinner are not logs in any of them, so that reporter would be ours either way.
+- **A plain run leads every line with its package** (`pkg ┆ line`). Packages run at once and a
+  step's status line comes only after its output, so unlabelled, an error read as the package
+  printed just above it - reported on opra, `@opra/api-ui`'s TS2307 under `@opra/openapi ┆ after
+  success`. The log's `output` event carries the package as a field instead.
+- **A reporter writes a step's lines to the stream, never through `console`**: a function step's
+  `console` is captured and arrives as `output` events synchronously, inside that step's async
+  context, so a `console.log` from the reporter would be captured again. Step lines and the recap are
+  written outside any step and keep using `console`.
+- **`childEnv` is the reporter's to say**: the plain screen asks for `FORCE_COLOR` where our stdout
+  is a terminal; the panel does not, since a row's width is measured and escape codes would count as
+  text.
 - **A nested `rman` in a step is not told**, so its own status line and recap arrive as `output`
   events. Measured in opra (`before: rman check`): correct, and visible in the log.
 - **Measured in opra under `script`**: 444 lines, every one parses, no escape codes, and the file is
@@ -1104,8 +1131,8 @@ counting up while it runs; a `✔`/`✖` line with the elapsed time when it ends
     `--no-progress` the CLI never draws the line at all; `schedule` silences a live one for the run
     in the other cases (config `progress: false`, or stdout redirected while stderr is a TTY).
 
-- **With no panel, a child runs without a terminal** (`pipe` + `onLine`, printed by rman to the
-  stream it came from). A child that finds a TTY draws its own live output, and a build is mostly
+- **With no panel, a child runs without a terminal** (`pipe` + `onLine`, printed by `PlainReporter`
+  to the stream it came from, led by its package). A child that finds a TTY draws its own live output, and a build is mostly
   other CLIs - the shared preset's `run.build` is `rman check`, `rman lint`, `rman clean`, `tsc`.
   Reported as `rman build --no-progress` printing progress and losing its logs; under a real
   terminal one short build had **149 spinner frames and 154 cursor-ups, 0 and 0 after**.
@@ -2502,10 +2529,14 @@ so none of them has anything a function could replace.
   - **Exported from the namespace as a seam.** A spec cannot reach it through `run()`: the panel is
     `isTTY && progress`, so under a test runner it is off and no capture happens at all. The three
     cases drive it directly, and the control (per-step restore) turns the concurrency one red.
-- **`console` is redirected only while the progress panel is on**, which is the same split `exec`
-  already makes (`stdio: 'pipe'` + `onLine` with the panel, `'inherit'` without). A function writing
-  to the real stdout would print *over* the panel it is being rendered inside. Steps should prefer
-  `ctx.logger`.
+- **`console` is always redirected, panel or not**, into the step's `output` events. It used to be
+  panel-only, and with no panel a function's `console.log` was then the one kind of step output a
+  plain run could not lead with its package, and that `--json` and the log file never saw.
+  - **That surfaced a leak**: `withCapturedConsole` chained its restore onto
+    `Promise.resolve(consoleSink.run(...))`, and a plain function throwing synchronously left before
+    the promise existed - the depth never came down and every later step captured nothing. Seen as
+    two specs in another describe block failing only after the function-step ones; pinned by "hands
+    it back when a step throws synchronously", with its control run.
 - **Only the JS config forms can hold one** - YAML cannot, and don't paper over that with a
   `js: './file.mjs'` step: it buys nothing over the `node ./file.mjs` a YAML repo would write
   anyway, and adds a second mechanism. A YAML `.rmanrc.yml` that `extends` a JS config **does** get

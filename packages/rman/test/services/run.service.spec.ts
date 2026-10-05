@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import colors from 'ansi-colors';
 import { expect } from 'expect';
 import { Package, Repository, resolveRootLogLevel } from '../../src/index.js';
 import { resolveBool, resolveLogLevel, resolveNumber, RunService } from '../../src/services/run.service.js';
@@ -101,29 +102,43 @@ async function captureLogs(fn: () => Promise<void>): Promise<{ lines: string[]; 
 }
 
 /**
- * `captureLogs`, watching **stderr as well** - for a step's own failure message, which goes there.
+ * Everything the run put on the screen, in the order it arrived - `console.log`, `console.error`
+ * **and** what was written to the streams directly, split into lines.
  *
- * A separate helper rather than widening `captureLogs`, and the reason is measured: forty-odd
- * cases in this file assert `lines.some(...)` is `false`, so folding another stream into the same
- * array risks turning one of those into a pass or a failure for a reason nobody asked about.
+ * For a step's own output, which reaches the screen as a stream line led by its package (see
+ * `PlainReporter`), whether a shell step or a function step's `console` produced it. `captureLogs`
+ * stays as it is for the forty-odd cases asserting a line is *absent* from the step lines.
  *
- * **This is also the mistake that made the specs below pass their first negative control for the
- * wrong reason.** They asserted on `captureLogs().lines`, `console.error` is not in it, so they
- * were red with the fix *and* without it - and reverting the fix and seeing red looked like proof.
- * A control that cannot come out green proves nothing.
+ * It replaced `captureAllLogs`, which watched `console.error` for a function step's failure message
+ * - and whose first negative control passed for the wrong reason: the cases had asserted on
+ * `captureLogs().lines`, which never held `console.error`, so they were red with the fix and
+ * without it. A control that cannot come out green proves nothing.
  */
-async function captureAllLogs(fn: () => Promise<void>): Promise<{ lines: string[]; error?: Error }> {
-  const originalError = console.error;
+async function captureOutput(fn: () => Promise<void>): Promise<{ lines: string[]; error?: Error }> {
   const lines: string[] = [];
-  console.error = (...args: unknown[]) => {
-    lines.push(stripAnsi(args.map(a => (typeof a === 'string' ? a : String(a))).join(' ')));
+  const add = (text: string) => lines.push(...stripAnsi(text).replace(/\n$/, '').split('\n'));
+  const original = {
+    log: console.log,
+    error: console.error,
+    out: process.stdout.write.bind(process.stdout),
+    err: process.stderr.write.bind(process.stderr),
   };
+  console.log = (...args: unknown[]) => add(args.map(a => String(a)).join(' '));
+  console.error = (...args: unknown[]) => add(args.map(a => String(a)).join(' '));
+  process.stdout.write = ((c: any) => (add(String(c)), true)) as typeof process.stdout.write;
+  process.stderr.write = ((c: any) => (add(String(c)), true)) as typeof process.stderr.write;
+  let error: Error | undefined;
   try {
-    const result = await captureLogs(fn);
-    return { lines: [...lines, ...result.lines], error: result.error };
+    await fn();
+  } catch (e) {
+    error = e as Error;
   } finally {
-    console.error = originalError;
+    console.log = original.log;
+    console.error = original.error;
+    process.stdout.write = original.out;
+    process.stderr.write = original.err;
   }
+  return { lines, error };
 }
 
 describe('run: config resolution helpers', () => {
@@ -509,6 +524,71 @@ describe('run: Run.runScript() integration', () => {
       expect(out).not.toContain('ERR-4');
     });
 
+    /**
+     * **Every line names its package**, because packages run at once and a step's status line comes
+     * only after its output: unlabelled, an error reads as the package printed just above it.
+     */
+    it('leads each line with the package it came from', async () => {
+      await fixture({
+        'pkg-a': { scripts: { build: 'echo LINE-$((1+1)) && echo ELINE-$((1+1)) 1>&2' } },
+        'pkg-b': { scripts: { build: 'echo LINE-$((2+2))' } },
+      });
+
+      const { out, err } = await captureWrites(() => service('run').runScript('build', { progress: false }));
+      const plainLines = (s: string) => stripAnsi(s).split('\n');
+
+      expect(plainLines(out)).toContain('pkg-a ┆ LINE-2');
+      expect(plainLines(out)).toContain('pkg-b ┆ LINE-4');
+      expect(plainLines(err)).toContain('pkg-a ┆ ELINE-2');
+    });
+
+    /** A function step's own `console` is captured too, so it is led by its package like any other
+     *  line - it used to go straight to the terminal with nothing saying whose it was. */
+    it("leads a function step's own console output with its package", async () => {
+      await fixture({
+        'pkg-a': { rmanrcJs: `{ run: { build: { exec: function say() { console.log('FROM-FN'); } } } }` },
+      });
+
+      const { out } = await captureWrites(() => service('run').runScript('build', { progress: false }));
+      expect(stripAnsi(out).split('\n')).toContain('pkg-a ┆ FROM-FN');
+    });
+
+    /**
+     * **The package is red on rman's own failure message and on the failed step line - never because
+     * a line came from stderr.** Coloured by stream for one build, every progress line went red:
+     * dpdm prints `Start analyzing dependencies...` to stderr. `colors.enabled` is forced on and the
+     * output read raw, or there is no colour to assert on and every half passes reverted.
+     */
+    it("reddens the package on a step's failure message and its failed line, not on stderr", async () => {
+      await fixture({
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { exec: function boom() {
+            console.error('PROGRESS-ON-STDERR');
+            throw new Error('BOOM-MESSAGE');
+          } } } }`,
+        },
+      });
+      const wasEnabled = colors.enabled;
+      colors.enabled = true;
+      const log = console.log;
+      let logged = '';
+      console.log = (...args: unknown[]) => void (logged += args.join(' ') + '\n');
+      try {
+        const { err } = await captureWrites(() =>
+          service('run')
+            .runScript('build', { progress: false })
+            .catch(() => {}),
+        );
+        const lineOf = (text: string) => err.split('\n').find(l => l.includes(text)) ?? '';
+        expect(lineOf('PROGRESS-ON-STDERR')).toContain(colors.cyan('pkg-a'));
+        expect(lineOf('BOOM-MESSAGE')).toContain(colors.red('pkg-a'));
+        expect(logged).toContain(colors.red('pkg-a'));
+      } finally {
+        console.log = log;
+        colors.enabled = wasEnabled;
+      }
+    });
+
     /** A function step's child goes through `runBin` rather than `exec`, so it is the other half. */
     it("prints a function step's child the same way", async () => {
       await fixture({
@@ -542,7 +622,16 @@ describe('run: Run.runScript() integration', () => {
       region.resume = () => (calls.push('resume'), resume());
       repo.app.statusRegion = region;
       try {
-        await captureWrites(() => service('run').runScript('build', { progress: false }));
+        await captureWrites(async () => {
+          try {
+            await service('run').runScript('build', { progress: false });
+          } finally {
+            /** `resume` starts the spinner's timer, and a region nobody stops draws on stderr for
+             *  the rest of the mocha process - into whichever later spec is capturing it. That is
+             *  how this case made `cli.spec.ts`'s "says nothing under --log-level silent" flaky. */
+            region.stop('ok');
+          }
+        });
       } finally {
         repo.app.statusRegion = undefined;
       }
@@ -845,6 +934,21 @@ describe('run: Run.runScript() integration', () => {
   });
 
   describe('logLevel', () => {
+    /** The tag is the line's own level - a success line is `[INFO]` even in a package set to
+     *  `verbose`, where tagging the threshold would have called it `[VERB]`. */
+    it('tags each step line with its own level: [VERB] executing, [INFO] success, [ERROR] failed', async () => {
+      await fixture({
+        'pkg-a': { scripts: { build: quiet('echo ok') } },
+        'pkg-b': { scripts: { build: 'exit 1' } },
+      });
+      const { lines } = await captureLogs(() =>
+        service('run').runScript('build', { progress: false, logLevel: 'verbose', bail: false }),
+      );
+      expect(lines.some(l => l.startsWith('[VERB] run pkg-a') && l.includes('executing'))).toBe(true);
+      expect(lines.some(l => l.startsWith('[INFO] run pkg-a') && l.includes('success'))).toBe(true);
+      expect(lines.some(l => l.startsWith('[ERROR] run pkg-b') && l.includes('failed'))).toBe(true);
+    });
+
     it('default "info": shows the success line but no "executing" line', async () => {
       await fixture({ 'pkg-a': { scripts: { build: quiet('echo hi') } } });
       const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
@@ -1075,7 +1179,7 @@ describe('run: Run.runScript() integration', () => {
           } } } }`,
         },
       });
-      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      const { lines } = await captureOutput(() => service('run').runScript('build', { progress: false }));
       expect(lines.some(l => l.includes('ran for pkg-a in its own dir'))).toBe(true);
     });
 
@@ -1097,7 +1201,7 @@ describe('run: Run.runScript() integration', () => {
           } } } }`,
         },
       });
-      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      const { lines } = await captureOutput(() => service('run').runScript('build', { progress: false }));
       expect(lines.some(l => l.includes('cwd is the package'))).toBe(true);
       expect(lines.some(l => l.includes('process.cwd is untouched'))).toBe(true);
     });
@@ -1111,7 +1215,7 @@ describe('run: Run.runScript() integration', () => {
           } } }`,
         },
       });
-      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      const { lines } = await captureOutput(() => service('run').runScript('build', { progress: false }));
       const first = lines.findIndex(l => l.includes('FIRST'));
       const second = lines.findIndex(l => l.includes('SECOND'));
       expect(first).toBeGreaterThanOrEqual(0);
@@ -1128,7 +1232,7 @@ describe('run: Run.runScript() integration', () => {
           ] } } }`,
         },
       });
-      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      const { lines } = await captureOutput(() => service('run').runScript('build', { progress: false }));
       const at = (text: string) => lines.findIndex(l => l.includes(text));
       expect(at('ONE')).toBeGreaterThanOrEqual(0);
       expect(at('TWO')).toBeGreaterThan(at('ONE'));
@@ -1164,7 +1268,7 @@ describe('run: Run.runScript() integration', () => {
       await fixture({
         'pkg-a': { rmanrcJs: `{ run: { build: { exec: function boom() { throw new Error('step exploded'); } } } }` },
       });
-      const { lines } = await captureAllLogs(() => service('run').runScript('build', { progress: false }));
+      const { lines } = await captureOutput(() => service('run').runScript('build', { progress: false }));
       expect(lines.some(l => l.includes('step exploded'))).toBe(true);
     });
 
@@ -1174,7 +1278,7 @@ describe('run: Run.runScript() integration', () => {
       await fixture({
         'pkg-a': { rmanrcJs: `{ run: { build: { exec: function boom() { throw undefined; } } } }` },
       });
-      const { lines, error } = await captureAllLogs(() => service('run').runScript('build', { progress: false }));
+      const { lines, error } = await captureOutput(() => service('run').runScript('build', { progress: false }));
       expect(error).toBeDefined();
       expect(lines.some(l => l.includes('the step threw undefined'))).toBe(true);
     });
@@ -1196,7 +1300,7 @@ describe('run: Run.runScript() integration', () => {
       await fixture({
         'pkg-a': { rmanrcJs: `{ run: { build: function shorthand() { console.log('SHORTHAND-RAN'); } } }` },
       });
-      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      const { lines } = await captureOutput(() => service('run').runScript('build', { progress: false }));
       expect(lines.some(l => l.includes('SHORTHAND-RAN'))).toBe(true);
     });
 
@@ -1213,7 +1317,7 @@ describe('run: Run.runScript() integration', () => {
         },
       );
       await createRepository(dir);
-      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      const { lines } = await captureOutput(() => service('run').runScript('build', { progress: false }));
       expect(lines.some(l => l.includes('ROOT-BOOKEND for root at root'))).toBe(true);
     });
   });
@@ -1657,6 +1761,22 @@ describe('RunService.withCapturedConsole()', () => {
           },
         ),
       ).rejects.toThrow('boom');
+      expect(console.log).toBe(stub);
+    });
+  });
+
+  /** A plain function throwing before it returns a promise: `consoleSink.run` throws on the spot,
+   *  and the restore used to be chained onto a promise that was never made. */
+  it('hands it back when a step throws synchronously', async () => {
+    await withStubbedConsole(async stub => {
+      await expect(
+        RunService.withCapturedConsole(
+          () => {},
+          () => {
+            throw new Error('sync boom');
+          },
+        ),
+      ).rejects.toThrow('sync boom');
       expect(console.log).toBe(stub);
     });
   });

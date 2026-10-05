@@ -191,11 +191,11 @@ export { parallelOptions, readParallelOptions, readRunOptions, runOptions } from
 export { BinPath } from './utils/bin-path.js';
 /** A shell command, with the repository's local binaries on PATH - for a command string an author
  *  wrote. `runBin` is the one to reach for when the arguments are assembled in code. */
+export type { LogLevel } from './core/classes/logger.js';
+export { LOG_LEVELS, Logger, resolveRootLogLevel } from './core/classes/logger.js';
 export type { ExecOptions, ExecResult } from './utils/exec.js';
 export { exec } from './utils/exec.js';
 export { GitHelper } from './utils/git.js';
-export type { LogLevel } from './utils/logger.js';
-export { LOG_LEVELS, Logger, resolveRootLogLevel } from './utils/logger.js';
 /** `--scope`/`--deps`/`--dependents`/`--private`, so a plugin's command filters packages the same
  *  way every built-in does rather than inventing its own flags. */
 export {

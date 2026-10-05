@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { Logger, resolveRootLogLevel } from '../../src/utils/logger.js';
+import { Logger, resolveRootLogLevel } from '../../src/core/classes/logger.js';
 import { createRepository, useTestEcosystem } from '../_fixture.js';
 
 /** Runs `fn` with console.log captured (plain-text lines) instead of printed. */

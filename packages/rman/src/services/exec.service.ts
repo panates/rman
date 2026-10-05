@@ -2,9 +2,9 @@ import os from 'node:os';
 import colors from 'ansi-colors';
 import { Task } from 'power-tasks';
 import type { RmanApplication } from '../core/application.js';
+import { Logger, type LogLevel, resolveRootLogLevel } from '../core/classes/logger.js';
 import { Service } from '../core/classes/service.js';
 import { exec as execCommand } from '../utils/exec.js';
-import { Logger, type LogLevel, resolveRootLogLevel } from '../utils/logger.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { type ProgressItem, ProgressPanel } from '../utils/progress-panel.js';
 

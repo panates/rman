@@ -1,11 +1,11 @@
 import path from 'node:path';
 import colors from 'ansi-colors';
+import { Logger, resolveRootLogLevel } from '../core/classes/logger.js';
 import type { Repository } from '../core/classes/repository.js';
 import type { ConfigValue, RmanConfig } from '../interfaces/rman-config.interface.js';
 import { registerCommand } from '../interfaces/rman-config.interface.js';
 import { ChangeHashService } from '../services/change-hash.service.js';
 import type { ChangelogService } from '../services/changelog.service.js';
-import { Logger, resolveRootLogLevel } from '../utils/logger.js';
 import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 import { ProgressPanel } from '../utils/progress-panel.js';
 

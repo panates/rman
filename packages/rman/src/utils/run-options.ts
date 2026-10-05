@@ -1,7 +1,7 @@
+import type { LogLevel } from '../core/classes/logger.js';
 import type { RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { RunService } from '../services/run.service.js';
 import { branchGuardOptions } from './branch-guard.js';
-import type { LogLevel } from './logger.js';
 import { fromRootOption, packageFilterOptions, readPackageFilterOptions } from './package-filter.js';
 
 /**

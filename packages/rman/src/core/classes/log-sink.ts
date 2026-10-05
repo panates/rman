@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import type { ProgressItem } from '../../utils/progress-panel.js';
+import type { LogLevel } from './logger.js';
 
 /**
  * One thing that happened during a run, in the order it happened. The JSON form is exactly this
@@ -7,10 +9,55 @@ import path from 'node:path';
  */
 export type LogEvent =
   | { event: 'start'; package: string; step: string; command?: string }
-  | { event: 'output'; package: string; stream: 'stdout' | 'stderr'; line: string }
+  | {
+      event: 'output';
+      package: string;
+      stream: 'stdout' | 'stderr';
+      line: string;
+      /** Set on a line rman itself wrote to say why a step failed - never inferred from the stream. */
+      level?: 'error';
+    }
   | { event: 'end'; package: string; step: string; status: 'success' | 'failed'; ms: number; error?: string }
   | { event: 'summary'; succeeded: number; failed: number; skipped: number; ms: number }
   | { event: 'message'; level: 'info' | 'error'; message: string };
+
+/**
+ * Something a run's events are rendered by - the screen, the `--json` stream, a log file.
+ *
+ * The scheduler produces each event once and hands it to every reporter the run has; none of them
+ * knows the others exist. Adding a destination is a reporter, never another branch where the event
+ * is produced.
+ */
+/* **Why a set of reporters rather than one writer with modes.** A step's line used to go through four
+ * branches at the place it was produced - the panel's row, the plain screen, `--json`, the file - and
+ * every new thing to do with a line (the package prefix was the one that showed it) meant touching
+ * each of them. winston and consola were weighed for this: both make the shape available, and both
+ * would have meant translating these typed events into a log record and back, while the set of
+ * destinations here is closed. winston also writes files asynchronously, which loses the last lines
+ * of an interrupted run - the ones that say why it was interrupted. */
+export interface Reporter {
+  /**
+   * One event. `origin` is given for every event that belongs to a package - which row it is, the
+   * package's own log level, and the step's label - and is absent for the run's own (`summary`,
+   * `message`).
+   */
+  report(event: LogEvent, origin?: ReportOrigin): void;
+  /**
+   * Environment a child should be started with for this reporter to render its lines - `FORCE_COLOR`
+   * where a reporter prints them to a terminal, nothing where colour would only be stripped again.
+   */
+  readonly childEnv?: Record<string, string>;
+}
+
+/** Which package an event is about, as a screen reporter needs to know it. */
+export interface ReportOrigin {
+  /** The package's row - the run's state for it, whether or not a panel is drawing it. */
+  item: ProgressItem;
+  /** The package's own `run.<script>.logLevel`, which decides what a plain screen prints. */
+  logLevel: LogLevel;
+  /** The step's label for a one-line-per-step log; empty for an anonymous function. */
+  label?: string;
+}
 
 /**
  * Where a run's log goes besides the screen - the global `--json` and `--log-file`.
@@ -36,7 +83,7 @@ export type LogEvent =
  * no empty file behind - and `used` stays false, which is how the CLI can say so. Written
  * synchronously, line by line: an interrupted run keeps every line written before the interrupt,
  * and lines from concurrent packages stay whole and in order. */
-export class LogSink {
+export class LogSink implements Reporter {
   /** The console format is JSON Lines - so nothing but events may reach stdout. */
   readonly json: boolean;
   /** Whether anything was written - read by the CLI to warn about a flag nothing honoured. */
@@ -65,7 +112,7 @@ export class LogSink {
     return this.file;
   }
 
-  write(event: LogEvent): void {
+  report(event: LogEvent): void {
     if (!this.active) return;
     this.used = true;
     const time = new Date().toISOString();

@@ -11,6 +11,8 @@ import yargs, { type ArgumentsCamelCase, type Argv, type CommandModule } from 'y
 import { hideBin } from 'yargs/helpers';
 import { version } from './constants.js';
 import { RmanApplication } from './core/application.js';
+import { LogSink } from './core/classes/log-sink.js';
+import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './core/classes/logger.js';
 import type { Package } from './core/classes/package.js';
 import { Repository } from './core/classes/repository.js';
 import { commandName, toYargsCommand } from './core/command-builder.js';
@@ -26,8 +28,6 @@ import {
 import { checkCustomCommand } from './core/plugin-loader.js';
 import { commandRegistry, type RmanConfig } from './interfaces/rman-config.interface.js';
 import { colorYaml } from './utils/color-yaml.js';
-import { LogSink } from './utils/log-sink.js';
-import { LOG_LEVELS, Logger, type LogLevel, resolveRootLogLevel } from './utils/logger.js';
 import { filterPackages, readFromRootOption, readPackageFilterOptions } from './utils/package-filter.js';
 import { printableConfig, withoutContributions } from './utils/printable-config.js';
 import { runBin } from './utils/run-bin.js';

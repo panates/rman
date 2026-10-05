@@ -1,4 +1,4 @@
-import type { Repository } from '../core/classes/repository.js';
+import type { Repository } from './repository.js';
 
 export type LogLevel = 'silent' | 'error' | 'info' | 'verbose';
 export const LOG_LEVELS: LogLevel[] = ['silent', 'error', 'info', 'verbose'];

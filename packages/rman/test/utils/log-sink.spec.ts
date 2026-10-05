@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { LogSink } from '../../src/utils/log-sink.js';
+import { LogSink } from '../../src/core/classes/log-sink.js';
 
 describe('utils/log-sink', () => {
   const dirs: string[] = [];
@@ -35,10 +35,10 @@ describe('utils/log-sink', () => {
   it('writes the text form to the file: the package in brackets, then what happened', () => {
     const dir = tmp();
     const sink = new LogSink({ file: 'run.log', cwd: dir });
-    sink.write({ event: 'start', package: 'pkg-a', step: 'build', command: 'tsc -b' });
-    sink.write({ event: 'output', package: 'pkg-a', stream: 'stdout', line: 'compiled' });
-    sink.write({ event: 'end', package: 'pkg-a', step: 'build', status: 'failed', ms: 12, error: 'one\ntwo' });
-    sink.write({ event: 'summary', succeeded: 1, failed: 1, skipped: 2, ms: 40 });
+    sink.report({ event: 'start', package: 'pkg-a', step: 'build', command: 'tsc -b' });
+    sink.report({ event: 'output', package: 'pkg-a', stream: 'stdout', line: 'compiled' });
+    sink.report({ event: 'end', package: 'pkg-a', step: 'build', status: 'failed', ms: 12, error: 'one\ntwo' });
+    sink.report({ event: 'summary', succeeded: 1, failed: 1, skipped: 2, ms: 40 });
     sink.close();
 
     const lines = fs
@@ -60,7 +60,7 @@ describe('utils/log-sink', () => {
     const dir = tmp();
     const sink = new LogSink({ json: true, file: 'run.jsonl', cwd: dir });
     const out = captureStdout(() => {
-      sink.write({ event: 'output', package: 'pkg-a', stream: 'stderr', line: 'warned' });
+      sink.report({ event: 'output', package: 'pkg-a', stream: 'stderr', line: 'warned' });
       sink.close();
     });
 
@@ -76,7 +76,7 @@ describe('utils/log-sink', () => {
     const dir = tmp();
     const sink = new LogSink({ json: true, file: 'run.jsonl', cwd: dir });
     captureStdout(() => {
-      sink.write({ event: 'output', package: '\x1b[1mpkg-a\x1b[22m', stream: 'stdout', line: '\x1b[32mok\x1b[39m' });
+      sink.report({ event: 'output', package: '\x1b[1mpkg-a\x1b[22m', stream: 'stdout', line: '\x1b[32mok\x1b[39m' });
       sink.close();
     });
     const event = JSON.parse(fs.readFileSync(path.join(dir, 'run.jsonl'), 'utf-8'));
@@ -100,14 +100,14 @@ describe('utils/log-sink', () => {
     fs.writeFileSync(path.join(dir, 'logs', 'run.log'), 'from an earlier run\n');
     const sink = new LogSink({ file: 'logs/run.log', cwd: dir });
     expect(sink.filePath).toBe(path.join(dir, 'logs', 'run.log'));
-    sink.write({ event: 'message', level: 'info', message: 'fresh' });
+    sink.report({ event: 'message', level: 'info', message: 'fresh' });
     sink.close();
     expect(fs.readFileSync(path.join(dir, 'logs', 'run.log'), 'utf-8')).not.toContain('earlier');
   });
 
   it('is inert when neither json nor a file was asked for', () => {
     const sink = new LogSink({});
-    const out = captureStdout(() => sink.write({ event: 'message', level: 'info', message: 'x' }));
+    const out = captureStdout(() => sink.report({ event: 'message', level: 'info', message: 'x' }));
     expect(sink.active).toBe(false);
     expect(sink.used).toBe(false);
     expect(out).toBe('');
