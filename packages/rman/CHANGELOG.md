@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to d026cc89cd28b25fbc6d63bcbbacc86c845e6c01 -->
+<!-- rman:documented-up-to c9603c1fca75b7d72f7dcf2b11fc0a5a64b20e81 -->
+
+## v2.11.2 (2026-10-05)
+
+### 🐛 Bug Fixes
+
+- **publish:** decide from the manifest publish writes, and keep --json stdout one document (c9603c1)
+
+---
 
 ## v2.11.1 (2026-10-05)
 
