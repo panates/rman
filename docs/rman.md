@@ -2815,6 +2815,7 @@ namespace SystemInfo {
     version: string;
     root: string;
     packageCount: number;
+    platforms: string[]; // the technologies this run loaded, in the order a directory is offered to them
   }
 
   type SystemInfo = Record<string, Record<string, unknown>>; // shape is envinfo's own

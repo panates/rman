@@ -124,9 +124,9 @@ rman version --json
 
 ```json
 [
-  { "name": "pkg-a", "selector": "pkg-a", "isRoot": false, "group": "default",
+  { "name": "pkg-a", "selector": "pkg-a", "isRoot": false, "groupKey": "default", "group": "default",
     "status": "bump", "from": "1.0.0", "to": "1.1.0", "reason": "changed since v1.0.0" },
-  { "name": "root", "selector": "root", "isRoot": true, "group": "root",
+  { "name": "root", "selector": "root", "isRoot": true, "groupKey": "__root__", "group": "root",
     "status": "bump", "from": "1.0.0", "to": "1.1.0",
     "reason": "informational - monorepo root is never published on its own" }
 ]
@@ -145,6 +145,9 @@ appears with `status: "error"` and the version it would get. Select what you wan
 ```bash
 rman version --json | jq '[.[] | select(.isRoot | not) | select(.status == "bump") | .name]'
 ```
+
+`groupKey` is the same value [`rman list --json`](list.md) reports for each package, so the two can
+be joined on it; `group` is the label printed in the plan's Group column.
 
 **The run resolves either way, even with a dirty package.** `--show` exits 1 there because a person
 needs stopping; here the same fact is in the data, and a non-zero exit would make a pipeline bail

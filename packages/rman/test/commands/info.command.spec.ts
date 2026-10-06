@@ -111,6 +111,9 @@ describe('commands/info', () => {
         version: '3.2.1',
         root: dir,
         packageCount: 1,
+        /** The fixture's synthetic technology - what a reader asking "which technologies are
+         *  loaded" is answered with. */
+        platforms: ['test'],
       });
       // whatever envinfo reports lives alongside "repository", not nested under it.
       expect(typeof parsed).toBe('object');

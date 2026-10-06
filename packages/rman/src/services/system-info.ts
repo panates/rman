@@ -8,6 +8,9 @@ export namespace SystemInfo {
     version: string;
     root: string;
     packageCount: number;
+    /** The technologies this run loaded, by `Platform.name`, in the order a directory is offered to
+     *  them - so `["cargo", "node"]` means a directory both recognize is a Cargo package. */
+    platforms: string[];
   }
 
   /** Whatever `envinfo` reports, grouped by category - shape is `envinfo`'s own, not ours. */
@@ -62,6 +65,7 @@ export namespace SystemInfo {
       version: repository.rootPackage.version,
       root: repository.dirname,
       packageCount: repository.getPackages().length,
+      platforms: [...repository.app.platforms].map(p => p.name),
     };
   }
 }

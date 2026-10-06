@@ -339,6 +339,20 @@ describe('commands/version', () => {
       expect(entries.filter(e => !e.isRoot).map(e => e.name)).toEqual(['pkg-a']);
     });
 
+    it("carries each entry's groupKey, the same one rman list --json reports", async () => {
+      const dir = fixture();
+      const entries = await planJson(dir);
+      const listed = JSON.parse(
+        (await captureLogs(() => runCli({ cwd: dir, argv: ['list', '--json'] }))).join('\n'),
+      ) as any[];
+
+      for (const item of listed) {
+        const entry = entries.find(e => e.name === item.name);
+        if (entry) expect(entry.groupKey).toBe(item.groupKey);
+      }
+      expect(entries.every(e => typeof e.groupKey === 'string')).toBe(true);
+    });
+
     it('keeps a dirty package in the output, with its status, instead of dropping it', async () => {
       const dir = fixture();
       fs.writeFileSync(path.join(dir, 'packages/a/dirty.txt'), 'uncommitted');

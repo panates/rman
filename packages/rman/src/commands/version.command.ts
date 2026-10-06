@@ -296,6 +296,8 @@ const versionCommand = registerCommand(app => {
               name: e.package.name,
               selector: e.package.selector,
               isRoot: e.package.isRoot,
+              /** `rman list --json`'s spelling, so a consumer joins the two on it. */
+              groupKey: e.groupKey,
               group: e.group,
               status: e.status,
               from: e.from,

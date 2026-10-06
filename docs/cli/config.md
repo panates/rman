@@ -80,8 +80,8 @@ single-package repository the root *is* the one package, and `"[*]"` reaches it 
 - **The contribution keys are left out** - `plugins`, `platforms`, `commands` and `publishTargets`.
   They are code (a technology, a command, a publish target), and every repository carries the
   default presets' entries, so printing them would bury the few keys the repository actually sets.
-  Which technology claimed each package is [`rman list`](list.md)'s `Platform` column; which commands
-  exist, `rman --help`'s.
+  Which technologies are loaded is [`rman info`](info.md)'s `Platforms` line, which one claimed each
+  package [`rman list`](list.md)'s `Platform` column, and which commands exist `rman --help`.
 - **A value written as a function prints as `[Function: name]`** - a step in a JS config, say -
   rather than breaking the YAML or, under `--json`, silently vanishing.
 - **`version.before`/`.exec`/`.after` are printed raw**, and the output says so when they are

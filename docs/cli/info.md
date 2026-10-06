@@ -42,12 +42,17 @@ rman info
  Utilities:
     Git      : 2.46.0
  Repository:
-    Type     : Monorepo
-    Name     : my-monorepo
-    Version  : (none)
-    Root     : /Users/me/dev/my-monorepo
-    Packages : 6 (run "list" to see them)
+    Type      : Monorepo
+    Name      : my-monorepo
+    Version   : (none)
+    Root      : /Users/me/dev/my-monorepo
+    Platforms : node
+    Packages  : 6 (run "list" to see them)
 ```
+
+`Platforms` is every technology this run loaded, in the order a directory is offered to them - so
+`cargo, node` means a directory both recognize is a Cargo package. Which one claimed each package
+is [`rman list`](list.md)'s `Platform` column.
 
 With `.rmanrc { "packageManager": "pnpm" }`, `Binaries` reports `pnpm`'s own version instead of
 npm's - every package-manager-aware command (`ci`/`publish`) already shells out to the configured
@@ -57,7 +62,7 @@ one, not npm, so that's the version actually relevant here.
 rman info --json
 # { "System": {...}, "Binaries": {...}, "Utilities": {...}, "npmPackages": {...},
 #   "repository": { "type": "monorepo", "name": "my-monorepo", "version": "", "root": "...",
-#                   "packageCount": 6 } }
+#                   "packageCount": 6, "platforms": ["node"] } }
 ```
 
 ## See also

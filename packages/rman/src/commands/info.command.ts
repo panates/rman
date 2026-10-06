@@ -70,20 +70,18 @@ function printSystemInfo(systemInfo: SystemInfo.SystemInfo): void {
 
 function printRepositoryInfo(info: SystemInfo.RepositoryInfo): void {
   console.log('', colors.whiteBright('Repository') + ':');
-  console.log(
-    '    ' + colors.reset('Type') + '     :',
-    colors.yellowBright(info.type === 'monorepo' ? 'Monorepo' : 'Single package'),
-  );
-  console.log('    ' + colors.reset('Name') + '     :', colors.yellowBright(info.name || '(none)'));
-  console.log('    ' + colors.reset('Version') + '  :', colors.yellowBright(info.version || '(none)'));
-  console.log('    ' + colors.reset('Root') + '     :', colors.yellowBright(info.root));
+  const rows: [string, ...string[]][] = [
+    ['Type', colors.yellowBright(info.type === 'monorepo' ? 'Monorepo' : 'Single package')],
+    ['Name', colors.yellowBright(info.name || '(none)')],
+    ['Version', colors.yellowBright(info.version || '(none)')],
+    ['Root', colors.yellowBright(info.root)],
+    ['Platforms', colors.yellowBright(info.platforms.join(', ') || '(none)')],
+  ];
   if (info.type === 'monorepo') {
-    console.log(
-      '    ' + colors.reset('Packages') + ' :',
-      colors.yellowBright(String(info.packageCount)),
-      colors.gray('(run "list" to see them)'),
-    );
+    rows.push(['Packages', colors.yellowBright(String(info.packageCount)), colors.gray('(run "list" to see them)')]);
   }
+  const width = Math.max(...rows.map(([label]) => label.length));
+  for (const [label, ...values] of rows) console.log('    ' + colors.reset(label.padEnd(width)) + ' :', ...values);
 }
 
 /**
