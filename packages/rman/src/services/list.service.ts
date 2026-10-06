@@ -5,6 +5,7 @@ import type { Repository } from '../core/classes/repository.js';
 import { Service } from '../core/classes/service.js';
 import { type PublishTargetName, skipReasonFor, targetsOf } from '../core/interfaces/publish-target.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
+import { groupKeyOf, isNamedGroupKey, isSoloGroupKey, ROOT_GROUP_KEY } from '../utils/version-group.js';
 
 /**
  * **A class, and the shape every service follows now.**
@@ -41,12 +42,19 @@ export class ListService extends Service {
       /** **A monorepo's root ships nowhere**: `publish` never makes it a candidate
        *  (`repository.getPackages()` leaves it out), so listing the target a root *would* claim
        *  says something no command does. */
-      const targets = p === repository.rootPackage && repository.monorepo ? [] : targetsOf(this.app, p);
+      const monorepoRoot = p === repository.rootPackage && repository.monorepo;
+      const targets = monorepoRoot ? [] : targetsOf(this.app, p);
+      /** The root's own key, as in `version`'s plan: a monorepo's root is never a group member - its
+       *  number is the repository's identity. */
+      const groupKey = monorepoRoot ? ROOT_GROUP_KEY : groupKeyOf(p);
       const publishTargets = targets.map(t => t.name);
       const skippedTargets: Record<string, string> = {};
+      const targetLabels: Record<string, string> = {};
       for (const target of targets) {
         const reason = skipReasonFor(p, target);
         if (reason) skippedTargets[target.name] = reason;
+        const label = target.labelFor?.(p);
+        if (label && label !== target.name) targetLabels[target.name] = label;
       }
       return {
         name: p.name,
@@ -54,6 +62,8 @@ export class ListService extends Service {
         version: p.version,
         platform: p.provider,
         depth: depthOf(p),
+        groupKey,
+        group: groupNameOf(groupKey),
         isRoot: p === repository.rootPackage,
         location: path.relative(repository.dirname, p.dirname) || '.',
         private: p.isPrivate,
@@ -61,6 +71,7 @@ export class ListService extends Service {
         dependencies: p.dependencies.map(d => d.name),
         publishTargets: [...publishTargets],
         skippedTargets,
+        targetLabels,
         docker: publishTargets.includes('docker') ? p.config.publish?.docker : undefined,
       };
     };
@@ -121,6 +132,15 @@ export namespace ListService {
      * `--toposort` - which reorders the rows and leaves the nesting where it is.
      */
     depth: number;
+    /**
+     * Which release group the package versions with - `.rmanrc group`, the key `version` batches its
+     * plan by: `default` for the implicit repo-wide group, `named:<name>` for a named one,
+     * `solo:<package>` for `group: false`, and `__root__` for a monorepo's root, which belongs to
+     * none. The same spelling `version --json` reports.
+     */
+    groupKey: string;
+    /** `groupKey`'s name - the group's own name, `default`, the package's for a solo one, `root`. */
+    group: string;
     /** Whether this row *is* the root package - present only when `includeRoot` asked for it, or in
      *  a single-package repository where the root is the one member. */
     isRoot: boolean;
@@ -139,6 +159,10 @@ export namespace ListService {
      *  registry, so `{}` means "a candidate", not "will publish": whether the version is already out
      *  there is `publish --dry-run`'s answer. */
     skippedTargets: Record<PublishTargetName, string>;
+    /** What the table shows in place of a target's name, where the target says more for this
+     *  package - npm's registry host when `publishConfig.registry` names one other than npm's own
+     *  (`{ npm: 'npm.pkg.github.com' }`). A label only: `publishTargets` and `--target` keep the name. */
+    targetLabels: Record<PublishTargetName, string>;
     /** Present only when `"docker"` is one of `publishTargets` and `publish.docker` is configured -
      *  the raw `.rmanrc` config, unresolved (no namespace prefixing - see `DockerPublishService`). */
     docker?: DockerPublishOptions;
@@ -162,4 +186,12 @@ function depthOf(pkg: Package): number {
   let depth = 0;
   for (let at = pkg.parent; at; at = at.parent) depth++;
   return depth;
+}
+
+/** The name behind a group key - the same reading `VersionPlanService.groupLabel` makes. */
+function groupNameOf(key: string): string {
+  if (key === ROOT_GROUP_KEY) return 'root';
+  if (isNamedGroupKey(key)) return key.slice('named:'.length);
+  if (isSoloGroupKey(key)) return key.slice('solo:'.length);
+  return key;
 }

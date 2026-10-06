@@ -4,6 +4,7 @@ import type { Repository } from '../core/classes/repository.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { ListService } from '../services/list.service.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
+import { isNamedGroupKey, isSoloGroupKey, ROOT_GROUP_KEY } from '../utils/version-group.js';
 
 /** `[options...]` is yargs-meaningless - its variadic marker is two dots, and this command declares
  *  no positional for it. Left as it is rather than fixed in passing: dropping it makes
@@ -86,7 +87,8 @@ const listCommand = registerCommand(app => {
        * so counting rows that are not the root reported `0 Package(s) found` there (measured). The
        * condition is the same one the service applies, and it is one line.
        */
-      else printTable(items, table && app.repository.monorepo);
+      /** Grouped, except where the order *is* the answer: `--toposort` is dependency order. */
+      else printTable(args.toposort ? items : byGroup(items), table && app.repository.monorepo);
     },
   };
 });
@@ -106,10 +108,50 @@ function statusLabel(status: Repository.PackageStatus): string {
   }
 }
 
-/** Where a package ships, one target name each - grey for a target `publish` would skip it for
- *  (`Item.skippedTargets`), so the column never reads as a promise the release will not keep. */
+/** Where a package ships, one target each - its label where it has one (`Item.targetLabels`, npm's
+ *  registry host). A target `publish` would skip it for (`Item.skippedTargets`) is left out, and a
+ *  package left with none reads `-`, so the column never reads as a promise the release will not
+ *  keep. Blank where no target claims the package at all - a monorepo's root, for one. */
 function publishLabel(it: ListService.Item): string {
-  return it.publishTargets.map(name => (it.skippedTargets[name] ? colors.gray(name) : colors.green(name))).join(', ');
+  if (!it.publishTargets.length) return '';
+  const shipping = it.publishTargets.filter(name => !it.skippedTargets[name]);
+  if (!shipping.length) return colors.gray('-');
+  return shipping.map(name => colors.green(it.targetLabels[name] ?? name)).join(', ');
+}
+
+/**
+ * The rows with each release group's members together - the root first, then the groups in the
+ * order their first member appears, then the packages in no group (`group: false`) - the order
+ * `version`'s plan prints them in. Stable within a group, so the lexical order holds there.
+ */
+/* The cost, stated: a package nested inside another can land away from it, when the two are in
+ * different groups - its indentation still says how deep it sits, not under which row. */
+function byGroup(items: ListService.Item[]): ListService.Item[] {
+  const root = items.filter(it => it.groupKey === ROOT_GROUP_KEY);
+  const groups = new Map<string, ListService.Item[]>();
+  const solo: ListService.Item[] = [];
+  for (const it of items) {
+    if (it.groupKey === ROOT_GROUP_KEY) continue;
+    if (isSoloGroupKey(it.groupKey)) solo.push(it);
+    else groups.set(it.groupKey, [...(groups.get(it.groupKey) ?? []), it]);
+  }
+  return [...root, ...[...groups.values()].flat(), ...solo];
+}
+
+/** Whether the Group column says anything: a group the repository named, or the default group
+ *  beside packages in none. One line for everything, or no grouping at all, would put the same
+ *  answer - or nothing - on every row. */
+function showsGroups(items: ListService.Item[]): boolean {
+  const keys = items.map(it => it.groupKey).filter(key => key !== ROOT_GROUP_KEY);
+  return keys.some(isNamedGroupKey) || (keys.includes('default') && keys.some(isSoloGroupKey));
+}
+
+/** A named group by its name, the default one as a grey `(default)` - `version`'s plan table reads
+ *  the same way. Blank for the root and for a package in no group. */
+function groupCell(it: ListService.Item): string {
+  if (isNamedGroupKey(it.groupKey)) return colors.cyan(it.group);
+  if (it.groupKey === 'default') return colors.gray('(default)');
+  return '';
 }
 
 /**
@@ -132,10 +174,12 @@ function publishLabel(it: ListService.Item): string {
  */
 function printTable(items: ListService.Item[], withRoot: boolean): void {
   const table = new EasyTable();
+  const withGroup = showsGroups(items);
   for (const it of items) {
     const indent = '  '.repeat(it.depth);
     table.cell('Package', indent + (it.isRoot ? colors.whiteBright(it.selector) : colors.yellowBright(it.selector)));
     table.cell('Version', colors.yellow(it.version));
+    if (withGroup) table.cell('Group', groupCell(it));
     table.cell('Platform', it.platform ? colors.cyan(it.platform) : '');
     table.cell('Private', it.private ? colors.magentaBright('yes') : '');
     table.cell('Publish', publishLabel(it));

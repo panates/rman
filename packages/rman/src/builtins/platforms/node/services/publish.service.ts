@@ -274,6 +274,24 @@ export namespace PublishService {
     return undefined;
   }
 
+  /** The host of a package's `publishConfig.registry` - `npm.pkg.github.com` for GitHub Packages -
+   *  or `undefined` where it names none, or names npm's own registry. What `rman list` shows in
+   *  place of `npm`. */
+  /* **`publishConfig.registry` only**, which is one package's own statement. A scoped
+   * `@owner:registry=` in `.npmrc` also sends a package elsewhere, and is not read: npm resolves it
+   * itself (see `resolveRegistry`), so such a package still shows `npm`. A value that is not a URL
+   * shows `npm` too - `npm publish` is what will say it is wrong. */
+  export function registryLabel(pkg: Package): string | undefined {
+    const registry = resolveRegistry(pkg, undefined);
+    if (!registry) return undefined;
+    try {
+      const host = new URL(registry).hostname;
+      return host && host !== NPMJS_HOST ? host : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   export async function getPlan(repository: Repository, options: Options = {}, deps: Deps = {}): Promise<Entry[]> {
     const git = new GitHelper({ cwd: repository.dirname });
     const packages = filterPackages(repository.getPackages({ toposort: true }), options);
@@ -539,6 +557,9 @@ function resolveRegistry(pkg: Package, override: string | undefined): string | u
   const native = pkg.manifest.raw.publishConfig?.registry;
   return override || (typeof native === 'string' && native ? native : undefined);
 }
+
+/** npm's own registry, which `PublishService.registryLabel` leaves shown as `npm`. */
+const NPMJS_HOST = 'registry.npmjs.org';
 
 /**
  * The retired `publish.directory` spelling, if a config still carries it.

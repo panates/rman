@@ -2,7 +2,6 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import colors from 'ansi-colors';
 import { expect } from 'expect';
 import { definePlatform, type Platform } from '../../src/core/interfaces/plugin.js';
 import { runCli, usePlugin, useTarget, useTestEcosystem } from '../_fixture.js';
@@ -378,7 +377,74 @@ describe('commands/list', () => {
   });
 
   /**
-   * **The publish column: where each package ships, grey where `publish` would skip it.**
+   * **The group column, and each group's members kept together** - the order and the reading
+   * `version`'s plan table already uses, so the two commands describe a repository the same way.
+   * Directory names are chosen so that lexical order interleaves the groups.
+   */
+  describe('the group column', () => {
+    function groupedFixture(): string {
+      const dir = tmp();
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      const pkg = (rel: string, name: string, group?: string | boolean) => {
+        writeJson(dir, `packages/${rel}/package.json`, { name, version: '1.0.0' });
+        if (group !== undefined) fs.writeFileSync(path.join(dir, `packages/${rel}/.rmanrc`), JSON.stringify({ group }));
+      };
+      pkg('a', 'pkg-a');
+      pkg('m', 'pkg-m', 'core');
+      pkg('n', 'pkg-n', false);
+      pkg('r', 'pkg-r');
+      pkg('z', 'pkg-z', 'core');
+      return dir;
+    }
+
+    it("reports each package's group in --json, in the spelling version --json uses", async () => {
+      const dir = groupedFixture();
+      const items = JSON.parse((await captureLogs(() => runCli({ cwd: dir, argv: ['list', '--json'] }))).join('\n'));
+      const byName = Object.fromEntries(items.map((i: any) => [i.name, [i.groupKey, i.group]]));
+      expect(byName).toEqual({
+        'pkg-a': ['default', 'default'],
+        'pkg-m': ['named:core', 'core'],
+        'pkg-n': ['solo:pkg-n', 'pkg-n'],
+        'pkg-r': ['default', 'default'],
+        'pkg-z': ['named:core', 'core'],
+      });
+      /** The inventory's order is not the table's: a script reading --json sees lexical order. */
+      expect(items.map((i: any) => i.name)).toEqual(['pkg-a', 'pkg-m', 'pkg-n', 'pkg-r', 'pkg-z']);
+    });
+
+    it('prints a Group column and keeps each group together, the ungrouped last', async () => {
+      const dir = groupedFixture();
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['list'] }));
+      expect(rows(lines)[0]).toContain('Group');
+      const order = rows(lines)
+        .map(l => l.trim().split(/\s+/)[0])
+        .filter(name => /^(root|pkg-)/.test(name));
+      expect(order).toEqual(['root', 'pkg-a', 'pkg-r', 'pkg-m', 'pkg-z', 'pkg-n']);
+      expect(row(lines, 'pkg-a')).toContain('(default)');
+      expect(row(lines, 'pkg-m')).toMatch(/\score\s/);
+      expect(row(lines, 'pkg-n')).not.toMatch(/\(default\)|\bcore\b/);
+    });
+
+    /** Dependency order is the whole answer under --toposort, so the groups do not reorder it. */
+    it('leaves --toposort in dependency order', async () => {
+      const dir = groupedFixture();
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['list', '--toposort'] }));
+      const order = rows(lines)
+        .map(l => l.trim().split(/\s+/)[0])
+        .filter(name => /^pkg-/.test(name));
+      expect(order).toEqual(['pkg-a', 'pkg-m', 'pkg-n', 'pkg-r', 'pkg-z']);
+    });
+
+    /** One version line for the whole repository: the column would say `(default)` on every row. */
+    it('leaves the column out where there is only the default group', async () => {
+      const lines = await captureLogs(() => runCli({ cwd: monorepoFixture(), argv: ['list'] }));
+      expect(rows(lines)[0]).not.toContain('Group');
+    });
+  });
+
+  /**
+   * **The publish column: where each package ships, `-` where `publish` would skip it.**
    *
    * A fake target, because the core registers `docker` alone and it is opt-in - and because the
    * question is the seam, not npm's rule: `skipReason` is the target's, `publish.skip` the core's.
@@ -389,6 +455,15 @@ describe('commands/list', () => {
       name: 'fake',
       platforms: ['test'],
       skipReason: pkg => (pkg.manifest.raw.private ? 'private package' : undefined),
+      labelFor: pkg => pkg.manifest.raw.registryHost,
+      getPlan: async () => [],
+      applyPlan: async () => [],
+    });
+    /** A second target for one package, so a row can be skipped by one target and not the other. */
+    useTarget({
+      name: 'other',
+      platforms: ['test'],
+      claims: pkg => pkg.name === 'pkg-b',
       getPlan: async () => [],
       applyPlan: async () => [],
     });
@@ -397,6 +472,7 @@ describe('commands/list', () => {
       const dir = monorepoFixture();
       writeJson(dir, 'packages/c/package.json', { name: 'pkg-c', version: '1.0.0' });
       fs.writeFileSync(path.join(dir, 'packages/c/.rmanrc'), JSON.stringify({ publish: { skip: true } }));
+      writeJson(dir, 'packages/d/package.json', { name: 'pkg-d', version: '1.0.0', registryHost: 'registry.example' });
       return dir;
     }
 
@@ -405,43 +481,44 @@ describe('commands/list', () => {
       const items = JSON.parse((await captureLogs(() => runCli({ cwd: dir, argv: ['list', '--json'] }))).join('\n'));
       const byName = Object.fromEntries(items.map((i: any) => [i.name, i]));
       expect(byName['pkg-a']).toMatchObject({ publishTargets: ['fake'], skippedTargets: {} });
-      expect(byName['pkg-b']).toMatchObject({ publishTargets: ['fake'], skippedTargets: { fake: 'private package' } });
+      expect(byName['pkg-b']).toMatchObject({
+        publishTargets: ['fake', 'other'],
+        skippedTargets: { fake: 'private package' },
+      });
       /** The core's own rule, asked before the target's - `pkg-c` is not private. */
       expect(byName['pkg-c'].skippedTargets).toEqual({ fake: 'excluded via .rmanrc "publish.skip"' });
     });
 
-    it('prints a Publish column, grey for a skipped target and the monorepo root empty', async () => {
+    /** A label is shown, never an identity: `publishTargets` keeps the name `--target` takes. */
+    it("shows a target's label for a package in place of its name, and keeps the name in --json", async () => {
       const dir = fixture();
-      const raw = await captureRaw(() => runCli({ cwd: dir, argv: ['list'] }));
-      const lines = raw.map(stripAnsi);
-      expect(rows(lines)[0]).toContain('Publish');
-      expect(row(lines, 'pkg-a')).toContain('fake');
-      /** `publish` never makes a monorepo's root a candidate, so the column says nothing there - though
-       *  the root is a `test` package the target would otherwise claim. */
-      expect(row(lines, 'root')).not.toContain('fake');
+      const items = JSON.parse((await captureLogs(() => runCli({ cwd: dir, argv: ['list', '--json'] }))).join('\n'));
+      const d = items.find((i: any) => i.name === 'pkg-d');
+      expect(d).toMatchObject({ publishTargets: ['fake'], targetLabels: { fake: 'registry.example' } });
+      expect(items.find((i: any) => i.name === 'pkg-a').targetLabels).toEqual({});
 
-      const rawRow = (name: string) => rows(raw).find(l => stripAnsi(l).trimStart().startsWith(name))!;
-      expect(rawRow('pkg-a')).toContain(colors.green('fake'));
-      expect(rawRow('pkg-b')).toContain(colors.gray('fake'));
-      expect(rawRow('pkg-c')).toContain(colors.gray('fake'));
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['list'] }));
+      expect(row(lines, 'pkg-d')).toContain('registry.example');
+      expect(row(lines, 'pkg-d')).not.toMatch(/\bfake\b/);
+    });
+
+    it('prints a Publish column: a skipped target left out, "-" where none is left', async () => {
+      const dir = fixture();
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['list'] }));
+      expect(rows(lines)[0]).toContain('Publish');
+      expect(row(lines, 'pkg-a')).toMatch(/\sfake\s/);
+      /** Skipped by `fake` and shipped by `other`: only what still ships is named. */
+      expect(row(lines, 'pkg-b')).toMatch(/\sother\s/);
+      expect(row(lines, 'pkg-b')).not.toMatch(/\bfake\b/);
+      /** `publish.skip` leaves nothing - the dash, not the target's name. */
+      expect(row(lines, 'pkg-c')).toMatch(/\s-\s/);
+      expect(row(lines, 'pkg-c')).not.toMatch(/\bfake\b/);
+      /** `publish` never makes a monorepo's root a candidate, so the column is blank there - not a
+       *  dash, which would say a target claimed it and skips it. */
+      expect(row(lines, 'root')).not.toMatch(/\s-\s|\bfake\b/);
     });
   });
 });
-
-/** `console.log` captured with its colours left in, for the one assertion that is about them. */
-async function captureRaw(fn: () => Promise<void>): Promise<string[]> {
-  const original = console.log;
-  const lines: string[] = [];
-  console.log = (...args: unknown[]) => {
-    lines.push(args.map(a => (typeof a === 'string' ? a : String(a))).join(' '));
-  };
-  try {
-    await fn();
-  } finally {
-    console.log = original;
-  }
-  return lines;
-}
 
 /**
  * A CLI call expected to fail, with **both** streams silenced while it runs.

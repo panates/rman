@@ -91,6 +91,11 @@ export class NpmPublishTarget implements PublishTarget {
     return PublishService.skipReason(pkg);
   }
 
+  /** The registry's host where `publishConfig.registry` names one other than npm's own. */
+  labelFor(pkg: Package) {
+    return PublishService.registryLabel(pkg);
+  }
+
   getPlan(ctx: PublishTarget.Context) {
     return PublishService.getPlan(ctx.repository, this.planOptions(ctx));
   }

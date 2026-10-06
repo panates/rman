@@ -34,7 +34,7 @@ outright); `--changed` conflicts with `--changed-since` (pick one).
 ## Examples
 
 ```bash
-# Default table: Package / Version / Platform / Private / Publish / Changed / Path, plus a count
+# Default table: Package / Version / [Group] / Platform / Private / Publish / Changed / Path, plus a count
 rman list
 ```
 
@@ -43,7 +43,7 @@ Package     Version  Platform  Private  Publish  Changed  Path
 ----------  -------  --------  -------  -------  -------  -----------------
 my-repo     1.2.0    node      yes               dirty    .
   pkg-a     1.2.0    node               npm      dirty    packages/pkg-a
-  pkg-b     1.0.4    node      yes      npm               packages/pkg-b
+  pkg-b     1.0.4    node      yes      -                 packages/pkg-b
 
 2 Package(s) found
 ```
@@ -67,11 +67,24 @@ possible - and until this column existed `rman list` was the one place that show
 could not say which each belonged to.
 
 **`Publish` is where each package ships**, one target name each - the same answer `publish` uses
-to pick its candidates. A target is **grey** where `publish` would skip the package for it: `.rmanrc
-"publish.skip"`, or the target's own rule (npm's: `private` with no `publishConfig`, or `private`
-published in place). Above, `pkg-b` is grey. Decided without the registry, so a coloured name means
-a candidate, not a pending publish - whether the version is already out there is
+to pick its candidates. A target `publish` would skip the package for is **left out**, and a package
+left with none reads **`-`**: `.rmanrc "publish.skip"`, or the target's own rule (npm's: `private`
+with no `publishConfig`, or `private` published in place). Above, `pkg-b` reads `-`. Decided
+without the registry, so a name means a candidate, not a pending publish - whether the version is already out there is
 [`publish --dry-run`](publish.md)'s answer. A monorepo's root is never a candidate and shows nothing.
+
+**An npm package publishing elsewhere shows the registry's host** - `npm.pkg.github.com` for one
+whose `publishConfig.registry` is GitHub Packages - and npm's own `registry.npmjs.org` stays `npm`.
+Only `publishConfig.registry` is read: a scoped `@owner:registry=` in `.npmrc` is npm's to resolve,
+so such a package still shows `npm`. A label only - it is still published with `--target npm`.
+
+**`Group` is the release group** (`.rmanrc group`) - a named group by its name, the default one as
+`(default)`, blank for a package in none (`group: false`) and for the root, as `version`'s plan
+table shows it. **The rows keep each group together**: the root, then the groups in the order their
+first member appears, then the ungrouped. Shown only where it says something - a named group, or
+the default one beside ungrouped packages - and the order is left alone under `--toposort`, where
+dependency order is the answer. A package nested inside another can then sit away from it; its
+indentation still says how deep it is.
 
 ```bash
 rman ls --short
@@ -81,8 +94,11 @@ rman ls --short
 rman list --json
 # [{ "name": "pkg-a", "selector": "pkg-a", "version": "1.2.0", "platform": "node", "depth": 1,
 #    "isRoot": false, "location": "packages/pkg-a", "private": false, "status": "dirty",
-#    "dependencies": [], "publishTargets": ["npm"], "skippedTargets": {} }, ...]
+#    "groupKey": "default", "group": "default", "dependencies": [], "publishTargets": ["npm"],
+#    "skippedTargets": {}, "targetLabels": {} }, ...]
+# groupKey is the spelling version --json uses: default / named:<name> / solo:<package>
 # skippedTargets maps a skipped target to why: { "npm": "private package" }
+# targetLabels maps a target to what the table shows instead: { "npm": "npm.pkg.github.com" }
 
 rman list --parseable
 # packages/pkg-a::pkg-a::1.2.0::::DIRTY

@@ -2007,6 +2007,7 @@ interface PublishTarget {
   options?: Record<string, RmanConfig.CommandOption>; // merged into `publish`'s own flags
   claims?(pkg: Package): boolean;                  // is this package mine when it declares nothing?
   skipReason?(pkg: Package): string | undefined;   // why I would leave it alone, without the registry
+  labelFor?(pkg: Package): string | undefined;     // what `rman list` shows instead of `name`
   getPlan(ctx: PublishTarget.Context): Promise<PublishTarget.Entry[]>;
   applyPlan(ctx: PublishTarget.Context, plan: PublishTarget.Entry[]): Promise<PublishTarget.Entry[]>;
 }
@@ -2056,9 +2057,12 @@ export default defineConfig({
   cannot disagree.
 - **`skipReason(pkg)` is why a target would leave a package it ships to alone**, from the config and
   manifest alone - no registry, no build. `skipReasonFor(pkg, target)` asks `.rmanrc "publish.skip"`
-  first and then the target; it is what `rman list` greys a target out by. A target implementing it
+  first and then the target; it is what `rman list` leaves a target out by (`-` when none is left). A target implementing it
   should call the same function from its own `getPlan`, or the list and the plan can disagree - npm's
   does (`PublishService.skipReason`).
+- **`labelFor(pkg)` is what `rman list` shows in place of `name`** for one package - npm's is the
+  host of a `publishConfig.registry` other than npm's own (`npm.pkg.github.com`). A label, never an
+  identity: `--target` and `publish.target` still take `name`.
 
 ### `DockerPublishService`
 
@@ -2532,8 +2536,11 @@ namespace ListService {
     private: boolean;
     status: Repository.PackageStatus;
     dependencies: string[]; // in-repo package names - enough to build a dependency graph
+    groupKey: string; // the release group, as version --json spells it: default / named:<n> / solo:<pkg>
+    group: string; // its name - the group's, "default", the package's for a solo one, "root"
     publishTargets: string[]; // where it actually ships: its own "publish.target", or what claims it
     skippedTargets: Record<string, string>; // the publishTargets publish would skip it for, and why
+    targetLabels: Record<string, string>; // what the table shows instead of a target's name
     docker?: DockerPublishOptions; // present only when "docker" is one of publishTargets
   }
 

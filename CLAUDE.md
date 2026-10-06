@@ -1428,6 +1428,7 @@ those touching more than half of all packages - to the root instead of repeating
 package (`ownersOf`/`BROAD_COMMIT_THRESHOLD`). Version bumping makes no such distinction: every
 touched package counts as changed.
 
+
 ### `changed` was removed - `version --json` is the machine-readable plan
 
 **Don't re-add it.** It answered the same question as `version --show` from the same `getPlan`, and
@@ -1967,11 +1968,20 @@ saw one thing to release and it was the one thing that must never be published.
 - **Which packages a target is asked about is `shipsTo`/`targetsOf`, never a second read of
   `publish.target`.** `DockerPublishService` and `ListService` both go through it, so `publish` and
   `rman list --json` cannot disagree about where a package ships.
-- **`PublishTarget.skipReason` is what `rman list` greys a target out by** (`skipReasonFor`, which
-  asks `publish.skip` first). An inventory must not ask the registry, so the rule is answered from
-  the config and the manifest alone - and npm's `getPlan` calls the same `PublishService.skipReason`,
-  or the list and the plan would disagree about which packages ship. A monorepo's root lists no
-  targets: `publish` never makes it a candidate.
+- **`PublishTarget.skipReason` is what `rman list` leaves a target out by**, `-` when none is left
+  (`skipReasonFor`, which asks `publish.skip` first). It was grey first and the user changed it: a
+  grey name still reads as a destination. An inventory must not ask the registry, so the rule is
+  answered from the config and the manifest alone - and npm's `getPlan` calls the same
+  `PublishService.skipReason`, or the list and the plan would disagree about which packages ship. A
+  monorepo's root lists no targets and reads blank, not `-`: `publish` never makes it a candidate.
+- **`rman list`'s table keeps each release group together** (`byGroup`), in `version`'s plan order -
+  root, groups by first appearance, `group: false` last - with a `Group` column read the same way
+  (`(default)` grey, named by name). Not under `--toposort`, and not in `--json`, whose order is the
+  inventory's. `Item.groupKey` is `version --json`'s spelling, so a consumer joins the two on it.
+- **`PublishTarget.labelFor` is what the list shows instead of a target's name**, and only shows:
+  npm answers the host of `publishConfig.registry` (`npm.pkg.github.com`), `registry.npmjs.org`
+  staying `npm`. A scoped `.npmrc` registry is not read, so such a package still shows `npm`.
+  `publishTargets` in `--json` and `--target` keep the name.
 - **B asks whether *this version* is published, never what `latest` points at.** The npm target
   runs one `npm view <name> version versions --json`: `versions` decides `up-to-date` vs `publish`,
   `latest` is only what the entry *reports* (`entry.registryVersion`). They are not the same

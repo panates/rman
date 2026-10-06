@@ -87,6 +87,13 @@ export interface PublishTarget {
    * the plan's own rule stated once - npm's `getPlan` calls the same function - or the two would
    * disagree about which packages ship. */
   skipReason?(pkg: Package): string | undefined;
+  /**
+   * The name `rman list` shows for this package when it says more than `name` does - npm's is the
+   * registry's host, `npm.pkg.github.com` for GitHub Packages. `undefined` shows `name`.
+   */
+  /* A label, never an identity: `--target` and `publish.target` still take `name`, so a package
+   * shown as `npm.pkg.github.com` is still published with `--target npm`. */
+  labelFor?(pkg: Package): string | undefined;
   /** What this target *would* do - never publishes. Called even under `--dry-run`, which is the
    *  whole point of the split. */
   getPlan(ctx: PublishTarget.Context): Promise<PublishTarget.Entry[]>;

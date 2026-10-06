@@ -52,6 +52,18 @@ describe('commands/list (npm target)', () => {
       private: true,
       publishConfig: { access: 'public' },
     });
+    /** GitHub Packages, stated in the package's own manifest. */
+    writeJson(dir, 'packages/github/package.json', {
+      name: '@owner/github',
+      version: '1.0.0',
+      publishConfig: { registry: 'https://npm.pkg.github.com' },
+    });
+    /** npm's own registry, written out - the same place a bare `npm` already says. */
+    writeJson(dir, 'packages/npmjs/package.json', {
+      name: 'npmjs',
+      version: '1.0.0',
+      publishConfig: { registry: 'https://registry.npmjs.org/' },
+    });
     return dir;
   }
 
@@ -65,5 +77,15 @@ describe('commands/list (npm target)', () => {
     const items = await listJson(fixture());
     expect(items.plain).toMatchObject({ publishTargets: ['npm'], skippedTargets: {} });
     expect(items.guarded.skippedTargets).toEqual({});
+  });
+
+  it("labels a package with its publishConfig.registry's host, unless that is npm's own", async () => {
+    const items = await listJson(fixture());
+    expect(items['@owner/github']).toMatchObject({
+      publishTargets: ['npm'],
+      targetLabels: { npm: 'npm.pkg.github.com' },
+    });
+    expect(items.npmjs.targetLabels).toEqual({});
+    expect(items.plain.targetLabels).toEqual({});
   });
 });
