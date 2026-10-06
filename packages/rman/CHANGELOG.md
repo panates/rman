@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 4c8e24322dec4b19bd01a1a1381af1750e53d435 -->
+<!-- rman:documented-up-to bcb336add6c3643ad4ec9643312cd803e88f8b17 -->
+
+## v2.14.0 (2026-10-06)
+
+### ✨ Features
+
+- **deps:** list and upgrade dependencies, replacing npm-check-updates (bcb336a)
+
+---
 
 ## v2.13.0 (2026-10-06)
 
