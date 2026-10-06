@@ -467,7 +467,16 @@ changelog:
 
 A commit is attributed to every package its files fall under; one broad enough to touch at least 3
 packages *and* more than half of all packages (a repo-wide doc pass, a relicense, ...) is
-attributed to the root alone instead of being repeated in every package's own entry. See
+attributed to the root alone instead of being repeated in every package's own entry.
+
+**A package that moved keeps its history.** A commit is matched against the directory each package
+was in *when the commit was made*, read from the moves of its manifest (`git log --follow`). Two
+cases are refused rather than guessed, and their history stays the root's: a manifest that git
+reports as a **copy** of another package's, and a directory **split** in one commit where no piece
+took more than half of its files - the piece that did is the old package, whichever got the
+manifest. A move that is not committed yet is not seen.
+
+See
 [`ChangelogService`](../rman.md#changelogservice) for the full template placeholder reference
 (`{{package}}`/`{{version}}`/`{{date}}`/`{{commits}}`/`{{features}}`/`{{fixes}}`/`{{other}}`) and
 grouping algorithm. A package with `.rmanrc "publish": { "skip": true }` gets no entry at all by

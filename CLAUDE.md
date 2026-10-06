@@ -1428,6 +1428,27 @@ those touching more than half of all packages - to the root instead of repeating
 package (`ownersOf`/`BROAD_COMMIT_THRESHOLD`). Version bumping makes no such distinction: every
 touched package counts as changed.
 
+**`ChangelogService` matches a commit against where each package was *then***
+(`ChangelogService.packageHomes`, `homesAt`, `GitHelper.moveHistory`). Measured on
+`panates/syncbridge`: one commit moved every package under `packages/<scope>/`, so every earlier
+commit touched paths no package sits at any more and `--write` under `groupBy: package` wrote the
+root's file alone - while git held 259 commits of hl7's and 283 of iomt's.
+
+- **Read from the manifest's moves**, one `git log --follow` per package, run at once (40ms each
+  there, 120ms on `panates/sqb`).
+- **`--follow` is not trusted as it is, and both refusals were measured on the same repository.** A
+  **copy** (`C`) stops the walk: hl7's manifest came back as `C054` of another package's that was
+  never deleted. And a **rename** counts only where more than half of the old directory's files
+  went too (`GitHelper.movedShare`): `packages/builtins` was split ten ways and git paired its
+  manifest with serialport's at `R052` - for 3 of 43 files. git pairs the old manifest with *every*
+  new one, so the piece holding most of the files is the one that gets the history, and where none
+  does it stays the root's.
+- **A fixture for this needs a long manifest.** A one-line `{ name, version }` changes too much with
+  its name and git reads it as a new file (`A`), so neither trap is set and a spec about it passes
+  with the guard removed - measured, which is why the specs write a multi-line one.
+- **`VersionService.belongsToPkg` does not do this yet.** It asks only from the last release, so it
+  matters for the first release after a move, and there the move commit itself touches every moved
+  package.
 
 ### `changed` was removed - `version --json` is the machine-readable plan
 

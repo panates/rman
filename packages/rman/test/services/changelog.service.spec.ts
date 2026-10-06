@@ -1391,6 +1391,136 @@ describe('services/changelog', () => {
    * wrote, so a rebuild ignores them; and the file is emptied before anything is prepended, or the
    * regenerated history lands on top of the history already there.
    */
+  /**
+   * **A commit belongs to the package whose directory it touched *when it was made*.** Measured on
+   * `panates/syncbridge`: one commit moved every package under `packages/<scope>/`, and every earlier
+   * commit - touching the old paths, where no package sits any more - was written to the root.
+   * The two other cases are the traps a naive `git log --follow` falls into.
+   */
+  describe('a package that moved', () => {
+    function repo(): { dir: string; run: (...args: string[]) => void; commit: (message: string) => void } {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, version: '1.0.0', workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      const run = (...args: string[]) => void execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      run('init', '-q');
+      run('config', 'user.email', 't@t.com');
+      run('config', 'user.name', 't');
+      const commit = (message: string) => {
+        run('add', '-A');
+        run('commit', '-q', '-m', message);
+      };
+      return { dir, run, commit };
+    }
+
+    /**
+     * A manifest long enough that one differing name leaves it ~95% similar - which is what makes git
+     * pair two of them, as it does in a real repository. A one-line `{ name, version }` changes too
+     * much with its name and reads as a new file, so neither trap below would be set at all
+     * (measured: `A` where this gives `R095` and `C096`).
+     */
+    function writeManifest(dir: string, rel: string, name: string) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      const manifest = {
+        name,
+        version: '1.0.0',
+        description: 'a package with enough lines to look like a real manifest',
+        keywords: ['one', 'two', 'three', 'four'],
+        license: 'MIT',
+        repository: { type: 'git', url: 'https://example.com/repo.git' },
+        scripts: { build: 'tsc', test: 'mocha', lint: 'eslint .' },
+        dependencies: { left: '^1.0.0', right: '^2.0.0', middle: '^3.0.0' },
+      };
+      fs.writeFileSync(path.join(dir, rel), JSON.stringify(manifest, null, 2) + '\n');
+    }
+
+    /** The root's label is `<directory> repository`, and the directory is a temporary one. */
+    const linesOf = (entries: ChangelogService.Entry[], label: string) =>
+      entries
+        .filter(e => (label === 'root' ? e.label.endsWith(' repository') : e.label === label))
+        .map(e => e.content)
+        .join('\n');
+
+    it('keeps the history from before the move', async () => {
+      const { dir, run, commit } = repo();
+      writeJson(dir, 'packages/old-a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      commit('chore: init');
+      fs.writeFileSync(path.join(dir, 'packages/old-a/feature.txt'), 'x');
+      commit('feat: made before the move');
+      run('mv', 'packages/old-a', 'packages/a');
+      commit('chore: move pkg-a');
+      fs.writeFileSync(path.join(dir, 'packages/a/fix.txt'), 'x');
+      commit('fix: made after the move');
+      await createRepository(dir);
+
+      const entries = await service('changelog').getEntries({ rebuild: true });
+      expect(linesOf(entries, 'pkg-a')).toContain('made before the move');
+      expect(linesOf(entries, 'pkg-a')).toContain('made after the move');
+      expect(linesOf(entries, 'root')).not.toContain('made before the move');
+    });
+
+    /**
+     * A directory split in one commit, its files moved into `pieces` - `{ dir: files }` - with the
+     * old manifest moved into the first. git pairs that manifest with *every* new one (`R095` each),
+     * so which piece is the old package is decided by where its files went.
+     */
+    async function splitRepo(pieces: Record<string, string[]>): Promise<ChangelogService.Entry[]> {
+      const { dir, run, commit } = repo();
+      const files = Object.values(pieces).flat();
+      writeManifest(dir, 'packages/old/package.json', 'pkg-old');
+      for (const f of files) fs.writeFileSync(path.join(dir, `packages/old/${f}.txt`), f);
+      commit('chore: init');
+      fs.writeFileSync(path.join(dir, `packages/old/${files[0]}.txt`), 'changed');
+      commit('feat: made in the old directory');
+      const pieceDirs = Object.keys(pieces);
+      for (const piece of pieceDirs) fs.mkdirSync(path.join(dir, `packages/${piece}`));
+      run('mv', 'packages/old/package.json', `packages/${pieceDirs[0]}/package.json`);
+      for (const [piece, own] of Object.entries(pieces)) {
+        for (const f of own) run('mv', `packages/old/${f}.txt`, `packages/${piece}/${f}.txt`);
+      }
+      for (const piece of pieceDirs) writeManifest(dir, `packages/${piece}/package.json`, `pkg-${piece}`);
+      commit('chore: split');
+      await createRepository(dir);
+      return service('changelog').getEntries({ rebuild: true });
+    }
+
+    /** The piece holding most of the old directory *is* the old package, whichever got the manifest. */
+    it('hands a split directory to the piece that took most of its files', async () => {
+      const entries = await splitRepo({ a: ['f1'], b: ['f2', 'f3', 'f4', 'f5'] });
+      /** f1 is what the commit changed, and it went to a - the history is still b's. */
+      expect(linesOf(entries, 'pkg-a')).not.toContain('made in the old directory');
+      expect(linesOf(entries, 'pkg-b')).toContain('made in the old directory');
+    });
+
+    /** `packages/builtins` in syncbridge: split ten ways, none taking more than 9 of its 43 files. */
+    it('hands it to no piece when none took most of it, and leaves it to the root', async () => {
+      const entries = await splitRepo({ a: ['f1'], b: ['f2', 'f3'], c: ['f4', 'f5'] });
+      for (const piece of ['pkg-a', 'pkg-b', 'pkg-c']) {
+        expect(linesOf(entries, piece)).not.toContain('made in the old directory');
+      }
+      expect(linesOf(entries, 'root')).toContain('made in the old directory');
+    });
+
+    /** `@syncbridge/hl7` in syncbridge: its manifest came back from `--follow` as a copy of another
+     *  package's, which was never deleted. Two rules refuse it - a copy stops the walk, and pkg-b's
+     *  files did not move - so its control has to lift both. */
+    it("does not follow a manifest copied from another package into that package's history", async () => {
+      const { dir, commit } = repo();
+      writeManifest(dir, 'packages/b/package.json', 'pkg-b');
+      commit('chore: init');
+      fs.writeFileSync(path.join(dir, 'packages/b/x.txt'), 'x');
+      commit('feat: made in pkg-b only');
+      writeManifest(dir, 'packages/a/package.json', 'pkg-a');
+      commit('chore: add pkg-a from pkg-b');
+      await createRepository(dir);
+
+      const entries = await service('changelog').getEntries({ rebuild: true });
+      expect(linesOf(entries, 'pkg-a')).not.toContain('made in pkg-b only');
+      expect(linesOf(entries, 'pkg-b')).toContain('made in pkg-b only');
+    });
+  });
+
   describe('--rebuild', () => {
     it('ignores the marker and re-reads the whole range', async () => {
       const { dir } = fixtureWithUnpushedCommits();

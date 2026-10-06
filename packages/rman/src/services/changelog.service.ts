@@ -166,6 +166,10 @@ export class ChangelogService extends Service {
       }),
     );
 
+    /** Where each package's directory was over time - so a commit made before a package moved is
+     *  still its own. See `packageHomes`. */
+    const homes = await this.packageHomes(git);
+
     const entries: ChangelogService.Entry[] = [];
     for (let i = 0; i < groups.length; i++) {
       const group = groups[i];
@@ -190,6 +194,7 @@ export class ChangelogService extends Service {
        * falls inside the range and there is exactly one segment - which is what `version
        * --changelog` and `github-release` see too, since both pass an explicit boundary.
        */
+      const dirsAt = homesAt(homes, commitsByTarget[i]);
       const floor = await resolveStartingPoint(git, pkg, options);
       const floorIndex = floor?.sha ? commitsByTarget[i].findIndex(c => c.sha === floor.sha) : -1;
       const withUnreleased = resolveUnreleased(pkg, options);
@@ -201,7 +206,7 @@ export class ChangelogService extends Service {
         /** A commit belongs to a group when it belongs to **any** of its members - one line for a
          *  commit touching two of them, which is the whole reason a group shares a file. */
         const ownCommits = dropVersionBumps(segment.commits).filter(c =>
-          [...ownersOf(repository, c)].some(owner => group.members.has(owner)),
+          [...ownersOf(repository, c, dirsAt(c))].some(owner => group.members.has(owner)),
         );
         if (!ownCommits.length) continue;
         const sections = groupCommits(ownCommits, ignoreTypesConfig(pkg), titles, order, withCommitHash(pkg, options));
@@ -240,6 +245,35 @@ export class ChangelogService extends Service {
       progress?.done(label, entries.length > entriesBefore);
     }
     return entries;
+  }
+
+  /**
+   * Where each member package's directory was over time, newest first - `since` is the commit that
+   * moved it there, absent for the oldest. A package that never moved has one entry, its own
+   * directory. Read from the moves of the package's manifest (`GitHelper.moveHistory`).
+   */
+  /* **Why a commit cannot simply be matched against today's directories**: measured on
+   * `panates/syncbridge`, whose last commit moved every package under `packages/<scope>/`. Every
+   * earlier commit touched the old paths, which no package sits at any more, so all of them were
+   * attributed to the root - `changelog --write` under `groupBy: package` wrote one root file and
+   * nothing for any package, while git still held 259 commits of hl7's and 283 of iomt's.
+   *
+   * **The manifest, not the files**: one file per package says where its directory was, so this is
+   * one `git log --follow` per package, run at once - 40ms each there, 120ms on `panates/sqb`. A
+   * single-package repository has nothing to follow: its package is the root, which does not move. */
+  protected async packageHomes(git: GitHelper): Promise<PackageHomes> {
+    const homes: PackageHomes = new Map();
+    const packages = this.repository.monorepo ? this.repository.packages : [];
+    await Promise.all(
+      packages.map(async pkg => {
+        if (!pkg.manifestFileName) return;
+        const moves = await git.moveHistory(pkg.manifestFileName);
+        const periods: Home[] = [{ dir: pkg.dirname, since: moves[0]?.sha }];
+        moves.forEach((move, k) => periods.push({ dir: path.dirname(move.from), since: moves[k + 1]?.sha }));
+        homes.set(pkg, periods);
+      }),
+    );
+    return homes;
   }
 }
 
@@ -973,14 +1007,51 @@ interface Segment {
  *  fallback for anything outside every package (e.g. root-level config files). Mirrors
  *  `Repository.currentPackage`'s longest-prefix logic, but always resolves to *something*
  *  (root), rather than `undefined`, since every file belongs to some changelog. */
-function owningPackage(repository: Repository, file: string): Package {
+function owningPackage(repository: Repository, file: string, dirOf: (pkg: Package) => string): Package {
   let best: Package = repository.rootPackage;
+  let bestDir = repository.rootPackage.dirname;
   for (const pkg of repository.packages) {
-    const rel = path.relative(pkg.dirname, file);
+    const dir = dirOf(pkg);
+    const rel = path.relative(dir, file);
     const isSelfOrDescendant = rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-    if (isSelfOrDescendant && pkg.dirname.length > best.dirname.length) best = pkg;
+    if (isSelfOrDescendant && dir.length > bestDir.length) {
+      best = pkg;
+      bestDir = dir;
+    }
   }
   return best;
+}
+
+/** Where a package's directory was over time, newest first - see `ChangelogService.packageHomes`. */
+type PackageHomes = Map<Package, Home[]>;
+
+interface Home {
+  dir: string;
+  /** The commit that moved the package here; absent for its first directory. */
+  since?: string;
+}
+
+/**
+ * For one fetched commit list, the function that answers where each package's directory was when a
+ * given commit was made.
+ */
+/* **Ordered by position in the list, not by asking git**: the list is oldest first and runs to HEAD,
+ * so a move inside it is compared by index, and a move *not* in it happened at or before the range's
+ * boundary - every commit in the range is after it. One `merge-base --is-ancestor` per commit and
+ * package would be the exact answer and costs a process each; this costs a Map. */
+function homesAt(homes: PackageHomes, commits: CommitInfo[]): (commit: CommitInfo) => (pkg: Package) => string {
+  const index = new Map(commits.map((c, i) => [c.sha, i]));
+  return commit => pkg => {
+    const periods = homes.get(pkg);
+    if (!periods) return pkg.dirname;
+    const at = index.get(commit.sha) ?? commits.length;
+    for (const period of periods) {
+      if (!period.since) return period.dir;
+      const movedAt = index.get(period.since);
+      if (movedAt === undefined || movedAt <= at) return period.dir;
+    }
+    return periods[periods.length - 1].dir;
+  };
 }
 
 /** A commit touching more than this fraction of all packages (a repo-wide relicense, a doc
@@ -1002,9 +1073,9 @@ const BROAD_COMMIT_MIN_PACKAGES = 3;
  * doc pass across every package, ...), not something that belongs in each package's own release
  * notes individually - it's attributed to the root alone.
  */
-function ownersOf(repository: Repository, commit: CommitInfo): Set<Package> {
+function ownersOf(repository: Repository, commit: CommitInfo, dirOf: (pkg: Package) => string): Set<Package> {
   const owners = new Set<Package>();
-  for (const f of commit.files) owners.add(owningPackage(repository, f));
+  for (const f of commit.files) owners.add(owningPackage(repository, f, dirOf));
 
   const totalPackages = repository.packages.length;
   const nonRootOwners = [...owners].filter(p => p !== repository.rootPackage).length;

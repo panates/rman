@@ -19,6 +19,9 @@ export interface CommitInfo {
 export class GitHelper {
   cwd: string;
 
+  /** `movedShare`'s per-commit rename lists. */
+  private _renames = new Map<string, Promise<{ from: string; to: string }[]>>();
+
   constructor(options?: GitOptions) {
     this.cwd = options?.cwd || process.cwd();
   }
@@ -221,6 +224,91 @@ export class GitHelper {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Every time `file` was **moved together with its directory**, newest first - `{ sha, from, to }`,
+   * absolute paths of the file, and the commit that moved it. Empty for a file that never moved, or
+   * one git has no history of. Meant for a package manifest: where it went, its package went.
+   */
+  /* **Renames only, and the walk stops at the first copy.** `git log --follow` also crosses a *copy*
+   * (`C`), and for a manifest that is the dangerous case: package manifests resemble one another, so a
+   * new package created from an old one's `package.json` is followed into that package's history.
+   * Measured on `panates/syncbridge`: `@syncbridge/hl7`'s manifest came back as `C054` from
+   * `packages/common/package.json` - a different package, `@panates-prv/syncbridge-common`, which was
+   * not even deleted in that commit - and following it would have handed hl7 137 commits of another
+   * package's history. A rename (`R`) means the old file is gone, which a copy does not.
+   *
+   * **And a rename counts only where the directory went too** - more than half of the files the old
+   * directory held landing in the new one (`movedShare`). Two manifests are similar enough to pair
+   * when a directory is *split*: in the same repository `packages/builtins` was broken into ten
+   * packages in one commit, git paired its `package.json` with `packages-ext/serialport`'s at
+   * `R052`, and serialport had received 3 of its 43 files. The old directory belongs to no one of
+   * them, so the walk stops there and its history stays the root's - unattributed rather than
+   * guessed. A real move clears this easily: `iomt-connectors` took 101 of its 110 files. */
+  async moveHistory(file: string): Promise<{ sha: string; from: string; to: string }[]> {
+    let stdout: string;
+    try {
+      ({ stdout } = await execFileAsync(
+        'git',
+        ['log', '--follow', '--format=%x00%H', '--name-status', '--', path.relative(this.cwd, file)],
+        { cwd: this.cwd, maxBuffer: 64 * 1024 * 1024 },
+      ));
+    } catch {
+      return [];
+    }
+    const moves: { sha: string; from: string; to: string }[] = [];
+    for (const entry of stdout.split('\0').filter(Boolean)) {
+      const [sha, ...lines] = entry.split(/\r?\n/).filter(Boolean);
+      const [status = '', from, to] = (lines[0] ?? '').split('\t');
+      if (status.startsWith('R') && from && to) {
+        const fromDir = path.posix.dirname(from);
+        const toDir = path.posix.dirname(to);
+        /** Renamed within its own directory: the package did not move. */
+        if (fromDir === toDir) continue;
+        if ((await this.movedShare(sha.trim(), fromDir, toDir)) <= 0.5) break;
+        moves.push({ sha: sha.trim(), from: path.join(this.cwd, from), to: path.join(this.cwd, to) });
+      } else if (status.startsWith('C') || status === 'A') break;
+    }
+    return moves;
+  }
+
+  /**
+   * Of the files `fromDir` held just before `sha`, the share `sha` renamed into `toDir` - `0` to `1`.
+   * Both directories relative to `cwd`, in git's `/` form.
+   */
+  /* The rename list is cached per commit: a commit that moves every package is asked about once per
+   * package, and it is one `git show` however many ask. */
+  async movedShare(sha: string, fromDir: string, toDir: string): Promise<number> {
+    let renames = this._renames.get(sha);
+    if (!renames) {
+      renames = execFileAsync('git', ['show', '-M', '--name-status', '--format=', sha], {
+        cwd: this.cwd,
+        maxBuffer: 64 * 1024 * 1024,
+      }).then(
+        ({ stdout }) =>
+          stdout
+            .split(/\r?\n/)
+            .map(line => line.split('\t'))
+            .filter(([status, from, to]) => status?.startsWith('R') && from && to)
+            .map(([, from, to]) => ({ from, to })),
+        () => [],
+      );
+      this._renames.set(sha, renames);
+    }
+    let held: string[];
+    try {
+      const { stdout } = await execFileAsync('git', ['ls-tree', '-r', '--name-only', `${sha}^`, '--', `${fromDir}/`], {
+        cwd: this.cwd,
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      held = stdout.split(/\r?\n/).filter(Boolean);
+    } catch {
+      return 0;
+    }
+    if (!held.length) return 0;
+    const into = (await renames).filter(r => r.from.startsWith(`${fromDir}/`) && r.to.startsWith(`${toDir}/`)).length;
+    return into / held.length;
   }
 
   /** The best common ancestor of `a` and `b` - `undefined` if none exists (unrelated histories,
