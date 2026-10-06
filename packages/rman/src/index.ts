@@ -87,6 +87,8 @@ export { Manifest } from './core/interfaces/manifest.js';
 export { Registry } from './core/classes/registry.js';
 export { Repository } from './core/classes/repository.js';
 export { Service, type ServiceFactory, type ServiceMap } from './core/classes/service.js';
+/** The `deps` seam: how a technology checks its dependencies against a registry and moves them. */
+export { DependencyUpdater } from './core/interfaces/dependency-updater.js';
 export {
   declaredTargets,
   type PublishTarget,

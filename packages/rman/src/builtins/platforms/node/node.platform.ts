@@ -5,6 +5,7 @@ import glob from 'fast-glob';
 import type { Package } from '../../../core/classes/package.js';
 import type { Platform } from '../../../core/interfaces/plugin.js';
 import type { RunService } from '../../../services/run.service.js';
+import { NodeDependencyUpdater } from './node-dependency-updater.js';
 import { NodeManifestProvider } from './node-manifest.provider.js';
 import { NodeVersionPlanService } from './services/version-plan.service.js';
 
@@ -18,6 +19,7 @@ export class NodePlatform implements Platform {
   name = 'node';
   manifestProvider = new NodeManifestProvider();
   versionPlanner = new NodeVersionPlanService();
+  dependencyUpdater = new NodeDependencyUpdater();
 
   /**
    * npm's `workspaces` globs, resolved against `dir` - the directories directly below it that hold

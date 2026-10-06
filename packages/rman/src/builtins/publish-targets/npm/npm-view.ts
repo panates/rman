@@ -77,9 +77,81 @@ export async function npmViewVersion(
   }
 }
 
+/** One published version, as `rman deps` needs it. */
+export interface NpmRelease {
+  version: string;
+  /** The deprecation message, when the version carries one. */
+  deprecated?: string;
+  peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+  engines?: Record<string, string>;
+}
+
+/** What `rman deps` asks of the registry about one package name. */
+export interface NpmReleases {
+  /** Every version satisfying the range that was asked about, oldest first. */
+  releases: NpmRelease[];
+  /** The `latest` dist-tag. */
+  latest?: string;
+  /** When each version was published, when it was asked for. */
+  time?: Record<string, string>;
+}
+
+/**
+ * `npm view '<name>@<range>' version deprecated peerDependencies peerDependenciesMeta engines` plus
+ * the package's `dist-tags` (and `time`, when `withTime`) - two calls, run at once. `undefined` when
+ * the registry gave no answer at all.
+ *
+ * **Not catch-everything, unlike the two above.** A name the registry does not know is an answer
+ * `rman deps` has to report, not a state it can treat as "nothing newer".
+ */
+/* **One call returns every version in the range.** npm answers a range with an array holding one
+ * object per matching version - measured at ~0.45s for a range covering dozens - so the cost is
+ * per name and not per version. A range matching exactly one version comes back as a bare object
+ * instead, which is why the result is normalized.
+ *
+ * `time` is a separate call because it is the whole package's history: thousands of entries for a
+ * package publishing nightlies, so it is fetched only when a minimum age asks for it. */
+export async function npmViewReleases(
+  name: string,
+  range: string,
+  cwd: string,
+  options: { withTime?: boolean } = {},
+): Promise<NpmReleases | undefined> {
+  const fields = ['version', 'deprecated', 'peerDependencies', 'peerDependenciesMeta', 'engines'];
+  const [releases, tags] = await Promise.all([
+    npmViewJson(['view', `${name}@${range}`, ...fields, '--json'], cwd),
+    npmViewJson(['view', name, 'dist-tags', ...(options.withTime ? ['time'] : []), '--json'], cwd),
+  ]);
+  if (tags === undefined) return undefined;
+  const list = Array.isArray(releases) ? releases : releases ? [releases] : [];
+  const meta = (options.withTime ? tags : { 'dist-tags': tags }) as { 'dist-tags'?: any; time?: any };
+  return {
+    releases: list.filter((r: any) => typeof r?.version === 'string') as NpmRelease[],
+    latest: meta['dist-tags']?.latest,
+    time: meta.time,
+  };
+}
+
 function toVersionList(versions: string | string[] | undefined): string[] {
   if (Array.isArray(versions)) return versions;
   return versions ? [versions] : [];
 }
 
 const execFileAsync = promisify(execFile);
+
+/** `npm <argv>` parsed as JSON - `undefined` for a failed call, `null` for an empty answer (a range
+ *  no version satisfies). */
+async function npmViewJson(argv: string[], cwd: string): Promise<unknown> {
+  try {
+    const { stdout } = await execFileAsync('npm', argv, { cwd, maxBuffer: 64 * 1024 * 1024 });
+    const text = stdout.trim();
+    return text ? JSON.parse(text) : null;
+  } catch (e: any) {
+    /** A range nothing satisfies is answered with `E404 No match found` rather than an empty list. */
+    if (argv[1]?.includes('@', 1) && /No match found/.test(String(e?.stdout ?? '') + String(e?.stderr ?? ''))) {
+      return null;
+    }
+    return undefined;
+  }
+}

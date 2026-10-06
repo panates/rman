@@ -48,6 +48,7 @@ rman <command> --help   # full option list for that one command
 | `changelog` | [`docs/cli/changelog.md`](cli/changelog.md) | Generates a changelog per package from unreleased commits. |
 | `version [bump]` | [`docs/cli/version.md`](cli/version.md) | Bumps versions of changed packages (and their dependents). |
 | `publish` | [`docs/cli/publish.md`](cli/publish.md) | Publishes every package whose version isn't on its registry yet. |
+| `deps [names..]` | [`docs/cli/deps.md`](cli/deps.md) | Lists the dependencies that have a newer version; `-u` upgrades them. |
 | `github-release` | [`docs/cli/github-release.md`](cli/github-release.md) | Creates the repository's GitHub Release for the version that just shipped. |
 | `import <path>` | [`docs/cli/import.md`](cli/import.md) | Imports an external git repository as a new package, with history. |
 

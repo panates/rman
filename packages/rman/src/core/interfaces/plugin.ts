@@ -4,6 +4,7 @@ import type { BinPath } from '../../utils/bin-path.js';
 import type { RmanApplication } from '../application.js';
 import type { Repository } from '../classes/repository.js';
 import type { Workspace } from '../classes/workspace.js';
+import type { DependencyUpdater } from './dependency-updater.js';
 import type { Manifest, ManifestProvider } from './manifest.js';
 
 /**
@@ -81,6 +82,10 @@ export interface Platform {
   /** How this technology's releases are planned - where a package's change boundary comes from
    *  when it has no release tag, and how far into its group a bump reaches. */
   versionPlanner?: VersionPlanService;
+
+  /** How this technology's dependencies are checked against their registry and moved forward -
+   *  what `rman deps` asks. Absent, `deps` leaves this technology's packages alone. */
+  dependencyUpdater?: DependencyUpdater;
 }
 
 /**

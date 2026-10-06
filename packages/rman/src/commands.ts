@@ -15,6 +15,7 @@
 import './commands/build.command.js';
 import './commands/changelog.command.js';
 import './commands/config.command.js';
+import './commands/deps.command.js';
 import './commands/diff.command.js';
 import './commands/exec.command.js';
 import './commands/github-release.command.js';
@@ -28,5 +29,6 @@ import './commands/version.command.js';
 
 /** The config shapes a command declares by hand, where an option cannot describe them - see
  *  `RmanConfig.CommandContribution`'s `Extra`. Exported so a plugin can name one. */
+export type { DepsExtraKeys } from './commands/deps.command.js';
 export type { PublishExtraKeys, PublishTargetConfigs } from './commands/publish.command.js';
 export type { VersionExtraKeys, VersionStampEntry } from './commands/version.command.js';

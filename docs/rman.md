@@ -205,6 +205,7 @@ interface Platform {
   getBinPaths?: BinPath.Provider;
   getRunSteps?: RunService.StepSource;
   versionPlanner?: VersionPlanService;
+  dependencyUpdater?: DependencyUpdater; // what `rman deps` asks
 }
 
 interface Plugin {
@@ -250,7 +251,8 @@ const audit = definePlugin({
   ships `basePlatform`, whose reader recognizes nothing: a directory no technology claimed falls
   back to it and gets a package named after its directory at `0.0.0`. No `getWorkspace` means no
   packages below it; no `versionPlanner` means `version` fails naming the key rather than releasing
-  a plausible but untrue set.
+  a plausible but untrue set; no `dependencyUpdater` means `deps` leaves that technology's packages
+  alone.
 - **`getRunSteps`, not `onBuildRunSteps`**: it is a *query*, and not build-specific - `version`
   reads the same seam for `preversion`/`version`/`postversion`.
 - **A stage is the escape hatch, not the front door.** Commands, platforms and publish targets are
