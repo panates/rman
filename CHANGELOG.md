@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to f3bbd437f7b9d8f7c630299d9477e95a06cd1fab -->
+<!-- rman:documented-up-to 4c8e24322dec4b19bd01a1a1381af1750e53d435 -->
+
+## v2.13.0 (2026-10-06)
+
+### ✨ Features
+
+- **list:** registry host, "-" for a skipped target, and a Group column (6132b5d)
+
+### 🐛 Bug Fixes
+
+- **changelog:** a package that moved keeps its history (4c8e243)
+
+---
 
 ## v2.12.0 (2026-10-06)
 
