@@ -1,4 +1,4 @@
-<!-- verified against commit 11dd8d1 - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # A repository's own commands (`.rman/*.mjs`)
 
@@ -46,6 +46,10 @@ commands: ['tools/commands/*.mjs']
   rather than onto a built-in fallback. Name `.rman/*.mjs` yourself if you want both.
 - **`.ts` is not loadable.** rman imports these in its own process with no loader registered, so a
   TypeScript repository compiles them first or writes them as `.mjs`.
+- **An entry may be the command itself** rather than a glob - either form below, written straight
+  into a JS config (`commands: [defineCommand({ command: 'deploy', ... })]`). Such a command has no
+  file to be named after, so it **must** declare `command`; one that does not is refused. Messages
+  about it name `.rmanrc "commands"` as its origin, since there is no path to show.
 
 ## Two forms
 
@@ -64,6 +68,11 @@ export default app => ({
 
 The factory is handed the `RmanApplication`, and runs once the repository exists. Either form takes
 its name from the file when its metadata declares no `command`.
+
+**Every command gets a status line** on stderr - a spinner, its name and a clock while it runs, a
+`✔`/`✖` line with the elapsed time when it ends. A declared command whose stdout *is* its answer (a
+report, a document a script parses) sets `printsDocument: true` to go without it; `--json` and
+`--config` suppress it too, whatever the command declares.
 
 ## When this, and when `run.<script>`
 
@@ -211,7 +220,19 @@ does the reading.
 
   Unlike a broken module, the file here is fine - the *name* is the mistake, and there is no reading
   of `rman publish` that is safe to guess at. Preferring either one silently would leave whoever
-  typed it unable to tell which ran.
+  typed it unable to tell which ran. A command written into the config itself has no file to rename,
+  so its message names `.rmanrc "commands"` and asks only for a `command:` of its own.
+
+- **`build` and `test` are the exception: a command of yours may take those two names.** Both are
+  only `run <script>` under a shorter name, so the name goes to whoever has the better answer - a
+  repository whose tests are one run at the root can make `rman test` that. rman's own alias is then
+  not registered at all (one row in `--help`, not two), and `--log-level verbose` says so.
+  `rman run test` still runs the per-package script.
+
+- **A command of the same name contributed twice** - a `.rman/clean.mjs` beside the `clean` a shared
+  config or the `node` built-in brings - is not an error: **the repository's own wins**, the same way
+  a package's own `.rmanrc` wins over an `extends` base. One command is registered per name, keeping
+  the last, and `--log-level verbose` names which one was overridden.
 
 A repository with no `.rman` directory loads nothing and scans nothing, so this costs it nothing -
 which matters, because every `rman` invocation would otherwise pay for it.

@@ -88,6 +88,7 @@ worked examples of every single command, see **[docs/cli-rman.md](https://github
 | [`config`](#rman-config) | Prints the effective `.rmanrc` config for the current directory's package. |
 | [`diff [package]`](#rman-diff-package) | Shows the git diff since a package's (or the repo's) last release tag. |
 | [`changelog`](#rman-changelog) | Generates a changelog per package from unreleased commits. |
+| [`deps [names..]`](#rman-deps-names) | Lists dependencies with a newer version; `-u` upgrades them. |
 | [`version [bump]`](#rman-version-bump) | Bumps versions of changed packages (and their dependents). |
 | [`publish`](#rman-publish) | Publishes every package whose version isn't on its registry yet. |
 | [`github-release`](#rman-github-release) | Creates the repository's GitHub Release for its release tag. |
@@ -129,16 +130,17 @@ Options shared across several commands:
 
 - **`skip`** (`.rmanrc`, per package): leave this package alone - honoured by every command that
   *acts* on packages, ignored by `list`, which reports on them.
-- **Package filtering** (`list`, `run`/`build`/`test`, `exec`, `version`, `changelog`, and a
-  plugin's own commands): `--scope <glob>`, `--ignore <glob>`, `--deps`, `--dependents` - see
-  [Package filtering](https://github.com/panates/rman/blob/main/docs/rman.md#package-filtering-scopeignoredepsdependents)
+- **Package filtering** (`list`, `run`/`build`/`test`, `exec`, `version`, `changelog`, `publish`,
+  `deps`, `clean`, `ci`, and a plugin's own commands): `--scope <glob>`, `--ignore <glob>`, `--deps`, `--dependents` - see
+  [Package filtering](https://github.com/panates/rman/blob/main/docs/rman.md#package-filtering-scopeignoreplatformdepsdependents)
   for the full semantics. **`--scope /` is the repository's own root package** - the same `/`
   `.rmanrc`'s `"[/]"` block uses, and not a glob, so `--scope '*'` means the members and a glob
   never picks up the root by name.
 - **`--from-root`/`-r`** (every command that narrows to the package you are standing in -
-  `run`/`build`/`test`, `exec`, `changelog`, `diff`): run against the whole repository instead.
+  `run`/`build`/`test`, `exec`, `clean`, `changelog`, `diff`, `config`): run against the whole
+  repository instead.
 - **Branch guard** (every command that mutates state or runs scripts - `run`/`build`/`test`,
-  `exec`, `version`): `--allow-branch <glob>`, `--ignore-branch <glob>` -
+  `exec`, `version`, `publish`, `github-release`, `clean`, `ci`): `--allow-branch <glob>`, `--ignore-branch <glob>` -
   refuses to run unless (or if) the current git branch matches, the same idea as GitHub Actions'
   own `branches`/`branches-ignore` workflow filters.
 
@@ -147,7 +149,7 @@ Options shared across several commands:
 Lists packages in the repository (alias: `ls`).
 
 ```bash
-rman list                       # table: Package / Version / Private / Changed / Path
+rman list                       # table: Package / Version / Group / Platform / Private / Publish / Changed / Path
 rman ls --short                 # just the bare package names
 rman list --json                # full detail as JSON
 rman list --parseable           # location::name::version::PRIVATE::STATUS lines, for scripting
@@ -158,12 +160,16 @@ rman list --changed-since HEAD~5
 rman list --scope '@myorg/*' --ignore '*-internal'
 ```
 
+The table keeps each release group together, in `version`'s plan order (root, then groups, then
+packages in no group), and indents a package by how deep it sits. `Group` appears only when it says
+something; `Publish` names the targets a package ships to, or `-` when none is left. `--toposort`
+orders by dependencies instead, and `--json` keeps the inventory's own order.
+
 ### `rman info`
 
 Prints local environment (OS/CPU/memory, Node, git) and repository information. A platform adds its
 own ecosystem's part - the `node` built-in reports whichever package manager
-`.rmanrc "packageManager"` names, plus the installed `rman` packages, and only in a repository that
-asked for it.
+`.rmanrc "packageManager"` names (`npm` by default), plus the installed `rman` and `typescript`.
 
 ```bash
 rman info
@@ -239,15 +245,37 @@ rman diff pkg-a          # since pkg-a's own last tag, scoped to its directory
 
 ### `rman changelog`
 
-Generates a changelog per package from unreleased commits, grouped into ✨ Features / 🐛 Bug Fixes
-/ 🔧 Other Changes.
+Generates a changelog per package from unreleased commits, with a section per Conventional Commits
+type (✨ Features, 🐛 Bug Fixes, ⚡ Performance, ...; anything else under 💬 General Changes) -
+renamed or extended with `.rmanrc "changelog.titles"`. With `changelog.groupBy: group`, one file per
+release group instead of per package.
 
 ```bash
 rman changelog                          # auto-detects each package's own last release
 rman changelog --from a1b2c3d           # since a specific commit, for every package
 rman changelog --write                  # prepend into each package's own CHANGELOG.md
 rman changelog --write --file-path docs/CHANGELOG.md
+rman changelog --rebuild                # regenerate the files from scratch instead of appending
 ```
+
+### `rman deps [names..]`
+
+Lists the dependencies that have a newer version on their registry - every package, the monorepo
+root's own tooling included - and with `-u` writes the new ranges to the manifests, then checks that
+they still install.
+
+```bash
+rman deps                       # what could move, and what holds it back
+rman deps -u                    # write the new ranges, then check that they install
+rman deps --target major        # across a major too
+rman deps '@types/*'            # only the dependencies matching this glob
+```
+
+**A dependency stays inside its major by default** (`deps.target: minor`). Taking a major is a
+decision a person makes: `--target major` for one run, `.rmanrc "deps.target"` for a standing
+answer, or `deps.targets` for one dependency. Only a caret or tilde range is rewritten; a version is
+offered only when every rule rman can see allows it. See
+[docs/cli/deps.md](https://github.com/panates/rman/blob/main/docs/cli/deps.md).
 
 ### `rman version [bump]`
 
@@ -394,16 +422,22 @@ precedence: `package.json`'s own `"rman"` key, `.rmanrc.yml` (YAML), `.rmanrc` (
 the dotfile-style name), and `.rmanrc.cjs`/`.rmanrc.mjs`/`.rmanrc.js` for config that needs real
 logic (a JS module's default export).
 
-**Who a declaration is about** follows one rule: unmarked keys configure the package of the
-directory declaring them, and a `"[selector]"` block configures the packages it names. So the
-repository root's own keys are the *root package's* - which is where repo-wide settings are read
-from anyway - and they reach the other packages only through a selector.
+**Who a declaration is about** follows one rule: what is written above reaches below, and a
+`"[selector]"` block narrows the audience. An unmarked key configures its directory's package and
+every package under it, so the repository root's own keys are the baseline for the whole repository.
+`"[/]"` is the root package alone, `"[platform:node]"` every package of that technology, and a glob
+such as `"[*]"` the packages below.
 
 ```yaml
 # .rmanrc.yml, at the repository root
 packageManager: pnpm
 logLevel: info
 allowBranch: [main, release/*]
+
+'[/]': # the root package alone - run's scheduling keys are read from here
+  run:
+    build:
+      concurrency: 4
 
 version:
   commitMessage: 'chore(release): v{version}'
@@ -418,7 +452,6 @@ version:
   run:
     test: mocha # a bare string is shorthand for { exec: mocha }
     build:
-      concurrency: 4
       before: [rman run lint]
       exec: tsc -b tsconfig-build.json
       after: node ../../support/postbuild.cjs
@@ -462,15 +495,15 @@ used to cover them was removed.
 
 ## Programmatic API
 
-Every command above is a thin wrapper around an exported service function - call them directly
+Every command above is a thin wrapper around an exported service - call them directly
 from your own Node.js scripts without shelling out to the `rman` binary:
 
 ```ts
-import { Repository, VersionService } from 'rman';
+import { Repository, VersionPlanService } from 'rman';
 
 const repository = await Repository.create();
-const plan = await VersionService.getPlan(repository);
-await VersionService.applyPlan(repository, plan, { changelog: true, push: true });
+const plan = await VersionPlanService.getPlanner(repository.app).getPlan(repository);
+await repository.app.getService('version').applyPlan(plan, { changelog: true, push: true });
 ```
 
 Full reference, with detailed examples for every service (`VersionService`, `PublishService`,

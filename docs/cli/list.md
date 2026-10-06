@@ -1,4 +1,4 @@
-<!-- verified against commit 16c3525 - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # `rman list`
 
@@ -28,8 +28,9 @@ Accepts [package filtering](../cli-rman.md#package-filtering) (`--scope`, `--ign
 | `--changed` | `-c` | boolean | Only list packages you have **touched but not pushed** - uncommitted, or committed and not yet on the upstream branch. Not a release question: after a push this empties out. |
 | `--changed-since <hash>` | - | string | Only list packages that have changed since the given git commit/hash. |
 
-`--graph`/`--short` each conflict with `--parseable`/`--json` (yargs refuses the combination
-outright); `--changed` conflicts with `--changed-since` (pick one).
+`--graph` conflicts with `--parseable`/`--json` (yargs refuses the combination outright);
+`--changed` conflicts with `--changed-since` (pick one). The other output flags do not refuse each
+other - the first of `--json`, `--parseable`, `--short` wins.
 
 ## Examples
 
@@ -106,7 +107,7 @@ rman list --parseable
 
 rman list --toposort              # dependencies printed before their dependents
 rman list --graph                 # { "pkg-a": [], "pkg-b": ["pkg-a"] }
-rman list --changed               # only packages with unpublished changes
+rman list --changed               # only packages touched but not yet pushed
 rman list --changed-since v1.2.0  # only packages that differ from that tag
 rman list --scope '@myorg/*' --ignore '*-internal'
 rman list --platform=node,cargo   # a polyglot repository, two of its technologies

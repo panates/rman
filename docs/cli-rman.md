@@ -1,8 +1,8 @@
 <!--
 docs-baseline
-git-commit: f20556f
-package-version: 2.0.0-beta.4
-date: 2026-09-28
+git-commit: 8430603
+package-version: 2.14.0
+date: 2026-10-06
 
 Verified against `packages/rman/src/cli.ts`, every `packages/rman/src/commands/*.command.ts` and
 the `node` built-in's own commands as of the commit above (and the matching specs for behavior
@@ -10,7 +10,7 @@ examples). There is no second index: `rman-node` was folded into rman, so every 
 repository can run is listed here. Before trusting/updating this file (or any page under
 `docs/cli/`) in a later session, run:
 
-  git diff f20556f..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/ packages/rman/src/builtins/
+  git diff 8430603..HEAD -- packages/rman/src/cli.ts packages/rman/src/commands/ packages/rman/src/builtins/
 
 and update only the pages touched by what that diff actually shows - don't regenerate everything
 unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -40,8 +40,8 @@ rman <command> --help   # full option list for that one command
 | `list` (`ls`) | [`docs/cli/list.md`](cli/list.md) | Lists packages in the repository. |
 | `info` | [`docs/cli/info.md`](cli/info.md) | Prints local environment and repository information. |
 | `run <script>` | [`docs/cli/run.md`](cli/run.md) | Runs an npm script in each package. |
-| `build` | [`docs/cli/build.md`](cli/build.md) | Alias for `run build`. |
-| `test` | [`docs/cli/test.md`](cli/test.md) | Alias for `run test`. |
+| `build` | [`docs/cli/build.md`](cli/build.md) | Alias for `run build` - a contributed command may take the name. |
+| `test` | [`docs/cli/test.md`](cli/test.md) | Alias for `run test` - a contributed command may take the name. |
 | `exec [command..]` | [`docs/cli/exec.md`](cli/exec.md) | Runs an arbitrary shell command in each package. |
 | `config` | [`docs/cli/config.md`](cli/config.md) | Prints the effective `.rmanrc` config for the current directory's package. |
 | `diff [package]` | [`docs/cli/diff.md`](cli/diff.md) | Shows the git diff since a package's (or the repo's) last release tag. |
@@ -80,7 +80,7 @@ a command "doesn't exist":
 | Source | Declared by | Scope |
 | --- | --- | --- |
 | **Built in** | nothing - always there | every repository |
-| **A platform** | `.rmanrc "plugins"` or `"platform"` | every repository naming that technology |
+| **A shared config** | a config's `commands` key, reaching the repository through `extends` - rman's own `node` preset is laid under every root this way | every repository inheriting that config |
 | **The repository's own** | a module matching `.rmanrc "commands"`, which defaults to `.rman/*.mjs` | this repository only |
 
 `commands` takes a glob or a list of them, always appends, and anchors a relative glob to the file
@@ -241,9 +241,19 @@ installed where the module can resolve it).
 | `.rman/*.mjs` vs a **plugin's** command | the repository wins - it is the more specific statement, the same way its own `.rmanrc` overrides an `extends` base. Said out loud at `--log-level verbose`, naming both files |
 | `.rman/*.mjs` vs a **built-in** | refused outright: `".rman/version.mjs" would shadow rman's built-in "version" command.` Rename the file, or give it its own name with `command: '<name>'` |
 | a **plugin** vs a **built-in** | refused outright, same check |
+| either vs **`build`** or **`test`** | the contributed command wins, and rman's alias is not registered at all - see below |
 
 So a repository can replace a contributed `clean` with its own - the intended escape hatch, not an
-oversight. Nothing can replace a built-in.
+oversight. Nothing can replace a built-in, with two exceptions.
+
+**`build` and `test` may be taken**, because they are the two built-ins with no logic of their own -
+each is `run <script>` under a shorter name, so the name belongs to whoever has the better answer
+for it. The case that forced it: in a repository whose tests are one run at the root, `rman test`
+fanned out over packages defining nothing and answered `No package defines a "test" script.` A
+shared config can now ship a `test` command that does the root run instead, and `rman run test` is
+still there for a repository whose tests really are per package. The alias is left out of
+registration rather than out-ranked, so `rman --help` lists one `test`, not two; the override is
+named at `--log-level verbose`. Every other built-in defends its name.
 
 **Only one of the two is registered, and the note is why that is not a new trap.** Both used to be,
 which cost the help output: measured, `rman --help` listed `deploy` twice, once with each
@@ -261,9 +271,9 @@ These apply to every command, before the command name:
 | --- | --- | --- |
 | `--help` | `-h` | Shows help - `--help` for the whole CLI, `<command> --help` for one command's full option list. |
 | `--version` | `-v` | Prints the installed `rman` version. |
-| `--log-level <level>` | - | Default verbosity of the per-step log for `run`/`build`/`test`/`ci` (`silent`\|`error`\|`info`\|`verbose`). Default `info`, or `.rmanrc "logLevel"`. Per-package overridable via `.rmanrc run.<script>.logLevel`. Only affects the *classic* one-line-per-step log - it has no effect on the live progress panel's own output. |
+| `--log-level <level>` | - | Default verbosity of the per-step log for `run`/`build`/`test`/`exec`/`ci` (`silent`\|`error`\|`info`\|`verbose`). Default `info`, or `.rmanrc "logLevel"`. Per-package overridable via `.rmanrc run.<script>.logLevel`. Only affects the *classic* one-line-per-step log - it has no effect on the live progress panel's own output. |
 | `--config` | - | Print what this command would run with, and **run nothing**. See below. |
-| `--json` | - | Write the run's log to stdout as JSON Lines and nothing else - no panel, no status line, no prose. A command with its own JSON result (`list`, `version`, `publish`, `config`, `info`, `github-release`) prints that result instead, unchanged. See below. |
+| `--json` | - | Write the run's log to stdout as JSON Lines and nothing else - no panel, no status line, no prose. A command with its own JSON result (`list`, `version`, `publish`, `deps`, `config`, `info`, `github-release`) prints that result instead, unchanged. See below. |
 | `--log-file <path>` | - | Also write the run's log to this file - JSON Lines under `--json`, text otherwise. Relative to where rman was invoked. See below. |
 
 ### The run log: `--json` and `--log-file`
@@ -281,7 +291,7 @@ $ rman build --json
 | `event` | Fields |
 | --- | --- |
 | `start` | `package`, `step` (`before`/`exec`/`after`, or a command's own step name), `command` |
-| `output` | `package`, `stream` (`stdout`/`stderr`), `line` |
+| `output` | `package`, `stream` (`stdout`/`stderr`), `line`, and `level: "error"` on a line rman itself wrote to say why a step failed - never inferred from the stream |
 | `end` | `package`, `step`, `status` (`success`/`failed`), `ms`, and `error` on a failure |
 | `summary` | `succeeded`, `failed`, `skipped`, `ms` |
 | `message` | `level` (`info`/`error`), `message` - e.g. "nothing to run" |
@@ -324,6 +334,18 @@ Four cases are silent, and each is about not corrupting something:
   nothing but events.
 - **`--config`**, for the same reason.
 - **`--log-level silent`**.
+
+**`--no-progress` draws no spinner either** - it asks for no live output at all, and a spinner
+redrawing in place would move the cursor up over the plain lines such a run prints. The result line
+still prints.
+
+**A progress panel takes the terminal over.** `run`/`build`/`test`, `exec`, `clean`, `ci` and
+`changelog` draw a panel of their own, and two live regions on one terminal overwrite each other's
+rows on every redraw. So the status line is suspended while the panel draws and resumed when it
+stops, and the panel's header carries what it would have shown - the command in its badge, the
+repository at the right-hand end. A run whose panel is off for another reason (`.rmanrc
+run.<script>.progress: false`, or stdout redirected while stderr is a terminal) silences the status
+line for the run too, since the steps' lines are then printed to the same screen.
 
 **stderr rather than stdout**, so `rman changelog > NOTES.md` leaves the notes alone in the file. And
 **nothing is drawn when stderr is not a TTY** (CI, a pipe): the escape codes would be noise there,
@@ -414,15 +436,15 @@ too.
 ### `skip`
 
 `.rmanrc "skip": true` on a package means "leave this one alone", and every command that *acts* on
-packages honours it - `run`/`build`/`test`, `exec`, `version`, `changelog`, plus `clean` and
-`publish`. `list` deliberately ignores it: it reports on the repository rather than acting on it,
+packages honours it - `run`/`build`/`test`, `exec`, `version`, `changelog`, `deps`, plus `clean`,
+`ci` and `publish`. `list` deliberately ignores it: it reports on the repository rather than acting on it,
 and an inventory hiding part of it answers a different question than the one asked. A skipped
 package is dropped **before** `--deps`/`--dependents`, so a dependency edge cannot drag it back in.
 
 ### Package filtering
 
 `list`, `run`/`build`/`test`, `exec`, `version`, `changelog`, `clean`, `ci`, `publish` - and a
-plugin's commands - all accept:
+plugin's commands - all accept (and `deps` part of it, see below):
 
 | Option | Description |
 | --- | --- |
@@ -431,6 +453,8 @@ plugin's commands - all accept:
 | `--platform <names>` | Only include packages of these platforms - `--platform=node,cargo`, or repeated. |
 | `--deps` | Also include every package the matched set depends on (transitively). |
 | `--dependents` | Also include every package that depends on the matched set (transitively). |
+
+`deps` takes `--scope`, `--ignore` and `--platform` only - it has no `--deps`/`--dependents`.
 
 ```bash
 rman run build --scope '@myorg/*' --ignore '*-internal'
@@ -489,7 +513,7 @@ An explicit CLI `--allow-branch`/`--ignore-branch` **replaces** the equivalent r
 entirely (they never combine, the same precedence `packageManager` uses). With neither set
 anywhere, every branch is allowed. A detached `HEAD`, or a directory that isn't a git repository at
 all, is never blocked. Read-only/non-branch-sensitive commands (`list`, `diff`, `info`, `config`,
-`changelog`, `import`) deliberately do **not** have this guard - `changelog` among them because it
+`changelog`, `deps`, `import`) deliberately do **not** have this guard - `changelog` among them because it
 only ever reads history and writes a file the repository already asked for.
 
 ## Exit codes and the `logged` convention

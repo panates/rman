@@ -1,4 +1,4 @@
-<!-- verified against commit 0e33a0a - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # `rman github-release`
 
@@ -52,7 +52,7 @@ rman github-release --repository panates/my-repo
 The release is identified by the repository's own version (the monorepo root's - see
 [`rman version`](version.md#the-repositorys-own-version)): its release tag (`.rmanrc
 "version.releaseTagPattern"`, default `release-*`) when that version is a calendar one, and
-otherwise the tag of the single shared version. Whether a release already exists for that tag
+otherwise the tag of the single shared version (the root's `v*`, e.g. `v1.4.0`). Whether a release already exists for that tag
 decides `up-to-date` vs `release`, which makes a re-run harmless - including on a run that shipped
 nothing at all.
 
@@ -67,12 +67,18 @@ notes would silently cover the entire history instead of what actually shipped.
 
 ## Release notes
 
-Notes come from [`changelog`](changelog.md) itself: one section per package, each bounded by the
-**previous repository release** and headed with that package's own version - so a repo whose
-packages sit on different version lines still reads correctly. A package with nothing in that range
-contributes no section, which is also how one that didn't ship this time is left out, with no
-ancestry arithmetic needed. The boundary is deliberately not the usual auto-detection, which would
-resolve to the very tag being released and correctly find nothing new.
+Notes come from [`changelog`](changelog.md) itself: one entry per package, each bounded by the
+**previous repository release** (the whole history when there is none). Each entry is headed the
+way `changelog` heads one - by the release tag that closes it, which under independent versioning
+is the package's own (`pkg-a@1.3.0`), so a repo whose packages sit on different version lines still
+reads correctly. A package with nothing in that range contributes nothing, which is also how one
+that didn't ship this time is left out, with no ancestry arithmetic needed. The boundary is
+deliberately not the usual auto-detection, which would resolve to the very tag being released and
+correctly find nothing new.
+
+The entries follow the repository's own `changelog.*` settings - section headings, order, the sha
+on each line. A package with `.rmanrc "publish.skip"` is **not** left out here: that key excludes a
+package from the registries, and a release is the repository's record, not a registry.
 
 An existing release for the tag is updated rather than treated as a failure, so a re-run after a
 partial failure converges.

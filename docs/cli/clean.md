@@ -1,9 +1,11 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # `rman clean`
 
-> Comes from the **[`node` built-in](../rman.md#the-node-built-in)**, not from rman's core - name it in `.rmanrc`
-> `plugins` (directly, or inherited through `extends`) or this command does not exist.
+> Comes from the **[`node` built-in](../rman.md#the-node-built-in)**, not from rman's core. Its preset
+> is laid under every repository by default, so the command is there without being named; a caller
+> passing `presets: []` gets a bare core without it. It acts on **node packages only** - in a
+> polyglot repository the packages of other technologies are left alone, with no `--platform` needed.
 
 ```
 rman clean [options]
@@ -15,8 +17,17 @@ package (root included). The built-in replacement for `ts-cleanup`, plus a small
 
 For every package not opted out via its own (cascaded) `clean.skip: true`:
 
-- deletes compiled `.js`/`.js.map`/`.d.ts` files sitting next to their `.ts` source under `src`/
-  `test` (a `.d.ts` with no matching `.ts`/`.tsx` is left alone - presumably hand-written);
+- deletes compiled `.js`/`.js.map`/`.d.ts` output **anywhere in the package**, except
+  `node_modules` and its build directory (the resolved `publish.npm.directory`, `build` when unset):
+  - under `src`/`test`, where everything is TypeScript, a `.js`/`.js.map` goes even when its `.ts`
+    was since renamed or deleted;
+  - anywhere else, a file goes **only when a matching `.ts`/`.tsx` sits beside it** - that is what
+    tells `tsc` output from a hand-written `index.js`, `*.config.js` or `scripts/*.js`, which are
+    left alone. A compiled file there whose source is gone is left alone too, since nothing on disk
+    says it was generated;
+  - a `.d.ts` always needs its `.ts`/`.tsx` beside it, `src` included - one without is a
+    hand-written declaration;
+  - directories left empty are pruned under `src`/`test` only;
 - deletes any `*.tsbuildinfo` incremental-build cache file anywhere in it (skips `node_modules`);
 - deletes anything matching its own `clean.include` glob(s), minus `clean.exclude`.
 

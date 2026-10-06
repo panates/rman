@@ -1,4 +1,4 @@
-<!-- verified against commit 0ec1e88 - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # `rman config`
 
@@ -24,13 +24,14 @@ Everything that makes a config hard to read back by hand:
 | | |
 | --- | --- |
 | directory cascade | a parent directory's `.rmanrc`, then the package's own, closest winning |
-| `"[selector]"` blocks | `"[*]"` and any glob that matches this package's **name** |
+| `"[selector]"` blocks | `"[/]"` for the root, `"[platform:node]"` for a technology, and `"[*]"` / any glob matching this package's **selector** (its name, unless its `.rmanrc "name"` says otherwise) - nested blocks included |
 | `extends` | configs merged *underneath* the file naming them |
 | `value` | a key deriving from what the layers below it resolved to |
 | `${{ ... }}` | evaluated for **this** package - `pkg`, `repository`, `file`, `env`, ... |
 
 ```bash
 $ cd packages/a && rman config
+# .rmanrc
 # pkg-a (packages/a)
 vars:
   registry: https://example.test
@@ -59,15 +60,30 @@ The same rule `run`/`exec`/`changelog` use: standing inside a package's own dire
 anywhere else - the repository root, or a directory holding no package (an intermediate
 `packages/`) - the root package. `--from-root` forces the root from inside a package.
 
-Remember that the **root is a package too**, and that a `"[*]"` block is about the *others*: at the
-root you see `allowBranch`, `version.*` and the plugins' root-level keys, and *not* what `"[*]"`
-said.
+Remember that the **root is a package too**, and gets what any package gets from the levels above
+it: every unmarked key, `"[/]"`, and a matching `"[platform:...]"` block. In a **monorepo** a glob -
+`"[*]"` included - never reaches the root, so what `"[*]"` said is not in its output; in a
+single-package repository the root *is* the one package, and `"[*]"` reaches it like `"[/]"` does.
 
-## Two things to know about the output
+## What to know about the output
 
+- **The first line names the config file the directory declares** (`.rmanrc`, `.rmanrc.yml`,
+  `.rmanrc.cjs`, ...) - the file to open first. It is omitted where the directory declares none,
+  since the answer then lies a level above. It is a starting point, not the provenance: the printed
+  config also holds the directories above, every `extends` base and each `"[selector]"` block. A
+  failing `${{ }}` expression names the file its key came from.
 - **The `#` lines are YAML comments**, so the whole thing is a loadable document - you can redirect
-  it to a file. They are coloured only when stdout is a terminal, because an escape sequence inside
-  a comment makes the document unloadable rather than merely ugly.
+  it to a file. The document is syntax-coloured only when stdout is a terminal - keys, `${{ }}`
+  expressions and literals each in their own colour - because an escape sequence inside a comment
+  makes the document unloadable rather than merely ugly. For the same reason no status line is
+  drawn around this command.
+- **The contribution keys are left out** - `plugins`, `platforms`, `commands` and `publishTargets`.
+  They are code (a technology, a command, a publish target), and every repository carries the
+  default presets' entries, so printing them would bury the few keys the repository actually sets.
+  Which technology claimed each package is [`rman list`](list.md)'s `Platform` column; which commands
+  exist, `rman --help`'s.
+- **A value written as a function prints as `[Function: name]`** - a step in a JS config, say -
+  rather than breaking the YAML or, under `--json`, silently vanishing.
 - **`version.before`/`.exec`/`.after` are printed raw**, and the output says so when they are
   present. `${{ pkg.targetVersion }}` cannot be evaluated before `version` has computed a plan, so
   the repository deliberately leaves those three unevaluated at load - see

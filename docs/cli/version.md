@@ -1,4 +1,4 @@
-<!-- verified against commit 16c3525 - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # `rman version [bump]`
 
@@ -14,7 +14,7 @@ nothing unless `--interactive` confirms it. With an explicit `bump`, applies imm
 
 | Argument | Description |
 | --- | --- |
-| `bump` | A release-type keyword (`"patch"`/`"minor"`/`"major"`) or an explicit semver version (e.g. `2.0.0-rc.1`). Omit to auto-detect from commits and only preview the plan. |
+| `bump` | A bump keyword of the root's version scheme (`"patch"`/`"minor"`/`"major"` under semver) or an explicit version in that scheme (e.g. `2.0.0-rc.1`). Omit to auto-detect from commits and only preview the plan. `--help` and the "invalid bump" error list the scheme's own keywords. |
 
 ## Options
 
@@ -28,7 +28,7 @@ options, in addition to:
 | `--ignore-dirty` | - | boolean | Exclude a package with uncommitted local changes instead of aborting the whole run. |
 | `--push` | - | boolean | Push the resulting commit(s) and tag(s) to the remote once applied. |
 | `--message <text>` | `-m` | string | Override the commit message for every group this run commits. Default: `.rmanrc version.commitMessage`, or `"chore(release): v{version}"`. `{version}` is substituted when a commit's own group shares one version. |
-| `--changelog` | - | boolean | Also write each bumped package's `CHANGELOG.md` (same as running `changelog --write` separately) and fold it into the same commit as the version bump. Default: `.rmanrc "version.changelog"`, or `false` - `--no-changelog` still overrides it off for one run, even when that's `true`. |
+| `--changelog` | - | boolean | Also write each bumped package's changelog (same as running `changelog --write` separately) and fold it into the same commit as the version bump. Follows [`changelog.groupBy`](changelog.md#one-file-per-package-or-one-per-release): under `group`, one file per release group, committed with that group's release. Default: `.rmanrc "version.changelog"`, or `false` - `--no-changelog` still overrides it off for one run, even when that's `true`. |
 | `--preid <name>` | - | string | Make the bump a prerelease with this identifier (e.g. `"beta"` -> `1.2.3-beta.0`). Running again with the same `--preid` increments it (`-> 1.2.3-beta.1`); a different identifier starts a fresh prerelease line. Ignored when `bump` is an explicit semver version. |
 | `--show` | - | boolean | Show the resulting plan for the given `bump` without applying it - unlike omitting `bump` entirely, this still uses the given release-type keyword/version to compute the plan, just never writes it. Conflicts with `--interactive`. |
 | `--json` | `-j` | boolean | Print the plan as JSON and write nothing - the machine-readable form of `--show`, and what the removed `changed` command was for. See [`--json`: the plan, for a script](#--json-the-plan-for-a-script). Conflicts with `--interactive` and `--yes`. |
@@ -55,8 +55,17 @@ Run again with an explicit bump, --interactive, or --yes, to apply.
 repository's release identity - what a [`github-release`](github-release.md) is named after - and
 not a package release at all. Below it, each block is one version line: a group's members are
 printed together however the workspace ordered them, and the packages that belong to no group share
-a final block. `Group` is written only where it says something - a package grouped with nobody would
-otherwise repeat its own name one column to the right.
+a final block. The `Group` column says which kind of line a row is on:
+
+| Group cell | Meaning |
+| --- | --- |
+| `(root)` | the repository's release identity, not a package release |
+| `(default)` | the default group (`group: true`) - a note, so it is grey and in parentheses |
+| `core` | a group the repository **named** (`group: "core"`) - a value, printed bare, even with a single member |
+| *(blank)* | `group: false` - a line of its own, so the cell would only repeat the package name |
+
+A named group always gets a block of its own, however many members it has: its name decides its tag
+and its changelog file, so it is a line of its own even when only one package sits on it.
 
 Note that `pkg-b` lands on `2.1.0` rather than `1.1.0`: it shares the `default` group with `pkg-a`,
 and **a group releases as one number** - the highest among its members. Use
@@ -185,19 +194,58 @@ Packages are partitioned into **groups**, and severity/version decisions happen 
 { "group": false }
 ```
 
+A group name is limited to 15 characters of letters, digits, `.`, `-` and `_`, starting with a
+letter or digit - it becomes a file name under
+[`changelog.groupBy: group`](changelog.md#one-file-per-package-or-one-per-release), so anything else
+is refused, naming the package that declared it, rather than escaped.
+
 Within a group, the highest severity among its **changed** members sets the group's severity, and
 the new version is the group's current version (highest among its members) bumped by that
-severity. Who actually receives it:
+severity. How far into the group it reaches is the package's **technology**'s answer, because it is
+a statement about what a published artifact still needs. A Node package's:
 
 | Severity | Who gets bumped |
 | --- | --- |
-| `patch` | Only the changed member(s). |
-| `minor` | Also every transitive **in-group** dependent of a changed member. |
+| `patch` | The changed member(s) **and** every transitive **in-group** dependent of one. |
+| `minor` | The same: the changed members and their transitive in-group dependents. |
 | `major` | The **entire group**, changed or not. |
 
-A package depending on another group's bumped package always gets exactly a **patch** bump of its
-own (a cross-group ripple, never inheriting the source's severity) - this can itself ripple into a
-third group, and so on.
+A patch reaches dependents (it reached only the changed packages before 2.4) because a dependent's
+published artifact was built against the old code: anything that bundles or type-checks against its
+dependency keeps shipping the pre-fix version until it is released again. Members of different
+technologies in one group take the widest answer any of them gives. A dependent pulled in this way
+reads `in-group dependent of a patch change`; one pulled in by a major reads
+`in-group member of a major change`.
+
+A package depending on another group's bumped package always gets exactly the scheme's
+**smallest** bump (`patch` under semver) of its own - a cross-group ripple, never inheriting the
+source's severity - and this can itself ripple into a third group, and so on.
+
+### Keeping a group in lockstep (`.rmanrc "version.cascade"`)
+
+The technology's answer is about what a release *needs*. Whether a repository wants **one number
+across its whole product** is a separate decision, and `version.cascade` is where it says so:
+
+```yaml
+group: true
+version:
+  cascade: group # every member releases on every release
+```
+
+| Value | The narrowest a group is released |
+| --- | --- |
+| `changed` | no floor of your own - only what the technology asks for |
+| `dependents` | the changed members and their in-group dependents |
+| `group` | every member, so the group stays on one version |
+
+It is a **floor, never a ceiling**: the technology still widens it where a narrower release would
+leave a dependent behind, so `cascade: changed` still reaches the whole group on a major. In a Node
+repository `changed` and `dependents` therefore change nothing, and `group` is the one value that
+does. Per-package cascaded; a group whose members disagree takes the widest. An explicit
+`rman version <v>` never consults it - every eligible package moves already.
+
+It is not a safety valve: a change that can break a dependent is a `feat:` or `feat!:`, and
+renumbering the dependent does not make the break safe.
 
 ## The repository's own version
 
@@ -219,6 +267,24 @@ a single version line the group's own tag already is the release, so no second n
 
 The release tag pattern must never match a package's own `changelog.tagPattern` - a release tag
 matching `v*` would be picked up as some package's last release and throw off its changelog.
+
+### Which tag a package's release gets
+
+Each group's release is tagged per member under `.rmanrc "changelog.tagPattern"`. Left unset, the
+pattern is derived from the same structural fact as the root's version - how many version lines the
+repository has:
+
+- **One line** - `v*`: one repo-wide tag (`v1.2.0`) for the whole release.
+- **Several lines** - `{name}@*`: every member gets its own tag at its group's version
+  (`pkg-a@1.2.0`, `pkg-b@1.2.0`), and each package finds its own on the next run. A repo-wide `v*`
+  tag is resolved as "the nearest one HEAD descends from", which stops being *this* package's last
+  release the moment the lines release separately.
+
+A repository that splits into several lines keeps working across the switch: while a package has no
+`{name}@*` tag of its own yet, its boundary falls back to the repo-wide `v*` tag that was correct
+before the split, so the first run reads the same commits as the last and writes the per-package
+tag every later run finds. That bridge applies only to the derived default, never to a
+`tagPattern` the repository set itself. The repository root always keeps `v*`.
 
 ## Stamping the version where the package declares it
 
@@ -265,8 +331,24 @@ export const version = '6.0.10'; // was '1'
 
 - Paths are relative to the package's own directory. A listed file a package doesn't have is a
   silent no-op, so one `"[*]"` declaration covers a repo where only some packages carry one.
-- Both `version = '...'` and `version: '...'` are matched, quoting style preserved. Only the whole
-  identifier - `myversion` and `version2` are somebody else's constants.
+- Both `version = '...'` and `version: '...'` are matched, with single, double or backtick quotes,
+  quoting style preserved. Only the whole identifier - `myversion` and `version2` are somebody
+  else's constants. **How** a version is declared is the package's technology's answer; this is the
+  rule the built-in one applies.
+- A constant spelled otherwise is named with the object form, `{ file, constant }`:
+
+  ```yaml
+  version:
+    stamp:
+      - { file: src/version.go, constant: Version }
+  ```
+
+- **A listed file that exists but holds nothing rewritable is an error**, raised before anything is
+  written - a typo'd path or a renamed identifier would otherwise ship a stale constant on every
+  release. A missing file stays a silent no-op: that means "not this package".
+- **`{ file, optional: true }`** waives that error, for an entry whose author cannot know whether the
+  file holds a version - a shared preset naming `src/constants.ts` for every package of a
+  technology. A file that does hold one is still stamped.
 - Explicitly listed rather than discovered: unlike the OCI label there is no standard saying "this
   file holds the version", which is also what keeps a match this broad safe.
 
@@ -277,9 +359,11 @@ rewrite has to be redone on every build.
 
 ## Hooks, and the version being written
 
-`.rmanrc "version"`'s `before`/`exec`/`after` run around the bump as this package's
-`preversion`/`version`/`postversion` (a real npm script of that name in `package.json` still wins).
-They are the one place [`${{ pkg.targetVersion }}`](../rman.md#expressions---) means anything:
+`.rmanrc "version"`'s `before`/`exec`/`after` run around the bump, alongside this package's own
+`preversion`/`version`/`postversion` scripts. The two **compose**: the config brackets the
+package's own (`version.before` → `preversion` → `version` → `postversion` → `version.after`), and
+only `exec` is replaced - a package's own `version` script stands in for `version.exec`. Any of the
+three may also be a function, in a JS config. They are the one place [`${{ pkg.targetVersion }}`](../rman.md#expressions---) means anything:
 
 ```yaml
 "[*]":
@@ -297,10 +381,12 @@ no other command has a target version, and evaluating it to `undefined` would qu
 
 With no explicit `bump`, each package's severity comes from its own commits since its last release -
 the shared [`ChangeHashService`](../rman.md#changehashservice) boundary [`changelog`](changelog.md)
-measures from too, so the two never disagree about which commits are unreleased. `fix:` → `patch`;
-`feat:` → `minor`; `feat!:`/a `BREAKING CHANGE:` footer → `major`; anything non-conventional →
-`patch`. A `Release-As: patch|minor|major` commit-body footer overrides that one
-commit's own contribution:
+measures from too, so the two never disagree about which commits are unreleased. Each commit is
+read as a kind - `feat!:`/a `BREAKING CHANGE:` footer is breaking, `feat:` a feature, anything else
+(`fix:`, an unknown type, a non-conventional subject) a fix - and the version scheme turns the kind
+into a bump: under semver `major`, `minor` and `patch`. A `Release-As: <bump>` commit-body footer,
+naming one of the scheme's bump keywords, overrides that one commit's own contribution; a word that
+is not one of them (another tool's `Release-As: 1.2.3`) is ignored rather than ranked:
 
 ```
 feat: needs to ship right now, not wait for the rest of the minor

@@ -1,4 +1,4 @@
-<!-- verified against commit 16c3525 - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # `rman publish`
 
@@ -42,7 +42,8 @@ Two ship today, and a repository can install more:
 Two consequences worth knowing:
 
 - **`rman publish --help` differs per repository.** Each target adds its own flags, so the ones
-  listed under "the `npm` target" below exist only where `rman-node` is installed. A flag belonging
+  listed under "the `npm` target" below exist only where the `node` built-in is loaded - which is
+  every repository unless a caller passes `presets: []`. A flag belonging
   to a target nobody installed is not a flag that does nothing - it is `Unknown argument`.
 - **A `publish.target` naming a target nothing implements is an error**, and it names the ones the
   repository *does* have. There is no fixed list of valid names any more, so this replaces what used
@@ -67,7 +68,7 @@ options, in addition to:
 | --- | --- | --- |
 | `--docker-namespace <ns>` | string | Prefixed onto a bare (no `/`) `publish.docker.image`. Default: the `DOCKERHUB_NAMESPACE` environment variable. |
 
-### From the `npm` target (`rman-node`)
+### From the `npm` target (the `node` built-in)
 
 | Option | Type | Choices | Description |
 | --- | --- | --- | --- |
@@ -87,8 +88,8 @@ rman publish                              # show the plan, then ask for confirma
 ```
 
 ```
-publish    pkg-a 1.3.0 never published
-up-to-date pkg-b 1.0.4
+publish [npm] pkg-a 1.3.0 never published
+up-to-date [npm] pkg-b 1.0.4
 Publish these packages? (y/N)
 ```
 
@@ -109,6 +110,10 @@ prompt. Pass --yes to publish non-interactively.` (important for CI - always pas
 Any dirty package aborts the whole plan (`N package(s) have uncommitted local changes...`) unless
 `--ignore-dirty` is given. With nothing to publish, prints `Nothing to publish.`.
 
+A failure line - an aborted plan, a publish that did not go through - is written to **stderr**, so
+under `--json` stdout stays one JSON document that `jq` or `JSON.parse` can read even when the run
+exits non-zero.
+
 A target's `getPlan` is decoupled from [`version`](version.md) - it only ever compares what is on
 disk against what is on its own registry, so it works equally well right after a version bump or
 standing alone days later.
@@ -119,7 +124,6 @@ A version that names a prerelease line publishes to that line:
 
 ```
 publish [npm] rman 2.0.0-beta.1 -> dist-tag "beta"  never published
-publish [npm] rman-node 2.0.0-beta.1 -> dist-tag "beta"  never published
 ```
 
 `2.0.0-beta.1` → `beta`; the identifier is written in the version, so this is a reading rather
@@ -273,12 +277,15 @@ directly has to tick it.
 
 ## `"workspace:"` protocol at publish time
 
-Just before running the actual publish command for a package, any `"workspace:"` dependency range
-in its `package.json` is rewritten to a real, registry-consumable range (`workspace:*` → the
+Just before running the actual publish command for a package published **in place** (from its own
+directory), any `"workspace:"` dependency range in its `package.json` is rewritten to a real, registry-consumable range (`workspace:*` → the
 dependency's exact current version; `workspace:^`/`workspace:~` → `^`/`~` + that version; an
 explicit `workspace:<range>` → the range verbatim, prefix stripped) - the same substitution
 pnpm/yarn's own `publish` performs. The original file is restored immediately afterward, success or
-failure, since `rman` publishes directly from the working tree rather than a staged tarball. See
+failure, since `rman` publishes directly from the working tree rather than a staged tarball. A
+package published from a [build directory](#publishing-from-a-build-directory-publishnpmdirectory)
+gets the same substitution in the manifest `publish` generates there, and its own `package.json` is
+never touched. See
 [`PublishService`](../rman.md#the-node-built-in) for the full mechanics.
 
 ## Docker publishing (`publish.docker`)
@@ -343,8 +350,13 @@ When the publishable output is a subdirectory, say so once:
 ```yaml
 "[*]":
   publish:
-    directory: build
+    npm:
+      directory: build
 ```
+
+The key used to be a bare `publish.directory`, and that spelling is **refused, not ignored**: the
+plan reports an error for the package naming `publish.npm.directory`. Ignored, it would silently fall
+back to the package's own directory and push the source tree to npm.
 
 Most specific statement wins: a package's own `publishConfig.directory` (npm/pnpm's native
 spelling), then this, then `--contents` for a single run.

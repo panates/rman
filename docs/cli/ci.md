@@ -1,9 +1,11 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # `rman ci`
 
-> Comes from the **[`node` built-in](../rman.md#the-node-built-in)**, not from rman's core - name it in `.rmanrc`
-> `plugins` (directly, or inherited through `extends`) or this command does not exist.
+> Comes from the **[`node` built-in](../rman.md#the-node-built-in)**, not from rman's core. Its preset
+> is laid under every repository by default, so the command is there without being named; a caller
+> passing `presets: []` gets a bare core without it. It acts on **node packages only** - in a
+> polyglot repository the packages of other technologies are left alone, with no `--platform` needed.
 
 ```
 rman ci [options]

@@ -1,4 +1,4 @@
-<!-- verified against commit c810d62 - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # `rman changelog`
 
@@ -29,7 +29,7 @@ Accepts [package filtering](../cli-rman.md#package-filtering) options, in additi
 | `--no-progress` | - | boolean | Leave off the live progress panel. On by default, and auto-disabled when stderr is not a TTY. The panel is drawn on **stderr**, so `rman changelog > NOTES.md` still gets clean notes. Also `.rmanrc "changelog.progress"`. |
 | `--group-by <what>` | - | `package` \| `group` | What one changelog file covers. `package` (default) is one file per package; `group` is one file per set of packages that releases together, written at the repository root. Also `.rmanrc "changelog.groupBy"`. See [One file per package, or one per release](#one-file-per-package-or-one-per-release). |
 | `--starting-at <ref>` | - | string | Where this package's changelog begins - a version or release tag (inclusive), a `YYYY-MM-DD` date, or a commit. Releases older than it are left out. Also `.rmanrc "changelog.startingAt"`. See [Where a changelog begins](#where-a-changelog-begins). |
-| `--release-version <v>` | - | string | The version these notes are **for** - what the entry heading shows. Default: read back from each package's own latest release tag, which is only right once that release is tagged. Pass it when generating notes ahead of the bump (e.g. from `changed --json`), otherwise the heading shows the *previous* release. |
+| `--release-version <v>` | - | string | The version these notes are **for**: the unreleased entry is headed with the tag that release is about to get (`## v1.3.0 (<today>)`) instead of `## Unreleased — <package>`, and is kept even under `--no-unreleased`. Pass it when generating notes ahead of the bump (e.g. from [`version --json`](version.md#--json-the-plan-for-a-script)); a segment an existing tag already closes keeps that tag's heading. |
 
 ## Examples
 
@@ -38,17 +38,19 @@ rman changelog                              # auto-detects each package's own la
 ```
 
 ```
-Detecting each package's last release...
-## pkg-a 1.3.0 (2026-09-12)
+## Unreleased — pkg-a (2026-09-12)
 
 ### ✨ Features
 
-- add a new option
+- add a new option (a1b2c3d)
 
 ### 🐛 Bug Fixes
 
-- correct a typo
+- correct a typo (9f3c1ab)
 ```
+
+On a terminal a progress panel runs on stderr while it works; without one (a pipe, or
+`--no-progress`) a single `Detecting each package's last release...` line stands in for it.
 
 ```bash
 rman changelog --from a1b2c3d               # since a specific commit, for every package
@@ -65,9 +67,10 @@ entry, which is where commits under no package, and repo-wide ones, are attribut
 [package filtering](../cli-rman.md#package-filtering); an ordinary glob never matches a monorepo's
 root (in a single-package repository the root *is* the one package, so it does).
 
-With `--write`, prints `updated <label> <filePath>` per package that had something to write,
-instead of the entry's raw content. With nothing unreleased at all, prints `No unreleased
-changes.`.
+With `--write`, prints one `updated <file>` line per changelog file it wrote, the path relative
+to the repository root (`updated packages/core/CHANGELOG.md`) - one line per *file*, not per entry,
+since a backfill writes several releases into the same file. With nothing to document at all,
+prints `No unreleased changes.`.
 
 ## `--write` picks up where the file left off
 
@@ -87,15 +90,25 @@ rman records where it stopped in the file itself, as an HTML comment that render
 
 <!-- rman:documented-up-to 9f3c1ab... -->
 
-## pkg-a 1.1.0 (2026-09-25)
+## v1.1.0 (2026-09-25)
 ...
 ---
 
-## pkg-a 1.0.0 (2026-09-24)
+## v1.0.0 (2026-09-24)
 ...
 ```
 
 There is **one** marker per file, rewritten on each write rather than accumulated.
+
+A **print** run (no `--write`) ignores all of this deliberately: nothing is being appended, so
+"the notes for this release" is the question, not "what is still undocumented". `--from` overrides
+it either way.
+
+**Not read from the entry headings.** `changelog.template` is the repository's, so the heading is a
+shape rman did not choose and cannot reliably parse back. The file's own last-modifying commit was
+the other candidate and cannot be the boundary: any unrelated edit - a typo, a hand-written note -
+would move it forward and drop every commit in between, silently. It still serves as the *widening*
+fallback for a file with no marker, which is the one run that has to guess.
 
 ## Rebuilding a file from scratch
 
@@ -162,8 +175,8 @@ where the tag would be one member's `pkg-a@1.2.0` over a file describing all of 
 own name carries it (`## core 1.2.0`).
 
 **A named group is written into a file name**, so it is limited to 15 characters of letters, digits,
-`.`, `-` and `_`, starting with a letter or digit. Anything else is refused when the config is read,
-naming the package that declared it - rather than escaped into a file name the repository never
+`.`, `-` and `_`, starting with a letter or digit. Anything else is refused - by this command and
+by `version` and `list` alike - naming the package that declared it - rather than escaped into a file name the repository never
 asked for.
 
 `rman version --changelog` follows this too, making one call per file rather than one per package,
@@ -210,9 +223,16 @@ describes.
 ### Migrating a repository that already has per-package files
 
 Turning this on does not move or merge what is already there: the per-package files are simply no
-longer written to, and the new root file starts from each group's last release. Delete the old ones
-in the same commit as the config change, or leave them as the historical record - but do not leave
-them *and* expect them to keep updating.
+longer written to. Delete the old ones in the same commit as the config change, or leave them as
+the historical record - but do not leave them *and* expect them to keep updating.
+
+**The first write reads the group's whole history.** A file that does not exist yet has no marker,
+so - exactly as [above](#--write-picks-up-where-the-file-left-off) - `--write` starts from the
+beginning, cut into one entry per release. That is a backfill, with the cost
+[a rebuild](#rebuilding-a-file-from-scratch) describes; set
+[`changelog.startingAt`](#where-a-changelog-begins) first if the early releases do not belong in
+it. (A root `CHANGELOG.md` that already exists without a marker is the exception: it is read from
+the last release tag, widened back to the file's own last commit.)
 
 ## One entry per release, not one per run
 
@@ -227,15 +247,15 @@ heading - measured on a real repository, twelve releases rendered as a single `v
 it:
 
 ```markdown
-## @panates/tsconfig v2.1.6 (2026-04-30)
+## v2.1.6 (2026-04-30)
 ...
 ---
 
-## @panates/tsconfig v2.1.1 (2026-04-05)
+## v2.1.1 (2026-04-05)
 ...
 ---
 
-## @panates/tsconfig v2.0.11 (2026-03-25)
+## v2.0.11 (2026-03-25)
 ```
 
 A release tag sits on the **release commit**, which comes after the work it describes - so that
@@ -431,26 +451,17 @@ package, cascaded like any other config key, and still holds on the run after ne
 
 ## `{{date}}` is the release's date, not today's
 
-The version in an entry heading is read back from the package's latest release tag, so the date
-beside it is that tag's day. They used to come from different places - the version from the tag, the
-date from the clock - so regenerating notes for an already-tagged release headed them with that
-release's number and *today's* date: `## @panates/eslint-config v2.1.6 (2026-09-25)` for a v2.1.6
-tagged days earlier. Two halves of one heading describing two different releases, and a file that
-changed every time it was regenerated.
+An entry a release tag closes is headed by that tag, so the date beside it is that tag's day - the
+**committer** date of the tagged commit, since a rebased release commit was authored before it
+shipped. They used to come from different places - the version from the tag, the date from the
+clock - so regenerating notes for an already-tagged release headed them with that release's number
+and *today's* date: `## @panates/eslint-config v2.1.6 (2026-09-25)` for a v2.1.6 tagged days
+earlier. Two halves of one heading describing two different releases, and a file that changed every
+time it was regenerated.
 
-Today's date is still what `--release-version` gets, and that is the case it was written for: a
-caller naming the version is describing a release that **does not exist yet** (`version --changelog`
-writes the entry before it commits and tags), so there is no tag to read a date off.
-
-A **print** run (no `--write`) ignores all of this deliberately: nothing is being appended, so
-"the notes for this release" is the question, not "what is still undocumented". `--from` overrides
-it either way.
-
-**Not read from the entry headings.** `changelog.template` is the repository's, so the heading is a
-shape rman did not choose and cannot reliably parse back. The file's own last-modifying commit was
-the other candidate and cannot be the boundary: any unrelated edit - a typo, a hand-written note -
-would move it forward and drop every commit in between, silently. It still serves as the *widening*
-fallback for a file with no marker, which is the one run that has to guess.
+Today's date is what the unreleased entry gets, and what `--release-version` gets: a caller naming
+the version is describing a release that **does not exist yet** (`version --changelog` writes the
+entry before it commits and tags), so there is no tag to read a date off.
 
 ## Configuration (`.rmanrc changelog.*`)
 
@@ -463,6 +474,13 @@ changelog:
   template: changelog.template.md # a PATH to a template file, relative to the repo root
   groupBy: package # or 'group': one file per set of packages that releases together, at the
   #                  repository root. Read off the root only - it is one layout per repository.
+  groupFiles: { core: packages/core/CHANGELOG.md } # a named group's file, under groupBy: group
+  titles: { dev: Development Changes } # section headings, merged over the defaults per key
+  sortTitles: [fix, feat] # section order, by commit type
+  commitHash: true # end each bullet with its commit's short sha
+  unreleased: true # give the not-yet-released commits an entry of their own
+  startingAt: '2.0.0' # the oldest release this package's changelog keeps
+  progress: true # the live progress panel - read off the root only
 ```
 
 A commit is attributed to every package its files fall under; one broad enough to touch at least 3
@@ -478,7 +496,8 @@ manifest. A move that is not committed yet is not seen.
 
 See
 [`ChangelogService`](../rman.md#changelogservice) for the full template placeholder reference
-(`{{package}}`/`{{version}}`/`{{date}}`/`{{commits}}`/`{{features}}`/`{{fixes}}`/`{{other}}`) and
+(`{{title}}`/`{{package}}`/`{{version}}`/`{{tag}}`/`{{date}}`/`{{commits}}`/`{{features}}`/`{{fixes}}`/`{{other}}`
+- the default template is `## {{title}} ({{date}})` followed by `{{commits}}`) and
 grouping algorithm. A package with `.rmanrc "publish": { "skip": true }` gets no entry at all by
 default, regardless of its own commits - see [`rman publish`'s own
 note](publish.md#excluding-a-package-entirely-rmanrc-publishskip). Pass `--include-skipped` to

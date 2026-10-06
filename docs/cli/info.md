@@ -1,4 +1,4 @@
-<!-- verified against commit b6924c69810870582f615a81c97b587e4057910d - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # `rman info`
 
@@ -10,7 +10,13 @@ Prints local environment information (OS, CPU, memory, shell, Node + whichever p
 `.rmanrc "packageManager"` actually configures (default npm), git, installed `rman`/`typescript`
 versions) alongside basic repository information (monorepo vs. single package, name, version, root
 path, package count). Useful for bug reports and CI debugging. No package filtering options apply -
-this command reports on the whole environment/repository.
+this command reports on the whole environment/repository. The report is the whole output, so no
+status line is drawn around it.
+
+The package manager and the installed `rman`/`typescript` versions (`npmPackages`) are the
+[`node` built-in](../rman.md#the-node-built-in)'s half of the report. Its preset is laid under every
+repository by default, so they are normally there; a bare core (`presets: []`) reports `Node` and
+`Git` alone.
 
 ## Options
 

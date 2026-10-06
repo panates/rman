@@ -1,4 +1,4 @@
-<!-- verified against the commit that introduced `rman deps` (parent fab1a2e) - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # `rman deps`
 

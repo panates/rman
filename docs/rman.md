@@ -1,13 +1,13 @@
 <!--
 docs-baseline
-git-commit: f935a28
-package-version: 2.0.0-beta.4
-date: 2026-09-28
+git-commit: 8430603
+package-version: 2.14.0
+date: 2026-10-06
 
 Verified against `src/` (and `test/**/*.spec.ts` for usage examples) as of the commit above.
 Before trusting/updating this file in a later session, run:
 
-  git diff f935a28..HEAD -- packages/rman/src/
+  git diff 8430603..HEAD -- packages/rman/src/
 
 and update only the sections touched by what that diff actually shows - don't regenerate the
 whole file unless the diff is broad enough to warrant it. Once verified again, bump `git-commit`/
@@ -70,6 +70,7 @@ utilities (`ChangeHashService`, `Logger`). For the CLI itself (commands, flags,
   - [`SystemInfo`](#systeminfo)
 - [Shared utilities](#shared-utilities)
   - [`ChangeHashService`](#changehashservice)
+  - [`ProgressPanel`](#progresspanel)
   - [`Logger` / `LogLevel` / `resolveRootLogLevel`](#logger--loglevel--resolverootloglevel)
 - [The `node` built-in](#the-node-built-in)
   - [What it contributes](#what-it-contributes)
@@ -113,6 +114,13 @@ import {
   SystemInfo,
   filterPackages,
   ROOT_SELECTOR,
+  mergeConfig,
+  runOptions,
+  readRunOptions,
+  parallelOptions,
+  readParallelOptions,
+  DependencyUpdater,
+  ProgressPanel,
   isCalendarVersion,
   Logger,
   LOG_LEVELS,
@@ -137,12 +145,13 @@ import type {
 Services are **classes reached through the application** (`app.getService('version')`) - the
 classes are exported so you can name their types, not so you can construct one.
 
-**Everything npm-specific lives in `rman-node`** - `PublishService`, `CiService`, `CleanService`,
-the `package.json` manifest reader, the version planner, `node_modules/.bin` on PATH, and the
-`ci`/`clean` commands. See [The `node` built-in](#the-node-built-in). The core documented here knows nothing
-about npm: a repository naming no plugin has no manifest reader at all, so a polyglot or non-Node
-repository declares its own through the same seams the plugin uses. `info` is a **core** command
-whose npm half the plugin augments in place.
+**Everything npm-specific is the `node` built-in's** - `PublishService`, `CiService`,
+`CleanService`, the `package.json` manifest reader, the version planner, the dependency updater,
+`node_modules/.bin` on PATH, and the `ci`/`clean` commands. It ships inside rman and is laid under
+every repository by default - see [The `node` built-in](#the-node-built-in). The core documented
+here knows nothing about npm: with `presets: []` there is no manifest reader at all, so a polyglot
+or non-Node repository declares its own through the same seams the built-in uses. `info` is a
+**core** command whose npm half the built-in augments in place.
 
 ## Core concepts
 
@@ -270,6 +279,48 @@ platform whose manifest provider recognizes it, `basePlatform` when none does. A
 its platform when it is constructed, by the walk that found it (see
 [`Workspace`](#workspace-finding-the-packages)), so nothing re-derives the answer later.
 
+**`dependencyUpdater` is the `deps` seam** - how a technology checks its dependencies against a
+registry and moves them. The command owns the filters, the plan table and the confirm; the
+technology owns every answer:
+
+```ts
+interface DependencyUpdater {
+  getPlan(ctx: DependencyUpdater.Context, packages: readonly Package[]): Promise<DependencyUpdater.Entry[]>;
+  applyPlan(ctx: DependencyUpdater.Context, plan: readonly DependencyUpdater.Entry[]): Promise<DependencyUpdater.Applied>;
+  verify?(ctx: DependencyUpdater.Context, packages: readonly Package[]): Promise<string | undefined>;
+}
+
+namespace DependencyUpdater {
+  interface Context { app: RmanApplication; repository: Repository; options: Options }
+  interface Options {
+    names?: string[]; target?: string; reject?: string[]; minAge?: number; // this run's flags
+    concurrency: number;
+    onProgress?(done: number, total: number): void;
+  }
+  interface Entry {
+    package: Package;
+    name: string;
+    types: string[];   // the fields that declare it, in the ecosystem's words
+    current: string;
+    status: 'update' | 'held' | 'skipped' | 'up-to-date' | 'error';
+    target?: string; latest?: string; available?: string; bump?: string; reason?: string;
+  }
+  interface Applied { files: string[]; restore(): void } // restore() undoes the write when verify fails
+
+  function settingsFor(pkg: Package, options: Options): Settings;   // deps.* resolved, flags applied
+  function targetFor(settings: Settings, name: string): { size: string; from: string };
+  function defaultTarget(bumps: readonly string[]): string;         // every size but the largest
+}
+```
+
+- **`settingsFor` is how a technology reads `deps.*`**, so every updater agrees about what the keys
+  mean: `--target` replaces `deps.target` *and* drops `deps.targets` for the run, `--reject` adds to
+  `deps.reject`, and a target the package's version scheme does not name is an error. `targetFor`
+  names which key decided, for the `reason` a held entry carries.
+- **`verify` answers whether the written result still installs**, as an error text or `undefined`;
+  `deps --upgrade` calls `restore()` when it does not. Optional - a technology without a resolver
+  to ask leaves it out.
+
 **A published plugin is not usually named in `plugins` at all.** Its package exports a config
 carrying it, and the repository writes `extends`:
 
@@ -350,6 +401,21 @@ export const deployCommand = declareCommand(app => ({
 - **A second parameter, `Extra`, is for what an option cannot describe** - `{ file, constant }`, or
   "a shell command or a function". Reach for it only when the shape genuinely resists; a `string[]`
   is `type: 'string'` plus `array: true`.
+- **The handler gets a [`CommandContext`](cli/custom-commands.md) as its second argument** -
+  `handler(args, context)`, with this run's `runBin` and `logger` and the scheduler's
+  `forEachPackage` and `parallel` (see [`RunService`](#runservice)). Optional, so a handler taking
+  `args` alone still fits, and the opposite order to `defineCommand`'s `(context, args)` for that
+  reason: appending a parameter broke no declared command, prepending one would have broken all.
+- **`printsDocument: true` when stdout *is* the answer.** Every other command gets a live status
+  line on stderr naming it, and a result line with the elapsed time; a command printing a document
+  (`config`, `list`, `changelog`) declares this so nothing is written around it. A command whose
+  `config` holds a `json` option is treated as owning `--json` - the global run-log `--json` leaves
+  its stdout alone.
+- **`shadowable: true` lets a contributed command take the name.** Only `build` and `test` carry
+  it - both are `run <script>` under a shorter name - so a preset's own `test` (one run at the
+  repository root, say) replaces rman's alias instead of throwing. A shadowed built-in is not
+  registered at all; the override is reported at `--log-level verbose`. Every other built-in name
+  still refuses.
 
 A repository's own `.rman/*.mjs` command is a different, older form (`defineCommand`, a
 hand-written `builder`, a handler taking a `CommandContext`) and is not deprecated - see
@@ -374,6 +440,7 @@ class Repository extends Package {
   ): Promise<Repository>;
 
   get currentPackage(): Package | undefined;
+  get dependencyCycles(): readonly (readonly string[])[];
   getPackages(options?: { scope?: string | string[]; toposort?: boolean }): Package[];
   getPackage(name: string): Package | undefined;
   listStatus(options?: { hash?: string }): Promise<Record<string, Repository.PackageStatus>>;
@@ -427,7 +494,7 @@ console.log(repository.packages.map(p => p.name));
 **`repository.currentPackage`** is the package whose directory contains `repository.cwd` (deepest
 match wins) - `undefined` when `cwd` *is* the repository root, or isn't inside any known package.
 Several services (`RunService`, `CleanService`, `ChangelogService`, ...) use this to scope
-themselves to "just the package I'm standing in" unless a `root: true` option overrides it:
+themselves to "just the package I'm standing in" unless a `fromRoot: true` option overrides it:
 
 ```ts
 const repository = await Repository.create('/repo/packages/pkg-a');
@@ -1077,6 +1144,31 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 >
 > Use `.rmanrc.mjs` if you want to call `defineConfig()` itself.
 
+**Assembling one config out of several objects: `mergeConfig`, not a spread.**
+
+```ts
+function mergeConfig(target: Record<string, any>, source: Record<string, any>, origin?: string): Record<string, any>;
+```
+
+It merges `source` onto `target` exactly the way rman layers an `extends` base, a directory level
+or a `"[selector]"` block, and returns `target`, mutated. A spread gets that wrong twice: it is
+shallow, so two objects both declaring `changelog` keep only the later one; and a generic deep merge
+*replaces* arrays, while `plugins`, `platforms`, `commands` and `publishTargets` always append - so
+a preset's commands would vanish the day anything else declared one. `origin` is the file `source`
+came from, recorded per key so a failing expression can name it; omit it for an object you built.
+
+```js
+// a shared preset composing a platform-neutral part and a Node one
+import { mergeConfig } from 'rman';
+import base from './base.js';
+import node from './node.js';
+
+export default mergeConfig(mergeConfig({}, base), node);
+```
+
+Try `extends: ['./base.js', './node.js']` first where it fits - it costs no API at all and keeps the
+origins exact. `mergeConfig` is for a module that has to hand back one finished object.
+
 ### Scoped `vars`
 
 `vars` can be declared at **any level** of the config, and applies to that level's subtree:
@@ -1482,6 +1574,7 @@ step there is mistaken for a value.
 | `version.commitMessage` | `string` | `"chore(release): v{version}"` | Root-level only. `{version}` substituted when a commit's group shares one version. |
 | `version.changelog` | `boolean` | `false` | Root-level only. Default for `version --changelog` when the CLI flag isn't given - `--no-changelog` still overrides it off for one run. |
 | `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
+| `version.cascade` | `'changed' \| 'dependents' \| 'group'` | none (the technology's answer) | Per-package cascaded; a group whose members disagree takes the widest. The narrowest this repository will release a group - a **floor, never a ceiling** under the platform's own [`cascade`](#versionplanservice). `group` keeps a group in lockstep on every bump; under npm, `dependents` equals the default and `changed` is a no-op. Never consulted by an explicit `rman version <v>`. |
 | `version.stampDockerfile` | `boolean` | `true` | Per-package cascaded. Rewrite this package's Dockerfile `org.opencontainers.image.version` label to the version being written, in the same commit as the bump. Only ever rewrites a label already declared; reads `publish.docker.dockerfile`. |
 | `version.stamp` | `string \| {file, constant?, optional?} \| (…)[]` | none | Per-package cascaded. Source files (relative to the package's own directory) whose `version` constant is rewritten to the version being written, in the same commit. `constant` names the identifier when it is not spelled `version`. A listed file a package doesn't **have** is a silent no-op; one that exists and holds nothing rewritable is an **error**, raised before anything is written - that is what catches a typo'd path or a renamed identifier before it ships a stale constant on every release. `optional: true` waives that refusal, for a **shared preset** naming one path for every package of a technology, which is saying "stamp it where there is one" and cannot know which repositories keep a constant there. |
 | `version.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. Hooks around a version bump's write. **The same composition rule `run` uses** - npm's `preversion`/`postversion` run *inside* the config's `before`/`after` rather than replacing them, and only `version` (the `exec` slot) is replaced by the package's own. Left **unevaluated** at load (`DEFERRED_PATHS`), which is what lets `${{ pkg.targetVersion }}` bind here and nowhere else. A `RunStepValue` is a shell command **or a function** - see [Function steps](#function-steps). A step object's `topo` is refused here: a version hook runs for one package and has no dependency order to join. |
@@ -1500,7 +1593,7 @@ step there is mistaken for a value.
 | `clean.include` / `.exclude` | `string \| string[]` | `[]` | Per-package cascaded, resolved relative to that package's own directory. |
 | `clean.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of `clean` entirely. |
 | `publish.target` | `string` or an array of them | whichever installed targets *claim* the package | Per-package cascaded. Which **registry** `publish` ships this package to - a name from the installed [publish targets](#publishtarget), never a fixed list. Each has its own "already published?" check: npm via `npm view`, docker via `docker manifest inspect`. A name nothing implements is an error naming the ones this repository has. The repository's GitHub Release is not a target here - see `githubRelease`. |
-| `publish.npm.directory` | `string` | none (the package's own directory) | Per-package cascaded. Where the publishable output lives, relative to the package's own directory. A package's own `publishConfig.directory` wins over it; `--contents` is the last fallback. Publishing from such a directory means **`publish` generates the manifest there** - see below. |
+| `publish.npm.directory` | `string` | none (the package's own directory) | Per-package cascaded. Where the publishable output lives, relative to the package's own directory. A package's own `publishConfig.directory` wins over it; `--contents` is the last fallback. Publishing from such a directory means **`publish` generates the manifest there**, and decides `private` from that manifest - see [`rman publish`](cli/publish.md#publishing-from-a-build-directory-publishnpmdirectory). |
 | `publish.npm.staged` | `boolean` | `false` | Per-package cascaded. Run `npm stage publish` instead of `npm publish`, so the version waits in npm's staging queue until a maintainer runs `npm stage approve` with 2FA. `--staged`/`--no-staged` overrule it for one run. Needs npm ≥ 11.15.0 and Node ≥ 22.14.0 on whatever publishes. See [`rman publish`](cli/publish.md#staged-publishing). |
 | `publish.docker.image` | `string` | none (required once `"docker"` is a target) | A bare name is prefixed with `--docker-namespace`/`DOCKERHUB_NAMESPACE`; one already containing `/` is used verbatim. |
 | `publish.docker.dockerfile` | `string` | `'Dockerfile'` | Relative to the package's own directory. |
@@ -1509,21 +1602,26 @@ step there is mistaken for a value.
 | `publish.docker.buildContexts` | `Record<string, string>` | `{}` | Named `--build-context <name>=<path>` entries, each path relative to the package's own directory. |
 | `publish.docker.buildArgs` | `Record<string, string>` | `{}` | `--build-arg <name>=<value>` entries. A value of exactly `"$NAME"` expands from `process.env.NAME`. |
 | `publish.docker.readme` | `string` | `'DOCKER_README.md'` | Relative to the package's own directory - becomes the DockerHub repo's description, if present. |
+| `deps.target` | a bump name of the package's version scheme | every size but the largest (`minor` under semver) | Per-package cascaded. The largest move [`deps`](cli/deps.md) may make to a dependency. `--target` overrides it - and every `deps.targets` entry - for a run. A name the scheme does not have is an error naming the ones it does. |
+| `deps.targets` | `Record<string, string>` (glob → bump name) | `{}` | Per-package cascaded. The largest move for the dependencies a glob matches, ahead of `deps.target` - `{ "@types/node": "major" }`. The last glob matching a name wins. |
+| `deps.reject` | `string \| string[]` (globs) | `[]` | Per-package cascaded. Dependencies left alone. `--reject` **adds** to it rather than replacing it. |
+| `deps.minAge` | `number` (days) | `0` | Per-package cascaded. Only move to a version published at least this many days ago. `--min-age` overrides it. |
+| `deps.types` | `string[]` | every kind | Per-package cascaded. The dependency kinds to look at, in the ecosystem's own words - for npm `prod`/`dev`/`optional`/`peer` or the field names themselves. |
 | `githubRelease.assets` | `string[]` | `[]` | Per-package cascaded. Globs (relative to the package's own directory) uploaded onto the one release. A release with no assets is still valid. |
 | `githubRelease.repository` | `string` | parsed from the `origin` remote | Root-level only. `owner/repo` the release is created in. |
 | `githubRelease.draft` | `boolean` | `false` | Root-level only. Create the release as an unpublished draft. |
 | `githubRelease.prerelease` | `boolean` | whether the version is a semver prerelease | Root-level only. Mark the release as a prerelease. |
 | `publish.skip` | `boolean` | `false` | Per-package cascaded - excludes this package from `publish` entirely (every target), regardless of `target`/`"private"`. `changelog` also skips it by default (its own `--include-skipped` overrides). `version` never consults this. |
-| `run.<script>.concurrency` | `number` | CPU count | See [`RunService`](#runservice) below. |
-| `run.<script>.topo` | `boolean` | `true` | Precedence: CLI flag > package config > fallback. Whether the package waits for its dependencies at all; **which step it waits at** is a step's own `topo` - see [Step objects](#step-objects). |
+| `run.<script>.concurrency` | `number` | CPU count | **Read off the repository root only** - one scheduler, one answer. `--parallel` wins when given. See [`RunService`](#runservice) below. |
+| `run.<script>.topo` | `boolean` | `true` | Read both ways, meaning different things: the **root's** picks the sort (topological or alphabetical) for the whole list, a **package's** own decides whether *it* waits for its dependencies. `--topo`/`--no-topo` wins at both. **Which step it waits at** is a step's own `topo` - see [Step objects](#step-objects). |
 | `run.<script>.bail` | `boolean` | `true` | **Unusual precedence:** package config > CLI flag > fallback (see below). |
-| `run.<script>.progress` | `boolean` | `true` | Per-package cascaded (the panel itself is one shared instance per run). |
+| `run.<script>.progress` | `boolean` | `true` | **Read off the repository root only** - the panel is one shared instance per run. `--progress`/`--no-progress` wins when given. |
 | `run.<script>.logLevel` | `LogLevel` | root's resolved log level | Per-package cascaded. |
-| `run.<script>.changedSince` | `string` | none | Root-level fallback, used only when CLI `--changed-since` isn't given. |
+| `run.<script>.changedSince` | `string` | none | **Read off the repository root only**, used only when CLI `--changed-since` isn't given. |
 | `run.<script>.skip` | `boolean` | `false` | Per-package cascaded - opts a package out of running this script entirely. |
 | `run.<script>.if` | `string` (small expression grammar) \| `RunConditionFn` | none (always runs) | Per-package cascaded. See [`RunService`'s conditional execution](#conditional-execution-if) and [Function steps](#function-steps). |
 | `run.<script>.before` / `.exec` / `.after` | `RunStepValue \| RunStepValue[]` | none | Per-package cascaded. **`before`/`after` compose with the package's own `pre<script>`/`post<script>`; only `exec` replaces** - the config brackets the package's own, `config.before -> prebuild -> build -> postbuild -> config.after`. A `RunStepValue` is a shell command, **a function** ([Function steps](#function-steps)), or **an object** ([Step objects](#step-objects)); a list may mix them. A bare value in place of the whole `run.<script>` object is shorthand for `exec` - a string, a function or a list, never a single step object, which at that position is the options block. |
-| `run.<script>.changed` | `boolean` | `false` | Root-level fallback, used only when CLI `--changed` isn't given. Read since forever and declared never, which made it unreachable from a typed config. |
+| `run.<script>.changed` | `boolean` | `false` | **Read off the repository root only**, used only when CLI `--changed` isn't given. |
 | `run.<script>.override` | `boolean` | `false` | Per-package cascaded - when `true`, the config's script replaces the package's own definition even when it has one. |
 | `extends` | `string \| string[]` | none | Root of each file only. Configs to inherit from - see [above](#inheriting-a-shared-config-extends). |
 | `dependencies` | `string[]` | none | Extra in-repo edges not present in the package's real manifest, purely for rman's own dependency graph (topo-sort, `--deps`/`--dependents`, `run`'s scheduling). Each entry is a **package name or a repository-relative directory**, tried in that order - the path form is what makes the key usable outside npm. Declared through a selector (`"[pkg-a]": { dependencies: [...] }`) or in the package's own `.rmanrc`. A `Record<string, string>` was also accepted once and the ranges went nowhere; the key states an **edge**, which needs two ends and nothing else. |
@@ -1560,26 +1658,26 @@ A JSDoc annotation does the same without the import, which is what a `.cjs` conf
 module.exports = { allowBranch: ['main'] };
 ```
 
-**With a plugin, import `defineConfig` from the plugin instead** - `rman-node`'s is the same
-function typed with `RmanNodeConfig`, and the import is what carries the plugin's own keys
-(`clean`, `publish.npm.directory`, `packageManager`) into the type:
+**The `node` built-in's keys need no extra import** - `clean`, `publish.npm.*` and
+`packageManager` are augmented into `RmanConfig` by rman itself, so `defineConfig` from `'rman'`
+types them. `RmanNodeConfig` is still exported as an alias for a config that wants its annotation to
+say which keys it uses. A *third-party* plugin's keys arrive the same way, by `declare module
+'rman'` - so its package's own entry point has to be in the program, which importing anything from
+it (or its `defineConfig`, where it ships one) ensures.
 
 ```js
 // .rmanrc.mjs
-import { defineConfig } from 'rman-node';
+import { defineConfig } from 'rman';
 
 export default defineConfig({
-  extends: 'rman-node',
   packageManager: 'pnpm',
   '[*]': { clean: { include: 'build' } },
 });
 ```
 
-**`extends`, not `plugins`** - and this is worth stating because the page said `plugins` until
-2.0.0-beta.3. A published plugin package exports an rman *config* (its plugin, its commands, its
-publish targets), and a config's way into a repository is `extends`; `plugins` names technologies
-themselves, and a bare string there is a **glob**. Measured on the old spelling:
-`"plugins" glob ".../rman-node" matched no file`, exit 1 from every command.
+**A published plugin arrives through `extends`, not `plugins`.** Its package exports an rman
+*config* (its platforms, commands, publish targets), and a config's way into a repository is
+`extends`; `plugins` takes an instance or a **glob**, so a bare package name there matches no file.
 
 **The JSON and YAML forms have no editor support, deliberately.** rman used to ship a JSON Schema
 for them; it was removed because a schema cannot describe a config whose keys are contributed by
@@ -1640,7 +1738,7 @@ grouping (fixed or independent versioning), Conventional Commits-based severity 
 cross-group dependency-range propagation, and prerelease (`--preid`) support.
 
 "Since the last release" is resolved by the shared [`ChangeHashService`](#changehashservice) - the very
-same boundary `ChangelogService` measures from, so `changed`/`version`/`changelog` never disagree
+same boundary `ChangelogService` measures from, so `version` and `changelog` never disagree
 about which commits are unreleased. This is deliberately a *commit*-driven question, independent of
 what any registry currently holds: only commits can say how big a bump is warranted, and why. The
 mirror-image question ("is this version already out there?") belongs to each
@@ -1671,11 +1769,11 @@ namespace VersionPlanService {
 
   type Cascade = 'changed' | 'dependents' | 'group';
 
-  /** The registered orchestrator. Throws when a repository's plugins contribute none. */
+  /** The registered orchestrator. Throws when no loaded platform contributes one. */
   function getPlanner(app: RmanApplication): VersionPlanService;
 }
 
-/** Abstract - a technology supplies it (`Plugin.versionPlanner`). */
+/** Abstract - a technology supplies it (`Platform.versionPlanner`). */
 abstract class VersionPlanService {
   getPlan(repository: Repository, options?: VersionPlanService.Options): Promise<VersionPlanService.Entry[]>;
 
@@ -1781,8 +1879,9 @@ const plan = await VersionPlanService.getPlanner(app).getPlan(repository, { bump
 Packages are partitioned into **groups**, and severity/version decisions happen per group, not
 per package:
 
-- `group: true` (the default) - one implicit repo-wide group. Every package in it shares one
-  version line (classic "fixed" / Lerna-style versioning).
+- `group: true` (the default) - one implicit repo-wide group. Its members share one version line;
+  how many of them move on a given bump is the cascade below, so add `version.cascade: group` for
+  classic "fixed" / Lerna-style lockstep.
 - `group: "<name>"` - joins exactly the other packages sharing that same string, regardless of the
   repo's own default. Use this to carve out a few packages that should version together while
   everything else stays independent (or vice versa).
@@ -1804,17 +1903,23 @@ whenever either changes; every other package still shares the repo-wide default 
 Within a group, whichever severity is highest among its **changed** members (real commits since
 that member's own last release tag, or an explicit `bump`) becomes the group's severity, and the
 group's new version is its current version (the highest version currently found among its members)
-bumped by that severity. Which members actually *receive* the new version depends on the severity:
+bumped by that severity. Which members actually *receive* the new version is the technology's
+[`cascade`](#versionplanservice) answer, under the `node` built-in:
 
 | Severity | Who gets bumped |
 | --- | --- |
-| `patch` | Only the changed member(s) - a caret range already tolerates a patch, no republish needed downstream. |
-| `minor` | Also every transitive **in-group** dependent of a changed member. |
+| `patch` | The changed member(s) and every transitive **in-group** dependent of one - a caret range would accept the patch, but a dependent's published artifact was built against the old code. |
+| `minor` | The same: changed members plus their in-group dependents. |
 | `major` | The **entire group**, changed or not. |
 
-Across groups, a package depending on another group's bumped package always receives exactly a
-**patch** bump of its own (never the source's severity) - this can itself ripple into a third
-group, and so on, but a patch never re-triggers its own group's minor/major cascade.
+`.rmanrc "version.cascade"` widens that floor for a repository - `version.cascade: group` keeps a
+group in **lockstep** on every bump, which is what a "one repo-wide version line" usually means.
+Without it, a `fix:` in two of seventeen grouped packages releases those two and their dependents,
+and the rest stay behind on the old number for good.
+
+Across groups, a package depending on another group's bumped package always receives exactly the
+scheme's **smallest** bump of its own (never the source's severity) - this can itself ripple into a
+third group, and so on, carrying that group's own cascade for the smallest bump with it.
 
 #### Grouping decides how release tags are named
 
@@ -1957,8 +2062,8 @@ const plan = await VersionPlanService.getPlanner(app).getPlan(repository, { igno
 
 ### `VersionPlanService`
 
-**Abstract - a technology supplies it**, through `Plugin.versionPlanner`. `version`/`changed`
-fail naming that key when a repository's plugins contribute none: there is no version plan that is
+**Abstract - a technology supplies it**, through `Platform.versionPlanner`. `version` fails
+naming that key when no loaded platform contributes one: there is no version plan that is
 merely a diminished one, and a wrong boundary or cascade releases a plausible, untrue set of
 packages.
 
@@ -1980,27 +2085,43 @@ The two abstract members are exactly the decisions no repository-in-general has 
 - **`detectBoundary`** - since when is a package unreleased. Git tags answer it for any repository
   (`ChangeHashService.detect` is exported for that), but *which* registry stands in when a package
   has no tag yet is the ecosystem's business.
-- **`cascade`** - how far into its group a bump reaches, named in the scheme's own `bumpNames`. The
-  familiar patch/minor/major mapping is a statement about **npm's dependency ranges**: `^1.2.0`
-  already tolerates a patch, so nothing downstream needs republishing. An ecosystem pinning exact
-  versions has to release every dependent for the same patch.
+- **`cascade`** - how far into its group a bump reaches (`'changed' | 'dependents' | 'group'`),
+  asked with a name from the scheme's own `bumpNames`. It is a statement about what a **published
+  artifact** still needs, not about versions: an ecosystem pinning exact versions has to release
+  every dependent for a patch, and one resolving from source may need no release at all.
 
 ```ts
 class NodeVersionPlanService extends VersionPlanService {
-  protected detectBoundary(git: GitHelper, pkg: Package) {
+  protected detectBoundary(git: GitHelper, pkg: Package): Promise<string | undefined> {
     return ChangeHashService.detect(git, pkg);
   }
   protected cascade(bump: string): VersionPlanService.Cascade {
-    return bump === 'major' ? 'group' : bump === 'minor' ? 'dependents' : 'changed';
+    // patch -> 'dependents', minor -> 'dependents', major -> 'group'; anything else -> 'group'
+    return CASCADE_BY_BUMP[bump] ?? 'group';
   }
 }
 ```
+
+**npm's patch answer is `'dependents'`, not `'changed'`**, although `^1.2.0` already resolves to
+`1.2.1`: a dependent's *artifact* was built against the old code, and anything that bundles or
+vendors it keeps shipping the pre-fix version until it is released again. Visible churn is
+preferred to an invisible miss.
+
+**`.rmanrc "version.cascade"` is the repository's floor under that answer** - `'changed'`,
+`'dependents'` or `'group'`, per-package cascaded, the widest of a group's members winning.
+`cascadeFor` takes the widest of the technologies' answers *and* the declared one, so a repository
+can ask for a wider release than its ecosystem requires and never a narrower one. It exists for
+the question `cascade` cannot answer - whether a repository wants **one number across its whole
+product** - which is `version.cascade: group` (lockstep). Under npm, `dependents` equals the
+default and `changed` narrows nothing. An explicit `rman version <v>` never consults it: every
+eligible package moves already.
 
 ### `PublishTarget`
 
 **Where a package's artifact ships, as a contribution.** The [`publish`](cli/publish.md) command is
 rman's; a target is one answer to "is this version on the registry, and how do I push it", which is
-the only part of publishing an ecosystem owns. rman registers `docker`; `rman-node` registers `npm`.
+the only part of publishing an ecosystem owns. rman's core registers `docker`; the `node` built-in
+registers `npm`.
 
 ```ts
 interface PublishTarget {
@@ -2211,34 +2332,46 @@ release.
 
 ### `ChangelogService`
 
-Generates (and optionally writes) a Markdown changelog per package from real commits, grouped into
-Features/Fixes/Other via best-effort Conventional Commits parsing.
+Generates (and optionally writes) a Markdown changelog per package - or per release group - from
+real commits, one section per commit type via best-effort Conventional Commits parsing.
 
 ```ts
 namespace ChangelogService {
-  interface Deps {
-    npmViewVersion?: (name: string, cwd: string) => Promise<string | undefined>;
+  interface Options extends PackageFilterOptions {
+    from?: string;            // commit/hash for every package, or "auto"/omitted to detect per package
+    fromRoot?: boolean;       // whole repository even when standing inside one package
+    filePath?: string;        // relative to each package's own directory, default "CHANGELOG.md"
+    includeSkipped?: boolean; // include a .rmanrc "publish.skip" package too - excluded by default
+    version?: string;         // the version these entries are FOR - default: read back from git tags
+    write?: boolean;          // set by generateToFile: start where the file's marker says, not at the tag
+    rebuild?: boolean;        // with write: regenerate each file from the whole history
+    startingAt?: string;      // overrides changelog.startingAt
+    unreleased?: boolean;     // overrides changelog.unreleased
+    commitHash?: boolean;     // overrides changelog.commitHash
+    groupBy?: 'package' | 'group'; // overrides the root's changelog.groupBy
+    progress?: Progress;      // where to report, for a caller drawing a panel
   }
 
-  interface Options extends PackageFilterOptions {
-    from?: string; // commit/hash, or "npm"/omitted to auto-detect per package
-    root?: boolean; // whole repository even when standing inside one package
-    filePath?: string; // relative to each package's own directory, default "CHANGELOG.md"
-    includeSkipped?: boolean; // include a .rmanrc "publish.skip" package too - excluded by default
-    version?: string; // the version these entries are FOR - default: read back from git tags
+  interface Progress {
+    start(labels: string[]): void;
+    step(label: string, phase: 'detect' | 'commits' | 'render'): void;
+    commits?(label: string, done: number, total: number): void;
+    done(label: string, wrote: boolean): void;
   }
 
   interface Entry {
-    package: Package;
-    label: string; // "<repo dir name> repository" for root, its own name otherwise
-    version: string; // options.version, else resolved from git tags (not package.json)
-    features: string[];
+    package: Package;         // whose directory holds the file - the root for a group of several
+    label: string;            // the group's name, "<repo dir name> repository" for root, else its own name
+    version: string;          // options.version, else resolved from git tags (not package.json)
+    documentedUpTo: string;   // the last commit covered - written into the file as the next run's start
+    sections: { title: string; lines: string[] }[];
+    features: string[];       // derived from sections - see {{features}} below
     fixes: string[];
     other: string[];
-    content: string; // the fully rendered entry
-    filePath: string;
+    content: string;          // the fully rendered entry
+    file: string;             // absolute - where it would be (or was) written
+    filePath: string;         // `file` relative to `package`'s directory, for display
   }
-
 }
 
 class ChangelogService {
@@ -2256,17 +2389,29 @@ const entries = await app.getService('changelog').getEntries();
 for (const entry of entries) console.log(entry.content);
 
 // Since a specific commit, for every package:
-const entries = await app.getService('changelog').getEntries({ from: 'a1b2c3d' });
+const since = await app.getService('changelog').getEntries({ from: 'a1b2c3d' });
 
 // Actually prepend each entry into its own CHANGELOG.md:
-const written = await app.getService('changelog').generateToFile({ root: true });
-for (const entry of written) console.log('wrote', entry.filePath, 'for', entry.package.name);
+const written = await app.getService('changelog').generateToFile({ fromRoot: true });
+for (const entry of written) console.log('wrote', entry.file, 'for', entry.label);
 ```
 
-By default (`from` omitted, or `"npm"`), the boundary is auto-detected per package from its own
-most recent release tag first - the same one `version`/`changed` themselves use, so all three
-agree on "since when" - falling back to its currently-published npm version only when it has no
-tag at all yet (via [`ChangeHashService`](#changehashservice)); a package that can't be resolved
+**The service prints nothing**, a progress panel included - `version --changelog` drives it in the
+middle of its own output. Pass `progress` to be told what it is doing; the slow phase is
+`commits`, reported per commit through `commits(label, done, total)`. A label names a **file**,
+which under `groupBy: 'group'` is a group rather than a package.
+
+**`generateToFile` appends from the file's own marker, not from the release tag.** Each file
+carries `<!-- rman:documented-up-to <sha> -->`; a run starts there, a file that does not exist yet
+gets the whole history, and a file with no marker falls back to ordinary detection. A tag does not
+move between two writes, so starting at it re-listed everything already written. `rebuild` ignores
+the marker, empties each file it writes once, and regenerates it. A range that crosses release tags
+is cut at each into one entry per release, newest first.
+
+By default (`from` omitted, or `"auto"`), the boundary is auto-detected per package from its own
+most recent release tag first - the same one `version` uses, so the two agree on "since when" -
+falling back to the version its ecosystem's registry reports only when it has no tag at all yet,
+and only to guess a tag name that must exist in git (via [`ChangeHashService`](#changehashservice)); a package that can't be resolved
 either way (never tagged *and* never published) has no boundary at all, so its whole history
 counts as unreleased - the same view `version` takes.
 
@@ -2274,6 +2419,10 @@ A commit touching a package's files is attributed to that package's changelog en
 broad enough (touches at least 3 packages *and* more than half of all packages) to count as a
 repo-wide maintenance change (a relicense, a doc pass across every package, ...), in which case
 it's attributed to the root alone instead of being repeated verbatim across most of the repo.
+Under `groupBy: 'group'` that diversion has nothing to do - a commit touching every member is the
+group's by construction. A commit is matched against where each package **was then**, read from
+its manifest's moves (`git log --follow`, trusting a rename only where most of the directory's
+files went too), so a package moved under a new directory keeps the history before the move.
 
 A package with `.rmanrc "publish.skip"` gets no entry at all by default - there's little point
 changelogging something that's never actually released - unless `includeSkipped` is set.
@@ -2345,7 +2494,16 @@ namespace RunService {
     changedSince?: string;
     progress?: boolean; // default true; auto-disabled off-TTY
     logLevel?: LogLevel;
-    root?: boolean;
+    fromRoot?: boolean; // ignore the current directory and run across the whole repository
+  }
+
+  interface ForEachOptions {
+    parallel?: boolean | number;
+    bail?: boolean;     // default true
+    topo?: boolean;     // default FALSE - unlike run's
+    progress?: boolean;
+    logLevel?: LogLevel;
+    label?: string;     // the panel's title and the word in the failure - the command's own name
   }
 
   function getConfig(pkg: Package, script: string): Record<string, unknown>;
@@ -2367,9 +2525,11 @@ namespace RunService {
 
 class RunService {
   runScript(script: string, options?: Options & { commandName?: string }): Promise<void>;
+  forEachPackage(packages: readonly Package[], fn: RunStepFn, options?: ForEachOptions): Promise<void>;
+  parallel<T>(tasks: readonly (() => Promise<T>)[], options?: { parallel?: boolean | number }): Promise<T[]>;
 }
 
-// Also exported at module scope:
+// Module-level in services/run.service.ts - not re-exported from 'rman':
 function resolveBool(cliValue: boolean | undefined, pkg: Package, script: string, key: string, fallback: boolean): boolean;
 function resolveBail(cliValue: boolean | undefined, pkg: Package, script: string, fallback: boolean): boolean;
 function resolveNumber(cliValue: number | undefined, pkg: Package, script: string, key: string, fallback: number): number;
@@ -2394,6 +2554,44 @@ outcomes, not from whether the underlying task tree rejected: a package's own `b
 tree, whose promise then settles while the packages already in flight keep running, so reading the
 run off it used to resolve on a failed run - and inconsistently, depending on which siblings
 happened to still be going.
+
+**`forEachPackage` is what a command reaches for instead of a `for` loop over packages.** It runs
+`fn` once per package under the same scheduler `run` uses - concurrency, bail, dependency order
+when asked, the progress panel, and `console` routed to that package's row - and hands `fn`
+exactly what a [function step](#function-steps) gets: `pkg`, `cwd`, a `runBin` already bound to the
+package's directory and this run's log level, and a `logger`. A loop of `await runBin(...)` ignores
+`--parallel`, draws no panel and has to re-implement `--bail` and the summary. Ordering is **off**
+unless `topo: true`, since a sweep with an independent tool is the common case. An empty list
+returns without failing - the caller knows why it is empty. A failed package throws the same
+`logged` error `runScript` does.
+
+```ts
+const run = repository.app.getService('run');
+await run.forEachPackage(packages, async function check({ runBin }) {
+  await runBin('dpdm', ['-T', 'src/index.ts']);
+}, { label: 'check', ...readParallelOptions(args) });
+```
+
+`parallel(tasks)` is the low-level half, for work that is not per package (sharding a file list):
+the concurrency limit and nothing else - no rows, no names, no ordering. It settles the tasks
+already in flight before rejecting, so no child process reports after the command has exited.
+
+**A command aliasing `run <script>`** takes `runOptions` and `readRunOptions` - the same flags and
+reader `build` and `test` use - so a preset adding `compile` or `docs` does not restate the six
+flags. `parallelOptions`/`readParallelOptions` are the smaller set (`--parallel`, `--bail`,
+`--progress`) for a `forEachPackage` command:
+
+```ts
+import { declareCommand, readRunOptions, runOptions } from 'rman';
+
+export default declareCommand(app => ({
+  command: 'docs' as const,
+  describe: 'Build the documentation in every package',
+  config: runOptions,
+  configKeys: ['run.docs'],
+  handler: args => app.getService('run').runScript('docs', { ...readRunOptions(args), commandName: 'docs' }),
+}));
+```
 
 It also throws when **nothing defines the script at all** - a typo, or a script that was removed,
 which `npm run` fails on too. A monorepo root's own `<script>` doesn't count as defining it, since
@@ -2444,8 +2642,8 @@ you're building your own tooling on top of the same config convention.
 `changedSince` it reads off the **root package only** - one scheduler, one answer for the whole
 batch - while `logLevel`, `skip`, `if`, `override` and the step slots are per package, and `topo`
 and `bail` are read both ways and mean different things at each. The block above is unmarked, so it
-reaches the root package as well as the members and every key lands; a `"[*]"` block would not
-reach the root, and the scheduling keys in it would be silently ignored. See
+reaches the root package as well as the members and every key lands; in a monorepo a `"[*]"`
+block does not reach the root, and the scheduling keys in it would be silently ignored. See
 [the table in `docs/cli/run.md`](cli/run.md#per-packagescript-configuration-rmanrc-runscript).
 
 #### Conditional execution (`if`)
@@ -2466,10 +2664,9 @@ run:
 ```
 
 ```ts
-const app = repository.app;
 const node = RunService.parseIfExpr('changed and not dirty');
 const cache = new Map();
-const shouldRun = await app.getService('run').evaluateIf(pkg, node!, cache);
+const shouldRun = await RunService.evaluateIf(repository, pkg, node!, cache);
 ```
 
 An unrecognized atom name prints a one-time warning and evaluates to `true` (the package still
@@ -2492,7 +2689,7 @@ namespace ExecService {
     changedSince?: string;
     progress?: boolean; // default true
     logLevel?: LogLevel;
-    root?: boolean;
+    fromRoot?: boolean;
   }
 
 }
@@ -2663,7 +2860,7 @@ named `node` reports no npm tooling.
 ### `ChangeHashService`
 
 Resolves the commit a package's changes should be measured "since" - the single boundary
-`ChangelogService` **and** `VersionService` (so `changed`/`version` too) both call, rather than each
+`ChangelogService` **and** `VersionService` (so `changelog` and `version`) both call, rather than each
 deciding for itself. It also owns tag naming in both directions, so nothing else builds a tag name.
 
 ```ts
@@ -2700,6 +2897,39 @@ means a ref literally called `npm` and fails as one.
 
 `GitHelper` is exported, so this is directly callable - though in practice it is reached through
 `ChangelogService.getEntries`/`generateToFile`, which construct one.
+
+### `ProgressPanel`
+
+The live panel `run`, `build`, `clean`, `ci` and `changelog` draw - exported so a plugin's
+per-package command looks like the rest of rman. **Reach for
+[`RunService.forEachPackage`](#runservice) first**: it builds and drives a panel for you, along
+with concurrency, bail and console capture. Drive one by hand only for work that is not a run.
+
+```ts
+class ProgressPanel {
+  constructor(title: string, enabled: boolean, stream?: NodeJS.WriteStream); // stream: stdout by default
+  detail?: string;                       // shown at the right end of the header - the repository name
+  readonly enabled: boolean;
+  addItem(name: string, stepsTotal?: number): ProgressItem;
+  start(statusRegion?: StatusRegion): void; // pass app.statusRegion
+  passThrough(text: string): void;       // print above the panel without breaking it
+  stop(): void;
+  tally(): ProgressSummary;              // count once, without printing
+  printSummary(): ProgressSummary;
+}
+
+function formatDuration(ms: number): string;
+```
+
+- **Pass `app.statusRegion` to `start`.** Every command already has a status line drawing on the
+  terminal, and two regions redrawing at once land on each other's rows; the panel suspends the
+  line while it draws and `stop()` hands it back. A panel that forgets reintroduces the flicker
+  with nothing reporting it.
+- **Set `currentStep`/`currentCommand` on the item**, not only `status`: the row shows the command
+  it is running, and a row forgets its last captured line when either changes, so stale output
+  never sits under a new command. A failed item stays listed below the running ones.
+- Construct it with `enabled: !!process.stdout.isTTY && progress !== false` (or the stream you draw
+  on) - off a TTY it draws nothing and `passThrough` writes straight through.
 
 ### `Logger` / `LogLevel` / `resolveRootLogLevel`
 
@@ -2770,10 +3000,10 @@ the preset's contribution keys. rman ships one preset, so none of that is visibl
 
 | | |
 | --- | --- |
-| **Platform** | `manifestProvider` (`package.json`, `npm view` for `publishedVersion`, `stampVersion`), `getWorkspace` (the `workspaces` globs, asked of every directory the walk reaches), `getRunSteps` (`package.json#scripts`, including `pre`/`post` - which is also how npm's `preversion`/`version`/`postversion` reach `version`, with no second seam), `getBinPaths` (`node_modules/.bin`, walked up), `versionPlanner`. |
+| **Platform** | `manifestProvider` (`package.json`, `npm view` for `publishedVersion`, `stampVersion`), `getWorkspace` (the `workspaces` globs, asked of every directory the walk reaches), `getRunSteps` (`package.json#scripts`, including `pre`/`post` - which is also how npm's `preversion`/`version`/`postversion` reach `version`, with no second seam), `getBinPaths` (`node_modules/.bin`, walked up), `versionPlanner` (`detectBoundary` through `ChangeHashService.detect`; `cascade` is `dependents` for a patch or a minor and `group` for a major), `dependencyUpdater` (what [`deps`](cli/deps.md) asks: the registry, the package's own peer ranges, `engines.node` and its siblings' peers, and `npm install --dry-run` at the root as `verify`). |
 | **Commands** | [`ci`](cli/ci.md) and [`clean`](cli/clean.md). |
 | **Publish target** | `npm` - see [`PublishTarget`](#publishtarget). |
-| **Config keys** | `packageManager`, `clean.*`, `publish.npm.*`. |
+| **Config keys** | `packageManager`, `clean.*`, `publish.npm.*`. (`deps.*` is the core's command; `deps.types` takes npm's words here.) |
 | **`SystemInfo`** | the npm half - see [`SystemInfo`](#systeminfo). |
 
 **Which declarations become graph edges**: all four of `dependencies`, `devDependencies`,
@@ -2875,8 +3105,10 @@ result. Comma-separated values are split and the comparison is case-insensitive.
 
 **`"/"` (`ROOT_SELECTOR`) is the repository's own root package, and it is not a glob** - the same
 `/` `.rmanrc`'s `"[/]"` block uses, for the reason stated there: *the root is never selected by
-name.* A glob is never offered the root, so `scope: '*'` means the members and `scope: '/'` means
-the root; `ignore: '/'` is every package but the root. It is accepted everywhere `scope`/`ignore`
+name.* In a monorepo a glob is never offered the root, so `scope: '*'` means the members and
+`scope: '/'` means the root; `ignore: '/'` is every package but the root. In a **single-package
+repository** a glob does reach the root, because there it is the one package - the same rule a
+`"[*]"` config block follows, so `"[*]"` and `scope: '*'` always name one set. It is accepted everywhere `scope`/`ignore`
 are, and selects nothing where the root is not a candidate to begin with - `repository.packages`
 holds the workspace members only, so `run`, `list` and `exec` see no root, while `clean` and
 `changelog` put it in their candidate list on purpose.

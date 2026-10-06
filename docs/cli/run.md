@@ -1,4 +1,4 @@
-<!-- verified against commit 0e33a0a - see ../cli-rman.md for the baseline convention -->
+<!-- verified against commit 8430603 (2.14.0) - see ../cli-rman.md for the baseline convention -->
 
 # `rman run <script>`
 
@@ -9,7 +9,8 @@ rman run <script> [options...]
 Runs an npm script (e.g. `build`, `lint`, `test`) in every matching package, in dependency order by
 default, with concurrency, bail, and per-package/script `.rmanrc` configuration - including npm's
 own `pre<script>`/`post<script>` convention. This is the general-purpose form; [`build`](build.md)
-and [`test`](test.md) are just aliases for `run build`/`run test`.
+and [`test`](test.md) are just aliases for `run build`/`run test` - unless a command the repository
+inherits has taken one of those names, which those two built-ins alone allow.
 
 ## Options
 
@@ -21,8 +22,8 @@ options, in addition to:
 | `--parallel <n>` | - | boolean \| number | CPU count | Max packages built at once: omit/`true` for CPU count (or `.rmanrc run.<script>.concurrency`), a number for that many, `false` to run serially (one at a time). Packages always build in dependency order regardless. |
 | `--bail` | - | boolean | `true` | Stop the whole batch on the first failure. Overridable per-package via `.rmanrc run.<script>.bail` - see the precedence note below. |
 | `--topo` | - | boolean | `true` | Respect the package dependency graph: a package waits for its dependencies and is skipped if one fails. Set `false` for independent scripts (`lint`, `test`, ...) - order becomes alphabetical and one package's failure never skips another. Overridable per-package via `.rmanrc run.<script>.topo`. |
-| `--progress` | - | boolean | `true` | Show the live progress panel (auto-disabled when stdout isn't a TTY). Overridable via `.rmanrc run.<script>.progress`. With `--no-progress` nothing is drawn live - no panel and no spinner - and each step's output is printed as plain lines: see [With no progress panel](#with-no-progress-panel). |
-| `--changed` | `-c` | boolean | `false` | Only run in packages that have changed since the last publish. |
+| `--progress` | - | boolean | `true` | Show the live progress panel (auto-disabled when stdout isn't a TTY, and under the global `--json`). See [The progress panel](#the-progress-panel). Overridable via `.rmanrc run.<script>.progress`. With `--no-progress` nothing is drawn live - no panel and no spinner - and each step's output is printed as plain lines: see [With no progress panel](#with-no-progress-panel). |
+| `--changed` | `-c` | boolean | `false` | Only run in packages you have touched but not pushed - uncommitted, or committed and not yet on the upstream branch. Not a release question: after a push nothing counts as changed. For "what needs releasing", see [`version --json`](version.md). |
 | `--changed-since <hash>` | - | string | - | Only run in packages that have changed since the given git commit/hash. Falls back to `.rmanrc run.<script>.changedSince` (root-level) when omitted. |
 | `--from-root` | `-r` | boolean | `false` | Run across the whole repository even when standing inside one package's own directory (which otherwise scopes the run to just that package, dropping the root pre/post hooks). No effect elsewhere. |
 
@@ -44,7 +45,7 @@ needs no order.
 ```bash
 rman run build                       # every package, dependency order, CPU-count concurrency
 rman run lint --topo=false            # independent order - lint doesn't care about dependency graph
-rman run test --changed               # only packages changed since the last publish
+rman run test --changed               # only packages you have touched but not pushed
 rman run build --changed-since v1.2.0
 rman run build --parallel 4           # at most 4 packages at once
 rman run build --parallel false       # serially, one at a time
@@ -97,7 +98,7 @@ names - so at the repository root, package-facing script config goes under `"[*]
       bail: false # one package's lint failure doesn't stop the others
     coverage:
       skip: true # these packages opt out of "coverage" entirely
-      if: changed # only actually runs when the package has changed since the last publish
+      if: changed # only actually runs when the package has unpushed changes
 ```
 
 **Which level a key is read at is not uniform**, and a key written at the wrong one is silently
@@ -169,11 +170,41 @@ Measured on two packages where `pkg-b` depends on `pkg-a`, with a slow first ste
 packages' first step runs at once and `pkg-b`'s codegen starts after `pkg-a` finishes; unmarked, the
 whole of `pkg-b` waits (227ms against 451ms for the same work).
 
+### The progress panel
+
+On a terminal, a run draws one block: a header - the command's badge, a bar, `done/total`, how many
+are running and failed, the clock, and the repository's name at the right-hand end - and below it one row per running package naming the package, its step, the elapsed time and - last,
+because it is the one field with no bound on its length - the command that step is running. For a
+step written as a function the row shows what the function *spawns* (`tsc -b tsconfig-build.json`),
+not only its own name. The second line of a row is the last line that command printed, and it is
+cleared when the step or the command changes, so one command's output never sits under the next.
+
+- **A failed package stays on the list**, below the running ones and only with the room they leave,
+  naming the command that failed. What does not fit is counted in one trailing line (`… and 3 more running, 1 more failed`).
+- **A step's output is captured, not printed**, shell and function steps alike - a child writing
+  straight to the terminal would scroll the panel. A failed package's captured output is printed
+  once, after the panel stops, followed by the recap: `2 succeeded, 1 failed (4.1s)`.
+- **The bar fills from step progress**, so a nine-step build advances within a package instead of
+  jumping when it ends. The `done/total` counter beside it counts packages.
+
 ### With no progress panel
 
 `--no-progress` (or `.rmanrc run.<script>.progress: false`) means **no live output at all** - no
-panel and no spinner. Each step's output is printed as plain lines, followed by a one-line result per
-step.
+panel and no spinner. Each step's output is printed as plain lines, each **led by its package**,
+and each step ends with a one-line result:
+
+```
+pkg-a ┆ src/index.ts(3,1): error TS2304: Cannot find name 'x'.
+[ERROR] build pkg-a ┆ exec failed ┆ tsc -b (612 ms)
+[INFO] build pkg-b ┆ exec success ┆ tsc -b (874 ms)
+```
+
+Packages run at once and a step's result line comes only after its output, so without the prefix
+an error read as belonging to whichever package was printed just above it. The tag is the line's
+level (`[VERB]` for the "executing" line `--log-level verbose` adds, `[INFO]`, `[ERROR]`); the
+package is red on a failed step's line and on rman's own failure message - never merely because a
+line came from stderr, where tools print progress too. A function step's `console.log` is captured
+the same way, so it is prefixed as well and reaches [`--json` and `--log-file`](../cli-rman.md#the-run-log---json-and---log-file).
 
 **Every step runs without a terminal**: rman pipes the child and prints its lines itself, stdout to
 stdout and stderr to stderr. That is what keeps a step's own tools quiet. A build is mostly other
@@ -196,7 +227,7 @@ atoms `changed`, `dirty`, `committed` (each optionally `= <hash>` or `= {ENV_VAR
 ```yaml
 run:
   build:
-    if: changed # changed since the last publish
+    if: changed # uncommitted, or committed and not pushed
   test:
     if: changed = a1b2c3d # changed since a specific commit
   deploy:
@@ -227,5 +258,7 @@ hooks in the same directory, so a bookend would simply run each of them twice.
 - [`build`](build.md) / [`test`](test.md) - aliases for `run build` / `run test`.
 - [`exec`](exec.md) - the same scheduling machinery, but for an arbitrary shell command instead of
   an npm script (no pre/post hook convention).
+- `runOptions` / `readRunOptions`, exported from `rman` - the option table and reader every
+  `run`-shaped command uses, for a plugin aliasing `run <script>` under a name of its own.
 - [`RunService`](../rman.md#runservice) - the underlying service, including `parseIfExpr`/
   `evaluateIf` if you want to build your own tooling on the same `if` grammar.
