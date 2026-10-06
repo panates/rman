@@ -418,13 +418,24 @@ export class GitHelper {
     }
   }
 
-  /** Pushes the current branch to `remote` (default `"origin"`), and its tags too unless
-   *  `options.tags` is `false`. */
-  async push(options?: { remote?: string; tags?: boolean }): Promise<void> {
+  /**
+   * Pushes the current branch to `remote` (default `"origin"`) together with `options.tags`, by
+   * name, in **one atomic push**: the branch and every tag go up, or none of them does.
+   */
+  /* **Named tags, not `--tags`.** `git push <remote> --tags` sends every tag in the clone, so one
+   * stale tag from months ago - re-created locally, diverged from the remote's - failed every
+   * release from then on, and failed it *after* the new tag had already gone up. Measured on
+   * `postgrejs` with 2.15.0: `v3.13.0` pushed, `v3.10.0` rejected, exit 1, and in CI the publish
+   * step after it never ran.
+   *
+   * **One command, `--atomic`.** The branch used to go first and the tags second, so a failure in
+   * the second - GitHub's own `fatal error in commit_refs` did it to the same repository an hour
+   * earlier - left a pushed version bump with no tag, which a re-run cannot repair because it has
+   * nothing left to bump. Atomic, a failure leaves the remote exactly as it was. */
+  async push(options?: { remote?: string; tags?: readonly string[] }): Promise<void> {
     const remote = options?.remote ?? 'origin';
     try {
-      await execFileAsync('git', ['push', remote], { cwd: this.cwd });
-      if (options?.tags !== false) await execFileAsync('git', ['push', remote, '--tags'], { cwd: this.cwd });
+      await execFileAsync('git', ['push', '--atomic', remote, 'HEAD', ...(options?.tags ?? [])], { cwd: this.cwd });
     } catch (e: any) {
       throw new Error(`Unable to push to "${remote}": ${e.message}`, { cause: e });
     }

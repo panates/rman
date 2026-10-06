@@ -278,7 +278,23 @@ export class VersionService extends Service {
     }
 
     const pushed = !!options.push && bumped.length > 0;
-    if (pushed) await git.push();
+    if (pushed) {
+      /** Every tag this release names, including one that was already there: it is this release's
+       *  tag all the same, and a remote that lacks it is missing part of the release. */
+      const tags = tagged.map(t => t.name);
+      try {
+        await git.push({ tags });
+      } catch (e: any) {
+        throw new Error(
+          `${e.message}\n\n` +
+            `  Nothing was pushed - the branch and its tags go up together or not at all. Left behind ` +
+            `locally: ${commits.map(c => c.sha).join(', ') || 'no commit'}` +
+            (tags.length ? `, tagged ${tags.join(', ')}` : '') +
+            `.\n  Once the cause is fixed, push them with: git push --atomic origin HEAD ${tags.join(' ')}`.trimEnd(),
+          { cause: e },
+        );
+      }
+    }
     return { entries: plan, updated: bumped, commits, tags: tagged, pushed };
   }
 }

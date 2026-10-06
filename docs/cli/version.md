@@ -26,7 +26,7 @@ options, in addition to:
 | `--interactive` | `-i` | boolean | Show the plan and ask for confirmation before applying - with or without an explicit `bump`. |
 | `--yes` | `-y` | boolean | Skip the confirmation prompt and apply the computed plan immediately - auto-detected severity included, no explicit `bump` keyword required. Conflicts with `--interactive`. |
 | `--ignore-dirty` | - | boolean | Exclude a package with uncommitted local changes instead of aborting the whole run. |
-| `--push` | - | boolean | Push the resulting commit(s) and tag(s) to the remote once applied. |
+| `--push` | - | boolean | Push the current branch and **this release's tags** to the remote once applied, in one atomic push - see [What `--push` sends](#what---push-sends). |
 | `--message <text>` | `-m` | string | Override the commit message for every group this run commits. Default: `.rmanrc version.commitMessage`, or `"chore(release): v{version}"`. `{version}` is substituted when a commit's own group shares one version. |
 | `--changelog` | - | boolean | Also write each bumped package's changelog (same as running `changelog --write` separately) and fold it into the same commit as the version bump. Follows [`changelog.groupBy`](changelog.md#one-file-per-package-or-one-per-release): under `group`, one file per release group, committed with that group's release. Default: `.rmanrc "version.changelog"`, or `false` - `--no-changelog` still overrides it off for one run, even when that's `true`. |
 | `--preid <name>` | - | string | Make the bump a prerelease with this identifier (e.g. `"beta"` -> `1.2.3-beta.0`). Running again with the same `--preid` increments it (`-> 1.2.3-beta.1`); a different identifier starts a fresh prerelease line. Ignored when `bump` is an explicit semver version. |
@@ -182,7 +182,34 @@ Each line is something the plan cannot tell you:
   only, see [The repository's own version](#the-repositorys-own-version)). A tag that already
   existed reads `(existing, left alone)` rather than being silently counted as created.
 - **`push`** - a release that is committed but not pushed looks identical to one that is, until
-  someone looks.
+  someone looks. A pushed run names the tags that went up with the branch.
+
+### What `--push` sends
+
+**The current branch and the tags this release names, by name, in one `git push --atomic`** - and
+nothing else:
+
+```
+git push --atomic origin HEAD pkg-a@1.1.0 pkg-b@2.1.0 release-2026.9.17-1814
+```
+
+- **Not every tag in the clone.** It used to be `git push origin --tags`, so a single stale tag -
+  deleted and re-created locally months ago, now different from the remote's - failed every
+  `--push` from then on, and failed it *after* the new tag had already gone up. A tag the release
+  names but did not create (one that was already there) is still sent: it is this release's tag.
+- **All or nothing.** The branch and the tags used to be two pushes, so a failure in the second left
+  a pushed version bump with no tag, which a re-run cannot repair - there is nothing left to bump.
+  Atomic, a refused ref leaves the remote exactly as it was, and the error says what is waiting
+  locally and the command that pushes it once the cause is fixed:
+
+  ```
+  Unable to push to "origin": Command failed: git push --atomic origin HEAD v1.1.0
+   ! [rejected]  v1.1.0 -> v1.1.0 (already exists)
+
+    Nothing was pushed - the branch and its tags go up together or not at all. Left behind
+    locally: 81fb42d, tagged v1.1.0.
+    Once the cause is fixed, push them with: git push --atomic origin HEAD v1.1.0
+  ```
 
 ## Grouping (`.rmanrc group`)
 

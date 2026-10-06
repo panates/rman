@@ -1784,7 +1784,7 @@ abstract class VersionPlanService {
 
 namespace VersionService {
   interface ApplyOptions {
-    push?: boolean; // default false
+    push?: boolean; // default false - the branch and this release's tags, in one atomic push
     message?: string; // overrides .rmanrc version.commitMessage for this run
     changelog?: boolean; // also write CHANGELOG.md and fold it into the same commit
   }

@@ -1188,6 +1188,65 @@ describe('services/version', () => {
     });
 
     /**
+     * **Only this release's tags, and all of it in one atomic push.** `git push --tags` sent every
+     * tag in the clone, so a stale one from months ago failed the release after the new tag was
+     * already up - measured on `postgrejs`, where CI then never reached the publish step.
+     */
+    describe('what --push sends', () => {
+      const remote = (originDir: string, ...args: string[]) =>
+        execFileSync('git', args, { cwd: originDir }).toString().trim();
+
+      it('is not stopped by an unrelated tag that diverged from the remote', async () => {
+        const { dir, originDir } = fixtureWithOrigin();
+        /** On the remote at one commit, re-created locally at another - the shape that broke it.
+         *  Named outside `v*` so it cannot become the boundary the plan is computed from. */
+        git(dir, 'tag', '-a', 'old-release', '-m', 'old', 'HEAD~1');
+        git(dir, 'push', '-q', 'origin', 'old-release');
+        const remoteOld = remote(originDir, 'rev-parse', 'old-release');
+        git(dir, 'tag', '-d', 'old-release');
+        git(dir, 'tag', '-a', 'old-release', '-m', 'old, again');
+
+        const repo = await createRepository(dir);
+        await service('version').applyPlan(await planner().getPlan(repo), { push: true });
+
+        expect(remote(originDir, 'tag', '--list').split(/\s+/)).toContain('v1.1.0');
+        expect(remote(originDir, 'rev-parse', 'old-release')).toBe(remoteOld);
+      });
+
+      it('leaves a local tag the release did not name where it is', async () => {
+        const { dir, originDir } = fixtureWithOrigin();
+        git(dir, 'tag', 'scratch');
+
+        const repo = await createRepository(dir);
+        await service('version').applyPlan(await planner().getPlan(repo), { push: true });
+
+        expect(remote(originDir, 'tag', '--list').split(/\s+/)).not.toContain('scratch');
+      });
+
+      it('moves nothing on the remote when one ref is refused, and says what it left behind', async () => {
+        const { dir, originDir } = fixtureWithOrigin();
+        /** The remote already holds the tag this release is about to make, at another commit. */
+        remote(originDir, 'tag', 'v1.1.0', 'main');
+        const remoteMain = remote(originDir, 'rev-parse', 'main');
+
+        const repo = await createRepository(dir);
+        const plan = await planner().getPlan(repo);
+        const error = await service('version')
+          .applyPlan(plan, { push: true })
+          .then(
+            () => undefined,
+            (e: Error) => e,
+          );
+
+        expect(error?.message).toContain('Nothing was pushed');
+        expect(error?.message).toContain('tagged v1.1.0');
+        expect(error?.message).toContain('git push --atomic origin HEAD v1.1.0');
+        /** The branch did not go up on its own, which is what two separate pushes allowed. */
+        expect(remote(originDir, 'rev-parse', 'main')).toBe(remoteMain);
+      });
+    });
+
+    /**
      * **What it did, not the plan it was given.** `applyPlan` used to return that plan untouched,
      * so its only caller could re-print the table it had already shown while the commits, the tags
      * and the push stayed silent - the three things a reader does not already know.

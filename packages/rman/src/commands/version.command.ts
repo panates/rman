@@ -402,7 +402,8 @@ function printApplied(result: VersionService.ApplyResult): void {
   }
   console.log(
     result.pushed
-      ? `${colors.green('push')}    pushed, with tags`
+      ? `${colors.green('push')}    pushed the branch` +
+          (result.tags.length ? ` and ${result.tags.map(t => t.name).join(', ')}, together` : '')
       : `${colors.gray('push')}    ${colors.gray('not pushed - run with --push, or push it yourself')}`,
   );
 }
