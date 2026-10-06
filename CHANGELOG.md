@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to bcb336add6c3643ad4ec9643312cd803e88f8b17 -->
+<!-- rman:documented-up-to 616a5f87384cc23338e0e1ccb75dedfc43ad475d -->
+
+## v2.15.0 (2026-10-06)
+
+### ✨ Features
+
+- **info,version:** report the loaded platforms, and put groupKey in version --json (e82c19a)
+
+### 📚 Documentation
+
+- verify the reference against 2.14.0 (5b167cc)
+
+---
 
 ## v2.14.0 (2026-10-06)
 
