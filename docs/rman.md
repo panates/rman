@@ -100,6 +100,7 @@ import {
   basePlatform,
   targetsOf,
   shipsTo,
+  skipReasonFor,
   VersionService,
   VersionPlanService,
   DockerPublishService,
@@ -2005,6 +2006,7 @@ interface PublishTarget {
   describe?: string;                               // one line, for --target's help
   options?: Record<string, RmanConfig.CommandOption>; // merged into `publish`'s own flags
   claims?(pkg: Package): boolean;                  // is this package mine when it declares nothing?
+  skipReason?(pkg: Package): string | undefined;   // why I would leave it alone, without the registry
   getPlan(ctx: PublishTarget.Context): Promise<PublishTarget.Entry[]>;
   applyPlan(ctx: PublishTarget.Context, plan: PublishTarget.Entry[]): Promise<PublishTarget.Entry[]>;
 }
@@ -2052,6 +2054,11 @@ export default defineConfig({
 - Which packages a target is asked about is `shipsTo(pkg, target)` / `targetsOf(app, pkg)`, both
   exported - use them rather than re-reading `publish.target`, so `publish` and `rman list --json`
   cannot disagree.
+- **`skipReason(pkg)` is why a target would leave a package it ships to alone**, from the config and
+  manifest alone - no registry, no build. `skipReasonFor(pkg, target)` asks `.rmanrc "publish.skip"`
+  first and then the target; it is what `rman list` greys a target out by. A target implementing it
+  should call the same function from its own `getPlan`, or the list and the plan can disagree - npm's
+  does (`PublishService.skipReason`).
 
 ### `DockerPublishService`
 
@@ -2526,6 +2533,7 @@ namespace ListService {
     status: Repository.PackageStatus;
     dependencies: string[]; // in-repo package names - enough to build a dependency graph
     publishTargets: string[]; // where it actually ships: its own "publish.target", or what claims it
+    skippedTargets: Record<string, string>; // the publishTargets publish would skip it for, and why
     docker?: DockerPublishOptions; // present only when "docker" is one of publishTargets
   }
 

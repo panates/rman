@@ -91,6 +91,7 @@ export {
   declaredTargets,
   type PublishTarget,
   shipsTo,
+  skipReasonFor,
   targetsOf,
   unknownTargets,
 } from './core/interfaces/publish-target.js';

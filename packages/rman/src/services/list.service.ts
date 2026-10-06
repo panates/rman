@@ -3,7 +3,7 @@ import type { DockerPublishOptions } from '../builtins/publish-targets/docker/do
 import type { Package } from '../core/classes/package.js';
 import type { Repository } from '../core/classes/repository.js';
 import { Service } from '../core/classes/service.js';
-import { type PublishTargetName, targetsOf } from '../core/interfaces/publish-target.js';
+import { type PublishTargetName, skipReasonFor, targetsOf } from '../core/interfaces/publish-target.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 
 /**
@@ -38,7 +38,16 @@ export class ListService extends Service {
       /** **Asked, not assumed.** This read the config key directly and defaulted to `['npm']`, so a
        *  Cargo package in a polyglot repository was reported as shipping to npm - which is what
        *  `PublishTarget.claims` exists to answer, per target, from the ecosystem that knows. */
-      const publishTargets = targetsOf(this.app, p).map(t => t.name);
+      /** **A monorepo's root ships nowhere**: `publish` never makes it a candidate
+       *  (`repository.getPackages()` leaves it out), so listing the target a root *would* claim
+       *  says something no command does. */
+      const targets = p === repository.rootPackage && repository.monorepo ? [] : targetsOf(this.app, p);
+      const publishTargets = targets.map(t => t.name);
+      const skippedTargets: Record<string, string> = {};
+      for (const target of targets) {
+        const reason = skipReasonFor(p, target);
+        if (reason) skippedTargets[target.name] = reason;
+      }
       return {
         name: p.name,
         selector: p.selector,
@@ -51,6 +60,7 @@ export class ListService extends Service {
         status: status[p.selector]!,
         dependencies: p.dependencies.map(d => d.name),
         publishTargets: [...publishTargets],
+        skippedTargets,
         docker: publishTargets.includes('docker') ? p.config.publish?.docker : undefined,
       };
     };
@@ -124,6 +134,11 @@ export namespace ListService {
      *  declares one, otherwise every registered target that claims it, which is the same question
      *  `publish` asks. Empty in a repository whose plugins contribute no target the package fits. */
     publishTargets: PublishTargetName[];
+    /** The entries of `publishTargets` that `publish` would leave this package alone for, each with
+     *  why - `.rmanrc "publish.skip"`, or the target's own rule (npm's `private`). Decided without the
+     *  registry, so `{}` means "a candidate", not "will publish": whether the version is already out
+     *  there is `publish --dry-run`'s answer. */
+    skippedTargets: Record<PublishTargetName, string>;
     /** Present only when `"docker"` is one of `publishTargets` and `publish.docker` is configured -
      *  the raw `.rmanrc` config, unresolved (no namespace prefixing - see `DockerPublishService`). */
     docker?: DockerPublishOptions;

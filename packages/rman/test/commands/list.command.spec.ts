@@ -2,9 +2,10 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import colors from 'ansi-colors';
 import { expect } from 'expect';
 import { definePlatform, type Platform } from '../../src/core/interfaces/plugin.js';
-import { runCli, usePlugin, useTestEcosystem } from '../_fixture.js';
+import { runCli, usePlugin, useTarget, useTestEcosystem } from '../_fixture.js';
 
 /**
  * A second technology, so the platform column and `--platform` are asked of a repository that has
@@ -375,7 +376,72 @@ describe('commands/list', () => {
       expect(error.message).toContain('--platform "crago" matches no package');
     });
   });
+
+  /**
+   * **The publish column: where each package ships, grey where `publish` would skip it.**
+   *
+   * A fake target, because the core registers `docker` alone and it is opt-in - and because the
+   * question is the seam, not npm's rule: `skipReason` is the target's, `publish.skip` the core's.
+   * npm's own answer is pinned in `plugins/node/commands/list.command.spec.ts`.
+   */
+  describe('the publish column', () => {
+    useTarget({
+      name: 'fake',
+      platforms: ['test'],
+      skipReason: pkg => (pkg.manifest.raw.private ? 'private package' : undefined),
+      getPlan: async () => [],
+      applyPlan: async () => [],
+    });
+
+    function fixture(): string {
+      const dir = monorepoFixture();
+      writeJson(dir, 'packages/c/package.json', { name: 'pkg-c', version: '1.0.0' });
+      fs.writeFileSync(path.join(dir, 'packages/c/.rmanrc'), JSON.stringify({ publish: { skip: true } }));
+      return dir;
+    }
+
+    it('reports each target, and the ones publish would skip with why', async () => {
+      const dir = fixture();
+      const items = JSON.parse((await captureLogs(() => runCli({ cwd: dir, argv: ['list', '--json'] }))).join('\n'));
+      const byName = Object.fromEntries(items.map((i: any) => [i.name, i]));
+      expect(byName['pkg-a']).toMatchObject({ publishTargets: ['fake'], skippedTargets: {} });
+      expect(byName['pkg-b']).toMatchObject({ publishTargets: ['fake'], skippedTargets: { fake: 'private package' } });
+      /** The core's own rule, asked before the target's - `pkg-c` is not private. */
+      expect(byName['pkg-c'].skippedTargets).toEqual({ fake: 'excluded via .rmanrc "publish.skip"' });
+    });
+
+    it('prints a Publish column, grey for a skipped target and the monorepo root empty', async () => {
+      const dir = fixture();
+      const raw = await captureRaw(() => runCli({ cwd: dir, argv: ['list'] }));
+      const lines = raw.map(stripAnsi);
+      expect(rows(lines)[0]).toContain('Publish');
+      expect(row(lines, 'pkg-a')).toContain('fake');
+      /** `publish` never makes a monorepo's root a candidate, so the column says nothing there - though
+       *  the root is a `test` package the target would otherwise claim. */
+      expect(row(lines, 'root')).not.toContain('fake');
+
+      const rawRow = (name: string) => rows(raw).find(l => stripAnsi(l).trimStart().startsWith(name))!;
+      expect(rawRow('pkg-a')).toContain(colors.green('fake'));
+      expect(rawRow('pkg-b')).toContain(colors.gray('fake'));
+      expect(rawRow('pkg-c')).toContain(colors.gray('fake'));
+    });
+  });
 });
+
+/** `console.log` captured with its colours left in, for the one assertion that is about them. */
+async function captureRaw(fn: () => Promise<void>): Promise<string[]> {
+  const original = console.log;
+  const lines: string[] = [];
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map(a => (typeof a === 'string' ? a : String(a))).join(' '));
+  };
+  try {
+    await fn();
+  } finally {
+    console.log = original;
+  }
+  return lines;
+}
 
 /**
  * A CLI call expected to fail, with **both** streams silenced while it runs.

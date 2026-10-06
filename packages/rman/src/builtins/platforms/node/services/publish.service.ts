@@ -256,6 +256,24 @@ export namespace PublishService {
    * excludes it for a real monorepo (it only doubles as "the" package in a single-package repo,
    * where it's a normal candidate like any other).
    */
+  /**
+   * Why the npm target leaves `pkg` alone, from its manifest alone - `'private package'`, or
+   * `undefined` when it would be published. `rman list` asks this to grey a package out.
+   */
+  /* **The one statement of npm's `private` rule**, called by `getPlan` and by `NpmPublishTarget.
+   * skipReason` both, so the plan and the list cannot disagree. Two cases, both private:
+   * - **no `publishConfig`** (`privateBySource`) - private in the published manifest too, wherever it
+   *   is published from;
+   * - **published in place** - the source manifest *is* the published one, so its `private` stands
+   *   whatever else it declares.
+   * The second sat after the build-output check in `getPlan` and moved ahead of it unchanged:
+   * `hasBuildOutput` is always true in place, so nothing reached it any differently. */
+  export function skipReason(pkg: Package, contentsOverride?: string): string | undefined {
+    if (!pkg.manifest.raw.private) return undefined;
+    if (privateBySource(pkg) || publishesInPlace(pkg, contentsOverride)) return 'private package';
+    return undefined;
+  }
+
   export async function getPlan(repository: Repository, options: Options = {}, deps: Deps = {}): Promise<Entry[]> {
     const git = new GitHelper({ cwd: repository.dirname });
     const packages = filterPackages(repository.getPackages({ toposort: true }), options);
@@ -279,6 +297,7 @@ export namespace PublishService {
        *  finding that out after a round trip per package would be a slower way to the same
        *  refusal. */
       const distTag = distTagFor(pkg, options.tag);
+      const privateReason = skipReason(pkg, options.contents);
       if (retiredDirectoryKey(pkg)) {
         entries.set(pkg.name, {
           package: pkg,
@@ -293,8 +312,8 @@ export namespace PublishService {
           status: 'skip',
           reason: 'excluded via .rmanrc "publish.skip"',
         });
-      } else if (privateBySource(pkg)) {
-        entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'skip', reason: 'private package' });
+      } else if (privateReason) {
+        entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'skip', reason: privateReason });
       } else if (!hasBuildOutput(pkg, options.contents)) {
         const dir = path.relative(pkg.dirname, resolvePublishDir(pkg, options.contents)) || '.';
         entries.set(pkg.name, {
@@ -303,8 +322,6 @@ export namespace PublishService {
           status: 'error',
           reason: `nothing to publish in "${dir}" - it is missing or empty; build the package first`,
         });
-      } else if (publishesInPlace(pkg, options.contents) && pkg.manifest.raw.private) {
-        entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'skip', reason: 'private package' });
       } else if (distTag.error) {
         entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'error', reason: distTag.error });
       } else if (isDirty(pkg)) {

@@ -75,6 +75,18 @@ export interface PublishTarget {
    * holding a Dockerfile, a package that is not private - which a list of platform names cannot
    * say. */
   claims?(pkg: Package): boolean;
+  /**
+   * Why this target would leave a package it ships to alone, or `undefined` when it would not -
+   * answered from the config and the manifest alone, with no registry and no build.
+   *
+   * `publish.skip` is the core's and is asked before this (see `skipReasonFor`); a target answers
+   * only what is its own, such as npm's `private`.
+   */
+  /* **What `rman list` greys out**, and why it is a member rather than a call to `getPlan`: a plan
+   * asks the registry, one round trip per package, and an inventory must not. So the rule has to be
+   * the plan's own rule stated once - npm's `getPlan` calls the same function - or the two would
+   * disagree about which packages ship. */
+  skipReason?(pkg: Package): string | undefined;
   /** What this target *would* do - never publishes. Called even under `--dry-run`, which is the
    *  whole point of the split. */
   getPlan(ctx: PublishTarget.Context): Promise<PublishTarget.Entry[]>;
@@ -168,6 +180,14 @@ export function shipsTo(pkg: Package, target: PublishTarget): boolean {
  *  this package go", so `publish` and `list --json` cannot disagree about it. */
 export function targetsOf(app: RmanApplication, pkg: Package): PublishTarget[] {
   return app.publishTargets.all.filter(target => shipsTo(pkg, target));
+}
+
+/** Why `target` would leave `pkg` alone, or `undefined` when it would publish it: `.rmanrc
+ *  "publish.skip"`, which excludes a package from every target, and then the target's own
+ *  `skipReason`. */
+export function skipReasonFor(pkg: Package, target: PublishTarget): string | undefined {
+  if (pkg.config.publish?.skip) return 'excluded via .rmanrc "publish.skip"';
+  return target.skipReason?.(pkg);
 }
 
 /** Names in a package's `publish.target` that no registered target answers to - a misconfiguration

@@ -106,6 +106,12 @@ function statusLabel(status: Repository.PackageStatus): string {
   }
 }
 
+/** Where a package ships, one target name each - grey for a target `publish` would skip it for
+ *  (`Item.skippedTargets`), so the column never reads as a promise the release will not keep. */
+function publishLabel(it: ListService.Item): string {
+  return it.publishTargets.map(name => (it.skippedTargets[name] ? colors.gray(name) : colors.green(name))).join(', ');
+}
+
 /**
  * **The tree, as a table**: the root first, then each package indented by how far below it sits.
  *
@@ -132,6 +138,7 @@ function printTable(items: ListService.Item[], withRoot: boolean): void {
     table.cell('Version', colors.yellow(it.version));
     table.cell('Platform', it.platform ? colors.cyan(it.platform) : '');
     table.cell('Private', it.private ? colors.magentaBright('yes') : '');
+    table.cell('Publish', publishLabel(it));
     table.cell('Changed', statusLabel(it.status));
     table.cell('Path', it.location);
     table.newRow();

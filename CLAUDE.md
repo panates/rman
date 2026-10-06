@@ -1967,6 +1967,11 @@ saw one thing to release and it was the one thing that must never be published.
 - **Which packages a target is asked about is `shipsTo`/`targetsOf`, never a second read of
   `publish.target`.** `DockerPublishService` and `ListService` both go through it, so `publish` and
   `rman list --json` cannot disagree about where a package ships.
+- **`PublishTarget.skipReason` is what `rman list` greys a target out by** (`skipReasonFor`, which
+  asks `publish.skip` first). An inventory must not ask the registry, so the rule is answered from
+  the config and the manifest alone - and npm's `getPlan` calls the same `PublishService.skipReason`,
+  or the list and the plan would disagree about which packages ship. A monorepo's root lists no
+  targets: `publish` never makes it a candidate.
 - **B asks whether *this version* is published, never what `latest` points at.** The npm target
   runs one `npm view <name> version versions --json`: `versions` decides `up-to-date` vs `publish`,
   `latest` is only what the entry *reports* (`entry.registryVersion`). They are not the same

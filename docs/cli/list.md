@@ -8,7 +8,8 @@
 rman list [options...]
 ```
 
-Lists every package in the repository - version, location, private flag, and change status - as a
+Lists every package in the repository - version, location, private flag, where it publishes to,
+and change status - as a
 table by default, or one of several other formats. Purely a *view* over
 [`ListService.getPackages`](../rman.md#listservice); this command never writes anything.
 
@@ -33,16 +34,16 @@ outright); `--changed` conflicts with `--changed-since` (pick one).
 ## Examples
 
 ```bash
-# Default table: Package / Version / Private / Changed / Path, plus a trailing count
+# Default table: Package / Version / Platform / Private / Publish / Changed / Path, plus a count
 rman list
 ```
 
 ```
-Package     Version  Platform  Private  Changed  Path
-----------  -------  --------  -------  -------  -----------------
-my-repo     1.2.0    node      yes      dirty    .
-  pkg-a     1.2.0    node               dirty    packages/pkg-a
-  pkg-b     1.0.4    node      yes               packages/pkg-b
+Package     Version  Platform  Private  Publish  Changed  Path
+----------  -------  --------  -------  -------  -------  -----------------
+my-repo     1.2.0    node      yes               dirty    .
+  pkg-a     1.2.0    node               npm      dirty    packages/pkg-a
+  pkg-b     1.0.4    node      yes      npm               packages/pkg-b
 
 2 Package(s) found
 ```
@@ -65,6 +66,13 @@ polyglot repository, which is exactly what the walk finding nested packages of a
 possible - and until this column existed `rman list` was the one place that showed every package and
 could not say which each belonged to.
 
+**`Publish` is where each package ships**, one target name each - the same answer `publish` uses
+to pick its candidates. A target is **grey** where `publish` would skip the package for it: `.rmanrc
+"publish.skip"`, or the target's own rule (npm's: `private` with no `publishConfig`, or `private`
+published in place). Above, `pkg-b` is grey. Decided without the registry, so a coloured name means
+a candidate, not a pending publish - whether the version is already out there is
+[`publish --dry-run`](publish.md)'s answer. A monorepo's root is never a candidate and shows nothing.
+
 ```bash
 rman ls --short
 # pkg-a
@@ -73,7 +81,8 @@ rman ls --short
 rman list --json
 # [{ "name": "pkg-a", "selector": "pkg-a", "version": "1.2.0", "platform": "node", "depth": 1,
 #    "isRoot": false, "location": "packages/pkg-a", "private": false, "status": "dirty",
-#    "dependencies": [] }, ...]
+#    "dependencies": [], "publishTargets": ["npm"], "skippedTargets": {} }, ...]
+# skippedTargets maps a skipped target to why: { "npm": "private package" }
 
 rman list --parseable
 # packages/pkg-a::pkg-a::1.2.0::::DIRTY

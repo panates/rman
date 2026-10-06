@@ -1,3 +1,4 @@
+import type { Package } from '../../../core/classes/package.js';
 import type { PublishTarget } from '../../../core/interfaces/publish-target.js';
 import { CiService } from '../../platforms/node/services/ci.service.js';
 import { PublishService } from '../../platforms/node/services/publish.service.js';
@@ -84,6 +85,11 @@ export class NpmPublishTarget implements PublishTarget {
       type: 'string',
     },
   } satisfies PublishTarget['options'];
+
+  /** npm's `private` rule, the same function `getPlan` asks. */
+  skipReason(pkg: Package) {
+    return PublishService.skipReason(pkg);
+  }
 
   getPlan(ctx: PublishTarget.Context) {
     return PublishService.getPlan(ctx.repository, this.planOptions(ctx));
