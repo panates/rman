@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to a1427a629fb69ca47cb9fa21f2abf46da235d65f -->
+<!-- rman:documented-up-to f3bbd437f7b9d8f7c630299d9477e95a06cd1fab -->
+
+## v2.12.0 (2026-10-06)
+
+### ✨ Features
+
+- **list:** a Publish column, grey where publish would skip the package (f3bbd43)
+
+### 🔧 Refactoring
+
+- move LiveRegion and ProgressPanel to core/classes [no-release] (9664c09)
+
+---
 
 ## v2.11.3 (2026-10-05)
 
