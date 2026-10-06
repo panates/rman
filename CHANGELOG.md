@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 616a5f87384cc23338e0e1ccb75dedfc43ad475d -->
+<!-- rman:documented-up-to c097120528613436c5fbea5c5cf46de6d576c1e3 -->
+
+## v2.15.1 (2026-10-06)
+
+### 🐛 Bug Fixes
+
+- **version:** --push sends this release's tags, branch and tags in one atomic push (c097120)
+
+---
 
 ## v2.15.0 (2026-10-06)
 
