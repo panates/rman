@@ -247,7 +247,7 @@ export function isPlugin(value: unknown): value is Plugin {
  * - no `getBinPaths` -> nothing is prepended to a child process's PATH, so the inherited one
  *   stands on its own rather than being guessed at;
  * - no `getRunSteps` -> a package's steps come from its `.rmanrc` alone, the core's only source;
- * - no `versionPlanner` -> `version`/`changed` fail naming the key, rather than releasing a
+ * - no `versionPlanner` -> `version` fails naming the key, rather than releasing a
  *   plausible but untrue set of packages from a default nobody chose.
  */
 export const basePlatform: Platform = definePlatform({

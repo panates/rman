@@ -10,7 +10,7 @@ import type { GitHelper } from '../../../../utils/git.js';
  * abstract because they are statements about an *ecosystem* rather than about releases. This is
  * npm's pair of answers.
  *
- * Registered through the plugin's `versionPlanner`, so `rman version`/`rman changed` work in a
+ * Registered through the plugin's `versionPlanner`, so `rman version` works in a
  * repository that registered the `node` built-in and say what is missing in one that did not.
  */
 export class NodeVersionPlanService extends VersionPlanService {

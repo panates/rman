@@ -61,7 +61,8 @@ export abstract class VersionPlanService {
    * Across groups: a package depending on another group's bumped package always gets its scheme's
    * **smallest** bump of its own (never inheriting the source's) - the dependency reference itself
    * is the only thing that changed for it. Whether that re-triggers its own group's cascade is
-   * `cascade`'s answer for that smallest bump (`'changed'` under npm, so it does not), but it can
+   * `cascade`'s answer for that smallest bump (`'dependents'` under npm, so its own in-group
+   * dependents move with it), and it can
    * itself ripple into a third group, and so on, until nothing new is affected - see
    * `rippleCrossGroup`.
    *
@@ -191,8 +192,8 @@ export abstract class VersionPlanService {
      * The abort case, marked **after** the root entry so the whole table reads as one coherent
      * "if this were committed" preview rather than a mixture of two.
      *
-     * `to` survives the overwrite; `status` is what every writer filters on (`VersionService`,
-     * `changed`), so an `'error'` entry carrying a version cannot be applied by any of them - and
+     * `to` survives the overwrite; `status` is what every writer filters on (`VersionService`),
+     * so an `'error'` entry carrying a version cannot be applied by any of them - and
      * `version` throws on the first error before it would reach `applyPlan` anyway. The reason
      * keeps the boundary it was computed from, because the status column already says `error` and
      * a reader losing `changed since <tag>` loses the only thing that explains the number.
@@ -657,8 +658,9 @@ export namespace VersionPlanService {
     const planner = app.versionPlanner;
     if (!planner) {
       throw new Error(
-        'No version planner is registered, so no version plan can be computed. Name a plugin that ' +
-          'contributes one in .rmanrc "plugins" - "rman-node" for a Node repository.',
+        'No version planner is registered, so no version plan can be computed. Name a technology ' +
+          'that contributes one in .rmanrc "platforms", or reach it through "extends" - "rman:node" ' +
+          'for a Node repository, which is laid down by default unless presets were turned off.',
       );
     }
     return planner;

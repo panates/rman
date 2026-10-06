@@ -159,8 +159,8 @@ export namespace ChangeHashService {
    * `changelog --from` uses, but reusable anywhere a command wants to answer "what changed for this
    * package". An explicit `options.from` (anything but `AUTO`) is returned as-is, applying the same
    * way to every package. Otherwise, it's auto-detected in order: (1) this package's own most recent
-   * release tag - the same network-free `findLatestTag` lookup `version`/`changed` themselves use,
-   * so all three commands agree on "since when" for any repo whose tags are the ones `rman version`
+   * release tag - the same network-free `findLatestTag` lookup `version` itself uses,
+   * so both commands agree on "since when" for any repo whose tags are the ones `rman version`
    * actually created; (2) failing that (no tag at all yet - e.g. onboarding `rman` onto a repo with
    * real release history but no `rman`-created tags), whatever this package's **own ecosystem**
    * reports as its published version (`Plugin.publishedVersion`), mapped to a git tag via

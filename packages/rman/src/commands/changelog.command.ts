@@ -19,7 +19,7 @@ const config = {
     describe:
       'Generate the changelog since this commit/hash, applied the same way to every package. ' +
       'Default (also "auto" explicitly): auto-detect per package from its own most recent release ' +
-      'tag - same as "version"/"changed" - falling back to the version its own ecosystem\'s ' +
+      'tag - same as "version" - falling back to the version its own ecosystem\'s ' +
       "registry reports (no tag yet), then to its whole history for a package that's never been " +
       'released at all',
     type: 'string',
@@ -51,7 +51,7 @@ const config = {
     describe:
       'The version these notes are for - what the entry heading shows. Default: read back from ' +
       "each package's own latest release tag, which is only right once that release is tagged. " +
-      'Pass it when generating notes ahead of the bump (e.g. from "changed --json" in CI), ' +
+      'Pass it when generating notes ahead of the bump (e.g. from "version --json" in CI), ' +
       'otherwise the heading shows the previous release.',
     type: 'string',
   },
@@ -102,7 +102,8 @@ const config = {
     describe:
       "The release tag naming scheme each package's changelog boundary is detected from - " +
       '"{name}" is replaced with the package name (e.g. "{name}@*" for independent versioning). ' +
-      'Default "v*", one repo-wide tag resolved through git describe.',
+      'Default: "v*" (one repo-wide tag, resolved through git describe) while the repository has one ' +
+      'version line, "{name}@*" once it has several.',
     type: 'string',
   },
   /**

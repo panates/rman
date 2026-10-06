@@ -435,8 +435,8 @@ export namespace VersionService {
             (pkg.provider
               ? `  The "${pkg.provider}" provider looked and found no version to change. Name the ` +
                 `identifier with { file, constant } if it is not "version", or drop the entry.`
-              : `  This package belongs to no ecosystem (no plugin claimed it), so nothing knows how ` +
-                `a version is declared in it. Name a plugin in .rmanrc "plugins".`),
+              : `  This package belongs to no ecosystem (no platform claimed it), so nothing knows how ` +
+                `a version is declared in it. Name the technology in .rmanrc "platforms", or reach it through "extends" (e.g. "rman:node").`),
         );
       }
       /** Matched, but already reads the target - nothing to write and nothing to report. Distinct
@@ -520,8 +520,8 @@ function assertStampable(pkg: Package, version: string): void {
         (pkg.provider
           ? `  The "${pkg.provider}" provider looked and found no version to change. Name the ` +
             `identifier with { file, constant } if it is not "version", or drop the entry.`
-          : `  This package belongs to no ecosystem (no plugin claimed it), so nothing knows how a ` +
-            `version is declared in it. Name a plugin in .rmanrc "plugins".`),
+          : `  This package belongs to no ecosystem (no platform claimed it), so nothing knows how a ` +
+            `version is declared in it. Name the technology in .rmanrc "platforms", or reach it through "extends" (e.g. "rman:node").`),
     );
   }
 }

@@ -218,7 +218,7 @@ export namespace Manifest {
     }
     throw new Error(
       `No manifest provider recognizes "${dir}", so there is nowhere to write its version.\n` +
-        `  A repository's ".rmanrc" names its technologies - see "plugins" (e.g. ['node']).`,
+        `  A repository's ".rmanrc" names its technologies - see "platforms", or "extends" (e.g. "rman:node").`,
     );
   }
 

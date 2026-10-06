@@ -273,7 +273,7 @@ export function filterPackages(
  * **It only means anything where a command scopes by the current directory** - `run`/`build`/`test`,
  * `exec`, `clean`, `changelog` and `diff` narrow to `Repository.currentPackage` when you stand
  * inside a package, and this is the escape hatch. On a command that already works across the whole
- * repository (`version`, `publish`, `list`, `changed`) it would be a flag that does nothing, which
+ * repository (`version`, `publish`, `list`) it would be a flag that does nothing, which
  * is worse than not offering it: a no-op flag reads as a promise.
  *
  * That same rule is why there is no `--root-only` beside it, however naturally the pair reads: it
