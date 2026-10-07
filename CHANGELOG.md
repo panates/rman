@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to b547cda4fa3e1f3027e3a7c3302d34c24165a759 -->
+<!-- rman:documented-up-to 39676637a03e40c966b0205dd74178321b69b45c -->
+
+## v2.16.0 (2026-10-07)
+
+### ✨ Features
+
+- **version,publish:** a permanent prerelease line - version.preid and publish.npm.latestPrereleases (3967663)
+
+---
 
 ## v2.15.2 (2026-10-07)
 
