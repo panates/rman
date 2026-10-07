@@ -1,6 +1,15 @@
 # Changelog
 
-<!-- rman:documented-up-to c097120528613436c5fbea5c5cf46de6d576c1e3 -->
+<!-- rman:documented-up-to b547cda4fa3e1f3027e3a7c3302d34c24165a759 -->
+
+## v2.15.2 (2026-10-07)
+
+### 🐛 Bug Fixes
+
+- **cli:** keep a command's own output when the status line is live (c5f6b69)
+- **deps:** say "All dependencies are up to date" when nothing moves (b547cda)
+
+---
 
 ## v2.15.1 (2026-10-06)
 
