@@ -232,9 +232,14 @@ function printPlan(entries: readonly DependencyUpdater.Entry[], root: string): v
   const behind = entries.filter(
     e => e.status === 'held' || e.status === 'skipped' || e.status === 'error' || (e.status === 'update' && e.reason),
   );
-  if (!updated.length && !behind.length) {
-    console.log(colors.gray('Every dependency is up to date.'));
-    return;
+  /** Said first when nothing moves, so a run whose only lines are majors left behind does not read
+   *  as a list of things to do. */
+  if (!updated.length) {
+    console.log(
+      colors.green('All dependencies are up to date') +
+        (behind.length ? colors.gray(' - newer versions their settings leave out, or another rule holds back:') : '.'),
+    );
+    if (!behind.length) return;
   }
   const shown = [...updated, ...behind];
   const nameWidth = Math.max(...shown.map(e => e.name.length));

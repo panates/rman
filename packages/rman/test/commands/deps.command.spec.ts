@@ -18,6 +18,8 @@ class FakeUpdater implements DependencyUpdater {
   restored = 0;
   verified = 0;
   refusal: string | undefined;
+  /** What every entry reports - `'update'` unless a case says otherwise. */
+  status: DependencyUpdater.Entry['status'] = 'update';
 
   async getPlan(_ctx: DependencyUpdater.Context, packages: readonly Package[]): Promise<DependencyUpdater.Entry[]> {
     this.planned = packages.map(p => p.name);
@@ -26,10 +28,11 @@ class FakeUpdater implements DependencyUpdater {
       name: 'left-pad',
       types: ['dependencies'],
       current: '^1.0.0',
-      status: 'update' as const,
-      target: '^1.3.0',
+      status: this.status,
+      ...(this.status === 'update' ? { target: '^1.3.0', bump: 'minor' } : {}),
       latest: '1.3.0',
-      bump: 'minor',
+      available: this.status === 'skipped' ? '2.0.0' : '1.3.0',
+      reason: this.status === 'skipped' ? 'major - deps.target is "minor"' : undefined,
     }));
   }
 
@@ -50,7 +53,14 @@ describe('commands/deps', () => {
   const updater = new FakeUpdater();
   usePlugin(definePlatform({ ...testPlatform, name: 'deps-test', dependencyUpdater: updater }));
   beforeEach(() => {
-    Object.assign(updater, { planned: [], applied: 0, restored: 0, verified: 0, refusal: undefined });
+    Object.assign(updater, {
+      planned: [],
+      applied: 0,
+      restored: 0,
+      verified: 0,
+      refusal: undefined,
+      status: 'update',
+    });
   });
 
   const dirs: string[] = [];
@@ -75,7 +85,10 @@ describe('commands/deps', () => {
   async function capture(fn: () => Promise<void>): Promise<{ lines: string[]; failed: boolean }> {
     const original = { log: console.log, error: console.error };
     const lines: string[] = [];
-    console.log = console.error = (...args: unknown[]) => void lines.push(args.map(String).join(' '));
+    /** Colours stripped: what is asserted is the text a reader sees. */
+    // eslint-disable-next-line no-control-regex
+    const plain = (text: string) => text.replace(/\x1b\[[0-9;]*m/g, '');
+    console.log = console.error = (...args: unknown[]) => void lines.push(plain(args.map(String).join(' ')));
     let failed = false;
     try {
       await fn();
@@ -126,6 +139,25 @@ describe('commands/deps', () => {
     const { failed } = await capture(() => runCli({ argv: ['deps', '-u', '--no-verify'], cwd: dir }));
     expect(failed).toBe(false);
     expect(updater.verified).toBe(0);
+  });
+
+  it('says every dependency is up to date when nothing has a newer version', async () => {
+    const dir = monorepo();
+    updater.status = 'up-to-date';
+    const { lines } = await capture(() => runCli({ argv: ['deps'], cwd: dir }));
+    expect(lines.join('\n')).toContain('All dependencies are up to date.');
+    expect(lines.join('\n')).not.toContain('rman deps -u');
+  });
+
+  it('says so first, then lists what was left out, when nothing moves but a major exists', async () => {
+    const dir = monorepo();
+    updater.status = 'skipped';
+    const { lines } = await capture(() => runCli({ argv: ['deps', '--scope', 'pkg-a'], cwd: dir }));
+    const text = lines.join('\n');
+    expect(text).toMatch(/^All dependencies are up to date - newer versions/m);
+    expect(text).toContain('not updated');
+    expect(text).toMatch(/left-pad\s+\^1\.0\.0\s+2\.0\.0\s+major - deps\.target is "minor"/);
+    expect(text).not.toContain('rman deps -u');
   });
 
   it('prints one JSON document under --json', async () => {

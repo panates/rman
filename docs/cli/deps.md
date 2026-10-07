@@ -33,6 +33,10 @@ app
     esbuild     ^0.24.0  0.28.2   major - deps.target is "minor"
 ```
 
+When nothing moves, the first line says so - `All dependencies are up to date.` - and when newer
+versions exist that the settings leave out (a major under `target: minor`, say), it says that too and
+the "not updated" list follows, so a run with nothing to do does not read as a list of things to do.
+
 A dependency that moved, but not as far as it could, is in both lists. Under "not updated" the
 reason is either the package's own settings (a major under `target: minor`, a version younger than
 `minAge`) or another rule, named in full - for instance
