@@ -312,6 +312,97 @@ describe('services/version', () => {
     });
   });
 
+  /**
+   * **A repository that releases on a prerelease line for good** - `panates/browsery`, which
+   * repackages upstream modules as `<upstream version>-rev.N`. `--preid` was the only way to say it,
+   * and the shared release workflow runs `rman version` without it, so the next release would have
+   * graduated `4.13.3-rev.8` to a bare `4.13.3`.
+   */
+  describe('.rmanrc "version.preid"', () => {
+    function revLine(rmanrc: object, commit = 'feat: a feature'): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '4.13.3-rev.8' });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(rmanrc));
+      initGit(dir);
+      commitAll(dir, 'init');
+      git(dir, 'tag', 'v4.13.3-rev.8');
+      fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+      commitAll(dir, commit);
+      return dir;
+    }
+
+    it('stays on the line for a feature as well as a fix, where no preid would graduate it', async () => {
+      const declared = await createRepository(revLine({ version: { preid: 'rev' } }));
+      expect(entryFor(await planner().getPlan(declared), 'pkg-a')).toMatchObject({ to: '4.13.3-rev.9' });
+
+      const fix = await createRepository(revLine({ version: { preid: 'rev' } }, 'fix: a bug'));
+      expect(entryFor(await planner().getPlan(fix), 'pkg-a')).toMatchObject({ to: '4.13.3-rev.9' });
+
+      /** The control: the same repository with nothing declared leaves the line - a fix graduates
+       *  to the bare `4.13.3`, a feature to `4.14.0`. */
+      const bareFix = await createRepository(revLine({}, 'fix: a bug'));
+      expect(entryFor(await planner().getPlan(bareFix), 'pkg-a')).toMatchObject({ to: '4.13.3' });
+      const bareFeat = await createRepository(revLine({}));
+      expect(entryFor(await planner().getPlan(bareFeat), 'pkg-a')).toMatchObject({ to: '4.14.0' });
+    });
+
+    it('--preid wins over it for one run', async () => {
+      const repo = await createRepository(revLine({ version: { preid: 'rev' } }));
+      const plan = await planner().getPlan(repo, { preid: 'beta' });
+      /** A different identifier starts a fresh line, sized by the commit - a feature, so a minor. */
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ to: '4.14.0-beta.0' });
+    });
+
+    /**
+     * **A new upstream base written by hand goes out as `rev.1`, not `rev.0`.** `4.13.4-rev.0` is the
+     * manifest's version and commits sit after the last tag, so the plan bumps from it like any
+     * other version. Pinned so the behaviour is a decision rather than an accident; `rev.0` is never
+     * published, which costs nothing since the revision only has to increase.
+     */
+    it('takes a hand-written new base from the manifest and bumps it once', async () => {
+      const dir = revLine({ version: { preid: 'rev' } });
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '4.13.4-rev.0' });
+      commitAll(dir, 'chore: follow upstream 4.13.4');
+
+      const repo = await createRepository(dir);
+      expect(entryFor(await planner().getPlan(repo), 'pkg-a')).toMatchObject({
+        from: '4.13.4-rev.0',
+        to: '4.13.4-rev.1',
+      });
+    });
+
+    it('refuses a group whose members declare different identifiers, naming them', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(
+        path.join(dir, '.rmanrc'),
+        JSON.stringify({ '[pkg-a]': { version: { preid: 'rev' } }, '[pkg-b]': { version: { preid: 'beta' } } }),
+      );
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+      initGit(dir);
+      commitAll(dir, 'init');
+
+      const repo = await createRepository(dir);
+      await expect(planner().getPlan(repo)).rejects.toThrow(/"rev" \(pkg-a\) and "beta" \(pkg-b\)/);
+    });
+
+    it('lets a member that says nothing follow the one that does', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[pkg-a]': { version: { preid: 'rev' } } }));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0-rev.3' });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0-rev.3' });
+      initGit(dir);
+      commitAll(dir, 'init');
+
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ to: '1.0.0-rev.4' });
+      expect(entryFor(plan, 'pkg-b')).toMatchObject({ to: '1.0.0-rev.4' });
+    });
+  });
+
   describe('group propagation (a monorepo with two same-group packages)', () => {
     function fixture(): string {
       const dir = tmp();

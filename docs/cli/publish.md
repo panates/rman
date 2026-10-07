@@ -146,6 +146,14 @@ somewhere other than `latest`:
 rman publish --tag next
 ```
 
+**A prerelease line that is not a preview is listed, by identifier.** A package whose releases are
+all `-rev.N` (see [`version.preid`](version.md#a-permanent-prerelease-line)) says so with
+`.rmanrc "publish.npm.latestPrereleases": ["rev"]`: a version on a listed identifier publishes with
+no tag, so to `latest`, and `--tag latest` is accepted for it. Every identifier it does not list is
+still a preview - a `4.14.0-beta.0` of the same package goes to `beta`. Naming the identifier rather
+than reading `version.preid` is deliberate: a repository can put its previews on a declared line
+too, and those must not land on `latest`.
+
 Two cases have no honest answer to derive, and are errors rather than guesses:
 
 | | |

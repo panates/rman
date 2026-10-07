@@ -29,7 +29,7 @@ options, in addition to:
 | `--push` | - | boolean | Push the current branch and **this release's tags** to the remote once applied, in one atomic push - see [What `--push` sends](#what---push-sends). |
 | `--message <text>` | `-m` | string | Override the commit message for every group this run commits. Default: `.rmanrc version.commitMessage`, or `"chore(release): v{version}"`. `{version}` is substituted when a commit's own group shares one version. |
 | `--changelog` | - | boolean | Also write each bumped package's changelog (same as running `changelog --write` separately) and fold it into the same commit as the version bump. Follows [`changelog.groupBy`](changelog.md#one-file-per-package-or-one-per-release): under `group`, one file per release group, committed with that group's release. Default: `.rmanrc "version.changelog"`, or `false` - `--no-changelog` still overrides it off for one run, even when that's `true`. |
-| `--preid <name>` | - | string | Make the bump a prerelease with this identifier (e.g. `"beta"` -> `1.2.3-beta.0`). Running again with the same `--preid` increments it (`-> 1.2.3-beta.1`); a different identifier starts a fresh prerelease line. Ignored when `bump` is an explicit semver version. |
+| `--preid <name>` | - | string | Make the bump a prerelease with this identifier (e.g. `"beta"` -> `1.2.3-beta.0`). Running again with the same `--preid` increments it (`-> 1.2.3-beta.1`); a different identifier starts a fresh prerelease line. Ignored when `bump` is an explicit semver version. Default: `.rmanrc "version.preid"` - see [A permanent prerelease line](#a-permanent-prerelease-line). |
 | `--show` | - | boolean | Show the resulting plan for the given `bump` without applying it - unlike omitting `bump` entirely, this still uses the given release-type keyword/version to compute the plan, just never writes it. Conflicts with `--interactive`. |
 | `--json` | `-j` | boolean | Print the plan as JSON and write nothing - the machine-readable form of `--show`, and what the removed `changed` command was for. See [`--json`: the plan, for a script](#--json-the-plan-for-a-script). Conflicts with `--interactive` and `--yes`. |
 
@@ -89,6 +89,42 @@ rman version --ignore-dirty       # exclude dirty packages instead of aborting t
 rman version --scope pkg-a --dependents  # only pkg-a and whatever depends on it
 rman version patch --show         # preview what an explicit patch bump would do, without applying it
 ```
+
+### A permanent prerelease line
+
+`.rmanrc "version.preid"` is `--preid` as a standing setting, for a package whose **every** release
+is a prerelease by design - one that repackages an upstream module as `<upstream version>-rev.N`, so
+the version always says which upstream release it wraps:
+
+```yaml
+# .rmanrc.yml
+version:
+  preid: rev
+publish:
+  npm:
+    latestPrereleases: [rev]   # these are releases, not previews - see rman publish
+```
+
+```
+4.13.3-rev.8  --fix:-->   4.13.3-rev.9
+4.13.3-rev.8  --feat:-->  4.13.3-rev.9      # the line only counts revisions
+```
+
+- **Without it the line ends on the next release**: a fix graduates `4.13.3-rev.8` to a bare
+  `4.13.3`, a feature to `4.14.0`. Release workflows run `rman version` with no flags, so the setting
+  is what keeps the line.
+- **`--preid` still wins for one run**, and a different identifier starts a fresh line as usual.
+- **Per package, cascaded, and one answer per group.** A group is one version line, so members
+  declaring *different* identifiers are an error naming them; a member declaring nothing follows the
+  one that does.
+- **A new upstream base is written by hand and goes out bumped once.** Setting the manifest to
+  `4.13.4-rev.0` and committing it makes the next release `4.13.4-rev.1` - the plan bumps from what
+  the manifest says, like any other version. `rev.0` is never published, which costs nothing: the
+  revision only has to increase.
+- **A bare version sorts above its own prereleases** in semver, so `4.13.4` followed by
+  `4.13.4-rev.1` goes *down*. Once on the line, stay on it.
+- A repository with one version line and this setting also wants `githubRelease.prerelease: false`,
+  or its GitHub Release is marked pre-release like any other prerelease.
 
 Any package with uncommitted local changes aborts the whole run (`N package(s) have uncommitted
 local changes (pass --ignore-dirty to exclude them instead of aborting)`) unless `--ignore-dirty`

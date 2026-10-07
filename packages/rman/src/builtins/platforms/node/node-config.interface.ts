@@ -63,6 +63,17 @@ export namespace RmanNodeConfig {
      * own "Unknown command: stage" is a better message than a guess made somewhere else.
      */
     staged?: ConfigValue<boolean>;
+    /**
+     * The prerelease identifiers that are **not previews** for this package - a version on one of
+     * them publishes to `latest` like a release, instead of under a dist-tag of its own.
+     *
+     * For a package whose every release is a prerelease by design: `["rev"]` publishes
+     * `4.13.3-rev.9` to `latest`, while a `4.14.0-beta.0` of the same package keeps its own `beta`
+     * tag. Pairs with `.rmanrc "version.preid"`.
+     *
+     * @example ["rev"]
+     */
+    latestPrereleases?: ConfigValue<string[]>;
   }
 }
 

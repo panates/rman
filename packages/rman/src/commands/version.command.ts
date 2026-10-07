@@ -87,12 +87,15 @@ const config = {
       '"version.changelog", or false - --no-changelog forces it off even when that\'s true.',
     type: 'boolean',
   },
+  /** `target: 'both'`: a flag for one prerelease, and `.rmanrc "version.preid"` for a repository
+   *  that releases on a prerelease line for good (`4.13.3-rev.N`). */
   preid: {
-    target: 'cli',
+    target: 'both',
     describe:
       'Make the bump a prerelease with this identifier (e.g. "beta" -> 1.2.3-beta.0). ' +
       'Running again with the same --preid increments it (-> 1.2.3-beta.1); a different ' +
-      'identifier starts a fresh prerelease line. Ignored when bump is an explicit version.',
+      'identifier starts a fresh prerelease line. Ignored when bump is an explicit version. ' +
+      'Default: .rmanrc "version.preid", which every member of a group has to agree on.',
     type: 'string',
   },
   /**

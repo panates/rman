@@ -308,6 +308,41 @@ describe('services/publish', () => {
       });
 
       /**
+       * **A prerelease line that is not a preview** - `panates/browsery` publishes
+       * `<upstream version>-rev.N` as its releases. Listing the identifier is the opt-in, and it
+       * reaches that identifier alone: a beta of the same package keeps its protection.
+       */
+      describe('publish.npm.latestPrereleases', () => {
+        async function listed(version: string) {
+          const dir = tmp();
+          writeJson(dir, 'package.json', { name: 'pkg-a', version });
+          fs.writeFileSync(
+            path.join(dir, '.rmanrc'),
+            JSON.stringify({ publish: { npm: { latestPrereleases: ['rev'] } } }),
+          );
+          return createRepository(dir);
+        }
+
+        it('publishes a listed identifier with no tag, so npm puts it on latest', async () => {
+          const repo = await listed('4.13.3-rev.9');
+          const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '4.13.3-rev.8' }));
+          expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish', distTag: undefined });
+        });
+
+        it('accepts --tag latest for it', async () => {
+          const repo = await listed('4.13.3-rev.9');
+          const plan = await PublishService.getPlan(repo, { tag: 'latest' }, registry({ 'pkg-a': '4.13.3-rev.8' }));
+          expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish', distTag: 'latest' });
+        });
+
+        it('leaves an identifier it does not list a preview', async () => {
+          const repo = await listed('4.14.0-beta.0');
+          const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': '4.13.3-rev.8' }));
+          expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'publish', distTag: 'beta' });
+        });
+      });
+
+      /**
        * A calendar version's time part *is* a semver prerelease identifier - that is how the time
        * is spelled - so reading it as a preview would refuse an ordinary release. `github-release`
        * rules it out the same way; these two agree deliberately.

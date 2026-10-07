@@ -172,7 +172,8 @@ export abstract class VersionPlanService {
     }
 
     for (const [key, members] of groups) {
-      this.computeGroupPlan(key, members, changeByPackage, explicitVersion, options.preid, entries);
+      const preid = options.preid ?? this.declaredPreid(members, this.groupLabel(key));
+      this.computeGroupPlan(key, members, changeByPackage, explicitVersion, preid, entries);
     }
 
     this.rippleCrossGroup(packages, entries, options.preid);
@@ -317,6 +318,33 @@ export abstract class VersionPlanService {
    * `^1.0.0` does not admit `2.0.0` and an in-group dependent left at the old number would declare
    * a range its own group no longer satisfies. So `changed` means "no floor of my own", not "never
    * more than the changed packages". */
+  /**
+   * The prerelease identifier a group's members declare in `.rmanrc "version.preid"`, or `undefined`
+   * when none does. Members declaring different ones are an error naming them: a group is one
+   * version line, and a line cannot be on two prerelease identifiers at once.
+   */
+  /* **A member saying nothing agrees with whoever does.** The usual shape is one declaration above
+   * the group (`"[*]"`, or a shared preset), which reaches every member; a group where only some
+   * members say it is still one line, and refusing it would make adding a package to a group a way
+   * to break its release. Two different words are the only disagreement, and that one has no
+   * answer: `4.13.3-rev.9` and `4.13.3-beta.0` cannot both be the group's next version. */
+  protected declaredPreid(members: Package[], label: string): string | undefined {
+    const declared = new Map<string, string[]>();
+    for (const m of members) {
+      const preid = m.config?.version?.preid;
+      if (typeof preid !== 'string' || !preid) continue;
+      declared.set(preid, [...(declared.get(preid) ?? []), m.name]);
+    }
+    if (declared.size > 1) {
+      const sides = [...declared].map(([preid, names]) => `"${preid}" (${names.join(', ')})`).join(' and ');
+      throw new Error(
+        `Group ${label} is one version line, but its members declare different "version.preid": ${sides}. ` +
+          'Declare one identifier for the whole group.',
+      );
+    }
+    return declared.keys().next().value;
+  }
+
   protected declaredCascade(members: Package[]): VersionPlanService.Cascade | undefined {
     const declared = new Set(
       members.map(m => m.config?.version?.cascade).filter((c): c is VersionPlanService.Cascade => !!c),
@@ -521,7 +549,14 @@ export abstract class VersionPlanService {
         const next: VersionPlanService.Entry = {
           ...entry,
           status: 'bump',
-          to: pkg.versionScheme.next(groupCeiling, pkg.versionScheme.smallestBump(), { preid }),
+          to: pkg.versionScheme.next(groupCeiling, pkg.versionScheme.smallestBump(), {
+            preid:
+              preid ??
+              this.declaredPreid(
+                packages.filter(p => entries.get(p.name)!.groupKey === entry.groupKey),
+                entry.group ?? entry.groupKey,
+              ),
+          }),
           reason: `depends on ${source.package.name}@${source.to}`,
         };
         entries.set(pkg.name, next);

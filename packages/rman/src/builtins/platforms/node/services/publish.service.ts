@@ -610,7 +610,8 @@ function retiredDirectoryKey(pkg: Package): boolean {
  * checks; they agree deliberately.
  */
 function distTagFor(pkg: Package, tag: string | undefined): { tag?: string; error?: string } {
-  const isPreview = !isCalendarVersion(pkg.version) && pkg.versionScheme.isPrerelease(pkg.version);
+  const isPreview =
+    !isCalendarVersion(pkg.version) && pkg.versionScheme.isPrerelease(pkg.version) && !releasesAsLatest(pkg);
   if (!isPreview) return { tag };
   if (tag) {
     if (tag !== 'latest') return { tag };
@@ -656,4 +657,20 @@ function buildPublishCommand(packageManager: CiService.PackageManager, options: 
 function resolveStaged(pkg: Package, override: boolean | undefined): boolean {
   if (override !== undefined) return override;
   return !!pkg.config?.publish?.npm?.staged;
+}
+
+/**
+ * Whether `pkg`'s prerelease identifier is one `.rmanrc "publish.npm.latestPrereleases"` lists - a
+ * line the package releases on for good, which publishes to `latest` like any release.
+ */
+/* **An explicit list, not "whatever `version.preid` says".** A repository can put its previews on a
+ * declared line too (`preid: beta`), and reading the bump's setting as a statement about the
+ * registry would have every such beta land on `latest` - the one mistake `distTagFor` exists to
+ * stop. Naming the identifier also keeps the protection for every other one: a `-beta.0` of a
+ * package publishing `-rev.N` to `latest` still gets its own tag. Requested from `panates/browsery`,
+ * which repackages upstream modules as `<upstream version>-rev.N`. */
+function releasesAsLatest(pkg: Package): boolean {
+  const listed = pkg.config?.publish?.npm?.latestPrereleases;
+  const id = pkg.versionScheme.prereleaseId(pkg.version);
+  return !!id && Array.isArray(listed) && listed.includes(id);
 }
