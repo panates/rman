@@ -1094,6 +1094,17 @@ counting up while it runs; a `✔`/`✖` line with the elapsed time when it ends
 - **On stderr, and `LiveRegion` took a `stream` parameter for it.** A command's answer goes to
   stdout, so `rman changelog > NOTES.md` has to leave the notes alone in the file - cursor-movement
   codes in there are worse than noise. `ProgressPanel`'s region keeps stdout, unchanged.
+- **The command's own writes are moved above the spinner** (`StatusRegion.guardWrites`): while the
+  line is live, every `process.stdout`/`process.stderr` write erases it, writes, and draws it again
+  below. Measured with `script`: `rman deps` printed its plan with `console.log`, the final erase
+  moved up one row from *below* the plan, and its last line - the one dependency it was reporting -
+  was gone, leaving a "not updated" heading with nothing under it; `version --show` lost "Nothing to
+  version." the same way. A rule that every command route its output through `passThrough` is one
+  each new command would have to remember, so the region does it.
+  - **Left alone while suspended** - the panel that took over writes to stdout itself - and **a
+    write ending mid-line holds the next frame back**, or the frame's `\r` + erase would wipe it.
+  - **A child process is not covered**, because its writes never pass through this process's
+    streams. That is what the next bullet is about.
 - **A live region forces `runBin` to pipe**, and that is not a preference. The region redraws by
   moving the cursor up N rows; a child writing straight to the terminal scrolls the screen, so the
   next redraw erases what the child just printed. So output goes through `passThrough` - erase,

@@ -20,11 +20,12 @@ import { LiveRegion } from '../core/classes/live-region.js';
  * there would be worse than noise. The two streams share a terminal, so only one region is ever
  * live.
  *
- * **Anything printed while it is live has to go through `passThrough`**, which erases the block,
- * writes, and redraws below. A write that bypasses it scrolls the screen, and the next redraw's
- * "move up N rows" then lands on the wrong rows and erases what was just printed - the same cursor
- * arithmetic `LiveRegion` documents as its own hard edge. That is why `runBin` pipes a child while
- * a region is live instead of letting it inherit the terminal.
+ * **Anything printed while it is live is moved above it**: erase, write, redraw below. `passThrough`
+ * does that for a child's output, and every other write to stdout or stderr in this process gets the
+ * same treatment from `guardWrites`. A write that bypassed it scrolled the screen, and the next
+ * redraw's "move up N rows" then landed on the wrong rows and erased what was just printed - the
+ * same cursor arithmetic `LiveRegion` documents as its own hard edge. A child is still piped while a
+ * region is live (`runBin`), since its writes do not go through this process's streams at all.
  *
  * **No-op when stderr is not a TTY** (CI, a pipe), where the escape codes mean nothing. There the
  * caller still gets the result line, which is the part that carries information. */
@@ -53,6 +54,12 @@ export class StatusRegion implements TerminalRegion {
    * there, so `runBin` keeps asking one object (`app.statusRegion`) whatever is actually drawing.
    */
   private takeover?: TerminalRegion;
+  /** Puts back the stream writes `guardWrites` replaced. */
+  private restoreWrites?: () => void;
+  /** Set while this region is writing its own frame, so the guard lets it through untouched. */
+  private drawing = false;
+  /** The last write from outside ended mid-line, so no frame is drawn until the line is finished. */
+  private partial = false;
 
   constructor(
     private readonly label: string,
@@ -71,6 +78,7 @@ export class StatusRegion implements TerminalRegion {
   /** Starts the spinner. Safe to call when not live - it does nothing. */
   start(): void {
     if (!this.region.enabled) return;
+    this.guardWrites();
     this.draw();
     /** **`unref`, so a spinner never holds the process open.** A command that finishes its work and
      *  leaves nothing else pending would otherwise wait out the interval before exiting. */
@@ -100,7 +108,7 @@ export class StatusRegion implements TerminalRegion {
     this.takeover = takeover;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
-    this.region.clear();
+    this.clear();
   }
 
   /**
@@ -133,8 +141,8 @@ export class StatusRegion implements TerminalRegion {
       process.stderr.write(text);
       return;
     }
-    this.region.clear();
-    process.stderr.write(text);
+    this.clear();
+    this.own(() => process.stderr.write(text));
     this.draw();
   }
 
@@ -143,12 +151,63 @@ export class StatusRegion implements TerminalRegion {
     this.takeover = undefined;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
-    this.region.clear();
+    this.clear();
+    this.restoreWrites?.();
+    this.restoreWrites = undefined;
     const mark = outcome === 'ok' ? colors.green('✔') : colors.red('✖');
-    process.stderr.write(`${mark} ${colors.bold(this.label)} ${colors.gray(this.elapsed())}\n`);
+    const lead = this.partial ? '\n' : '';
+    process.stderr.write(`${lead}${mark} ${colors.bold(this.label)} ${colors.gray(this.elapsed())}\n`);
+  }
+
+  /**
+   * Moves every write to stdout and stderr above the spinner: erase it, write, draw it again below.
+   * Undone by `stop`.
+   */
+  /* **Here, once, rather than in every command.** Measured with a pseudo-terminal: `rman deps`
+   * printed its plan with `console.log`, the spinner's next erase moved up one row from *below* the
+   * plan, and the plan's last line - the one dependency it was reporting - was gone from the screen,
+   * leaving a "not updated" heading with nothing under it. `version --show` lost its closing
+   * "Nothing to version." the same way. Asking each command to route its output through
+   * `passThrough` is a rule every new command would have to remember; a command's own `console.log`
+   * is the ordinary thing to write.
+   *
+   * **Left alone while suspended**: the region that took over draws to stdout itself, and it owns the
+   * terminal until `resume`. **A write ending mid-line holds the next frame back** (`partial`), or the
+   * frame's `\r` + erase would wipe the half-written line. */
+  private guardWrites(): void {
+    const streams = [process.stdout, process.stderr];
+    const originals = streams.map(stream => stream.write);
+    streams.forEach((stream, i) => {
+      const original = originals[i]!;
+      stream.write = ((chunk: any, ...rest: any[]) => {
+        if (this.drawing || this.takeover) return original.call(stream, chunk, ...rest);
+        this.clear();
+        const written = this.own(() => original.call(stream, chunk, ...rest));
+        this.partial = !String(chunk).endsWith('\n');
+        this.draw();
+        return written;
+      }) as typeof stream.write;
+    });
+    this.restoreWrites = () => streams.forEach((stream, i) => (stream.write = originals[i]!));
+  }
+
+  /** Runs `write` as one of this region's own writes, so the guard passes it through. */
+  private own<T>(write: () => T): T {
+    const was = this.drawing;
+    this.drawing = true;
+    try {
+      return write();
+    } finally {
+      this.drawing = was;
+    }
+  }
+
+  private clear(): void {
+    this.own(() => this.region.clear());
   }
 
   private draw(): void {
+    if (this.partial) return;
     const spinner = colors.cyan(FRAMES[this.frame % FRAMES.length]!);
     const parts = [
       spinner,
@@ -156,7 +215,7 @@ export class StatusRegion implements TerminalRegion {
       this.detail && colors.gray(this.detail),
       colors.gray(this.elapsed()),
     ];
-    this.region.render([parts.filter(Boolean).join(' ')]);
+    this.own(() => this.region.render([parts.filter(Boolean).join(' ')]));
   }
 
   /** `0.4s` while running and `950ms` / `4.1s` / `2m 03s` at the end - one formatter, because a

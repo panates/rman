@@ -117,6 +117,54 @@ describe('utils/StatusRegion', () => {
    * and this line each redraw by moving the cursor up by *their own* line count, so interleaved
    * they land on each other's rows and the bottom lines visibly swap places.
    */
+  /**
+   * **A command's own output survives the spinner.** Measured with a pseudo-terminal: `rman deps`
+   * printed its plan with `console.log`, the region's final erase moved up one row from below the
+   * plan, and the plan's last line was gone - a "not updated" heading with nothing under it.
+   * `version --show` lost "Nothing to version." the same way. Asserted on what a terminal would
+   * show, since every byte is still in the stream either way.
+   */
+  describe('output written while it is live', () => {
+    it('keeps every line a command prints itself, the last one included', () => {
+      const shown = screen(() => {
+        const region = new StatusRegion('deps', '', true);
+        region.start();
+        process.stdout.write('@panates/reportj\n');
+        console.log('  not updated');
+        process.stdout.write('    typescript  ^6.0.3  7.0.2\n');
+        region.stop('ok');
+      });
+
+      expect(shown.slice(0, 3)).toEqual(['@panates/reportj', '  not updated', '    typescript  ^6.0.3  7.0.2']);
+      expect(shown[3]).toMatch(/^✔ deps /);
+      expect(shown).toHaveLength(4);
+    });
+
+    it('does not draw over a line written in pieces', () => {
+      const shown = screen(() => {
+        const region = new StatusRegion('deps', '', true);
+        region.start();
+        process.stderr.write('half ');
+        process.stderr.write('and the rest\n');
+        region.stop('ok');
+      });
+
+      expect(shown[0]).toBe('half and the rest');
+      expect(shown[1]).toMatch(/^✔ deps /);
+    });
+
+    it('hands the streams back when it stops', () => {
+      const before = { out: process.stdout.write, err: process.stderr.write };
+      const region = new StatusRegion('deps', '', true);
+      screen(() => {
+        region.start();
+        region.stop('ok');
+      });
+      expect(process.stdout.write).toBe(before.out);
+      expect(process.stderr.write).toBe(before.err);
+    });
+  });
+
   describe('handing the terminal over (suspend/resume)', () => {
     it('stops drawing its own line while suspended', () => {
       const out = capture(written => {
@@ -181,3 +229,47 @@ describe('utils/StatusRegion', () => {
     });
   });
 });
+
+/**
+ * What a terminal would show for everything written to stdout and stderr during `fn` - one entry per
+ * row, colours dropped. Just enough of a VT100 for this region: `\r`, `\n`, cursor up (`ESC[nA`)
+ * and erase line (`ESC[2K`).
+ */
+function screen(fn: () => void): string[] {
+  let out = '';
+  const streams = [process.stdout, process.stderr] as NodeJS.WriteStream[];
+  const originals = streams.map(stream => stream.write);
+  for (const stream of streams) {
+    stream.write = ((chunk: any) => {
+      out += String(chunk);
+      return true;
+    }) as typeof stream.write;
+  }
+  try {
+    fn();
+  } finally {
+    streams.forEach((stream, i) => (stream.write = originals[i]!));
+  }
+
+  const rows: string[] = [''];
+  let row = 0;
+  let col = 0;
+  // eslint-disable-next-line no-control-regex
+  for (const match of out.matchAll(/\x1b\[(\d*)([A-Za-z])|\r|\n|[^\x1b\r\n]+/g)) {
+    const [token, count, command] = match;
+    if (token === '\r') col = 0;
+    else if (token === '\n') {
+      row++;
+      col = 0;
+      rows[row] ??= '';
+    } else if (command === 'A') row = Math.max(0, row - Number(count || 1));
+    else if (command === 'K') rows[row] = '';
+    else if (!command) {
+      const line = rows[row] ?? '';
+      rows[row] = line.slice(0, col).padEnd(col) + token + line.slice(col + token.length);
+      col += token.length;
+    }
+  }
+  while (rows.length && !rows[rows.length - 1]) rows.pop();
+  return rows;
+}
