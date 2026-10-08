@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to 70bc9806c903bbf8517fa2020004449dfdc988e0 -->
+<!-- rman:documented-up-to 4fac239be7b7f1cbfa7db75caecb19461b50fa37 -->
+
+## v2.18.1 (2026-10-08)
+
+### 🐛 Bug Fixes
+
+- **version:** a prerelease moving to another identifier keeps its version (a2ce750)
+
+### 🤖 Continuous Integration
+
+- **release:** alpha and beta branches release prereleases named after themselves (4fac239)
+
+---
 
 ## v2.18.0 (2026-10-08)
 
