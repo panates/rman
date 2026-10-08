@@ -17,30 +17,29 @@ tooling included. `names` narrows the run to the dependencies matching those glo
 **A dependency stays inside its major by default.** A major is a break, and taking one is a decision
 a person makes: `--target major` for one run, or `deps.target` / `deps.targets` for a standing answer.
 
-A version is offered only when **every rule rman can see allows it**. What moves is printed by size,
-smallest first; what does not move is printed below it with the newest version there is and the
-reason it was left:
+A version is offered only when **every rule rman can see allows it**. Each package gets one table,
+one row per dependency that has something newer:
 
 ```
 app
-  patch
-    esbuild     ^0.24.0  →  ^0.24.2
-  minor
-    typescript  ^5.3.0   →  ^5.9.3
-  not updated
-    typescript  ^5.3.0   7.0.2    major - deps.target is "minor"
-    eslint      ^9.0.0   10.12.0  major - deps.target is "minor"
-    esbuild     ^0.24.0  0.28.2   major - deps.target is "minor"
+  Dependency  Current  Upgrade  Latest   Change   Note
+  esbuild     ^0.24.0  ^0.24.2  0.28.2   patch    major - deps.target is "minor"
+  typescript  ^5.3.0   ^5.9.3   7.0.2    minor    major - deps.target is "minor"
+  eslint      ^9.0.0   -        10.12.0  skipped  major - deps.target is "minor"
 ```
 
-When nothing moves, the first line says so - `All dependencies are up to date.` - and when newer
-versions exist that the settings leave out (a major under `target: minor`, say), it says that too and
-the "not updated" list follows, so a run with nothing to do does not read as a list of things to do.
+- **Upgrade** is the range `-u` would write; `-` when the dependency stays where it is.
+- **Latest** is the newest version there is, whatever the settings say.
+- **Change** is the size of the move (`patch`, `minor`, `major`), or why there is none: `held` -
+  another dependency's rule refuses the newer version, named in full in the note - `skipped` - the
+  package's own settings leave it out (a major under `target: minor`, a version younger than
+  `minAge`) - or `error`. Rows that move come first, smallest first.
+- **Note** says why a row stops short of **Latest**, for instance
+  `7.0.2 refused: @typescript-eslint/parser@8.40.0 needs typescript >=4.8.4 <6.0.0`.
 
-A dependency that moved, but not as far as it could, is in both lists. Under "not updated" the
-reason is either the package's own settings (a major under `target: minor`, a version younger than
-`minAge`) or another rule, named in full - for instance
-`7.0.2 refused: @typescript-eslint/parser@8.40.0 needs typescript >=4.8.4 <6.0.0`.
+When nothing moves, the first line says so - `All dependencies are up to date.` - and says that a
+table of what was left out follows when there is one, so a run with nothing to do does not read as a
+list of things to do.
 
 **Sizes are read the way a caret range reads them.** `^0.1.0` stops below `0.2.0`, because a `0.x`
 minor may break; so `0.1.x -> 0.2.0` is a major here, and a package that has lived on `0.x` for

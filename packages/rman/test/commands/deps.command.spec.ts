@@ -109,6 +109,14 @@ describe('commands/deps', () => {
     expect(lines.join('\n')).toContain('rman deps -u');
   });
 
+  /** One table per package, under a header - each dependency once, what it moves to and how far. */
+  it('prints a table with a header, one row per dependency', async () => {
+    const dir = monorepo();
+    const { lines } = await capture(() => runCli({ argv: ['deps', '--scope', 'pkg-a'], cwd: dir }));
+    expect(lines).toContainEqual(expect.stringMatching(/^\s+Dependency\s+Current\s+Upgrade\s+Latest\s+Change\s+Note$/));
+    expect(lines).toContainEqual(expect.stringMatching(/^\s+left-pad\s+\^1\.0\.0\s+\^1\.3\.0\s+1\.3\.0\s+minor$/));
+  });
+
   it('narrows to --scope', async () => {
     const dir = monorepo();
     await capture(() => runCli({ argv: ['deps', '--scope', 'pkg-a'], cwd: dir }));
@@ -155,8 +163,8 @@ describe('commands/deps', () => {
     const { lines } = await capture(() => runCli({ argv: ['deps', '--scope', 'pkg-a'], cwd: dir }));
     const text = lines.join('\n');
     expect(text).toMatch(/^All dependencies are up to date - newer versions/m);
-    expect(text).toContain('not updated');
-    expect(text).toMatch(/left-pad\s+\^1\.0\.0\s+2\.0\.0\s+major - deps\.target is "minor"/);
+    expect(text).not.toContain('not updated');
+    expect(text).toMatch(/left-pad\s+\^1\.0\.0\s+-\s+2\.0\.0\s+skipped\s+major - deps\.target is "minor"/);
     expect(text).not.toContain('rman deps -u');
   });
 

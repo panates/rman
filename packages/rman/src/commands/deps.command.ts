@@ -220,56 +220,68 @@ function jsonPlan(entries: readonly DependencyUpdater.Entry[]) {
 }
 
 /**
- * One block per package with something to say: what moves, grouped by size, smallest first - and
- * then **what does not**, each with the reason it stays.
+ * One table per package with something to say, under a header: what each dependency would move to
+ * and how far, and for one that stays, the newest release and why it is not taken.
  */
-/* **The second half is the one `npm-check-updates` taught people to read.** Under `--target minor`
- * a major that was left behind has to be on the screen, or a run reporting three patches looks like
- * a repository that is current. A dependency that moved but not as far as it could appears in both:
- * once under its size, once under "not updated" with what held it. */
+/* **One row per dependency, the change a column.** It was a list per size (`patch`, `minor`) and a
+ * second list headed "not updated" - wrong for a command that, without `-u`, updates nothing, and a
+ * dependency that moved part of the way appeared in both. The `Change` column says what a row is:
+ * the size of the move, or `held` (another dependency's rule refuses it), `skipped` (the package's
+ * own settings leave the newer version out) or `error`. Moves first, smallest first, then the rest. */
 function printPlan(entries: readonly DependencyUpdater.Entry[], root: string): void {
   const updated = entries.filter(e => e.status === 'update');
-  const behind = entries.filter(
-    e => e.status === 'held' || e.status === 'skipped' || e.status === 'error' || (e.status === 'update' && e.reason),
-  );
-  /** Said first when nothing moves, so a run whose only lines are majors left behind does not read
+  const shown = entries.filter(e => e.status !== 'up-to-date');
+  /** Said first when nothing moves, so a run whose only rows are majors left behind does not read
    *  as a list of things to do. */
   if (!updated.length) {
     console.log(
       colors.green('All dependencies are up to date') +
-        (behind.length ? colors.gray(' - newer versions their settings leave out, or another rule holds back:') : '.'),
+        (shown.length ? colors.gray(' - newer versions their settings leave out, or another rule holds back:') : '.'),
     );
-    if (!behind.length) return;
+    if (!shown.length) return;
   }
-  const shown = [...updated, ...behind];
-  const nameWidth = Math.max(...shown.map(e => e.name.length));
-  const currentWidth = Math.max(...shown.map(e => e.current.length));
-  const row = (e: DependencyUpdater.Entry, rest: string) =>
-    `    ${e.name.padEnd(nameWidth)}  ${e.current.padEnd(currentWidth)}  ${rest}`;
+
+  const header = ['Dependency', 'Current', 'Upgrade', 'Latest', 'Change'];
+  const cells = (e: DependencyUpdater.Entry): string[] => [
+    e.name,
+    e.current,
+    e.status === 'update' ? (e.target ?? '') : '-',
+    e.status === 'error' ? '-' : (e.available ?? e.latest ?? ''),
+    changeOf(e),
+  ];
+  const widths = header.map((h, i) => Math.max(h.length, ...shown.map(e => cells(e)[i]!.length)));
+  /** Padded to the column, except a last value nothing follows - trailing spaces inside a colour
+   *  code are past the reach of `trimEnd`. */
+  const line = (values: string[], paint: (text: string, column: number) => string = text => text) =>
+    '  ' + values.map((v, i) => paint(i === values.length - 1 ? v : v.padEnd(widths[i]!), i)).join('  ');
 
   for (const pkg of [...new Set(shown.map(e => e.package))]) {
+    const sizes = pkg.versionScheme.bumpNames;
+    const rank = (e: DependencyUpdater.Entry) =>
+      e.status === 'update' ? sizes.indexOf(e.bump!) : sizes.length + ['held', 'skipped', 'error'].indexOf(e.status);
+    const rows = shown.filter(e => e.package === pkg).sort((x, y) => rank(x) - rank(y));
+
     const where = path.relative(root, pkg.dirname);
     console.log(colors.cyan(pkg.name) + (where ? colors.gray(` (${where})`) : ''));
-    const sizes = pkg.versionScheme.bumpNames;
-
-    for (const size of [...sizes, undefined]) {
-      const group = updated.filter(e => e.package === pkg && (size ? e.bump === size : !sizes.includes(e.bump!)));
-      if (!group.length) continue;
-      const paint = sizeColor(size, sizes);
-      console.log(`  ${paint(size ?? 'other')}`);
-      for (const e of group) console.log(row(e, `→  ${paint(e.target ?? '')}`));
-    }
-
-    const left = behind.filter(e => e.package === pkg);
-    if (!left.length) continue;
-    console.log(`  ${colors.yellow('not updated')}`);
-    const newest = (e: DependencyUpdater.Entry) => (e.status === 'error' ? 'error' : (e.available ?? e.latest ?? ''));
-    const width = Math.max(...left.map(e => newest(e).length));
-    for (const e of left) {
-      const paint = e.status === 'error' ? colors.red : (text: string) => text;
-      console.log(row(e, `${paint(newest(e).padEnd(width))}  ${colors.gray(e.reason ?? '')}`));
+    console.log(colors.gray(line([...header, 'Note']).trimEnd()));
+    for (const e of rows) {
+      const paint = e.status === 'update' ? sizeColor(e.bump, sizes) : changeColor(e.status);
+      const values = cells(e);
+      if (e.reason) values[4] = values[4]!.padEnd(widths[4]!);
+      const text = line(values, (v, column) => (column === 2 || column === 4 ? paint(v) : v));
+      console.log(e.reason ? `${text}  ${colors.gray(e.reason)}` : text);
     }
   }
+}
+
+/** What the `Change` column says: the size of the move, or why there is none. */
+function changeOf(e: DependencyUpdater.Entry): string {
+  return e.status === 'update' ? (e.bump ?? 'other') : e.status;
+}
+
+/** `held` and `skipped` in yellow, an error in red - a row with no move to colour by size. */
+function changeColor(status: DependencyUpdater.Entry['status']): (text: string) => string {
+  return status === 'error' ? colors.red : colors.yellow;
 }
 
 /** The colours `npm-check-updates` uses - the largest size red, the next cyan, the rest green - read
