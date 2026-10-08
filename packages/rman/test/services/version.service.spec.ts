@@ -297,7 +297,37 @@ describe('services/version', () => {
 
       const repo = await createRepository(dir);
       const plan = await planner().getPlan(repo, { preid: 'rc' });
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.2-rc.0' });
+      /** `1.0.1` already holds a fix, so the version stays and only the identifier changes - the
+       *  way `beta` follows `alpha`. It was `1.0.2-rc.0`, which skipped a version nobody released. */
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1-rc.0' });
+    });
+
+    /**
+     * **`alpha` -> `beta` -> release, the order a release channel takes.** Measured with the release
+     * workflow's own branches: switching identifier used to bump again, so `2.19.0-alpha.1` became
+     * `2.19.1-beta.0` and the release that followed `2.19.1`, with no `2.19.0` ever published.
+     */
+    it('keeps the version when the identifier changes, unless the change needs a bigger one', async () => {
+      async function planFrom(version: string, commit: string, preid: string): Promise<string | undefined> {
+        const dir = tmp();
+        writeJson(dir, 'package.json', { name: 'pkg-a', version });
+        initGit(dir);
+        commitAll(dir, 'init');
+        git(dir, 'tag', `v${version}`);
+        fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
+        commitAll(dir, commit);
+        const repo = await createRepository(dir);
+        return entryFor(await planner().getPlan(repo, { preid }), 'pkg-a').to;
+      }
+
+      expect(await planFrom('2.19.0-alpha.1', 'fix: a bug', 'beta')).toBe('2.19.0-beta.0');
+      expect(await planFrom('2.19.0-alpha.1', 'feat: a feature', 'beta')).toBe('2.19.0-beta.0');
+      /** `2.19.0` is a minor's target, not a major's. */
+      expect(await planFrom('2.19.0-alpha.1', 'feat!: a break', 'beta')).toBe('3.0.0-beta.0');
+      /** `2.19.1` holds a fix and nothing more. */
+      expect(await planFrom('2.19.1-alpha.0', 'feat: a feature', 'beta')).toBe('2.20.0-beta.0');
+      /** The same identifier still only counts - a permanent line such as `-rev.N` depends on it. */
+      expect(await planFrom('2.19.0-beta.0', 'feat!: a break', 'beta')).toBe('2.19.0-beta.1');
     });
 
     it('has no effect when bump is an explicit semver version', async () => {

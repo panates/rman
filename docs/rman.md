@@ -1997,7 +1997,7 @@ await app.getService('version').applyPlan(plan);
 plan = await VersionPlanService.getPlanner(app).getPlan(repository, { bump: 'minor', preid: 'beta' });
 await app.getService('version').applyPlan(plan);
 
-// Switching the identifier starts a fresh prerelease line instead of incrementing:
+// Switching the identifier keeps the version when it already holds the change, and restarts the counter:
 plan = await VersionPlanService.getPlanner(app).getPlan(repository, { preid: 'rc' }); // -> 1.3.0-rc.0
 ```
 

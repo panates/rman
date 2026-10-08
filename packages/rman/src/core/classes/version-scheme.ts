@@ -180,8 +180,17 @@ export class SemverScheme extends VersionScheme {
      */
     const existing = semver.prerelease(current);
     const sameLine = existing && String(existing[0]) === preid;
-    const preType = sameLine ? 'prerelease' : (`pre${releaseType}` as semver.ReleaseType);
-    return semver.inc(current, preType, preid) ?? current;
+    if (sameLine) return semver.inc(current, 'prerelease', preid) ?? current;
+    /**
+     * **A prerelease moving to another identifier keeps its version when that version already
+     * holds the change** - `2.19.0-alpha.1` -> `2.19.0-beta.0` for a fix or a feature, since
+     * `2.19.0` is a minor's target already. It moves on only when the change needs more than the
+     * target gives: a breaking change on `2.19.0-alpha.1` is `3.0.0-beta.0`.
+     */
+    if (existing && this.coversBump(current, bump)) {
+      return `${semver.major(current)}.${semver.minor(current)}.${semver.patch(current)}-${preid}.0`;
+    }
+    return semver.inc(current, `pre${releaseType}` as semver.ReleaseType, preid) ?? current;
   }
 
   isPrerelease(version: string): boolean {
@@ -198,6 +207,21 @@ export class SemverScheme extends VersionScheme {
   prereleaseId(version: string): string | undefined {
     const first = semver.prerelease(version)?.[0];
     return typeof first === 'string' ? first : undefined;
+  }
+
+  /**
+   * Whether the release a prerelease of `version` leads to already holds a change of size `bump` -
+   * `X.Y.0` a minor, `X.0.0` a major, and anything a patch. The rule `semver.inc` itself applies:
+   * `minor` on `2.19.0-alpha.1` is `2.19.0`, not `2.20.0`.
+   */
+  /* **Only consulted when the identifier changes.** On the same identifier the counter advances
+   * whatever the size - a permanent `-rev.N` line (`version.preid: rev`) counts revisions of one
+   * upstream version, so a feature there is `rev.9`, not a new base. That is a statement about the
+   * line, and changing it would move `panates/browsery` off the version it wraps. */
+  protected coversBump(version: string, bump: string): boolean {
+    if (bump === 'major') return semver.minor(version) === 0 && semver.patch(version) === 0;
+    if (bump === 'minor') return semver.patch(version) === 0;
+    return true;
   }
 }
 

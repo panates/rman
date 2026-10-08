@@ -94,7 +94,8 @@ const config = {
     describe:
       'Make the bump a prerelease with this identifier (e.g. "beta" -> 1.2.3-beta.0). ' +
       'Running again with the same --preid increments it (-> 1.2.3-beta.1); a different ' +
-      'identifier starts a fresh prerelease line. Ignored when bump is an explicit version. ' +
+      'identifier keeps the version when it already holds the change (2.19.0-alpha.1 -> ' +
+      '2.19.0-beta.0). Ignored when bump is an explicit version. ' +
       'Default: .rmanrc "version.preid", which every member of a group has to agree on.',
     type: 'string',
   },
