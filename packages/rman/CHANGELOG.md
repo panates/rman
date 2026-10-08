@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 4fac239be7b7f1cbfa7db75caecb19461b50fa37 -->
+<!-- rman:documented-up-to dcbc73c15bf843e12f1e264324350b9e92e5db45 -->
+
+## v2.18.2 (2026-10-08)
+
+### 🐛 Bug Fixes
+
+- **config:** an empty key keeps what it inherited instead of erasing it (dcbc73c)
+
+---
 
 ## v2.18.1 (2026-10-08)
 
