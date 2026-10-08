@@ -387,14 +387,39 @@ export class NodeDependencyUpdater implements DependencyUpdater {
     if (!version || semver.satisfies(version, range, { includePrerelease: true })) return false;
     if (about.index >= 0) {
       const fits = about.candidates.findIndex((v, i) => i > about.index && semver.satisfies(v, range));
-      this.stepTo(about, fits, rule);
-      return true;
+      if (fits >= 0) {
+        this.stepTo(about, fits, rule);
+        return true;
+      }
+      const declared = this.resolvedDeclared(about);
+      if (declared && semver.satisfies(declared, range, { includePrerelease: true })) {
+        this.stepTo(about, -1, rule);
+        return true;
+      }
+      /* Nothing `about` may move to keeps the rule - so stepping it down gains nothing, and since a
+       * decision only ever steps down it would never come back up once the side stating the rule
+       * had given way. Measured on `abisena/syncbridge-iomt`: `@syncbridge/builtins@0.14.13` needs
+       * `@syncbridge/common ^0.14.0`, which `deps.target: minor` leaves out (a 0.x minor is a
+       * major), and `common`'s own `0.13.9` was dropped for it - then `builtins` stepped back too,
+       * and both read "not updated" with a reason pointing at a move that never happened. */
     }
     if (stating && stating.index >= 0) {
-      this.stepTo(stating, stating.index + 1 < stating.candidates.length ? stating.index + 1 : -1, rule);
+      this.stepTo(
+        stating,
+        stating.index + 1 < stating.candidates.length ? stating.index + 1 : -1,
+        this.explain(rule, about, range),
+      );
       return true;
     }
     return false;
+  }
+
+  /** `rule`, plus why `about` cannot meet it when the version that would is one its own settings
+   *  leave out - `0.14.0: major - deps.target is "minor"`. */
+  protected explain(rule: string, about: NodeDependencyUpdater.Decision, range: string): string {
+    const newest = about.available;
+    if (!newest || !about.skipReason || !semver.satisfies(newest, range, { includePrerelease: true })) return rule;
+    return `${rule} (${about.name}@${newest}: ${about.skipReason})`;
   }
 
   /** Moves `d` down to `index` (`-1` keeps what is declared), remembering why it left its newest. */
@@ -406,7 +431,12 @@ export class NodeDependencyUpdater implements DependencyUpdater {
   /** The version `d` resolves to: the one it moves to, or else the newest release its declarations
    *  already allow, which is what an install picks. */
   protected effective(d: NodeDependencyUpdater.Decision): string | undefined {
-    if (d.index >= 0) return d.candidates[d.index];
+    return d.index >= 0 ? d.candidates[d.index] : this.resolvedDeclared(d);
+  }
+
+  /** The newest release `d`'s declarations already allow - what an install picks if `d` does not
+   *  move. */
+  protected resolvedDeclared(d: NodeDependencyUpdater.Decision): string | undefined {
     if (!d.releases?.size) return undefined;
     const ranges = [...d.fields.values()].filter(r => semver.validRange(r));
     if (!ranges.length) return undefined;

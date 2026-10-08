@@ -224,6 +224,34 @@ describe('plugins/node/NodeDependencyUpdater', () => {
     });
   });
 
+  /**
+   * **A rule the other side cannot meet holds back the side stating it, and only that side.**
+   * Measured on `abisena/syncbridge-iomt`: `builtins@0.14.13` needs `common ^0.14.0`, which
+   * `target: minor` leaves out (a 0.x minor is a major). `common`'s own `0.13.9` was dropped for it,
+   * then `builtins` stepped back as well, and both read "not updated" - with `common` blamed on a
+   * move that never happened.
+   */
+  it('moves the side a rule is about as far as it may, and holds back the side whose rule it cannot meet', async () => {
+    const dir = single({ dependencies: { common: '^0.13.7', builtins: '^0.14.12' } });
+    const updater = new FakeRegistryUpdater({
+      common: { releases: releases('0.13.7', '0.13.9', '0.14.0') },
+      builtins: {
+        releases: releases(
+          { version: '0.14.12', peerDependencies: { common: '^0.13.0' } },
+          { version: '0.14.13', peerDependencies: { common: '^0.14.0' } },
+        ),
+      },
+    });
+    const { entries } = await plan(dir, updater);
+
+    expect(entry(entries, 'common')).toMatchObject({ status: 'update', target: '^0.13.9', available: '0.14.0' });
+    const builtins = entry(entries, 'builtins');
+    expect(builtins).toMatchObject({ status: 'held', latest: '0.14.13' });
+    expect(builtins.reason).toBe(
+      '0.14.13 refused: builtins@0.14.13 needs common ^0.14.0 (common@0.14.0: major - deps.target is "minor")',
+    );
+  });
+
   /** Under `target: major`, so a rule is what holds a version back and not the size of the move. */
   describe('rules another declaration states', () => {
     it("holds a version back that another dependency's peer range refuses, and names the rule", async () => {
