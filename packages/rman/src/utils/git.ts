@@ -252,7 +252,7 @@ export class GitHelper {
       ({ stdout } = await execFileAsync(
         'git',
         ['log', '--follow', '--format=%x00%H', '--name-status', '--', path.relative(this.cwd, file)],
-        { cwd: this.cwd, maxBuffer: 64 * 1024 * 1024 },
+        { cwd: this.cwd },
       ));
     } catch {
       return [];
@@ -284,7 +284,6 @@ export class GitHelper {
     if (!renames) {
       renames = execFileAsync('git', ['show', '-M', '--name-status', '--format=', sha], {
         cwd: this.cwd,
-        maxBuffer: 64 * 1024 * 1024,
       }).then(
         ({ stdout }) =>
           stdout
@@ -300,7 +299,6 @@ export class GitHelper {
     try {
       const { stdout } = await execFileAsync('git', ['ls-tree', '-r', '--name-only', `${sha}^`, '--', `${fromDir}/`], {
         cwd: this.cwd,
-        maxBuffer: 64 * 1024 * 1024,
       });
       held = stdout.split(/\r?\n/).filter(Boolean);
     } catch {
@@ -459,7 +457,7 @@ export class GitHelper {
     const args = ['diff', hash];
     if (pathspec) args.push('--', pathspec);
     try {
-      const { stdout } = await execFileAsync('git', args, { cwd: this.cwd, maxBuffer: 64 * 1024 * 1024 });
+      const { stdout } = await execFileAsync('git', args, { cwd: this.cwd });
       return stdout;
     } catch (e: any) {
       throw new Error(`Unable to diff since "${hash}": ${e.message}`, { cause: e });
@@ -473,7 +471,6 @@ export class GitHelper {
     try {
       const { stdout } = await execFileAsync('git', ['format-patch', '--root', '-o', outputDir, 'HEAD'], {
         cwd: this.cwd,
-        maxBuffer: 64 * 1024 * 1024,
       });
       return stdout.trim() ? stdout.trim().split(/\r?\n/) : [];
     } catch (e: any) {
@@ -487,7 +484,7 @@ export class GitHelper {
   async applyPatches(patchFiles: string[]): Promise<void> {
     if (!patchFiles.length) return;
     try {
-      await execFileAsync('git', ['am', '--3way', ...patchFiles], { cwd: this.cwd, maxBuffer: 64 * 1024 * 1024 });
+      await execFileAsync('git', ['am', '--3way', ...patchFiles], { cwd: this.cwd });
     } catch (e: any) {
       throw new Error(`Unable to apply patches: ${e.message}`, { cause: e });
     }
@@ -500,4 +497,15 @@ export namespace GitHelper {
   export type CommitProgress = (done: number, total: number) => void;
 }
 
-const execFileAsync = promisify(execFile);
+/* **One buffer for every git call, not one per call site.** Node's `execFile` defaults `maxBuffer`
+ * to 1 MiB and fails the call past it, and how much git prints depends on the repository, not on
+ * the command. Opting in call by call left the `git show --name-only` behind `listCommittedFiles`
+ * and `listCommits` on the default, so one vendored-library commit in `panates/formwave` - 28k
+ * files, 2.9 MB of names - failed `rman list` with "stdout maxBuffer length exceeded". */
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
+const execFileP = promisify(execFile);
+
+function execFileAsync(file: string, args: readonly string[], options: { cwd: string }) {
+  return execFileP(file, args, { maxBuffer: GIT_MAX_BUFFER, ...options });
+}

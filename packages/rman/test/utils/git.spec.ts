@@ -111,6 +111,17 @@ describe('utils/GitHelper', () => {
       const git = new GitHelper({ cwd: dir });
       expect(await git.listCommittedFiles()).toEqual(['b.txt']);
     });
+
+    it('lists an unpushed commit whose file list is larger than execFile’s 1 MiB default buffer', async () => {
+      // Regression test: the per-commit `git show --name-only` ran with Node's default `maxBuffer`,
+      // so one vendored-library commit (2.9 MB of names, ~28k files, in panates/formwave) failed
+      // `rman list` outright with "stdout maxBuffer length exceeded".
+      const { dir, run } = repoWithUpstream(tmp(), tmp());
+      const names = commitManyFiles(run, LARGE_FILE_COUNT);
+
+      const git = new GitHelper({ cwd: dir });
+      expect(await git.listCommittedFiles()).toEqual(names);
+    });
   });
 
   describe('listChangedSince()', () => {
@@ -230,6 +241,17 @@ describe('utils/GitHelper', () => {
       expect(commits[0].subject).toBe('feat: a feature');
       expect(commits[0].body).toContain('Some explanation.');
       expect(commits[0].body).toContain('Release-As: patch');
+    });
+
+    it('reads a commit whose file list is larger than execFile’s 1 MiB default buffer', async () => {
+      const { dir, run } = repoWithUpstream(tmp(), tmp());
+      const baseHash = run('rev-parse', 'HEAD').toString().trim();
+      const names = commitManyFiles(run, LARGE_FILE_COUNT);
+
+      const git = new GitHelper({ cwd: dir });
+      const commits = await git.listCommits({ hash: baseHash });
+      expect(commits).toHaveLength(1);
+      expect(commits[0].files).toEqual(names.map(n => path.join(dir, n)));
     });
 
     it('throws a clear error for an invalid hash instead of silently returning []', async () => {
@@ -391,3 +413,41 @@ describe('utils/GitHelper', () => {
     });
   });
 });
+
+/** Enough ~200-byte paths to put `git show --name-only` past Node's 1 MiB `execFile` default. */
+const LARGE_FILE_COUNT = 6000;
+
+/** A repository with one commit already pushed to a bare `origin`, so `git cherry` has an
+ *  upstream to compare against. */
+function repoWithUpstream(dir: string, originDir: string) {
+  fs.rmSync(originDir, { recursive: true, force: true });
+  execFileSync('git', ['init', '-q', '--bare', originDir]);
+  const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+  run('init', '-q');
+  run('config', 'user.email', 't@t.com');
+  run('config', 'user.name', 't');
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'v1');
+  run('add', '-A');
+  run('commit', '-q', '-m', 'init');
+  run('remote', 'add', 'origin', originDir);
+  run('branch', '-M', 'main');
+  run('push', '-u', 'origin', 'main', '-q');
+  return { dir, run };
+}
+
+/** Commits `count` files in one commit, straight into the index from a single blob - writing them
+ *  to disk would be most of the test's time. Returns their paths in git's (sorted) order. */
+function commitManyFiles(run: (...args: string[]) => Buffer, count: number): string[] {
+  const cwd = run('rev-parse', '--show-toplevel').toString().trim();
+  const blob = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd, input: 'x' }).toString().trim();
+  const names = Array.from(
+    { length: count },
+    (_, i) => `vendored/${String(i).padStart(5, '0')}-${'x'.repeat(180)}.txt`,
+  );
+  execFileSync('git', ['update-index', '--index-info'], {
+    cwd,
+    input: names.map(n => `100644 ${blob}\t${n}`).join('\n') + '\n',
+  });
+  run('commit', '-q', '-m', 'chore: vendor a library');
+  return names;
+}
