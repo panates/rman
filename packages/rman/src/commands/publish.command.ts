@@ -4,7 +4,7 @@ import colors from 'ansi-colors';
 import type { DockerPublishOptions } from '../builtins/publish-targets/docker/docker.target.js';
 import type { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/classes/package.js';
-import { type PublishTarget, unknownTargets } from '../core/interfaces/publish-target.js';
+import { type PublishTarget, shipsTo, unknownTargets } from '../core/interfaces/publish-target.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
@@ -159,7 +159,17 @@ const publishCommand = registerCommand(app => {
       assertDeclaredTargetsExist(app, repository.getPackages());
 
       const plans = new Map<PublishTarget, PublishTarget.Entry[]>();
-      for (const target of selected) plans.set(target, await target.getPlan(ctx));
+      /** A target's plan keeps only the packages that ship to it, whatever the target itself
+       *  filtered - see `shipsTo`. Asked here, once for every target, because leaving it to each
+       *  one let them disagree: the npm target never asked, so a package declaring
+       *  `publish.target: ['docker']` was planned for npm too while `rman list` and the docker
+       *  target called it docker-only (panates/rman#40). */
+      for (const target of selected) {
+        plans.set(
+          target,
+          (await target.getPlan(ctx)).filter(entry => shipsTo(entry.package, target)),
+        );
+      }
 
       if (args.json) {
         console.log(JSON.stringify(jsonPlan(plans), undefined, 2));

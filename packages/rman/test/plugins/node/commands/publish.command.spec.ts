@@ -383,16 +383,20 @@ describe('commands/publish', () => {
       });
     });
 
+    /** Not a `private` skip any more - the package is out of npm's plan altogether, so asking for
+     *  npm by name is the same mistake as asking for docker above (panates/rman#40). */
     it('--target npm never considers a package configured only for "docker"', async () => {
       const dir = tmp();
-      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0', private: true });
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
       /** An `.rmanrc`, not `package.json`'s own `"rman"` key: a directory may declare **one**
        *  config, and this fixture's `runCli` writes an `.rmanrc` to declare the preset. */
       writeJson(dir, '.rmanrc', { publish: { target: ['docker'], docker: { image: 'org/pkg-a' } } });
 
       await withStubbedNpm(dir, async logFile => {
-        const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--target', 'npm', '--yes'] }));
-        expect(lines.some(l => l.includes('Nothing to publish.'))).toBe(true);
+        const lines = await captureLogs(() =>
+          expectCliFailure(() => runCli({ cwd: dir, argv: ['publish', '--target', 'npm', '--yes'] })),
+        );
+        expect(lines.some(l => l.includes('--target npm') && l.includes('no package ships there'))).toBe(true);
         expect(fs.existsSync(logFile)).toBe(false);
       });
     });

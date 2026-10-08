@@ -138,6 +138,8 @@ export namespace PublishService {
     /** A package with uncommitted local changes is excluded (status `'skip'`) instead of aborting
      *  the whole plan (status `'error'`) - same as `version`'s own option. Default false. */
     ignoreDirty?: boolean;
+    /** Which packages are the npm target's (`shipsTo`) - every one the filters keep when omitted. */
+    shipsHere?: (pkg: Package) => boolean;
     /** Registry to check against (and, in `applyPlan`, publish to) - `.npmrc`'s own configured
      *  registry is used when omitted. */
     registry?: string;
@@ -294,7 +296,9 @@ export namespace PublishService {
 
   export async function getPlan(repository: Repository, options: Options = {}, deps: Deps = {}): Promise<Entry[]> {
     const git = new GitHelper({ cwd: repository.dirname });
-    const packages = filterPackages(repository.getPackages({ toposort: true }), options);
+    const packages = filterPackages(repository.getPackages({ toposort: true }), options).filter(
+      pkg => options.shipsHere?.(pkg) ?? true,
+    );
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
     const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
 

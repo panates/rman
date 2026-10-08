@@ -1,5 +1,5 @@
 import type { Package } from '../../../core/classes/package.js';
-import type { PublishTarget } from '../../../core/interfaces/publish-target.js';
+import { type PublishTarget, shipsTo } from '../../../core/interfaces/publish-target.js';
 import { CiService } from '../../platforms/node/services/ci.service.js';
 import { PublishService } from '../../platforms/node/services/publish.service.js';
 
@@ -121,6 +121,9 @@ export class NpmPublishTarget implements PublishTarget {
   protected planOptions(ctx: PublishTarget.Context): PublishService.Options {
     return {
       ...ctx.options,
+      /** `publish` drops the rest from the plan anyway; asked here too so a docker-only package
+       *  costs no `npm view`. */
+      shipsHere: pkg => shipsTo(pkg, this),
       registry: ctx.args.registry as string | undefined,
       userconfig: ctx.args.userconfig as string | undefined,
       /** Read at *plan* time too, not only where the publish command is built: the plan is what

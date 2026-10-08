@@ -123,6 +123,29 @@ const fixtureTarget = fakeTarget('fixture', { claims: true });
  *  makes "declared beats claimed" testable without a real registry on either side. */
 const optInTarget = fakeTarget('optin', { claims: false });
 
+/** Plans every package it is shown, asking nothing about where each one ships - the shape the npm
+ *  target had, which the command has to correct for. */
+const carelessTarget: PublishTarget = {
+  ...fakeTarget('careless', { claims: true }),
+  async getPlan(ctx) {
+    const packages = filterPackages(ctx.repository.getPackages(), ctx.options);
+    calls.push({
+      target: 'careless',
+      method: 'getPlan',
+      packages: packages.map(p => p.name),
+      options: ctx.options,
+      args: ctx.args,
+    });
+    return packages.map(pkg => ({
+      package: pkg,
+      version: pkg.version,
+      status: 'publish' as const,
+      detail: `careless:${pkg.name}`,
+      reason: 'never published',
+    }));
+  },
+};
+
 /**
  * `publish` is the **core's** command, and every case here is about the seam that made that
  * possible rather than about any one registry.
@@ -267,6 +290,21 @@ describe('commands/publish', () => {
       /** `fixture` claims every `'test'` package, and is still passed over: an explicit
        *  `publish.target` is the whole answer, not one input to it. */
       expect(callsTo('fixture')[0]?.packages).toEqual([]);
+    });
+
+    /** The command drops it, whatever the target returned - the npm target never asked
+     *  `shipsTo`, and planned a docker-only package for npm (panates/rman#40). */
+    describe('a target that plans every package it is shown', () => {
+      useTarget(carelessTarget);
+
+      it('still leaves out a package declaring another target, and never publishes it there', async () => {
+        const dir = fixtureRepo({ target: ['optin'] });
+        const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes'] }));
+        expect(callsTo('careless')[0]?.packages).toEqual(['pkg-a']);
+        expect(callsTo('careless').flatMap(c => (c.method === 'applyPlan' ? c.packages : []))).toEqual([]);
+        expect(lines.some(l => l.includes('careless:pkg-a'))).toBe(false);
+        expect(callsTo('optin').find(c => c.method === 'applyPlan')?.packages).toEqual(['pkg-a']);
+      });
     });
 
     it('list --json reports the same answer publish would - never a guess at ["npm"]', async () => {

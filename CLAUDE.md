@@ -2021,6 +2021,12 @@ saw one thing to release and it was the one thing that must never be published.
 - **Which packages a target is asked about is `shipsTo`/`targetsOf`, never a second read of
   `publish.target`.** `DockerPublishService` and `ListService` both go through it, so `publish` and
   `rman list --json` cannot disagree about where a package ships.
+- **`publish` drops from each target's plan every package that does not ship to it** (`shipsTo`,
+  applied to whatever `getPlan` returned). It was left to each target and the npm one never asked,
+  so a package declaring `publish.target: ['docker']` was planned for npm while `rman list` called
+  it docker-only (panates/rman#40). The npm target still filters early (`shipsHere`) so such a
+  package costs no `npm view`; the command's filter is the guarantee. `--target npm` with nothing
+  shipping there is now the same error `--target docker` already was.
 - **`PublishTarget.skipReason` is what `rman list` leaves a target out by**, `-` when none is left
   (`skipReasonFor`, which asks `publish.skip` first). It was grey first and the user changed it: a
   grey name still reads as a destination. An inventory must not ask the registry, so the rule is
