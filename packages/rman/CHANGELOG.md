@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 39676637a03e40c966b0205dd74178321b69b45c -->
+<!-- rman:documented-up-to 27496e443447c525d6977ae91163a9ef63f40f62 -->
+
+## v2.17.0 (2026-10-08)
+
+### ✨ Features
+
+- **node:** copyAssets - the files tsc does not emit, copied into its outDir (27496e4)
+
+---
 
 ## v2.16.0 (2026-10-07)
 
