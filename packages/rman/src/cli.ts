@@ -28,6 +28,7 @@ import {
 import { checkCustomCommand } from './core/plugin-loader.js';
 import { commandRegistry, type RmanConfig } from './interfaces/rman-config.interface.js';
 import { colorYaml } from './utils/color-yaml.js';
+import { askEnterOrEsc } from './utils/key-prompt.js';
 import { filterPackages, readFromRootOption, readPackageFilterOptions } from './utils/package-filter.js';
 import { printableConfig, withoutContributions } from './utils/printable-config.js';
 import { runBin } from './utils/run-bin.js';
@@ -60,7 +61,13 @@ export async function runCli(options?: {
     /** One application per run, made here so `--log-level` reaches its logger, and handed to
      *  `Repository.create` rather than found through a global. */
     const app = options?.app ?? new RmanApplication();
-    const repository = await Repository.create(options?.cwd, { app, presets: options?.presets });
+    const missingPresets: MissingPreset[] = [];
+    const repository = await Repository.create(options?.cwd, {
+      app,
+      presets: options?.presets,
+      onMissingExtends: (target, from) => missingPresets.push({ target, from }),
+    });
+    if (missingPresets.length) await confirmMissingPresets(missingPresets, _argv);
 
     const program = yargs(_argv)
       .scriptName('rman')
@@ -90,6 +97,14 @@ export async function runCli(options?: {
         describe:
           'Write the log as JSON Lines - one event per line on stdout, and no panel, spinner or prose. ' +
           'A command that prints a result (list, version, publish, ...) prints that result as JSON',
+        type: 'boolean',
+      })
+      /** **Global**, like `--json`: a command that asks for confirmation declares its own `--yes`
+       *  with the same meaning, and this one also answers the question asked before any command
+       *  runs - whether to go on without a preset that cannot be found. */
+      .option('yes', {
+        alias: 'y',
+        describe: 'Answer yes to every question - including going on without an "extends" preset that cannot be found',
         type: 'boolean',
       })
       .option('log-file', {
@@ -686,6 +701,59 @@ function commandContext(repository: Repository, app: RmanApplication, args: Argu
     forEachPackage: (packages, fn, options) => run.forEachPackage(packages, fn, { logLevel, ...options }),
     parallel: (tasks, options) => run.parallel(tasks, options ?? {}),
   };
+}
+
+/** An `extends` package the repository's config names and that could not be found. */
+interface MissingPreset {
+  target: string;
+  /** The config file that named it. */
+  from: string;
+}
+
+/**
+ * Warns about the `extends` presets that could not be found - their settings are left out - and
+ * asks whether to go on: **Enter** continues, **Esc** cancels. `--yes` goes on without asking; with
+ * no terminal to ask on, it is an error that says to pass `--yes`.
+ *
+ * `--help` is never held up: it is what someone reaches for in exactly this situation.
+ */
+/* **It was an error outright**, and the case that made that wrong is a repository whose
+ * `node_modules` is not installed yet: its shared preset is nowhere to be found, so `rman ci` - the
+ * command that would install it - could not start. Without a terminal there is nobody to ask, and a
+ * release in CI quietly built without its preset is the worse outcome, so the error stays there
+ * unless `--yes` says otherwise. */
+async function confirmMissingPresets(missing: MissingPreset[], argv: string[]): Promise<void> {
+  if (!argv.length || argv.some(arg => arg === '-h' || arg === '--help')) return;
+  const byTarget = new Map<string, string[]>();
+  for (const { target, from } of missing) {
+    const where = path.relative(process.cwd(), from) || from;
+    byTarget.set(target, [...new Set([...(byTarget.get(target) ?? []), where])]);
+  }
+  const width = Math.max(...[...byTarget.keys()].map(t => t.length));
+  console.error(colors.yellow('These presets could not be found, so their settings are left out:'));
+  for (const [target, files] of byTarget) {
+    console.error(`  ${colors.cyan(target.padEnd(width))}  ${colors.gray(`extends in ${files.join(', ')}`)}`);
+  }
+  console.error(colors.gray('Are they installed? "rman ci" installs the repository\'s dependencies.'));
+
+  if (argv.some(arg => arg === '--yes' || arg === '-y')) {
+    console.error(colors.gray('Continuing without them (--yes).'));
+    return;
+  }
+  if (!process.stdin.isTTY) {
+    throw logged('No terminal to ask on - pass --yes to continue without them.');
+  }
+  if (!(await askEnterOrEsc(colors.yellow('Press Enter to continue without them, Esc to cancel. ')))) {
+    throw logged('Cancelled.');
+  }
+}
+
+/** The `logged` convention: printed here, so the caller's catch does not print it a second time. */
+function logged(message: string): Error {
+  console.error(colors.red(message));
+  const err: any = new Error(message);
+  err.logged = true;
+  return err;
 }
 
 /**

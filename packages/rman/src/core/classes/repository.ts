@@ -13,6 +13,7 @@ import { RmanApplication } from '../application.js';
 import { ConfigFileScope } from '../config/config-file-scope.js';
 import { ConfigInterpolator } from '../config/config-interpolator.js';
 import { DEFERRED_PATHS } from '../config/config-paths.js';
+import { ConfigReader } from '../config/config-reader.js';
 import { Manifest } from '../interfaces/manifest.js';
 import type { Platform } from '../interfaces/plugin.js';
 import type { PublishTarget } from '../interfaces/publish-target.js';
@@ -604,7 +605,14 @@ export class Repository extends Package {
    * passes `[]`. */
   static async create(
     root?: string,
-    options?: { deep?: number; app?: RmanApplication; presets?: readonly string[] },
+    options?: {
+      deep?: number;
+      app?: RmanApplication;
+      presets?: readonly string[];
+      /** See `ConfigReader`'s constructor: an `extends` package that cannot be found is reported
+       *  here and left out, rather than failing the read. */
+      onMissingExtends?: (target: string, from: string) => void;
+    },
   ): Promise<Repository> {
     const from = root || process.cwd();
     const rootDir = Workspace.findRoot(from, options?.deep ?? 10);
@@ -623,6 +631,7 @@ export class Repository extends Package {
       deep: options?.deep,
       platforms: [...app.platforms],
       presets: options?.presets,
+      reader: options?.onMissingExtends ? new ConfigReader({ onMissingExtends: options.onMissingExtends }) : undefined,
     });
 
     /** What the configs named, onto the application the commands read from. */

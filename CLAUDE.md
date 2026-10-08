@@ -508,6 +508,16 @@ the gap below about a `.cjs` base loading differently from a `.cjs` config.
     either direction - a shared config aiming at the root alone writes `"[/]"`, and one aiming at
     the packages writes `"[*]"`. (This bullet said the opposite until the selector redesign, and was
     measured wrong: a base declaring `group` unmarked resolves onto the root **and** `pkg-a`.)
+- **A bare `extends` package that cannot be found is a warning and a question, not a refusal**
+  (`ConfigReader`'s `onMissingExtends`, `cli.ts`'s `confirmMissingPresets`). The case: a repository
+  whose `node_modules` is not installed has its shared preset nowhere, and refusing to start left
+  `rman ci` - the command that installs it - unable to run. The CLI lists them, leaves their
+  settings out and asks (Enter goes on, Esc cancels); `--yes` (now a **global** option, beside the
+  per-command ones of the same name) goes on; with no terminal it stays an error, since a release in
+  CI quietly built without its preset is worse. A relative path still throws (the repository's own
+  file, so a typo), and so does a library caller that passes no callback. `--help` never stops.
+  - **A spec must not leave `process.stdin.isTTY` true** when it reaches this: mocha run from a
+    terminal has one, and the run would wait on a key. `cli.spec.ts` sets it false for its cases.
 - **There is no `+key`, and there was.** It appended instead of replacing; `value` says the same
   thing and says it better - it composes (three layers each deriving from the one below), it can
   reorder or filter rather than only append, and it needs no machinery keeping an append

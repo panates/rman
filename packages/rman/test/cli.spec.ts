@@ -683,3 +683,51 @@ describe('cli: --version and --help without a working repository', () => {
     }
   });
 });
+
+/**
+ * **A preset that cannot be found is a warning and a question, not a refusal to start.** A
+ * repository whose `node_modules` is not installed has its shared preset nowhere, and refusing left
+ * `rman ci` - the command that installs it - unable to run. With no terminal there is nobody to ask,
+ * so there it stays an error unless `--yes` says otherwise.
+ */
+describe('cli: an extends preset that cannot be found', () => {
+  useTestEcosystem();
+
+  /** The specs never wait on a key: a terminal running mocha would otherwise be one. */
+  const tty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+  beforeEach(() => Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true }));
+  afterEach(() => {
+    if (tty) Object.defineProperty(process.stdin, 'isTTY', tty);
+    else delete (process.stdin as { isTTY?: boolean }).isTTY;
+  });
+
+  function repo(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-cli-missing-preset-'));
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'solo', version: '1.0.0' }));
+    fs.writeFileSync(path.join(dir, '.rmanrc.yml'), "extends: '@nope/missing-preset'\n");
+    return dir;
+  }
+
+  it('names the preset and goes on under --yes', async () => {
+    const dir = repo();
+    let lines: string[] = [];
+    const stderr = await captureStderr(async () => {
+      lines = await captureLogs(() => runCli({ cwd: dir, argv: ['info', '--json', '--yes'] }));
+    });
+    expect(stderr).toContain('@nope/missing-preset');
+    expect(stderr).toContain('Continuing without them (--yes).');
+    expect(JSON.parse(lines.join('\n')).repository.name).toBe('solo');
+  });
+
+  it('stops with no terminal to ask on, saying to pass --yes', async () => {
+    const dir = repo();
+    let error: Error | undefined;
+    const stderr = await captureStderr(() =>
+      runCli({ cwd: dir, argv: ['info'] }).catch((e: Error) => {
+        error = e;
+      }),
+    );
+    expect(error?.message).toContain('pass --yes');
+    expect(stderr).toContain('These presets could not be found');
+  });
+});

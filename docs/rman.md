@@ -885,6 +885,23 @@ the base they sit on, and the directory chain then layers on top exactly as befo
 **top level only**: naming one inside a `"[selector]"` block is an error rather than a no-op, since
 inheritance is a statement about the config and not about the packages a selector names.
 
+**A preset that cannot be found is a warning and a question, on the command line.** A bare name or
+an `rman:` preset that does not resolve - typically a repository whose `node_modules` is not
+installed yet - is listed, its settings are left out, and rman asks before going on:
+
+```
+These presets could not be found, so their settings are left out:
+  @panates/rman-preset  extends in .rmanrc.yml
+Are they installed? "rman ci" installs the repository's dependencies.
+Press Enter to continue without them, Esc to cancel.
+```
+
+`--yes` goes on without asking. With no terminal to ask on (CI), it is an error saying to pass
+`--yes` - a release quietly built without its preset is the worse outcome. `--help` never stops for
+it. A **relative path** that does not exist is still an error: it is the repository's own file, and
+missing it is a typo. A programmatic caller gets the error too, unless it passes
+`Repository.create(dir, { onMissingExtends })`.
+
 An inherited **unmarked** key behaves exactly as one written in the inheriting file: it reaches that
 directory and every package below it. That makes a base *portable* rather than fixed - the same file
 inherited by the root is the repository's baseline, and inherited by a package's own `.rmanrc` is

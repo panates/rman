@@ -274,6 +274,7 @@ These apply to every command, before the command name:
 | `--log-level <level>` | - | Default verbosity of the per-step log for `run`/`build`/`test`/`exec`/`ci` (`silent`\|`error`\|`info`\|`verbose`). Default `info`, or `.rmanrc "logLevel"`. Per-package overridable via `.rmanrc run.<script>.logLevel`. Only affects the *classic* one-line-per-step log - it has no effect on the live progress panel's own output. |
 | `--config` | - | Print what this command would run with, and **run nothing**. See below. |
 | `--json` | - | Write the run's log to stdout as JSON Lines and nothing else - no panel, no status line, no prose. A command with its own JSON result (`list`, `version`, `publish`, `deps`, `config`, `info`, `github-release`) prints that result instead, unchanged. See below. |
+| `--yes` | `-y` | Answer yes to every question rman asks - going on without an `extends` preset that cannot be found, and the confirmation `publish`/`version`/`github-release` ask for. |
 | `--log-file <path>` | - | Also write the run's log to this file - JSON Lines under `--json`, text otherwise. Relative to where rman was invoked. See below. |
 
 ### The run log: `--json` and `--log-file`

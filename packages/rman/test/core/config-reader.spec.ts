@@ -668,3 +668,34 @@ describe('core/ConfigReader', () => {
 function pluginModuleUrl(): string {
   return new URL('../../src/core/interfaces/plugin.ts', import.meta.url).href;
 }
+
+/**
+ * **A preset that cannot be found is reported and left out, when the caller asks for that** - the
+ * CLI does, so a repository whose `node_modules` is not installed can still run `rman ci`. A
+ * relative path is the repository's own file, so missing it stays an error, and so does a missing
+ * package for a caller that did not ask.
+ */
+describe('core/ConfigReader: an extends package that cannot be found', () => {
+  function repoExtending(target: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-missing-preset-'));
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ extends: target, logLevel: 'info' }));
+    return dir;
+  }
+
+  it('is reported and left out when onMissingExtends is given', async () => {
+    const dir = repoExtending('@nope/missing-preset');
+    const missing: string[] = [];
+    const reader = new ConfigReader({ onMissingExtends: (target, from) => missing.push(`${target} <- ${from}`) });
+    expect((await reader.resolve(dir)).config).toEqual({ logLevel: 'info' });
+    expect(missing).toEqual([`@nope/missing-preset <- ${path.join(dir, '.rmanrc')}`]);
+  });
+
+  it('is still an error for a relative path, and for a caller that did not ask', async () => {
+    await expect(
+      new ConfigReader({ onMissingExtends: () => undefined }).resolve(repoExtending('./missing.yml')),
+    ).rejects.toThrow(/was not found/);
+    await expect(new ConfigReader().resolve(repoExtending('@nope/missing-preset'))).rejects.toThrow(
+      /could not be resolved/,
+    );
+  });
+});

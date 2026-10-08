@@ -50,6 +50,23 @@ export class ConfigReader {
     '.rmanrc.js',
   ];
 
+  /** Told about an `extends` package that cannot be found, which is then left out - see the
+   *  constructor. */
+  protected readonly onMissingExtends?: (target: string, from: string) => void;
+
+  /**
+   * `onMissingExtends`, when given, turns an `extends` naming a **package** that cannot be found -
+   * `@scope/preset` or `rman:<name>` - into a call to it, and the config is read without that base.
+   * Without it such a target is an error, as it always was. A relative path that does not exist is
+   * an error either way: it is the repository's own file, and missing it is a typo.
+   */
+  /* For the CLI, which asks before going on: a repository whose `node_modules` is not installed yet
+   * has its shared preset nowhere to be found, and refusing to start left `rman ci` - the command
+   * that installs it - unable to run. A library caller keeps the error unless it asks otherwise. */
+  constructor(options?: { onMissingExtends?: (target: string, from: string) => void }) {
+    this.onMissingExtends = options?.onMissingExtends;
+  }
+
   /**
    * Whether a config key names **packages** rather than a setting: `"[*]"`, `"[/]"`, `"[pkg-a]"`.
    */
@@ -505,7 +522,15 @@ export class ConfigReader {
 
     const base: RmanConfig = {};
     for (const target of targets as string[]) {
-      const file = this._resolveExtendTarget(target, from, EXTENDS_KEY);
+      let file: string;
+      try {
+        file = this._resolveExtendTarget(target, from, EXTENDS_KEY);
+      } catch (e) {
+        const isPath = target.startsWith('.') || path.isAbsolute(target);
+        if (!this.onMissingExtends || isPath) throw e;
+        this.onMissingExtends(target, from);
+        continue;
+      }
       if (seen.includes(file)) {
         throw new Error(`"extends" forms a cycle: ${[...seen, file].map(f => path.basename(f)).join(' -> ')}`);
       }
