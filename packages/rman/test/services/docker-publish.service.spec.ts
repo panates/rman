@@ -297,5 +297,59 @@ describe('services/docker-publish', () => {
       expect(buildCall).toContain('-t myorg/pkg-a:latest');
       expect(buildCall).toContain('--push');
     });
+
+    /**
+     * **A failed build says why.** It ran with `stdio: 'inherit'`, and the reason left was the exit
+     * code alone - measured on `panates/syncbridge`, where the cause was an `npm install` inside the
+     * image asking for a version not yet published, forty lines above a recap reading
+     * `Command failed (1)`. The output is a BuildKit one: step prefixes, and the failing step printed
+     * twice.
+     */
+    it('carries the error lines of a failed build in its reason, once each', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version: '1.2.3',
+        rman: { publish: { target: ['docker'], docker: { image: 'myorg/pkg-a' } } },
+      });
+      await createRepository(dir);
+      const binDir = path.join(dir, 'local-bin');
+      fs.mkdirSync(binDir, { recursive: true });
+      const failing = [
+        '#42 31.01 npm error code ETARGET',
+        '#42 31.01 npm error notarget No matching version found for @scope/common@^0.13.9.',
+        '#42 31.02 npm error A complete log of this run can be found in: /root/.npm/_logs/x.log',
+        '31.01 npm error notarget No matching version found for @scope/common@^0.13.9.',
+        'ERROR: failed to build: failed to solve: exit code: 1',
+      ];
+      fs.writeFileSync(
+        path.join(binDir, 'docker'),
+        `#!/usr/bin/env node\nif (process.argv.includes('build')) { console.error(${JSON.stringify(failing.join('\n'))}); process.exit(1); }\n`,
+      );
+      fs.chmodSync(path.join(binDir, 'docker'), 0o755);
+      process.env.DOCKERHUB_USERNAME = 'u';
+      process.env.DOCKERHUB_PASSWORD = 'p';
+
+      const plan = await service('dockerPublish').getPlan({}, registry(false));
+      const write = process.stderr.write;
+      process.stderr.write = (() => true) as typeof process.stderr.write;
+      let applied;
+      try {
+        applied = await service('dockerPublish').applyPlan(plan);
+      } finally {
+        process.stderr.write = write;
+      }
+
+      const entry = applied.find(e => e.package.name === 'pkg-a')!;
+      expect(entry.status).toBe('error');
+      expect(entry.reason!.split('\n')).toEqual([
+        'docker build exited with code 1:',
+        '    npm error code ETARGET',
+        '    npm error notarget No matching version found for @scope/common@^0.13.9.',
+        '    ERROR: failed to build: failed to solve: exit code: 1',
+      ]);
+    });
   });
 });

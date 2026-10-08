@@ -416,6 +416,33 @@ not marked optional; a package that lists the failed one only in `devDependencie
 what is published), as an optional peer, or in `optionalDependencies` is published anyway.
 Unrelated packages elsewhere in the plan are unaffected.
 
+**Targets run one after another, and `docker` runs last** (`PublishTarget.publishesLast`). An image
+is built from what the other targets publish - a `Dockerfile` running `npm install` asks the registry
+for the versions this same run is about to push - so building it first fails with `ETARGET No
+matching version found` on a version that goes up a minute later.
+
+**The run ends with a recap** of how many packages went up and every failure again, with its reason
+- a target prints as it goes, so on a long release the failed line is otherwise far above the end of
+the log:
+
+```
+publish 12 published, 1 failed
+  failed [docker] syncbridge-app 0.14.13
+         docker build exited with code 1:
+           npm error code ETARGET
+           npm error notarget No matching version found for @syncbridge/common@^0.13.9.
+           ERROR: failed to build: failed to solve: exit code: 1
+```
+
+A failed image build's reason carries the build's own error lines (once each - BuildKit prints a
+failing step twice), not only its exit code. The closing error line names the failed packages too,
+`"publish" failed for [docker] syncbridge-app`, since in CI stdout and stderr are separate pipes and
+it can land anywhere among the lines above it.
+
+**In GitHub Actions the same outcome goes to the job's summary page** as a table - result, target,
+package, version, and the reason or the dist-tag - whenever `GITHUB_STEP_SUMMARY` is set. Nothing is
+written outside Actions, and a summary that cannot be written does not fail the publish.
+
 ## See also
 
 - [`rman version`](version.md) - typically run right before `publish`.

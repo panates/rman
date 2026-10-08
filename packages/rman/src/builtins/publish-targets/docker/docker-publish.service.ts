@@ -215,7 +215,41 @@ async function buildAndPush(repository: Repository, entry: DockerPublishService.
     '.',
   );
 
-  await exec(`docker ${args.join(' ')}`, { cwd, app: repository.app, stdio: 'inherit' });
+  /** **Shown as it runs and kept**, so a failure can say why. It ran with `stdio: 'inherit'`, and the
+   *  one thing left to report was the exit code - measured on `panates/syncbridge`, the line that
+   *  explained the failure sat forty lines above the plan's recap and the recap said
+   *  `Command failed (1)`. On stderr, so a `--json` stdout stays one document. */
+  const lines: string[] = [];
+  const result = await exec(`docker ${args.join(' ')}`, {
+    cwd,
+    app: repository.app,
+    throwOnError: false,
+    onLine: line => {
+      lines.push(line);
+      process.stderr.write(line + '\n');
+    },
+  });
+  if (result.code) throw new Error(`docker build exited with code ${result.code}${failureLines(lines)}`);
+}
+
+/**
+ * The lines of a failed build worth putting in a one-paragraph reason: those saying "error", with
+ * BuildKit's `#42 31.01 ` step prefix removed, each once - BuildKit prints a failing step's output
+ * twice, once as it runs and again in its summary - and without npm's pointer to its own log file.
+ * At most four, as an indented block under the first line.
+ */
+function failureLines(lines: string[]): string {
+  const seen = new Set<string>();
+  for (const raw of lines) {
+    const line = raw
+      .replace(/^#\d+\s+[\d.]+\s+/, '')
+      .replace(/^[\d.]+\s+/, '')
+      .trim();
+    if (!/\berror\b/i.test(line) || /complete log of this run/i.test(line)) continue;
+    seen.add(line);
+  }
+  const picked = [...seen].slice(0, 4);
+  return picked.length ? ':\n' + picked.map(l => `    ${l}`).join('\n') : '';
 }
 
 async function updateDescription(entry: DockerPublishService.Entry): Promise<void> {

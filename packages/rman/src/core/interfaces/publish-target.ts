@@ -43,6 +43,15 @@ export interface PublishTarget {
    */
   readonly options?: Record<string, RmanConfig.CommandOption>;
   /**
+   * Applied after every target without it. For a target whose artifact is built **from** what the
+   * others publish - an image whose `Dockerfile` runs `npm install` - and so has to wait for them.
+   */
+  /* Measured on `panates/syncbridge`: targets were applied in registration order, the core's
+   * `docker` first, and the image's `npm install` asked the registry for `@syncbridge/common@0.13.9`
+   * while the `npm` target had not yet published it - `ETARGET No matching version found`, and the
+   * release failed on a version that went up a minute later. */
+  readonly publishesLast?: boolean;
+  /**
    * The technologies this target is for, by `Platform.name` - `['node']` for `npm`. Absent means
    * every platform, which is what a technology-agnostic target says: any package can carry a
    * Dockerfile, so `docker` declares none.

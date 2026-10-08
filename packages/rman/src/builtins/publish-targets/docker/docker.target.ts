@@ -64,6 +64,8 @@ export interface DockerPublishOptionsKeys {
 export const dockerPublishTarget: PublishTarget = {
   name: DOCKER_TARGET,
   describe: 'Build and push a container image (docker buildx build --push)',
+  /** An image installs its dependencies from the registries the other targets push to. */
+  publishesLast: true,
   options: {
     dockerNamespace: {
       target: 'cli',
