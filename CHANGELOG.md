@@ -1,6 +1,23 @@
 # Changelog
 
-<!-- rman:documented-up-to 27496e443447c525d6977ae91163a9ef63f40f62 -->
+<!-- rman:documented-up-to 70bc9806c903bbf8517fa2020004449dfdc988e0 -->
+
+## v2.18.0 (2026-10-08)
+
+### ✨ Features
+
+- **node:** packageManager is keyed by technology - packageManager: { node: pnpm } (3be302d)
+
+### 🐛 Bug Fixes
+
+- **publish:** build the docker image after the registries, and say why it failed (0441151)
+
+### 🧹 Chores
+
+- drop dependencies nothing uses (5f8f183)
+- **deps:** update dependencies within their majors (70bc980)
+
+---
 
 ## v2.17.0 (2026-10-08)
 
