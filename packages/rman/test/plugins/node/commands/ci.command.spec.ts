@@ -156,6 +156,25 @@ describe('commands/ci', () => {
     expect(fs.existsSync(npm.logFile)).toBe(false);
   });
 
+  /** The setting, keyed by technology - `packageManager: { node: yarn }` - picks the install command
+   *  with no flag given. Same two stubs as above, so the other one running would be visible. */
+  it('installs with .rmanrc "packageManager.node" when no flag is given', async () => {
+    const dir = fixtureNoRootScript();
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ packageManager: { node: 'yarn' } }));
+    const binDir = tmp();
+    const yarn = stubPackageManager('yarn');
+    const npm = stubPackageManager('npm');
+    for (const from of [yarn.dir, npm.dir]) {
+      for (const entry of fs.readdirSync(from)) fs.copyFileSync(path.join(from, entry), path.join(binDir, entry));
+    }
+    fs.chmodSync(path.join(binDir, 'yarn'), 0o755);
+    fs.chmodSync(path.join(binDir, 'npm'), 0o755);
+
+    await captureLogs(() => runCli({ cwd: dir, argv: ['ci', '--no-progress'], app: appWithStubBin(binDir) }));
+    expect(fs.existsSync(yarn.logFile)).toBe(true);
+    expect(fs.existsSync(npm.logFile)).toBe(false);
+  });
+
   it('rejects a --package-manager outside the known choices before ever touching the filesystem', async () => {
     const dir = fixtureNoRootScript();
     const lines = await captureLogs(async () => {

@@ -1,4 +1,5 @@
 import { SystemInfo as OrgSystemInfo } from '../../../../services/system-info.js';
+import { CiService } from '../services/ci.service.js';
 /**
  * Adds the npm half of `SystemInfo` to rman's own types.
  *
@@ -42,8 +43,12 @@ export function augmentSystemInfo(): void {
     /** An explicit argument first, then the repository's own config, then npm. The config step is
      *  why the core declares `Options.repository`: `rman info` passes only that, so without it a
      *  pnpm repository would silently be reported as an npm one. */
+    /** The old bare `packageManager: pnpm` is refused here as `ci` and `publish` refuse it - read
+     *  as a map it has no `node` entry, and `info` would report npm for a pnpm repository. */
+    const configured: unknown = options?.repository?.config?.packageManager;
+    if (typeof configured === 'string') CiService.resolvePackageManager(options!.repository!);
     const packageManager: OrgSystemInfo.PackageManager =
-      options?.packageManager ?? asPackageManager(options?.repository?.config?.packageManager) ?? 'npm';
+      options?.packageManager ?? asPackageManager((configured as { node?: unknown } | undefined)?.node) ?? 'npm';
 
     return base({
       ...options,

@@ -1,5 +1,5 @@
 import type { cleanCommand, CleanExtraKeys } from '../commands/clean.command.js';
-import type { NodeConfigKeys, RmanNodeConfig } from '../node-config.interface.js';
+import type { NodeConfigKeys, NodePackageManagers, RmanNodeConfig } from '../node-config.interface.js';
 import type { CiService } from '../services/ci.service.js';
 
 /**
@@ -25,6 +25,9 @@ declare module '../../../../interfaces/rman-config.interface.js' {
    * The augmentation is evaluated where it is used, so `clean` is typed at the place it is read.
    */
   interface RmanConfigKeys extends NodeConfigKeys {}
+
+  /** Node's entry in `.rmanrc "packageManager"` - `{ node: 'pnpm' }`. */
+  interface PackageManagers extends NodePackageManagers {}
 
   /**
    * **`clean.*`, contributed by the command that reads it**, the way every built-in contributes its
@@ -77,7 +80,7 @@ declare module '../../../../services/system-info.js' {
       /**
        * Report this package manager's version under `Binaries`, plus the `npmPackages` sections.
        *
-       * Defaults to `.rmanrc "packageManager"` (read off `Options.repository`), then to `npm` -
+       * Defaults to `.rmanrc "packageManager.node"` (read off `Options.repository`), then to `npm` -
        * this package being installed is itself the statement that the repository is a Node one.
        */
       packageManager?: PackageManager;

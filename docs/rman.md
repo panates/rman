@@ -703,7 +703,8 @@ for the whole repository, and a selector is how a statement stops being everyone
 
 ```yaml
 # the repository root's own .rmanrc.yml
-packageManager: pnpm                          # every package, and the root
+packageManager:                               # every package, and the root
+  node: pnpm
 
 "[/]":                                        # the root package alone
   run:
@@ -857,8 +858,8 @@ The one to look at is **`run.<script>`**, because its hooks are the one place wh
 changes the meaning: on the root they are a repo-wide bookend run once at the repository root; on a
 package they are that package's own hook, run in its directory. Left unmarked they are now both -
 once at the root and once per package. Put a repo-wide bookend under `"[/]"`. The other root keys
-(`allowBranch`, `version.*`, `githubRelease.*`, `packageManager`) cascade harmlessly, since nothing
-reads them at package level.
+(`allowBranch`, `version.*`, `githubRelease.*`) cascade harmlessly, since nothing reads them at
+package level. `packageManager.node` is read at both: `ci` takes the root's, `publish` each package's.
 
 ### Inheriting a shared config (`extends`)
 
@@ -1046,7 +1047,7 @@ For a single directory, up to six sources merge together in **increasing precede
 ```json
 // .rmanrc (JSON)
 {
-  "packageManager": "pnpm",
+  "packageManager": { "node": "pnpm" },
   "group": true,
   "version": { "commitMessage": "chore(release): v{version}" }
 }
@@ -1054,7 +1055,8 @@ For a single directory, up to six sources merge together in **increasing precede
 
 ```yaml
 # .rmanrc.yml (YAML) - equivalent to the above
-packageManager: pnpm
+packageManager:
+  node: pnpm
 group: true
 version:
   commitMessage: 'chore(release): v{version}'
@@ -1065,7 +1067,7 @@ version:
 {
   "name": "my-repo",
   "rman": {
-    "packageManager": "pnpm"
+    "packageManager": { "node": "pnpm" }
   }
 }
 ```
@@ -1080,7 +1082,7 @@ formats, just computed instead of static:
 ```js
 // .rmanrc.cjs (CommonJS - always, regardless of the nearest package.json "type")
 module.exports = {
-  packageManager: 'pnpm',
+  packageManager: { node: 'pnpm' },
   logLevel: process.env.CI ? 'verbose' : 'info',
 };
 ```
@@ -1088,7 +1090,7 @@ module.exports = {
 ```js
 // .rmanrc.mjs (native ESM - always) / .rmanrc.js (ESM only under a "type": "module" package.json)
 export default {
-  packageManager: 'pnpm',
+  packageManager: { node: 'pnpm' },
 };
 ```
 
@@ -1109,7 +1111,7 @@ argument for a JS config as soon as one is non-trivial.
 import { defineConfig } from 'rman';
 
 export default defineConfig({
-  packageManager: 'pnpm', // autocompletes to 'npm' | 'yarn' | 'pnpm' | 'bun'
+  packageManager: { node: 'pnpm' }, // autocompletes to 'npm' | 'yarn' | 'pnpm' | 'bun'
 });
 ```
 
@@ -1118,7 +1120,7 @@ export default defineConfig({
 const { defineConfig } = require('rman');
 
 module.exports = defineConfig({
-  packageManager: 'pnpm',
+  packageManager: { node: 'pnpm' },
 });
 ```
 
@@ -1129,7 +1131,7 @@ authored with a separate build step, or just to annotate a config object built u
 ```ts
 import type { RmanConfig } from 'rman';
 
-const config: RmanConfig = { packageManager: 'pnpm' };
+const config: RmanConfig = { packageManager: { node: 'pnpm' } };
 ```
 
 > **Note on `.rmanrc.cjs` and `require('rman')`.** rman is ESM-only, so `require('rman')` in a
@@ -1139,7 +1141,7 @@ const config: RmanConfig = { packageManager: 'pnpm' };
 >
 > ```js
 > /** @type {import('rman').RmanConfig} */
-> module.exports = { packageManager: 'pnpm' };
+> module.exports = { packageManager: { node: 'pnpm' } };
 > ```
 >
 > Use `.rmanrc.mjs` if you want to call `defineConfig()` itself.
@@ -1566,7 +1568,7 @@ step there is mistaken for a value.
 | `publishTargets` | a publish target | none | Always appends. Where a package's artifact can ship - see [`PublishTarget`](#publishtarget). |
 | `platform` | `string` | the first loaded platform that recognizes the directory | Per-directory cascaded. Which technology claims this directory, by `Platform.name`. **It loads nothing** - a name no loaded technology provides is an error naming the file, and the fix is `platforms` or `extends`. A declaration is held to the directory: a platform that does not recognize it is an error naming the file it looked for. Never an expression; refused inside a `"[glob]"` block and inside a nested `"[/]"`. |
 | `name` | `string` | the platform's answer, else the manifest's name | Per-package cascaded. The selector this package answers to - what `"[glob]"` and `--scope` match. Does **not** rename the package: `pkg.name` stays what the manifest says. Must be unique; refused inside a `"[glob]"` block. |
-| `packageManager` | `'npm'\|'yarn'\|'pnpm'\|'bun'` | `'npm'` | Root-level only. Used by `ci`/`publish`. CLI flag wins when given. |
+| `packageManager` | `{ [platform]: string }` | none | Which package manager each technology uses, keyed by `Platform.name`; cascades per package. The `node` built-in reads `packageManager.node` - `'npm' \| 'yarn' \| 'pnpm' \| 'bun'`, default `'npm'` - for `ci` (the root's), `publish` (each package's own) and `info`; `--package-manager` wins when given. An entry for a technology the repository does not load is ignored, so a shared preset can name several. The old bare string (`packageManager: pnpm`) is refused with the spelling to use instead. |
 | `logLevel` | `'silent'\|'error'\|'info'\|'verbose'` | `'info'` | Root-level only. Invalid values fall back to `'info'`. CLI `--log-level` wins when given. |
 | `allowBranch` | `string \| string[]` | none (no restriction) | Root-level only. A CLI `--allow-branch` **replaces** it entirely (never merges). |
 | `ignoreBranch` | `string \| string[]` | none (no restriction) | Same as `allowBranch`. |
@@ -1661,7 +1663,7 @@ module.exports = { allowBranch: ['main'] };
 ```
 
 **The `node` built-in's keys need no extra import** - `clean`, `publish.npm.*` and
-`packageManager` are augmented into `RmanConfig` by rman itself, so `defineConfig` from `'rman'`
+`packageManager.node` are augmented into `RmanConfig` by rman itself, so `defineConfig` from `'rman'`
 types them. `RmanNodeConfig` is still exported as an alias for a config that wants its annotation to
 say which keys it uses. A *third-party* plugin's keys arrive the same way, by `declare module
 'rman'` - so its package's own entry point has to be in the program, which importing anything from
@@ -1672,7 +1674,7 @@ it (or its `defineConfig`, where it ships one) ensures.
 import { defineConfig } from 'rman';
 
 export default defineConfig({
-  packageManager: 'pnpm',
+  packageManager: { node: 'pnpm' },
   '[*]': { clean: { include: 'build' } },
 });
 ```
@@ -2854,7 +2856,7 @@ only append to it.
 **The `node` built-in is the worked example**, and it is bundled rather than separate: its
 `augmentSystemInfo()` adds `Options.packageManager`, wraps `getSystemInfo` so the report carries the
 configured package manager's version under `Binaries` plus the `npmPackages` sections, and defaults
-the value from `.rmanrc "packageManager"` read off `Options.repository`. It is applied when the
+the value from `.rmanrc "packageManager.node"` read off `Options.repository`. It is applied when the
 built-in is *contributed*, not at import time - so `rman info` in a Cargo repository that never
 named `node` reports no npm tooling.
 
@@ -3006,7 +3008,7 @@ the preset's contribution keys. rman ships one preset, so none of that is visibl
 | **Platform** | `manifestProvider` (`package.json`, `npm view` for `publishedVersion`, `stampVersion`), `getWorkspace` (the `workspaces` globs, asked of every directory the walk reaches), `getRunSteps` (`package.json#scripts`, including `pre`/`post` - which is also how npm's `preversion`/`version`/`postversion` reach `version`, with no second seam), `getBinPaths` (`node_modules/.bin`, walked up), `versionPlanner` (`detectBoundary` through `ChangeHashService.detect`; `cascade` is `dependents` for a patch or a minor and `group` for a major), `dependencyUpdater` (what [`deps`](cli/deps.md) asks: the registry, the package's own peer ranges, `engines.node` and its siblings' peers, and `npm install --dry-run` at the root as `verify`). |
 | **Commands** | [`ci`](cli/ci.md) and [`clean`](cli/clean.md). |
 | **Publish target** | `npm` - see [`PublishTarget`](#publishtarget). |
-| **Config keys** | `packageManager`, `clean.*`, `publish.npm.*`. (`deps.*` is the core's command; `deps.types` takes npm's words here.) |
+| **Config keys** | `packageManager.node`, `clean.*`, `publish.npm.*`. (`deps.*` is the core's command; `deps.types` takes npm's words here.) |
 | **`SystemInfo`** | the npm half - see [`SystemInfo`](#systeminfo). |
 
 **Which declarations become graph edges**: all four of `dependencies`, `devDependencies`,
@@ -3091,7 +3093,7 @@ run: {
 ## The `logged` error convention
 
 Every service that can fail outright (a version bump with dirty packages, a failed `run`/`ci`/
-`clean`/`exec` batch, an invalid `.rmanrc packageManager`, ...) throws a plain `Error`. Some of
+`clean`/`exec` batch, an invalid `.rmanrc packageManager.node`, ...) throws a plain `Error`. Some of
 these errors additionally carry `.logged = true` - a convention `rman`'s own CLI commands use to
 avoid printing the same failure twice (the service already printed a colored, human-readable
 message to the console before throwing; the CLI's top-level handler sees `.logged` and skips

@@ -91,7 +91,7 @@ resolver, so `-u` asks the real one instead: after writing, rman runs
 `npm install --dry-run --ignore-scripts` at the repository root. That writes nothing, and npm
 refuses a peer conflict anywhere in the tree with `ERESOLVE`. If it does, **every manifest is put
 back as it was** and the command fails with npm's own lines. `--no-verify` skips the check. Another
-package manager (`.rmanrc "packageManager"`) is not asked, and a note says so.
+package manager (`.rmanrc "packageManager.node"`) is not asked, and a note says so.
 
 `-u` does not install anything and does not touch the lockfile. Run your usual install afterwards.
 

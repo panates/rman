@@ -406,7 +406,6 @@ export namespace PublishService {
    * `consumerNeeds`).
    */
   export async function applyPlan(repository: Repository, plan: Entry[], options: ApplyOptions = {}): Promise<Entry[]> {
-    const packageManager = CiService.resolvePackageManager(repository, options.packageManager);
     const failed = new Set<string>();
     const result: Entry[] = [];
     /** The tuple is explicit: `[p.name, p]` widens to `(string | Package)[]`, and whether `new Map`
@@ -434,7 +433,7 @@ export namespace PublishService {
          *  this package goes, the reader confirmed that, and `applyPlan` is here to carry it out.
          *  `options.*` is the fallback only for a plan built by something other than `getPlan`. */
         await exec(
-          buildPublishCommand(packageManager, {
+          buildPublishCommand(CiService.resolvePackageManager(pkg, options.packageManager), {
             ...options,
             tag: entry.distTag ?? options.tag,
             staged: entry.staged ?? options.staged,

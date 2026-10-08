@@ -23,13 +23,13 @@ describe('interfaces/rman-config', () => {
        *  which take the plugin itself or a glob naming modules that export one. This package's
        *  entry point exports a *config*, and `extends` is how a config is inherited. */
       extends: 'rman-node',
-      packageManager: 'pnpm',
+      packageManager: { node: 'pnpm' },
       '[*]': {
         clean: { include: 'build', exclude: ['keep.js'] },
         publish: { npm: { directory: 'build' } },
       },
     };
-    expect(config.packageManager).toBe('pnpm');
+    expect(config.packageManager?.node).toBe('pnpm');
   });
 
   /**
@@ -39,7 +39,7 @@ describe('interfaces/rman-config', () => {
    */
   it("merges into the core's RmanConfig, which is what pkg.config is typed by", () => {
     const config: RmanConfig = {
-      packageManager: 'yarn',
+      packageManager: { node: 'yarn' },
       clean: { skip: true },
       /** `npm` from this package, `target` and `docker` from rman's own `publish` command and
        *  docker target - one key, three contributors, no collision. */
@@ -89,7 +89,20 @@ describe('interfaces/rman-config', () => {
   });
 
   it('defineConfig returns its argument unchanged - a typing aid, not a transform', () => {
-    const config: RmanNodeConfig = { packageManager: 'npm' };
+    const config: RmanNodeConfig = { packageManager: { node: 'npm' } };
     expect(defineConfig(config)).toBe(config);
+  });
+
+  /**
+   * **`packageManager` is keyed by technology**, so the old bare spelling no longer type-checks - a
+   * typed config finds out at compile time what `CiService.resolvePackageManager` would refuse at
+   * run time - and a value outside Node's tooling is refused too.
+   */
+  it('takes packageManager per technology, and only a tool that technology has', () => {
+    // @ts-expect-error a bare string says nothing about whose package manager it is
+    const bare: RmanConfig = { packageManager: 'pnpm' };
+    // @ts-expect-error pip is not a Node package manager
+    const foreign: RmanConfig = { packageManager: { node: 'pip' } };
+    expect([bare, foreign]).toBeDefined();
   });
 });

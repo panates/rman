@@ -23,7 +23,7 @@ options, in addition to:
 
 | Option | Type | Choices | Description |
 | --- | --- | --- | --- |
-| `--package-manager <name>` | string | `npm`, `yarn`, `pnpm`, `bun` | Package manager to install with. Default: `npm`, or `.rmanrc "packageManager"` (root-level). |
+| `--package-manager <name>` | string | `npm`, `yarn`, `pnpm`, `bun` | Package manager to install with. Default: the root's `.rmanrc "packageManager.node"`, else `npm`. |
 | `--progress` | boolean | - | Show a live progress panel while running (default `true`; auto-disabled when not a TTY). Unlike `run`/`build`, completion is **not** reported as a per-package tally - only failures are called out by name. |
 
 ## Examples
@@ -47,8 +47,10 @@ ci completed (4.2s)
 
 - Never touches anything beyond `node_modules`/lockfiles and the final install - it does not run
   `build`/`test`. Chain it with `rman build`/`rman test` in a CI script if you need those too.
-- `.rmanrc packageManager` is validated: an invalid value throws `Invalid "packageManager" in
-  .rmanrc: "<value>" (expected one of: npm, yarn, pnpm, bun)` rather than silently falling back.
+- `.rmanrc "packageManager"` is keyed by technology - `packageManager: { node: pnpm }` - and is
+  validated: a tool Node does not have throws `Invalid "packageManager.node" in .rmanrc: "<value>"
+  (expected one of: npm, yarn, pnpm, bun)`, and the old bare `packageManager: pnpm` is refused with
+  the spelling to use instead, rather than silently installing with npm.
 
 ## See also
 

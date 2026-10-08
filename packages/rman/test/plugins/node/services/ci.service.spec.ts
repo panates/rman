@@ -87,10 +87,10 @@ describe('services/ci', () => {
       expect(CiService.resolvePackageManager(repo, 'pnpm')).toBe('pnpm');
     });
 
-    it('falls back to .rmanrc "packageManager" when no CLI value is given', async () => {
+    it('falls back to .rmanrc "packageManager.node" when no CLI value is given', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', version: '1.0.0' });
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ packageManager: 'bun' }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ packageManager: { node: 'bun' } }));
       const repo = await createRepository(dir);
       expect(CiService.resolvePackageManager(repo)).toBe('bun');
     });
@@ -98,9 +98,9 @@ describe('services/ci', () => {
     it('throws for an unrecognized package manager', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', version: '1.0.0' });
-      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ packageManager: 'rush' }));
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ packageManager: { node: 'rush' } }));
       const repo = await createRepository(dir);
-      expect(() => CiService.resolvePackageManager(repo)).toThrow(/Invalid "packageManager"/);
+      expect(() => CiService.resolvePackageManager(repo)).toThrow(/Invalid "packageManager.node"/);
     });
   });
 
@@ -394,5 +394,35 @@ describe('services/ci', () => {
       const lines = await captureLogs(() => CiService.reinstall(repo, { packageManager }));
       expect(lines).toEqual([]);
     });
+  });
+});
+
+/**
+ * **`.rmanrc "packageManager"` is keyed by technology** - `{ node: 'pnpm' }` - because which package
+ * manager a repository uses is a question each ecosystem answers for itself. The bare string it used
+ * to be is refused rather than read: rman validates no config keys, so read as a map it would have no
+ * `node` entry and a pnpm repository would install with npm without a word.
+ */
+describe('CiService.resolvePackageManager', () => {
+  const pkg = (packageManager: unknown) =>
+    ({ config: { packageManager } }) as unknown as Parameters<typeof CiService.resolvePackageManager>[0];
+
+  it('reads the node entry, defaults to npm, and lets the flag win', () => {
+    expect(CiService.resolvePackageManager(pkg({ node: 'pnpm' }))).toBe('pnpm');
+    expect(CiService.resolvePackageManager(pkg(undefined))).toBe('npm');
+    expect(CiService.resolvePackageManager(pkg({ python: 'uv' }))).toBe('npm');
+    expect(CiService.resolvePackageManager(pkg({ node: 'pnpm' }), 'yarn')).toBe('yarn');
+  });
+
+  it('refuses the old bare string, saying how to write it now', () => {
+    expect(() => CiService.resolvePackageManager(pkg('pnpm'))).toThrow(
+      'write packageManager: { node: pnpm } instead of packageManager: pnpm',
+    );
+  });
+
+  it('refuses a tool Node does not have, naming the ones it does', () => {
+    expect(() => CiService.resolvePackageManager(pkg({ node: 'pip' }))).toThrow(
+      /Invalid "packageManager.node".*"pip".*npm, yarn, pnpm, bun/,
+    );
   });
 });

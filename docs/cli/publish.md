@@ -72,7 +72,7 @@ options, in addition to:
 
 | Option | Type | Choices | Description |
 | --- | --- | --- | --- |
-| `--package-manager <name>` | string | `npm`, `yarn`, `pnpm`, `bun` | Package manager to publish with. Default: `npm`, or `.rmanrc "packageManager"`. |
+| `--package-manager <name>` | string | `npm`, `yarn`, `pnpm`, `bun` | Package manager to publish with. Default: the package's `.rmanrc "packageManager.node"`, else `npm`. |
 | `--access <level>` | string | `public`, `restricted` | `npm publish --access <level>` - required by the registry for a *new* scoped package. |
 | `--tag <name>` | string | - | `npm publish --tag <name>` - the dist-tag this version is published under (default `latest`). |
 | `--otp <code>` | string | - | `npm publish --otp <code>` - a 2FA one-time password, for registries that require it. |

@@ -35,15 +35,29 @@ export namespace CiService {
     logLevel?: LogLevel;
   }
 
-  /** `.rmanrc packageManager` (root only) picks the package manager used for the final install;
-   *  explicit CLI value wins over it. Defaults to 'npm'. */
-  export function resolvePackageManager(repository: Repository, cliValue?: PackageManager): PackageManager {
+  /**
+   * The package manager `pkg` uses: `cliValue` when given, else its `.rmanrc "packageManager.node"`,
+   * else `npm`. Pass the repository for the one the repository installs with.
+   */
+  /* **The bare string is refused rather than read.** `packageManager: pnpm` was the old spelling,
+   * and rman validates no config keys, so read as an object it would simply have no `node` entry -
+   * a pnpm repository installing with npm, saying nothing. No repository of this organization
+   * wrote it, so a clear refusal costs nobody anything. */
+  export function resolvePackageManager(pkg: Package, cliValue?: PackageManager): PackageManager {
     if (cliValue) return cliValue;
-    const configured = repository.config?.packageManager;
-    if (configured === undefined) return 'npm';
-    if ((PACKAGE_MANAGERS as readonly string[]).includes(configured)) return configured as PackageManager;
+    const configured: unknown = pkg.config?.packageManager;
+    if (typeof configured === 'string') {
+      throw new Error(
+        `.rmanrc "packageManager" takes one entry per technology - write packageManager: { node: ${configured} } ` +
+          `instead of packageManager: ${configured}.`,
+      );
+    }
+    const node = (configured as { node?: unknown } | undefined)?.node;
+    if (node === undefined) return 'npm';
+    if (typeof node === 'string' && (PACKAGE_MANAGERS as readonly string[]).includes(node))
+      return node as PackageManager;
     throw new Error(
-      `Invalid "packageManager" in .rmanrc: "${configured}" (expected one of: ${PACKAGE_MANAGERS.join(', ')})`,
+      `Invalid "packageManager.node" in .rmanrc: "${String(node)}" (expected one of: ${PACKAGE_MANAGERS.join(', ')})`,
     );
   }
 

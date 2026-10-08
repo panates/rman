@@ -169,7 +169,7 @@ orders by dependencies instead, and `--json` keeps the inventory's own order.
 
 Prints local environment (OS/CPU/memory, Node, git) and repository information. A platform adds its
 own ecosystem's part - the `node` built-in reports whichever package manager
-`.rmanrc "packageManager"` names (`npm` by default), plus the installed `rman` and `typescript`.
+`.rmanrc "packageManager.node"` names (`npm` by default), plus the installed `rman` and `typescript`.
 
 ```bash
 rman info
@@ -430,7 +430,8 @@ such as `"[*]"` the packages below.
 
 ```yaml
 # .rmanrc.yml, at the repository root
-packageManager: pnpm
+packageManager:
+  node: pnpm
 logLevel: info
 allowBranch: [main, release/*]
 

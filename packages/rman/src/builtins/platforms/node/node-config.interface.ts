@@ -2,31 +2,22 @@ import type { ConfigValue, RmanConfig, ScopedVars } from '../../../interfaces/rm
 import type { CiService } from './services/ci.service.js';
 
 /**
- * The `.rmanrc` keys that only mean something because the repository is a Node one.
- *
- * **One key, and it is here because no single command owns it**: `packageManager` is read by `ci`
- * *and* by the `npm` publish target, so neither can contribute it. Everything else this package
- * adds to `.rmanrc` is declared by whoever reads it - `clean.*` by `clean.command.ts` (through
- * `CommandContribution`), `publish.npm.*` by the target, below.
- *
- * **Two surfaces, and they are not alternatives:**
- *
- * - the `declare module 'rman'` block in [`../augmentation/rman.augmentation.ts`] merges this into
- *   `RmanConfigKeys`, so `repository.config.packageManager` stays typed wherever it is read with no
- *   cast. It lives there because one such block per package is the limit;
- * - `RmanNodeConfig` is the name a *config author* annotates with, which is what makes the import
- *   carrying that augmentation explicit instead of a side effect someone has to remember.
+ * The `.rmanrc` keys that only mean something because the repository is a Node one, merged into
+ * `RmanConfigKeys` by `rmanrc.augmentation.ts`. Everything else this built-in adds is declared by
+ * whoever reads it - `clean.*` by `clean.command.ts`, `publish.npm.*` by the target, below.
  */
-export interface NodeConfigKeys {
-  /**
-   * Which package manager `ci`/`publish` shell out to, and whose version `info` reports under
-   * `Binaries`. Root level only. Default `npm`.
-   *
-   * It used to be a core key, on the grounds that `info` read it - and that stopped being true the
-   * moment `SystemInfo`'s npm half moved here: measured, **nothing in rman's core reads it at
-   * all**, only the declaration was left behind. The value set was npm's tooling the whole time.
-   */
-  packageManager?: CiService.PackageManager;
+/* **Empty since `packageManager` became a map keyed by platform** - it is the core's key now, and
+ * Node contributes its entry through `NodePackageManagers`. Kept as the place a Node-only key would
+ * go, and because `RmanNodeConfig` and the package's exports name it. */
+
+export interface NodeConfigKeys {}
+
+/**
+ * Node's entry in `.rmanrc "packageManager"`: which package manager `ci` installs with, `publish`
+ * publishes with and `info` reports - `packageManager: { node: pnpm }`. Default `npm`.
+ */
+export interface NodePackageManagers {
+  node?: CiService.PackageManager;
 }
 
 export namespace RmanNodeConfig {

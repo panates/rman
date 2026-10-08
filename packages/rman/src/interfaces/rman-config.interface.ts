@@ -77,6 +77,13 @@ export type CommandEntry = string | CustomCommand | RmanConfig.CommandRegisterFu
 export type PublishTargetEntry = string | PublishTarget;
 
 /**
+ * `.rmanrc "packageManager"`: one entry per technology, by `Platform.name`. Empty here - each
+ * platform that has a package manager to choose adds its own entry by declaration merging, the way
+ * `PublishTargetConfigs` collects the publish targets' blocks.
+ */
+export interface PackageManagers {}
+
+/**
  * **The `.rmanrc` keys no command owns**, without `extends` - kept
  * separate from `RmanConfig` only so the two halves stay legible. A key a *command* owns is
  * declared beside that command and arrives through `RmanConfig.CommandConfigs` instead.
@@ -322,6 +329,17 @@ export interface RmanConfigKeys {
    */
   vars?: Record<string, unknown>;
   logLevel?: 'silent' | 'error' | 'info' | 'verbose';
+  /**
+   * Which package manager each technology uses, keyed by `Platform.name` - `{ node: 'pnpm' }`.
+   * Cascades per package. A technology with no choice to make (Cargo has `cargo`) adds no entry.
+   */
+  /* **A map keyed by platform, because the question is a technology's.** It was a bare
+   * `packageManager: pnpm` at the root, which said nothing about *whose* package manager: in a
+   * polyglot repository Node's is npm/pnpm/yarn and Python's would be pip/poetry/uv. Subject first
+   * and owner second, the order `publish.npm.*` already uses. The entries are contributed through
+   * `PackageManagers`, so the core names no technology; an entry for a platform this repository
+   * does not load is left alone, which lets one shared preset serve repositories of any kind. */
+  packageManager?: PackageManagers;
   allowBranch?: string | string[];
   ignoreBranch?: string | string[];
   /**

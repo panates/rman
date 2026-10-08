@@ -43,10 +43,10 @@ describe('docs/node.md: the documented API surface', () => {
    * before the compiler can disagree with it.
    */
   it('exports the types its Installation block imports', () => {
-    const config: RmanNodeConfig = { packageManager: 'npm' };
-    const keys: NodeConfigKeys = { packageManager: 'pnpm' };
+    const config: RmanNodeConfig = { packageManager: { node: 'npm' } };
+    const keys: NodeConfigKeys = {};
     const range: ParsedWorkspaceRange = { selector: 'explicit', range: '^1.0.0' };
-    expect([config.packageManager, keys.packageManager, range.selector]).toEqual(['npm', 'pnpm', 'explicit']);
+    expect([config.packageManager?.node, keys, range.selector]).toEqual(['npm', {}, 'explicit']);
   });
 
   /**

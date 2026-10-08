@@ -387,7 +387,7 @@ Three sections, answering the three ways a run surprises someone:
   for a package the command never reaches explains nothing.
 - **`.rmanrc`** is narrowed to the keys that command reads (`run.build` above), and is the whole
   effective config for a command that declares none. The **root package is always listed**, because
-  a repo-wide key (`packageManager`, `allowBranch`, `version.*`, `githubRelease.*`) is read there.
+  a repo-wide key (`packageManager.node` for `ci`, `allowBranch`, `version.*`, `githubRelease.*`) is read there.
 
 It reaches **every** command - built-in, a plugin's, and a repository's own `.rman/*.mjs` - because
 it is applied once where commands are registered rather than declared per command. A command names

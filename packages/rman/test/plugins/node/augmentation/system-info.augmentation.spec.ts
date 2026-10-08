@@ -60,13 +60,13 @@ describe('augmentation/system-info', () => {
   it('takes the package manager from the repository config when no argument names one', async () => {
     // The core `info` command passes only `{ repository }` - it cannot name a package manager, so
     // without this step a pnpm repository would silently be reported as an npm one.
-    const repository = { config: { packageManager: 'pnpm' } } as unknown as Repository;
+    const repository = { config: { packageManager: { node: 'pnpm' } } } as unknown as Repository;
     await SystemInfo.getSystemInfo({ repository });
     expect(seen?.envinfo?.Binaries).toEqual(['Node', 'pnpm']);
   });
 
   it('prefers an explicit argument over the config', async () => {
-    const repository = { config: { packageManager: 'pnpm' } } as unknown as Repository;
+    const repository = { config: { packageManager: { node: 'pnpm' } } } as unknown as Repository;
     await SystemInfo.getSystemInfo({ repository, packageManager: 'bun' });
     expect(seen?.envinfo?.Binaries).toEqual(['Node', 'bun']);
   });
@@ -74,7 +74,7 @@ describe('augmentation/system-info', () => {
   it('ignores an unrecognized config value rather than reporting an undefined binary', async () => {
     // A config value is whatever the file said; indexing the binary map with it would produce
     // `Binaries: ['Node', undefined]`.
-    const repository = { config: { packageManager: 'rush' } } as unknown as Repository;
+    const repository = { config: { packageManager: { node: 'rush' } } } as unknown as Repository;
     await SystemInfo.getSystemInfo({ repository });
     expect(seen?.envinfo?.Binaries).toEqual(['Node', 'npm']);
   });

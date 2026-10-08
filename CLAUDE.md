@@ -315,7 +315,7 @@ below, and a `"[selector]"` narrows the audience.**
     package. **A repo-wide bookend belongs under `"[/]"`**, and that is the one migration step that
     is not mechanical. The measured failure it prevents: `node ../../support/postbuild.cjs`, written
     for a package, run at the root where it cannot resolve.
-  - The other repo-wide keys (`allowBranch`, `version.*`, `githubRelease.*`, `packageManager`) may
+  - The other repo-wide keys (`allowBranch`, `version.*`, `githubRelease.*`) may
     cascade or not without consequence - nothing reads them at package level - but `"[/]"` still
     reads better for them.
   - Migration from 1.2.x, in three mechanical rules plus that one: `"[ws:*]"` → `"[*]"`; old `"[*]"`
@@ -951,9 +951,20 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   still lives with its own subject (`augmentSystemInfo()`, `augmentManifest()`, ...).
 - Measured both ways: with the core alone, `{ clean: ... }` and `{ publish: { npm } }` are
   rejected; with the plugin in the program, `rman-node`'s own `pkg.config?.clean` type-checks.
-- `packageManager` is `rman-node`'s. It was core "because `info` reads it", and that stopped being
-  true when `SystemInfo`'s npm half moved out: measured, **nothing in the core read it any more** -
-  only the declaration was left, and its value set was npm's tooling all along.
+- **`packageManager` is a map keyed by platform - `packageManager: { node: pnpm }`.** The key is
+  the core's and names no technology (`PackageManagers` is an empty slot, like
+  `PublishTargetConfigs`); the node built-in contributes `node` and is the only reader
+  (`CiService.resolvePackageManager`: `ci` asks the root, `publish` each package, `info` the root).
+  - **It was a bare `packageManager: pnpm` at the root, and the user's objection was the reason it
+    moved**: the package manager is a technology's question - npm/pnpm/yarn for Node, pip/poetry/uv
+    for Python - so a key not saying whose it is cannot serve a polyglot repository. Subject first,
+    owner second, the order `publish.npm.*` already uses; `node.packageManager` was the alternative
+    and opens a `node` block everything would drift into.
+  - **The bare string is refused, not read** - rman validates no config keys, so read as a map it
+    would have no `node` entry and a pnpm repository would install with npm in silence. No
+    repository of the organization wrote it, so the refusal shipped in a minor.
+  - **An entry for a platform the repository does not load is ignored**, so one shared preset can
+  name several technologies' tools.
 - **`dependencies` is core, and must stay.** It layers on top of whatever
   the plugin's manifest provider read, and it is the only way a repository with *no* provider has a
   graph at all - a repo whose manifests rman cannot read can still state its edges by hand.

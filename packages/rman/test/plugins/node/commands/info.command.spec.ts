@@ -58,10 +58,25 @@ describe('commands/info - the package-manager augmentation reaching a core comma
   });
 
   it("reports the configured package manager's own Binaries key instead of npm's", async () => {
-    const dir = fixture({ name: 'my-pkg', version: '1.0.0' }, { packageManager: 'pnpm' });
+    const dir = fixture({ name: 'my-pkg', version: '1.0.0' }, { packageManager: { node: 'pnpm' } });
     const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['info', '--json'] }));
     const parsed = JSON.parse(lines[0]);
     expect(Object.keys(parsed.Binaries)).toContain('pnpm');
     expect(Object.keys(parsed.Binaries)).not.toContain('npm');
+  });
+
+  /** The old bare spelling is refused here as `ci` and `publish` refuse it - read as a map it has no
+   *  `node` entry, and `info` would report npm for a pnpm repository. */
+  it('refuses the old bare packageManager string instead of reporting npm', async () => {
+    const dir = fixture({ name: 'my-pkg', version: '1.0.0' }, { packageManager: 'pnpm' });
+    const lines = await captureLogs(() =>
+      runCli({ cwd: dir, argv: ['info', '--json'] }).then(
+        () => {
+          throw new Error('expected info to fail');
+        },
+        (e: Error) => void console.log(e.message),
+      ),
+    );
+    expect(lines.join('\n')).toContain('write packageManager: { node: pnpm }');
   });
 });
