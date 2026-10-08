@@ -318,3 +318,84 @@ describe('commands/publish', () => {
     });
   });
 });
+
+/**
+ * **What a release reads at the end of a long log**, and the order targets run in. Both measured on
+ * `panates/syncbridge`: the `docker` target ran before `npm`, so the image's `npm install` asked for
+ * a version not published yet; and the only line saying anything had failed was `"publish" failed`,
+ * landing among the `published` lines with no package named.
+ */
+describe('commands/publish: order, recap and the job summary', () => {
+  useTestEcosystem();
+  /** Registered first and marked last - so the order the specs see is the flag's, not registration's. */
+  const image: PublishTarget = { ...fakeTarget('image', { claims: true }), publishesLast: true };
+  const registryTarget = fakeTarget('reg', { claims: true });
+  /** Reports a failure for every package it was asked to publish, with a reason of two lines. */
+  const broken: PublishTarget = {
+    ...fakeTarget('broken', { claims: false }),
+    async applyPlan(_ctx, plan) {
+      return plan.map(e => ({
+        ...e,
+        status: 'error' as const,
+        reason: 'docker build exited with code 1:\n    npm error notarget',
+      }));
+    },
+  };
+  useTarget(image);
+  useTarget(registryTarget);
+  useTarget(broken);
+  beforeEach(() => {
+    calls.length = 0;
+  });
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  function repo(publish?: unknown): string {
+    const dir = mkTmp();
+    dirs.push(dir);
+    writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(publish ? { '[*]': { publish } } : {}));
+    writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+    return dir;
+  }
+
+  it('applies a target marked publishesLast after the others, whatever order they were registered in', async () => {
+    const dir = repo();
+    await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes'] }));
+    expect(calls.filter(c => c.method === 'applyPlan').map(c => c.target)).toEqual(['reg', 'image']);
+  });
+
+  it('ends with a recap naming every failure and its reason, and names them in the error line too', async () => {
+    const dir = repo({ target: ['reg', 'broken'] });
+    let error: Error | undefined;
+    const lines = await captureLogs(() =>
+      runCli({ cwd: dir, argv: ['publish', '--yes'] }).catch((e: Error) => {
+        error = e;
+      }),
+    );
+    const text = lines.join('\n');
+    expect(text).toMatch(/publish.*1 published.*1 failed/);
+    expect(text).toContain('npm error notarget');
+    expect(error?.message).toContain('"publish" failed for [broken] pkg-a');
+  });
+
+  it('writes the outcome to the GitHub job summary when there is one', async () => {
+    const dir = repo({ target: ['reg', 'broken'] });
+    const summary = path.join(dir, 'summary.md');
+    const previous = process.env.GITHUB_STEP_SUMMARY;
+    process.env.GITHUB_STEP_SUMMARY = summary;
+    try {
+      await captureLogs(() => expectCliFailure(() => runCli({ cwd: dir, argv: ['publish', '--yes'] })));
+    } finally {
+      if (previous === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+      else process.env.GITHUB_STEP_SUMMARY = previous;
+    }
+    const written = fs.readFileSync(summary, 'utf-8');
+    expect(written).toContain('### rman publish - 1 published, 1 failed');
+    expect(written).toContain('| ✅ published | reg | `pkg-a` | 1.0.0 |');
+    expect(written).toContain('| ❌ failed | broken | `pkg-a` | 1.0.0 | docker build exited with code 1:<br>');
+  });
+});

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
 import type { DockerPublishOptions } from '../builtins/publish-targets/docker/docker.target.js';
@@ -143,7 +144,11 @@ const publishCommand = registerCommand(app => {
     handler: async (args: Args) => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));
       const requested = args.target as string[] | undefined;
-      const selected = selectTargets(targets, requested);
+      /** A target built from what the others publish goes after them - see `publishesLast`. A
+       *  stable sort, so registration order still decides among the rest. */
+      const selected = selectTargets(targets, requested).sort(
+        (a, b) => Number(!!a.publishesLast) - Number(!!b.publishesLast),
+      );
       const ctx: PublishTarget.Context = {
         app,
         repository,
@@ -201,12 +206,20 @@ const publishCommand = registerCommand(app => {
       }
       if (!proceed) return;
 
-      let failed = false;
+      const outcomes: Outcome[] = [];
       for (const [target, plan] of plans) {
         const applied = await target.applyPlan(ctx, plan);
-        if (printApplied(applied, plan, target.name)) failed = true;
+        outcomes.push(...printApplied(applied, plan, target.name));
       }
-      if (failed) throw logged('"publish" failed');
+      if (!args.json) printRecap(outcomes);
+      writeStepSummary(outcomes);
+      const failed = outcomes.filter(o => o.entry.status === 'error');
+      /** **The names are in the line itself**, not only in the recap above it: in CI stdout and
+       *  stderr are separate pipes, and measured on `panates/syncbridge` this line landed in the
+       *  middle of the `published` lines rather than after them. */
+      if (failed.length) {
+        throw logged(`"publish" failed for ${failed.map(o => `[${o.target}] ${o.entry.package.name}`).join(', ')}`);
+      }
     },
   };
 });
@@ -336,25 +349,93 @@ function printPlan(entries: PublishTarget.Entry[], label: string): void {
   }
 }
 
+/** What one target did to one package it was asked to publish. */
+interface Outcome {
+  target: string;
+  entry: PublishTarget.Entry;
+}
+
 /**
- * What one target actually did. Returns whether anything it was asked to publish failed.
+ * What one target actually did, printed as it is known. Returns the outcome of every package the
+ * *plan* said to publish.
  *
- * An `'error'` is only reported when the *plan* said `'publish'` for that package: an entry that
+ * An `'error'` is only an outcome when the plan said `'publish'` for that package: an entry that
  * was already an error before anything ran has been printed once by `printPlan`, and printing it
  * again under "failed" would read as a push that was attempted and did not work.
  */
-function printApplied(applied: PublishTarget.Entry[], plan: PublishTarget.Entry[], label: string): boolean {
+function printApplied(applied: PublishTarget.Entry[], plan: PublishTarget.Entry[], label: string): Outcome[] {
   const prefix = colors.gray(`[${label}] `);
-  let failed = false;
+  const outcomes: Outcome[] = [];
   for (const entry of applied) {
+    if (plan.find(e => e.package === entry.package)?.status !== 'publish') continue;
     if (entry.status === 'publish') {
       console.log(colors.green('published'), prefix + colors.cyan(entry.package.name), entry.detail ?? entry.version);
-    } else if (entry.status === 'error' && plan.find(e => e.package === entry.package)?.status === 'publish') {
-      failed = true;
+    } else if (entry.status === 'error') {
       console.log(colors.red('failed'), prefix + colors.cyan(entry.package.name), colors.red(entry.reason ?? ''));
-    }
+    } else continue;
+    outcomes.push({ target: label, entry });
   }
-  return failed;
+  return outcomes;
+}
+
+/**
+ * **One block at the end saying how it went**: how many went up, and every failure again with its
+ * reason. A target prints as it goes, so on a long release the failed line is hundreds of lines up,
+ * among the output of the build that failed - measured on `panates/syncbridge`, where the last
+ * thing in the log was `"publish" failed` and nothing said what.
+ */
+function printRecap(outcomes: Outcome[]): void {
+  if (!outcomes.length) return;
+  const failed = outcomes.filter(o => o.entry.status === 'error');
+  const published = outcomes.length - failed.length;
+  console.log(
+    '\n' +
+      colors.bold('publish') +
+      ' ' +
+      colors.green(`${published} published`) +
+      colors.gray(', ') +
+      (failed.length ? colors.red(`${failed.length} failed`) : colors.gray('0 failed')),
+  );
+  for (const { target, entry } of failed) {
+    const [first, ...rest] = (entry.reason ?? '').split('\n');
+    console.log(
+      `  ${colors.red('failed')} ${colors.gray(`[${target}]`)} ${colors.cyan(entry.package.name)} ${entry.version}`,
+    );
+    console.log(`         ${colors.red(first ?? '')}`);
+    for (const line of rest) console.log(colors.gray(`       ${line}`));
+  }
+}
+
+/**
+ * The same outcome as a table on the job's summary page, when running in GitHub Actions - where a
+ * reader looks first, and where a failed release otherwise shows only "exit code 1".
+ *
+ * A no-op outside it (`GITHUB_STEP_SUMMARY` unset), and a summary that cannot be written is not a
+ * reason to fail a publish that worked.
+ */
+function writeStepSummary(outcomes: Outcome[]): void {
+  const file = process.env.GITHUB_STEP_SUMMARY;
+  if (!file || !outcomes.length) return;
+  const cell = (text: string) => text.replace(/\|/g, '\\|').replace(/\n+/g, '<br>');
+  const rows = outcomes.map(({ target, entry }) =>
+    entry.status === 'error'
+      ? `| ❌ failed | ${target} | \`${entry.package.name}\` | ${entry.version} | ${cell(entry.reason ?? '')} |`
+      : `| ✅ published | ${target} | \`${entry.package.name}\` | ${entry.version} | ${cell(entry.detail ?? '')} |`,
+  );
+  const failed = outcomes.filter(o => o.entry.status === 'error').length;
+  const markdown = [
+    `### rman publish - ${outcomes.length - failed} published, ${failed} failed`,
+    '',
+    '| Result | Target | Package | Version | Detail |',
+    '| --- | --- | --- | --- | --- |',
+    ...rows,
+    '',
+  ].join('\n');
+  try {
+    fs.appendFileSync(file, markdown + '\n');
+  } catch {
+    /* The summary is a courtesy; the release itself is what the exit code reports. */
+  }
 }
 
 /** The `logged` convention: printed here, so `runCli`'s catch does not print it a second time. */
