@@ -2101,6 +2101,16 @@ saw one thing to release and it was the one thing that must never be published.
   `dependencies` entry or a non-optional peer. Every edge used to count, and measured on opra's
   1.31.0 release `@opra/api-ui` failing its first publish blocked `@opra/http` - which lists it as
   an optional peer and a devDependency only - and elastic, mongodb and sqb behind it.
+- **`docker` runs last and waits for the registries first** (`PublishTarget.publishesLast`,
+  `PublishTarget.waitUntilAvailable`). An image whose `Dockerfile` runs `npm install` asks for the
+  versions this same run publishes. Measured on `panates/syncbridge`: run in registration order,
+  `docker` came first and failed `ETARGET` on `@syncbridge/common@0.13.9`; and ordering alone is not
+  enough, because npm accepts a version minutes before it serves it. So before the first
+  `publishesLast` target with work, `publish` asks each earlier target to wait for what it published
+  - npm polls `npm view --prefer-online` (5s, up to 5 min, staged entries skipped). A version still
+  missing is named and the build goes ahead. The core knows no registry; each target answers for
+  its own. The fuller fix - building the image from local `npm pack` tarballs so the registry is out
+  of the path - was weighed and deferred: it needs every repository's `Dockerfile` to change.
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
 - In CI, gate the release pipeline on **this** plan, not on `version --json`.

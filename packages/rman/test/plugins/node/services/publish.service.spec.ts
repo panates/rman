@@ -848,4 +848,59 @@ describe('services/publish', () => {
       });
     });
   });
+
+  /**
+   * **A registry serves a version a while after accepting it** - npm says "may take a few minutes" -
+   * and an image whose `Dockerfile` installs what this run published fails on `ETARGET` inside that
+   * window. `waitUntilAvailable` asks until it is served.
+   */
+  describe('waitUntilAvailable()', () => {
+    async function published(...names: string[]): Promise<PublishService.Entry[]> {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      for (const n of names) writeJson(dir, `packages/${n}/package.json`, { name: n, version: '1.0.0' });
+      const repo = await createRepository(dir);
+      return names.map(n => ({ package: repo.getPackage(n)!, version: '1.0.0', status: 'publish' as const }));
+    }
+
+    /** A registry that starts serving a package's new version after it has been asked `after` times. */
+    function servesAfter(after: Record<string, number>): PublishService.Deps & { asked: Record<string, number> } {
+      const asked: Record<string, number> = {};
+      return {
+        asked,
+        npmViewPackage: async name => {
+          asked[name] = (asked[name] ?? 0) + 1;
+          const versions = asked[name] > (after[name] ?? 0) ? ['0.9.0', '1.0.0'] : ['0.9.0'];
+          return { latest: versions[versions.length - 1], versions };
+        },
+      };
+    }
+
+    it('keeps asking until every version is served, and then reports none missing', async () => {
+      const entries = await published('pkg-a', 'pkg-b');
+      const served = servesAfter({ 'pkg-a': 2, 'pkg-b': 0 });
+      const missing = await PublishService.waitUntilAvailable(entries, { intervalMs: 1, timeoutMs: 5_000 }, served);
+      expect(missing).toEqual([]);
+      expect(served.asked).toEqual({ 'pkg-a': 3, 'pkg-b': 1 });
+    });
+
+    it('gives up after the timeout and returns what is still not served', async () => {
+      const entries = await published('pkg-a', 'pkg-b');
+      const served = servesAfter({ 'pkg-a': 1_000_000 });
+      const missing = await PublishService.waitUntilAvailable(entries, { intervalMs: 5, timeoutMs: 40 }, served);
+      expect(missing.map(e => e.package.name)).toEqual(['pkg-a']);
+    });
+
+    it('does not wait for a staged version, which stays queued until a maintainer approves it', async () => {
+      const [entry] = await published('pkg-a');
+      const served = servesAfter({ 'pkg-a': 1_000_000 });
+      const missing = await PublishService.waitUntilAvailable(
+        [{ ...entry!, staged: true }],
+        { intervalMs: 1, timeoutMs: 1_000 },
+        served,
+      );
+      expect(missing).toEqual([]);
+      expect(served.asked).toEqual({});
+    });
+  });
 });

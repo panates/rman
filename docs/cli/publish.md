@@ -421,6 +421,22 @@ is built from what the other targets publish - a `Dockerfile` running `npm insta
 for the versions this same run is about to push - so building it first fails with `ETARGET No
 matching version found` on a version that goes up a minute later.
 
+**And before it runs, `publish` waits for the registry to serve what was just published.** A
+registry accepts a version before it serves it - npm says "may take a few minutes to become
+available" - so an image built in that window fails the same way even after `npm`. The `npm` target
+asks each package's own registry (`npm view --prefer-online`) every five seconds until every new
+version is there, for up to five minutes; a staged version is not waited for, since it stays queued
+until a maintainer approves it.
+
+```
+waiting for 12 package(s) to be served by [npm]...
+[npm] serves all 12 (38.4s)
+```
+
+A version still missing at the end is named and the image is built anyway - it may have arrived by
+then, and if it has not, the build's own error says which version it could not find. Nothing waits
+when no image has anything to build.
+
 **The run ends with a recap** of how many packages went up and every failure again, with its reason
 - a target prints as it goes, so on a long release the failed line is otherwise far above the end of
 the log:

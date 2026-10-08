@@ -53,7 +53,7 @@ async function expectCliFailure(fn: () => Promise<void>): Promise<void> {
  */
 const calls: {
   target: string;
-  method: 'getPlan' | 'applyPlan';
+  method: 'getPlan' | 'applyPlan' | 'wait';
   packages: string[];
   options: PublishTarget.Options;
   args: Record<string, any>;
@@ -329,7 +329,22 @@ describe('commands/publish: order, recap and the job summary', () => {
   useTestEcosystem();
   /** Registered first and marked last - so the order the specs see is the flag's, not registration's. */
   const image: PublishTarget = { ...fakeTarget('image', { claims: true }), publishesLast: true };
-  const registryTarget = fakeTarget('reg', { claims: true });
+  /** Records each wait in the same list as the other calls, so the order across the two is visible;
+   *  `missing` is what it reports as still unserved. */
+  let missing: string[] = [];
+  const registryTarget: PublishTarget = {
+    ...fakeTarget('reg', { claims: true }),
+    async waitUntilAvailable(ctx, published) {
+      calls.push({
+        target: 'reg',
+        method: 'wait',
+        packages: published.map(e => e.package.name),
+        options: ctx.options,
+        args: ctx.args,
+      });
+      return published.filter(e => missing.includes(e.package.name));
+    },
+  };
   /** Reports a failure for every package it was asked to publish, with a reason of two lines. */
   const broken: PublishTarget = {
     ...fakeTarget('broken', { claims: false }),
@@ -346,6 +361,7 @@ describe('commands/publish: order, recap and the job summary', () => {
   useTarget(broken);
   beforeEach(() => {
     calls.length = 0;
+    missing = [];
   });
 
   const dirs: string[] = [];
@@ -366,6 +382,36 @@ describe('commands/publish: order, recap and the job summary', () => {
     const dir = repo();
     await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes'] }));
     expect(calls.filter(c => c.method === 'applyPlan').map(c => c.target)).toEqual(['reg', 'image']);
+  });
+
+  /**
+   * **And waits for the registry to serve what it just published** - a version is accepted before
+   * it is served, and an image built in that window fails on `ETARGET`. Measured on
+   * `panates/syncbridge`, where running `docker` after `npm` was not enough on its own.
+   */
+  it('waits for the earlier targets to serve what they published before a publishesLast target runs', async () => {
+    const dir = repo();
+    await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes'] }));
+    expect(calls.filter(c => c.method !== 'getPlan').map(c => `${c.method} ${c.target}`)).toEqual([
+      'applyPlan reg',
+      'wait reg',
+      'applyPlan image',
+    ]);
+    expect(calls.find(c => c.method === 'wait')?.packages).toEqual(['pkg-a']);
+  });
+
+  it('names what is still not served when the wait gives up, and builds anyway', async () => {
+    const dir = repo();
+    missing = ['pkg-a'];
+    const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes'] }));
+    expect(lines.join('\n')).toMatch(/\[reg\] still does not serve pkg-a@1\.0\.0/);
+    expect(calls.filter(c => c.method === 'applyPlan').map(c => c.target)).toEqual(['reg', 'image']);
+  });
+
+  it('does not wait when no publishesLast target has anything to do', async () => {
+    const dir = repo({ target: ['reg'] });
+    await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes'] }));
+    expect(calls.some(c => c.method === 'wait')).toBe(false);
   });
 
   it('ends with a recap naming every failure and its reason, and names them in the error line too', async () => {

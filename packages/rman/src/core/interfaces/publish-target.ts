@@ -103,6 +103,20 @@ export interface PublishTarget {
   /* A label, never an identity: `--target` and `publish.target` still take `name`, so a package
    * shown as `npm.pkg.github.com` is still published with `--target npm`. */
   labelFor?(pkg: Package): string | undefined;
+  /**
+   * Waits until what `applyPlan` just published is served by this target's registry, and returns
+   * the entries that still are not when it gives up - none when everything showed up.
+   *
+   * Asked by `publish` before a `publishesLast` target runs, so an image built from these packages
+   * finds them. Absent, nothing waits for this target.
+   */
+  /* **A registry does not serve a version the moment it accepts it.** npm answers a publish with
+   * "may take a few minutes to become available", and an image built in the same run whose
+   * `Dockerfile` runs `npm install` lands inside that window - `ETARGET No matching version found`
+   * on a version that is there a minute later. Running `docker` after `npm` was necessary and not
+   * enough; this is the other half. A question each target answers for its own registry, so the
+   * core knows nothing about npm. */
+  waitUntilAvailable?(ctx: PublishTarget.Context, published: PublishTarget.Entry[]): Promise<PublishTarget.Entry[]>;
   /** What this target *would* do - never publishes. Called even under `--dry-run`, which is the
    *  whole point of the split. */
   getPlan(ctx: PublishTarget.Context): Promise<PublishTarget.Entry[]>;

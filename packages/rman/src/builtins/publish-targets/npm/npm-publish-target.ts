@@ -37,7 +37,7 @@ export class NpmPublishTarget implements PublishTarget {
     packageManager: {
       target: 'cli',
       cliName: 'package-manager',
-      describe: 'Package manager to publish with (default: npm, or .rmanrc "packageManager")',
+      describe: 'Package manager to publish with (default: .rmanrc "packageManager.node", else npm)',
       choices: CiService.PACKAGE_MANAGERS,
     },
     access: {
@@ -111,6 +111,13 @@ export class NpmPublishTarget implements PublishTarget {
 
   /** The shared filters plus the two flags both halves need - read here rather than in the
    *  service, which keeps taking a plain options object and stays callable without a CLI. */
+  waitUntilAvailable(ctx: PublishTarget.Context, published: PublishTarget.Entry[]) {
+    return PublishService.waitUntilAvailable(published as PublishService.Entry[], {
+      registry: ctx.args.registry as string | undefined,
+      userconfig: ctx.args.userconfig as string | undefined,
+    });
+  }
+
   protected planOptions(ctx: PublishTarget.Context): PublishService.Options {
     return {
       ...ctx.options,

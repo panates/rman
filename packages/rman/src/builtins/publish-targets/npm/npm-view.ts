@@ -35,11 +35,14 @@ export interface NpmPackageView {
 export async function npmViewPackage(
   name: string,
   cwd: string,
-  options: { registry?: string; userconfig?: string } = {},
+  options: { registry?: string; userconfig?: string; preferOnline?: boolean } = {},
 ): Promise<NpmPackageView | undefined> {
   const argv = ['view', name, 'version', 'versions', '--json'];
   if (options.registry) argv.push('--registry', options.registry);
   if (options.userconfig) argv.push('--userconfig', options.userconfig);
+  /** Past npm's local cache - a caller polling for a version it just published would otherwise be
+   *  answered from the copy fetched before the publish. */
+  if (options.preferOnline) argv.push('--prefer-online');
   try {
     const { stdout } = await execFileAsync('npm', argv, { cwd });
     const text = stdout.trim();

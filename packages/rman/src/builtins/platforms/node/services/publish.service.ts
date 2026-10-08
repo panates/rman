@@ -391,6 +391,55 @@ export namespace PublishService {
     return packages.map(pkg => entries.get(pkg.name)!);
   }
 
+  export interface WaitOptions {
+    /** As in `Options` - the registry each package is asked on is resolved the same way. */
+    registry?: string;
+    userconfig?: string;
+    /** How long to keep asking, in milliseconds. Default five minutes. */
+    timeoutMs?: number;
+    /** How long between rounds, in milliseconds. Default five seconds. */
+    intervalMs?: number;
+  }
+
+  /**
+   * Asks each package's registry, every `intervalMs`, whether it serves the version just published,
+   * until all of them do or `timeoutMs` passes. Returns the entries still missing - none when every
+   * version showed up.
+   *
+   * A staged entry is not waited for: it stays in npm's queue until a maintainer approves it, which
+   * no wait in a release job can outlast.
+   */
+  /* `--prefer-online`, or npm answers from the copy of the package document it cached before the
+   * publish. One round asks about every pending package at once. */
+  export async function waitUntilAvailable(
+    entries: Entry[],
+    options: WaitOptions = {},
+    deps: Deps = {},
+  ): Promise<Entry[]> {
+    const pending = new Set(entries.filter(e => e.status === 'publish' && !e.staged));
+    const deadline = Date.now() + (options.timeoutMs ?? 300_000);
+    const interval = options.intervalMs ?? 5_000;
+    const view = (pkg: Package) =>
+      deps.npmViewPackage
+        ? deps.npmViewPackage(pkg.name, pkg.dirname)
+        : npmViewPackage(pkg.name, pkg.dirname, {
+            userconfig: options.userconfig,
+            registry: resolveRegistry(pkg, options.registry),
+            preferOnline: true,
+          });
+    while (pending.size) {
+      await Promise.all(
+        [...pending].map(async entry => {
+          if ((await view(entry.package))?.versions.includes(entry.version)) pending.delete(entry);
+        }),
+      );
+      const left = deadline - Date.now();
+      if (!pending.size || left <= 0) break;
+      await new Promise(resolve => setTimeout(resolve, Math.min(interval, left)));
+    }
+    return [...pending];
+  }
+
   /**
    * Publishes every `'publish'` entry in `plan`, topological order (already `plan`'s own order -
    * see `getPlan`), via the configured `packageManager`'s own `publish` command. Sequential, not

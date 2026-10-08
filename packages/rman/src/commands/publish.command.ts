@@ -207,9 +207,22 @@ const publishCommand = registerCommand(app => {
       if (!proceed) return;
 
       const outcomes: Outcome[] = [];
+      const publishedBy = new Map<PublishTarget, PublishTarget.Entry[]>();
+      let waited = false;
       for (const [target, plan] of plans) {
+        /** Once, before the first target built from what the others published - see
+         *  `PublishTarget.waitUntilAvailable`. */
+        if (target.publishesLast && !waited && plan.some(e => e.status === 'publish')) {
+          waited = true;
+          await waitForPublished(ctx, publishedBy);
+        }
         const applied = await target.applyPlan(ctx, plan);
-        outcomes.push(...printApplied(applied, plan, target.name));
+        const done = printApplied(applied, plan, target.name);
+        outcomes.push(...done);
+        publishedBy.set(
+          target,
+          done.filter(o => o.entry.status === 'publish').map(o => o.entry),
+        );
       }
       if (!args.json) printRecap(outcomes);
       writeStepSummary(outcomes);
@@ -346,6 +359,35 @@ function printPlan(entries: PublishTarget.Entry[], label: string): void {
         console.log(colors.red('error'), name, colors.red(e.reason ?? ''));
         break;
     }
+  }
+}
+
+/**
+ * Waits for every target that can say so to serve what it just published, so a target building from
+ * those packages finds them. On stderr, as progress rather than part of the answer; a version still
+ * missing at the end is reported and the build goes ahead - it may have arrived since, and if not,
+ * the build's own error now says which version it could not find.
+ */
+async function waitForPublished(
+  ctx: PublishTarget.Context,
+  publishedBy: Map<PublishTarget, PublishTarget.Entry[]>,
+): Promise<void> {
+  for (const [target, published] of publishedBy) {
+    if (!target.waitUntilAvailable || !published.length) continue;
+    const started = Date.now();
+    console.error(colors.gray(`waiting for ${published.length} package(s) to be served by [${target.name}]...`));
+    const missing = await target.waitUntilAvailable(ctx, published);
+    const took = ((Date.now() - started) / 1000).toFixed(1);
+    if (!missing.length) {
+      console.error(colors.gray(`[${target.name}] serves all ${published.length} (${took}s)`));
+      continue;
+    }
+    console.error(
+      colors.yellow(
+        `[${target.name}] still does not serve ${missing.map(e => `${e.package.name}@${e.version}`).join(', ')} ` +
+          `after ${took}s - building anyway`,
+      ),
+    );
   }
 }
 
