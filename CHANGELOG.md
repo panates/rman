@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to bca902bffeaa47c6680ad49e0f0cfebf65f242f6 -->
+<!-- rman:documented-up-to 8261b69a1da612edcc4c1a3a02d79eac043ab66d -->
+
+## v2.19.1 (2026-10-08)
+
+### 🐛 Bug Fixes
+
+- **publish:** a target's plan holds only the packages that ship to it (8261b69)
+
+---
 
 ## v2.19.0 (2026-10-08)
 
