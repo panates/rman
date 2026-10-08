@@ -1,6 +1,21 @@
 # Changelog
 
-<!-- rman:documented-up-to dcbc73c15bf843e12f1e264324350b9e92e5db45 -->
+<!-- rman:documented-up-to bca902bffeaa47c6680ad49e0f0cfebf65f242f6 -->
+
+## v2.19.0 (2026-10-08)
+
+### ✨ Features
+
+- **deps:** one table per package, with column headers (8e36ef9)
+- **cli:** a preset that cannot be found is a warning and a question, not an error (fa2df86)
+
+### 🐛 Bug Fixes
+
+- **publish:** wait for the registry to serve what was published before building images (398024c)
+- **deps:** hold back only the side of a rule the other side cannot meet (aa6b477)
+- **deps:** a long note continues under its own column (bca902b)
+
+---
 
 ## v2.18.2 (2026-10-08)
 
