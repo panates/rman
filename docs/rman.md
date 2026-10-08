@@ -3048,6 +3048,46 @@ interface ParsedWorkspaceRange {
 The same substitution pnpm and yarn perform in their own `publish`, applied to the manifest
 `publish` generates in the build directory.
 
+### `copyAssets` - the files `tsc` does not emit
+
+`tsc` compiles sources; a translation, an XML template or a fixture that code reads at run time is
+left in `src`, and the built package fails on a path that exists only there. `copyAssets` copies
+them into the output directory, keeping their place in the tree:
+
+```ts
+import { copyAssets, DEFAULT_ASSET_PATTERNS } from 'rman';
+
+interface CopyAssetsOptions {
+  tsconfig: string; // the one the build compiles with
+  patterns?: readonly string[]; // globs relative to rootDir; default DEFAULT_ASSET_PATTERNS
+  runBin: RunStepContext['runBin']; // runs tsc - a function step's own ctx.runBin
+}
+function copyAssets(options: CopyAssetsOptions): Promise<string[]>; // the files written, absolute
+
+const DEFAULT_ASSET_PATTERNS = ['**/*.json', '**/*.xml', '**/*.yaml', '**/*.yml'];
+```
+
+```js
+// .rmanrc.mjs - after the compile, in the same package
+run: {
+  build: {
+    exec: 'tsc -b tsconfig-build.json',
+    after: ({ pkg, runBin }) =>
+      copyAssets({ tsconfig: path.join(pkg.dirname, 'tsconfig-build.json'), runBin }),
+  },
+}
+```
+
+- **`rootDir` and `outDir` come from `tsc --showConfig`**, so a tsconfig that inherits them through
+  `extends` - a relative base or a package such as `@panates/tsconfig` - is read the way `tsc` reads
+  it. With no `rootDir`, the common directory of the inputs is used, as `tsc` does. With no `outDir`
+  there is nothing to copy, and nothing is.
+- `src/i18n/tr.json` lands at `build/i18n/tr.json`. `node_modules`, the output directory itself,
+  `tsconfig*.json`, `package.json` and `package-lock.json` are never copied.
+- **A list of formats rather than "everything that is not TypeScript"**: what is copied ships to
+  every consumer, and a list leaves out what nobody named - a stray `.md`, a `.DS_Store`, a test's
+  data. A repository that needs more passes `patterns`.
+
 ## The `logged` error convention
 
 Every service that can fail outright (a version bump with dirty packages, a failed `run`/`ci`/

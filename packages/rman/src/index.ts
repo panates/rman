@@ -242,6 +242,11 @@ export { CiService } from './builtins/platforms/node/services/ci.service.js';
 export { CleanService } from './builtins/platforms/node/services/clean.service.js';
 export { PublishService } from './builtins/platforms/node/services/publish.service.js';
 export { NodeVersionPlanService } from './builtins/platforms/node/services/version-plan.service.js';
+export {
+  copyAssets,
+  type CopyAssetsOptions,
+  DEFAULT_ASSET_PATTERNS,
+} from './builtins/platforms/node/utils/copy-assets.js';
 export type { ParsedWorkspaceRange } from './builtins/platforms/node/utils/workspace-range.js';
 export { NPM_TARGET, NpmPublishTarget } from './builtins/publish-targets/npm/npm-publish-target.js';
 export { isCalendarVersion } from './utils/release-version.js';
