@@ -1,6 +1,19 @@
 # Changelog
 
-<!-- rman:documented-up-to 4fac239be7b7f1cbfa7db75caecb19461b50fa37 -->
+<!-- rman:documented-up-to bca902bffeaa47c6680ad49e0f0cfebf65f242f6 -->
+
+## v2.19.0 (2026-10-08)
+
+### ✨ Features
+
+- **deps:** one table per package, with column headers (8e36ef9)
+- **cli:** a preset that cannot be found is a warning and a question, not an error (fa2df86)
+
+### 🐛 Bug Fixes
+
+- **publish:** wait for the registry to serve what was published before building images (398024c)
+
+---
 
 ## v2.18.1 (2026-10-08)
 
