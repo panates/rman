@@ -18,6 +18,8 @@ class FakeUpdater implements DependencyUpdater {
   restored = 0;
   verified = 0;
   refusal: string | undefined;
+  /** The note a held-back entry carries, when a case wants a long one. */
+  reason = 'major - deps.target is "minor"';
   /** What every entry reports - `'update'` unless a case says otherwise. */
   status: DependencyUpdater.Entry['status'] = 'update';
 
@@ -32,7 +34,7 @@ class FakeUpdater implements DependencyUpdater {
       ...(this.status === 'update' ? { target: '^1.3.0', bump: 'minor' } : {}),
       latest: '1.3.0',
       available: this.status === 'skipped' ? '2.0.0' : '1.3.0',
-      reason: this.status === 'skipped' ? 'major - deps.target is "minor"' : undefined,
+      reason: this.status === 'skipped' ? this.reason : undefined,
     }));
   }
 
@@ -60,6 +62,7 @@ describe('commands/deps', () => {
       verified: 0,
       refusal: undefined,
       status: 'update',
+      reason: 'major - deps.target is "minor"',
     });
   });
 
@@ -166,6 +169,36 @@ describe('commands/deps', () => {
     expect(text).not.toContain('not updated');
     expect(text).toMatch(/left-pad\s+\^1\.0\.0\s+-\s+2\.0\.0\s+skipped\s+major - deps\.target is "minor"/);
     expect(text).not.toContain('rman deps -u');
+  });
+
+  /** A note longer than the terminal continues under its own column, not at the left edge. */
+  it('wraps a long note under the Note column on a terminal', async () => {
+    const dir = monorepo();
+    updater.status = 'skipped';
+    updater.reason = Array.from({ length: 20 }, (_, i) => `word${i}`).join(' ');
+    const tty = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY');
+    const columns = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
+    Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+    let lines: string[];
+    try {
+      ({ lines } = await capture(() => runCli({ argv: ['deps', '--scope', 'pkg-a'], cwd: dir })));
+    } finally {
+      for (const [key, d] of [
+        ['isTTY', tty],
+        ['columns', columns],
+      ] as const) {
+        if (d) Object.defineProperty(process.stdout, key, d);
+        else delete (process.stdout as any)[key];
+      }
+    }
+    const header = lines.find(l => l.includes('Dependency'))!;
+    const rows = lines.flatMap(l => l.split('\n'));
+    const first = rows.findIndex(l => l.includes('word0'));
+    const continuation = rows.slice(first + 1).filter(l => l.includes('word'));
+    expect(continuation.length).toBeGreaterThan(0);
+    for (const l of [rows[first]!, ...continuation]) expect(l.length).toBeLessThanOrEqual(80);
+    for (const l of continuation) expect(l.search(/\S/)).toBe(header.indexOf('Note'));
   });
 
   it('prints one JSON document under --json', async () => {

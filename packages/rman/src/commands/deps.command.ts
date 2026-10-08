@@ -269,9 +269,34 @@ function printPlan(entries: readonly DependencyUpdater.Entry[], root: string): v
       const values = cells(e);
       if (e.reason) values[4] = values[4]!.padEnd(widths[4]!);
       const text = line(values, (v, column) => (column === 2 || column === 4 ? paint(v) : v));
-      console.log(e.reason ? `${text}  ${colors.gray(e.reason)}` : text);
+      if (!e.reason) {
+        console.log(text);
+        continue;
+      }
+      const indent = 2 + widths.reduce((sum, w) => sum + w + 2, 0);
+      const note = wrapNote(e.reason, process.stdout.isTTY ? process.stdout.columns - indent : 0);
+      console.log(`${text}  ${note.map(l => colors.gray(l)).join('\n' + ' '.repeat(indent))}`);
     }
   }
+}
+
+/**
+ * A note cut into lines of at most `width` characters, at spaces, so a long one continues under its
+ * own column instead of wrapping to the terminal's left edge. One line when `width` is too narrow to
+ * be worth it, or 0 - output that is not a terminal has no edge to wrap at.
+ */
+function wrapNote(note: string, width: number): string[] {
+  if (width < 20 || note.length <= width) return [note];
+  const lines: string[] = [];
+  let current = '';
+  for (const word of note.split(' ')) {
+    if (current && current.length + 1 + word.length > width) {
+      lines.push(current);
+      current = word;
+    } else current = current ? `${current} ${word}` : word;
+  }
+  if (current) lines.push(current);
+  return lines;
 }
 
 /** What the `Change` column says: the size of the move, or why there is none. */
