@@ -22,10 +22,12 @@ on:
         type: boolean
         default: false
 
-  # on git push
+  # on git push. `alpha` and `beta` release prereleases on their own line - see the Version step.
   push:
     branches:
       - main
+      - alpha
+      - beta
 
 permissions:
   id-token: write  # Required for OIDC
@@ -176,8 +178,20 @@ jobs:
       # (conventional-commit prefixes, with a `Release-As:` footer as the one-off override) - never
       # a static input here, which would apply identically to every future run.
       # A no-op when nothing warrants a new version, so it needs no gate of its own.
+      # **The branch is the release channel.** `alpha` and `beta` cut prereleases named after
+      # themselves (`--preid`), so `2.18.0` + a `feat:` on `alpha` is `2.19.0-alpha.0`, and the next
+      # `2.19.0-alpha.1`. Nothing else needs to know: `publish` derives the npm dist-tag from the
+      # version's own identifier, so `latest` is never touched, and `github-release` marks a
+      # prerelease as one. `--allow-branch` is the branch itself for these three and `main`
+      # otherwise, so a manual run from any other branch is refused as it always was.
       - name: Version
-        run: node packages/rman/build/cli.js version --yes --push --allow-branch main
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          case "$BRANCH" in
+            alpha | beta) node packages/rman/build/cli.js version --yes --push --allow-branch "$BRANCH" --preid "$BRANCH" ;;
+            *) node packages/rman/build/cli.js version --yes --push --allow-branch main ;;
+          esac
 
       # **Build 2 of 2: the artifact.** `support/postbuild.cjs` bakes `package.json`'s version into
       # `build/constants.js`, so a build made *before* the bump ships a CLI that reports the old
