@@ -139,6 +139,19 @@ describe('core/Workspace.create()', () => {
       expect(a.packageManager).toBe('npm');
     });
 
+    /**
+     * **An empty key in YAML keeps what it inherited.** `run:` with nothing after it is `null`, and
+     * it used to replace the inherited `run` whole - measured on `abisena/syncbridge-iomt`, where the
+     * shared preset's `"[*]" run.build` disappeared and `rman build` found no build script.
+     */
+    it('keeps an inherited block when a closer layer leaves the same key empty', async () => {
+      const root = twoPackageRepo();
+      write(root, 'base.yml', '"[*]":\n  run:\n    build:\n      exec: tsc\n');
+      write(root, '.rmanrc.yml', 'extends: ./base.yml\n"[*]":\n  run:\n');
+      const ws = await Workspace.create(root, { app: app(), presets: [], platforms: [test] });
+      expect(ws.packageAt(path.join(root, 'packages/pkg-a'))!.rawConfig.run?.build).toEqual({ exec: 'tsc' });
+    });
+
     it("lets a package's own config beat every level above it", async () => {
       const root = twoPackageRepo();
       write(root, '.rmanrc.yml', 'logLevel: info\n');

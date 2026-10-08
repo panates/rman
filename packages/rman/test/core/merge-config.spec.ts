@@ -9,6 +9,17 @@ describe('core/merge-config', () => {
       expect(target).toEqual({ group: false, publish: { target: ['npm'], skip: true } });
     });
 
+    /**
+     * **An empty key keeps what is below it.** YAML reads `run:` with nothing after it as `null`,
+     * and replacing with that wiped a shared preset's whole `run` block - measured on
+     * `abisena/syncbridge-iomt`, where `rman build` then found no build script at all.
+     */
+    it('leaves the inherited value alone for a key that is null or undefined', () => {
+      const target = { run: { build: { exec: 'tsc' } }, plugins: ['a'], group: 'core' };
+      mergeConfig(target, { run: null, plugins: null, group: undefined });
+      expect(target).toEqual({ run: { build: { exec: 'tsc' } }, plugins: ['a'], group: 'core' });
+    });
+
     it('appends `plugins` without being asked, since replacing is never what it would mean', () => {
       /** The silent failure this closes: a repository that `extends` a toolchain config and then
        *  names a plugin of its own used to *drop* the toolchain's, and what it noticed was

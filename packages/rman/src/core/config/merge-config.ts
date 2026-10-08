@@ -132,6 +132,14 @@ export function mergeConfig(
           `\`value\` is the layers below this one, and spreads as empty when there are none.`,
       );
     }
+    /**
+     * **An empty key says nothing**, so what the layers below said stands. In YAML a key with
+     * nothing after it - `run:` - is `null`, and replacing with it erased the inherited value whole.
+     * Measured on `abisena/syncbridge-iomt`: an empty `run:` under `"[*]"` wiped the shared preset's
+     * entire `run` block, and `rman build` answered `No package defines a "build" script.`
+     * Nothing in rman uses `null` to unset a key, so there is no meaning to lose.
+     */
+    if (value === null || value === undefined) continue;
     /** `plugins`/`commands`/`publishTargets`: additive at every layer, so the closer one adds
      *  rather than takes over. A glob among them is anchored to its own file on the way in - see
      *  `anchorContributions`. */
