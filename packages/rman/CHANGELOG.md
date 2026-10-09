@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to 8261b69a1da612edcc4c1a3a02d79eac043ab66d -->
+<!-- rman:documented-up-to b9723e355a5418cd680f3616cc244954394bd571 -->
+
+## v2.20.0 (2026-10-09)
+
+### ✨ Features
+
+- **run:** a step object takes its own if, and a step knows what the run was scoped to (b9723e3)
+
+### 🐛 Bug Fixes
+
+- **run:** indent a failed package's replayed log under its recap line (e839645)
+
+---
 
 ## v2.19.1 (2026-10-08)
 
