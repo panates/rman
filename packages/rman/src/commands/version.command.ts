@@ -7,6 +7,7 @@ import { registerCommand } from '../interfaces/rman-config.interface.js';
 import type { VersionService } from '../services/version.service.js';
 import { VersionPlanService } from '../services/version-plan.service.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
+import { fitTable } from '../utils/fit-table.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 import { isNamedGroupKey, isSoloGroupKey, ROOT_GROUP_KEY } from '../utils/version-group.js';
 
@@ -420,7 +421,7 @@ function printPlan(entries: VersionPlanService.Entry[]): void {
     first = false;
     for (const e of members) printPlanRow(table, e);
   }
-  console.log(table.toString().trim());
+  console.log(fitTable(table.toString().trim(), process.stdout.isTTY ? process.stdout.columns : undefined));
 }
 
 /**

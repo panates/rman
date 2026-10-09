@@ -3,6 +3,7 @@ import EasyTable from 'easy-table';
 import type { Repository } from '../core/classes/repository.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import type { ListService } from '../services/list.service.js';
+import { fitTable } from '../utils/fit-table.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 import { isNamedGroupKey, isSoloGroupKey, ROOT_GROUP_KEY } from '../utils/version-group.js';
 
@@ -187,7 +188,7 @@ function printTable(items: ListService.Item[], withRoot: boolean): void {
     table.cell('Path', it.location);
     table.newRow();
   }
-  console.log(table.toString().trim());
+  console.log(fitTable(table.toString().trim(), process.stdout.isTTY ? process.stdout.columns : undefined));
   console.log('');
   console.log(colors.gray(`${items.length - (withRoot ? 1 : 0)} Package(s) found`));
 }
