@@ -298,6 +298,45 @@ describe('services/docker-publish', () => {
       expect(buildCall).toContain('--push');
     });
 
+    /** A package at `version`, configured with `docker`, built through the recording shim - the
+     *  `buildx build` line it ran, or the entry when the build never started. */
+    async function buildWith(version: string, docker: Record<string, unknown>) {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', {
+        name: 'pkg-a',
+        version,
+        rman: { publish: { target: ['docker'], docker: { image: 'myorg/pkg-a', ...docker } } },
+      });
+      fs.writeFileSync(path.join(dir, 'packages/a/cert.pem'), 'pem');
+      await createRepository(dir);
+      const { logFile } = stubDockerBin(dir);
+      process.env.DOCKERHUB_USERNAME = 'u';
+      process.env.DOCKERHUB_PASSWORD = 'p';
+      const plan = await service('dockerPublish').getPlan({}, registry(false));
+      const [result] = await service('dockerPublish').applyPlan(plan);
+      const calls = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf-8').trim().split('\n') : [];
+      return { dir, plan, result: result!, build: calls.find(c => c.includes('buildx build')) };
+    }
+
+    /**
+     * **A prerelease is not `latest`.** Every image was pushed as `latest`, a beta included, so a
+     * plain `docker pull` took whatever went up last - npm's dist-tag rule, missing on this registry.
+     */
+    it('pushes a prerelease under its identifier, not latest - and shows it in the plan', async () => {
+      const beta = await buildWith('2.0.0-beta.1', {});
+      expect(beta.plan[0]!.detail).toBe('myorg/pkg-a:2.0.0-beta.1, beta');
+      expect(beta.build).toContain('-t myorg/pkg-a:beta ');
+      expect(beta.build).not.toContain(':latest');
+
+      const numeric = await buildWith('2.0.0-1', {});
+      expect(numeric.plan[0]!.detail).toBe('myorg/pkg-a:2.0.0-1');
+
+      const release = await buildWith('2.0.0', {});
+      expect(release.plan[0]!.detail).toBe('myorg/pkg-a:2.0.0, latest');
+    });
+
     /**
      * **A failed build says why.** It ran with `stdio: 'inherit'`, and the reason left was the exit
      * code alone - measured on `panates/syncbridge`, where the cause was an `npm install` inside the

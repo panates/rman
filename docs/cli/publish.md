@@ -322,8 +322,10 @@ missing it is a clear `'error'` in the plan, not a silent skip:
 `publish.docker.image` already containing a `/` (e.g. `"someregistry.io/team/my-app"`) is used
 verbatim, no namespace prefixing. Requires `DOCKERHUB_USERNAME`/`DOCKERHUB_PASSWORD` environment
 variables to log in (once per run, before any package's build) and `docker buildx` on the machine.
-Each `'publish'` entry builds and pushes `<image>:<version>` and `<image>:latest` via a single
-`docker buildx build --push`; whether the tag already exists (`docker manifest inspect`) decides
+Each `'publish'` entry builds and pushes `<image>:<version>` and a floating tag via a single
+`docker buildx build --push` - `latest` for a release, the identifier for a prerelease
+(`2.0.0-beta.1` goes to `beta`, never `latest`; one with no word to name it, `2.0.0-1`, gets none) -
+the plan shows every tag beside the package; whether the tag already exists (`docker manifest inspect`) decides
 `'publish'` vs `'up-to-date'`, the same idea `npm view` serves on the npm side. A
 `publish.docker.readme` file (default `DOCKER_README.md`, relative to the package's own directory),
 if present, updates the DockerHub repository's description afterward.

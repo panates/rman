@@ -2163,6 +2163,10 @@ saw one thing to release and it was the one thing that must never be published.
   - **The journal is written before anything is touched**, and the restore is synchronous so
     `signal-exit` can run it on Ctrl-C. A run that died outright is finished by the next publish,
     first thing (`PublishFiles.recover`), so one target's file can never ship with another.
+- **A prerelease image is not `latest`** (`imageTags` in `docker-publish.service.ts`): every image
+  was pushed as `<version>` and `latest`, a beta included - npm's `distTagFor` rule, missing on the
+  other registry. The floating tag is now `latest` or the prerelease's identifier, and the plan's
+  `detail` lists every tag so `--dry-run` shows it.
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
 - In CI, gate the release pipeline on **this** plan, not on `version --json`.

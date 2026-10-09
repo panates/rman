@@ -10,6 +10,7 @@ import { type PublishTarget, targetsOf } from '../../../core/interfaces/publish-
 import { exec } from '../../../utils/exec.js';
 import { GitHelper } from '../../../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../../../utils/package-filter.js';
+import { isCalendarVersion } from '../../../utils/release-version.js';
 
 /**
  * The name this target answers to in `publish.target` and `--target`.
@@ -89,6 +90,10 @@ export class DockerPublishService extends Service {
       toCheck.push({ pkg, image });
     }
 
+    /** What the plan prints beside a package is every tag it pushes, so `--dry-run` shows whether a
+     *  prerelease would move `latest`. */
+    const describe = (pkg: Package, image: string) => `${image}:${imageTags(pkg).join(', ')}`;
+
     await Promise.all(
       toCheck.map(async ({ pkg, image }) => {
         const exists = await imageExists(image, pkg.version);
@@ -96,7 +101,7 @@ export class DockerPublishService extends Service {
           package: pkg,
           version: pkg.version,
           image,
-          detail: image,
+          detail: describe(pkg, image),
           status: exists ? 'up-to-date' : 'publish',
           reason: exists ? `registry already has ${image}:${pkg.version}` : 'never published',
         });
@@ -170,6 +175,23 @@ function resolveImageRef(image: string, namespaceOverride: string | undefined): 
   return `${namespace}/${image}`;
 }
 
+/**
+ * Every tag an image of `pkg` is pushed under: its version and its floating tag.
+ *
+ * The floating tag is `latest` for a release and the identifier for a prerelease - `2.0.0-beta.1`
+ * goes to `beta`, and one with no word to name it (`2.0.0-1`) to none. A calendar version is a
+ * release however its time is spelled.
+ */
+/* **Every image used to be pushed as `latest`**, a beta included, so a plain `docker pull` took
+ * whatever was pushed last - the mistake npm's `distTagFor` exists to prevent, made on the other
+ * registry. Same rule, same scheme questions. */
+function imageTags(pkg: Package): string[] {
+  const version = pkg.version;
+  const preview = !isCalendarVersion(version) && pkg.versionScheme.isPrerelease(version);
+  const floating = preview ? pkg.versionScheme.prereleaseId(version) : 'latest';
+  return [version, ...(floating ? [floating] : [])];
+}
+
 /** A value of exactly `"$NAME"` expands to `process.env.NAME` (empty string if unset) - anything
  *  else (including a value with `$` only as part of a larger string) is passed through verbatim. */
 function expandEnvValue(value: string): string {
@@ -204,16 +226,9 @@ async function buildAndPush(repository: Repository, entry: DockerPublishService.
   for (const [name, value] of Object.entries(docker.buildArgs ?? {})) {
     args.push('--build-arg', `${name}="${expandEnvValue(value)}"`);
   }
-  args.push(
-    '-f',
-    `"${dockerfile}"`,
-    '-t',
-    `"${entry.image}:${entry.version}"`,
-    '-t',
-    `"${entry.image}:latest"`,
-    '--push',
-    '.',
-  );
+  args.push('-f', `"${dockerfile}"`);
+  for (const tag of imageTags(pkg)) args.push('-t', `"${entry.image}:${tag}"`);
+  args.push('--push', '.');
 
   /** **Shown as it runs and kept**, so a failure can say why. It ran with `stdio: 'inherit'`, and the
    *  one thing left to report was the exit code - measured on `panates/syncbridge`, the line that
