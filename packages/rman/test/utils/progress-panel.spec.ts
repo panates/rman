@@ -340,6 +340,19 @@ describe('utils/ProgressPanel', () => {
       expect(lines.some(l => l.includes('boom'))).toBe(true);
     });
 
+    /** Indented under its `X` line, so a nested rman's own recap in it is not read as this one's. */
+    it("indents a failed item's log two columns, every line of it, leaving empty lines empty", () => {
+      const panel = new ProgressPanel('X', true);
+      const a = panel.addItem('a');
+      a.status = 'failed';
+      a.log.push('first\nsecond', '', 'boom');
+      panel.start();
+      panel.stop();
+
+      const lines = captureRawLogs(() => panel.printSummary());
+      expect(lines).toContain('  first\n  second\n\n  boom');
+    });
+
     /**
      * **The log is a replay, so it is printed exactly as captured.** It holds every step the item
      * ran and only the last one failed - painting the block red reports the ones that succeeded as
@@ -372,7 +385,7 @@ describe('utils/ProgressPanel', () => {
         const lines = captureRawLogs(() => panel.printSummary());
         const replay = lines.find(l => l.includes('1 succeeded, 0 failed'));
         expect(replay).toBeDefined();
-        expect(replay).toBe('check passed\n1 succeeded, 0 failed\nboom');
+        expect(replay).toBe('  check passed\n  1 succeeded, 0 failed\n  boom');
 
         /** The X line itself still marks the failure - that is what the colour is for. */
         const header = lines.find(l => stripAnsi(l).startsWith('X '));

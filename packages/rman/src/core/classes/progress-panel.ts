@@ -122,6 +122,14 @@ export class ProgressPanel implements TerminalRegion {
     this.render();
   }
 
+  /** Every line of a replayed log moved two columns right - an empty line left empty. */
+  protected indentLog(text: string): string {
+    return text
+      .split('\n')
+      .map(line => (line ? `  ${line}` : line))
+      .join('\n');
+  }
+
   private render(): void {
     this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
     const spinner = colors.cyan(SPINNER_FRAMES[this.spinnerFrame]);
@@ -317,8 +325,11 @@ export class ProgressPanel implements TerminalRegion {
            * the comma after it red.
            *
            * The `X` above already says the item failed, and the step that failed printed its own
-           * error. */
-          if (item.log.length) console.log(item.log.join('\n'));
+           * error.
+           *
+           * **Indented two columns**, so the log reads as belonging to the `X` line above it - level
+           * with the recap's own lines it ran together with them, a nested rman's recap most of all. */
+          if (item.log.length) console.log(this.indentLog(item.log.join('\n')));
         }
       } else if (this.live.enabled) {
         console.log(colors.gray('○'), item.name, colors.gray('skipped'));
