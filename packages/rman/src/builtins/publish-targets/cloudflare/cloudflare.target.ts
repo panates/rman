@@ -28,6 +28,16 @@ export interface CloudflarePublishOptionsKeys extends PublishFilesKeys {
   /** Workers: the wrangler configuration file, relative to the package. Default: the first of
    *  `wrangler.jsonc`, `wrangler.json`, `wrangler.toml` in the package. */
   config?: ConfigValue<string>;
+  /** Workers: the wrangler environment to deploy (`--env`) - one the configuration declares,
+   *  `staging` or `production`. */
+  env?: ConfigValue<string>;
+  /** Workers: variables the Worker reads from `env` at run time (`--var NAME:value`), over the
+   *  configuration's own `vars`. Not for secrets - they show in the dashboard; those are
+   *  `wrangler secret`'s. Pages takes none from the command line: a file through `files` instead. */
+  /* **`variables`, not wrangler's `vars`**: `vars` is reserved at every level of an rman config -
+   * it is the `${{ vars.x }}` scope, consumed by the interpolator - so a key by that name here would
+   * never reach the target. The type said so first: it cannot extend both this and `ScopedVars`. */
+  variables?: ConfigValue<Record<string, string>>;
 }
 
 /**

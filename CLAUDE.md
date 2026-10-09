@@ -2167,6 +2167,10 @@ saw one thing to release and it was the one thing that must never be published.
   was pushed as `<version>` and `latest`, a beta included - npm's `distTagFor` rule, missing on the
   other registry. The floating tag is now `latest` or the prerelease's identifier, and the plan's
   `detail` lists every tag so `--dry-run` shows it.
+- **`publish.cloudflare.variables`, not `vars`**: `vars` is reserved at every config level (the
+  `${{ vars.x }}` scope), so a key by that name never reaches a target - and the type refused it
+  first, since `CloudflarePublishOptions` cannot extend both that and `ScopedVars`. Any future
+  target key mirroring a tool's `vars` needs another name.
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
 - In CI, gate the release pipeline on **this** plan, not on `version --json`.

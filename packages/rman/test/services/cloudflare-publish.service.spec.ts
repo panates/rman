@@ -103,6 +103,10 @@ if (args[0] === 'versions') console.log(${JSON.stringify(JSON.stringify(versions
         status: 'error',
         reason: expect.stringMatching(/wrangler\.jsonc/),
       });
+      expect(await reason(pages({ variables: { A: '1' } }))).toMatchObject({
+        status: 'error',
+        reason: expect.stringMatching(/"publish\.cloudflare\.variables" is for kind "workers"/),
+      });
       expect(await reason({ publish: { target: ['cloudflare'], cloudflare: { kind: 'site' } } })).toMatchObject({
         status: 'error',
         reason: expect.stringMatching(/"pages" or "workers"/),
@@ -168,6 +172,20 @@ if (args[0] === 'versions') console.log(${JSON.stringify(JSON.stringify(versions
 
       expect(entry).toMatchObject({ status: 'error', reason: expect.stringMatching(/dist does not exist/) });
       expect(wrangler.calls()).toEqual([]);
+    });
+
+    it("deploys a Worker to a named environment with its variables, and checks that environment's versions", async () => {
+      const dir = repo(workers({ env: 'staging', variables: { PLATFORM: 'cloudflare', API_URL: 'https://x' } }));
+      fs.writeFileSync(path.join(dir, 'packages/a/wrangler.jsonc'), '{ "name": "site" }');
+      const wrangler = stubWrangler(dir);
+      const plan = await planFor(dir);
+      expect(plan[0]).toMatchObject({ detail: 'workers wrangler.jsonc (staging)' });
+
+      await service('cloudflarePublish').applyPlan(plan);
+
+      const [list, deploy] = wrangler.calls();
+      expect(list).toMatch(/versions list --json --config .* --env staging$/);
+      expect(deploy).toContain('--env staging --var PLATFORM:cloudflare --var API_URL:https://x --tag v1.2.3');
     });
 
     it('deploys a Worker with its own configuration, tagged with the version', async () => {

@@ -394,6 +394,12 @@ publish:
 | `pages` | `wrangler pages deploy <directory> --project-name <project> --branch <branch>` | commit message `<name>@<version>` |
 | `workers` | `wrangler deploy --config <config>` | tag `v<version>`, message `<name>@<version>` |
 
+A Worker also takes `env` - the wrangler environment to deploy (`--env staging`), used for the
+deployed-version check too - and `variables`, run-time values the Worker reads from `env`
+(`--var NAME:value`, over the configuration's own `vars`; not for secrets, which show in the
+dashboard). Pages takes neither from the command line - give it a file through
+[`files`](#files-a-target-needs-publishtargetfiles) instead. `variables` rather than wrangler's
+`vars` because `vars` is reserved at every level of an rman config.
 
 **One deploy per version.** The label is what the plan reads back: a version already deployed is
 `up-to-date`, so a release run twice - or a merge that changes nothing a package versions - deploys

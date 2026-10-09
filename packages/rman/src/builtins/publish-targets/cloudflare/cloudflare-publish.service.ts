@@ -103,6 +103,13 @@ export class CloudflarePublishService extends Service {
     if (!cf) throw new Error('"cloudflare" is a publish target but "publish.cloudflare" is not configured');
     const marker = `${pkg.name}@${pkg.version}`;
     if (cf.kind === 'pages') {
+      /** Said rather than ignored: `wrangler pages deploy` has no `--env` or `--var`, and a setting
+       *  that silently does nothing is the one a reader trusts. */
+      for (const key of ['env', 'variables'] as const) {
+        if (cf[key] !== undefined) {
+          throw new Error(`"publish.cloudflare.${key}" is for kind "workers" - Pages takes settings through "files"`);
+        }
+      }
       const project = cf.project as string | undefined;
       if (!project) throw new Error('"publish.cloudflare.project" is required for kind "pages"');
       const branch = (cf.branch as string | undefined) || 'main';
@@ -121,13 +128,16 @@ export class CloudflarePublishService extends Service {
             : `kind "workers" needs a wrangler configuration - none of ${this.workerConfigFiles.join(', ')} is in the package`,
         );
       }
+      const env = (cf.env as string | undefined) || undefined;
       return {
         kind: 'workers',
         pkg,
         marker,
         tag: `v${pkg.version}`,
         config,
-        label: `workers ${path.relative(pkg.dirname, config)}`,
+        env,
+        variables: (cf.variables as Record<string, string> | undefined) ?? {},
+        label: `workers ${path.relative(pkg.dirname, config)}${env ? ` (${env})` : ''}`,
       };
     }
     throw new Error(`"publish.cloudflare.kind" must be "pages" or "workers", not ${JSON.stringify(cf.kind)}`);
@@ -171,7 +181,8 @@ export class CloudflarePublishService extends Service {
   /** A version of the Worker tagged with this version - among the ten most recent wrangler lists. */
   protected async workerHas(deploy: CloudflarePublishService.WorkersDeploy): Promise<boolean> {
     const lines: string[] = [];
-    await this.wrangler(deploy.pkg, ['versions', 'list', '--json', '--config', deploy.config], (line, stream) => {
+    const argv = ['versions', 'list', '--json', '--config', deploy.config, ...this.envArgs(deploy)];
+    await this.wrangler(deploy.pkg, argv, (line, stream) => {
       if (stream === 'stdout') lines.push(line);
     });
     const versions = JSON.parse(lines.join('\n')) as { annotations?: Record<string, string> }[];
@@ -199,7 +210,17 @@ export class CloudflarePublishService extends Service {
             deploy.marker,
             '--commit-dirty=true',
           ]
-        : ['deploy', '--config', deploy.config, '--tag', deploy.tag, '--message', deploy.marker];
+        : [
+            'deploy',
+            '--config',
+            deploy.config,
+            ...this.envArgs(deploy),
+            ...Object.entries(deploy.variables).flatMap(([name, value]) => ['--var', `${name}:${value}`]),
+            '--tag',
+            deploy.tag,
+            '--message',
+            deploy.marker,
+          ];
     const lines: string[] = [];
     try {
       await this.wrangler(deploy.pkg, argv, line => {
@@ -212,6 +233,12 @@ export class CloudflarePublishService extends Service {
         cause: e,
       });
     }
+  }
+
+  /** `--env <name>` when the Worker deploys to a named wrangler environment - for the deploy and for
+   *  the versions list, which would otherwise ask about a different Worker. */
+  protected envArgs(deploy: CloudflarePublishService.WorkersDeploy): string[] {
+    return deploy.env ? ['--env', deploy.env] : [];
   }
 
   /**
@@ -269,6 +296,10 @@ export namespace CloudflarePublishService {
     tag: string;
     /** Absolute path of the wrangler configuration. */
     config: string;
+    /** The wrangler environment, when one is named. */
+    env?: string;
+    /** `--var` entries. */
+    variables: Record<string, string>;
   }
 
   export type Deploy = PagesDeploy | WorkersDeploy;
