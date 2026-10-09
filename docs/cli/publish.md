@@ -370,6 +370,7 @@ publish:
 | `pages` | `wrangler pages deploy <directory> --project-name <project> --branch <branch>` | commit message `<name>@<version>` |
 | `workers` | `wrangler deploy --config <config>` | tag `v<version>`, message `<name>@<version>` |
 
+
 **One deploy per version.** The label is what the plan reads back: a version already deployed is
 `up-to-date`, so a release run twice - or a merge that changes nothing a package versions - deploys
 nothing. `publish.skip`, `--dry-run` and `--json` apply as they do to every target, and a package
@@ -387,6 +388,40 @@ nothing. `publish.skip`, `--dry-run` and `--json` apply as they do to every targ
   is deployed again - harmless, where failing the release over a question would not be.
 - **It runs last**, beside `docker`: a site's build may install what the other targets just
   published.
+
+## Files a target needs (`publish.<target>.files`)
+
+One build often ships to several places that each want something different - a `config.json`
+saying which features are on, a logo, a robots file. Each target's block can name files to copy
+into the package just before that target publishes it:
+
+```yaml
+publish:
+  target: [docker, cloudflare]
+  docker:
+    image: my-ui
+    files:
+      dist/config.json: deploy/docker/config.json
+  cloudflare:
+    kind: workers
+    files:
+      dist/config.json: deploy/cloudflare/config.json
+      dist/assets/brand: deploy/cloudflare/brand   # a directory is copied with its contents
+```
+
+Destination on the left, source on the right, both relative to the package. Any kind of file, or a
+directory. The platform's own files stay in the repository as the files they are.
+
+- **Each target sees only its own files.** Targets run one after another: the files are copied in,
+  the target publishes, and the package is put back before the next target starts - a copy is
+  removed, and whatever it replaced is moved back. That happens when the publish fails too.
+- **What it replaces is moved aside, not lost**, into `.git/rman/publish-files` together with a
+  journal of what was done. A run killed before it could put things back - Ctrl-C, a cancelled CI
+  job - puts them back on its way out; one that died outright leaves the journal, and the next
+  `rman publish` finishes the job before it plans anything, saying so.
+- **A source that does not exist fails the plan**, before anything is copied or published.
+- `--dry-run` copies nothing and lists what it would copy, under each target's plan.
+- Every target takes the key - `npm`, `docker`, `cloudflare`, and any a plugin contributes.
 
 ## The GitHub Release is not a target
 

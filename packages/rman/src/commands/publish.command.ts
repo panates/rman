@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
 import type { CloudflarePublishOptions } from '../builtins/publish-targets/cloudflare/cloudflare.target.js';
@@ -9,6 +10,7 @@ import { type PublishTarget, shipsTo, unknownTargets } from '../core/interfaces/
 import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
+import { PublishFiles } from '../utils/publish-files.js';
 
 /** Hoisted for `ArgsOf` - see `version.command.ts` and `RmanConfig.ArgsOf` for why. */
 const COMMAND = 'publish' as const;
@@ -147,6 +149,16 @@ const publishCommand = registerCommand(app => {
     ],
     handler: async (args: Args) => {
       await assertAllowedBranch(repository, readBranchGuardOptions(args));
+      /** Before anything is planned: a run that died while one target's files were in place left
+       *  them there, and the next target - or the dirty check - must not see them. */
+      const recovered = PublishFiles.recover(repository.dirname);
+      if (recovered.length) {
+        console.error(
+          colors.yellow(
+            `Put back ${recovered.length} file(s) an interrupted publish had copied in (publish.<target>.files).`,
+          ),
+        );
+      }
       const requested = args.target as string[] | undefined;
       /** A target built from what the others publish goes after them - see `publishesLast`. A
        *  stable sort, so registration order still decides among the rest. */
@@ -175,10 +187,25 @@ const publishCommand = registerCommand(app => {
         );
       }
 
+      /** A missing source fails the plan, before anything is published or copied. */
+      for (const [target, plan] of plans) {
+        for (const [i, entry] of plan.entries()) {
+          if (entry.status !== 'publish') continue;
+          try {
+            filesFor(entry.package, target);
+          } catch (e: any) {
+            plan[i] = { ...entry, status: 'error', reason: e.message };
+          }
+        }
+      }
+
       if (args.json) {
         console.log(JSON.stringify(jsonPlan(plans), undefined, 2));
       } else {
-        for (const [target, plan] of plans) printPlan(plan, target.name);
+        for (const [target, plan] of plans) {
+          printPlan(plan, target.name);
+          printFiles(plan, target);
+        }
       }
 
       /** An explicitly requested target that matched nothing is a mistake worth reporting: the run
@@ -230,7 +257,14 @@ const publishCommand = registerCommand(app => {
           waited = true;
           await waitForPublished(ctx, publishedBy);
         }
-        const applied = await target.applyPlan(ctx, plan);
+        const files = plan.filter(e => e.status === 'publish').flatMap(e => filesFor(e.package, target));
+        const staged = files.length ? PublishFiles.stage(repository.dirname, `[${target.name}]`, files) : undefined;
+        let applied: PublishTarget.Entry[];
+        try {
+          applied = await target.applyPlan(ctx, plan);
+        } finally {
+          staged?.restore();
+        }
         const done = printApplied(applied, plan, target.name);
         outcomes.push(...done);
         publishedBy.set(
@@ -333,6 +367,44 @@ function assertDeclaredTargetsExist(app: RmanApplication, packages: Package[]): 
 
 /** One `--json` row per package *and target*: a package shipping to two registries needs two, or a
  *  consumer cannot tell which of them still has something to do. */
+/**
+ * The files `publish.<target>.files` copies into `pkg` before that target publishes it - destination
+ * and source, both relative to the package. Throws naming the first source that does not exist, or
+ * a destination outside the package.
+ */
+/* **Copied, never written from config** - the user's call: a file a platform needs (a `config.json`,
+ * an image, a font) is kept in the repository as the file it is, with a diff and a history, and the
+ * config only says where it goes. Generic over targets because it is the same need for each. */
+function filesFor(pkg: Package, target: PublishTarget): PublishFiles.File[] {
+  const block = (pkg.config.publish as Record<string, any> | undefined)?.[target.name];
+  const files = block && typeof block === 'object' ? block.files : undefined;
+  if (!files || typeof files !== 'object') return [];
+  return Object.entries(files as Record<string, unknown>).map(([to, from]) => {
+    const where = `publish.${target.name}.files["${to}"]`;
+    if (typeof from !== 'string' || !from) throw new Error(`${where} must name a file or directory to copy`);
+    const dest = path.resolve(pkg.dirname, to);
+    const source = path.resolve(pkg.dirname, from);
+    const relative = path.relative(pkg.dirname, dest);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error(`${where} must be a path inside the package`);
+    }
+    if (!fs.existsSync(source)) throw new Error(`${where}: ${from} does not exist`);
+    return { source, dest };
+  });
+}
+
+/** Under a target's plan, what each package to publish will have copied in - so `--dry-run` says
+ *  it. */
+function printFiles(plan: PublishTarget.Entry[], target: PublishTarget): void {
+  for (const entry of plan) {
+    if (entry.status !== 'publish') continue;
+    for (const file of filesFor(entry.package, target)) {
+      const rel = (p: string) => path.relative(entry.package.dirname, p);
+      console.log(colors.gray(`  ${entry.package.name}: ${rel(file.dest)} <- ${rel(file.source)}`));
+    }
+  }
+}
+
 function jsonPlan(plans: Map<PublishTarget, PublishTarget.Entry[]>) {
   return [...plans].flatMap(([target, plan]) =>
     plan.map(entry => ({

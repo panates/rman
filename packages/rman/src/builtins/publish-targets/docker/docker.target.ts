@@ -1,4 +1,4 @@
-import type { PublishTarget } from '../../../core/interfaces/publish-target.js';
+import type { PublishFilesKeys, PublishTarget } from '../../../core/interfaces/publish-target.js';
 import type { ConfigValue, ScopedVars } from '../../../interfaces/rman-config.interface.js';
 import { DOCKER_TARGET, type DockerPublishService } from './docker-publish.service.js';
 
@@ -17,7 +17,7 @@ export interface DockerPublishOptions extends DockerPublishOptionsKeys, ScopedVa
 /** Every key here is a **value**, so every one is a `ConfigValue` - this target declares no step,
  *  which is what makes the whole block uniform (see `VersionExtraKeys` for the interface where it
  *  is not). */
-export interface DockerPublishOptionsKeys {
+export interface DockerPublishOptionsKeys extends PublishFilesKeys {
   /** DockerHub image name/repository - bare (e.g. `"my-app"`) to be prefixed with
    *  `--docker-namespace`/`DOCKERHUB_NAMESPACE`, or already-namespaced (contains a `/`) to use
    *  verbatim. */

@@ -1,4 +1,4 @@
-import type { PublishTarget } from '../../../core/interfaces/publish-target.js';
+import type { PublishFilesKeys, PublishTarget } from '../../../core/interfaces/publish-target.js';
 import type { ConfigValue, ScopedVars } from '../../../interfaces/rman-config.interface.js';
 import { CLOUDFLARE_TARGET, type CloudflarePublishService } from './cloudflare-publish.service.js';
 
@@ -11,7 +11,7 @@ import { CLOUDFLARE_TARGET, type CloudflarePublishService } from './cloudflare-p
  */
 export interface CloudflarePublishOptions extends CloudflarePublishOptionsKeys, ScopedVars {}
 
-export interface CloudflarePublishOptionsKeys {
+export interface CloudflarePublishOptionsKeys extends PublishFilesKeys {
   /**
    * What the package deploys as: `"pages"` - a directory of static files uploaded to a Pages
    * project (`wrangler pages deploy`) - or `"workers"` - a Worker, static assets included, as its

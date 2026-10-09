@@ -1,4 +1,4 @@
-import type { RmanConfig } from '../../interfaces/rman-config.interface.js';
+import type { ConfigValue, RmanConfig } from '../../interfaces/rman-config.interface.js';
 import type { PackageFilterOptions } from '../../utils/package-filter.js';
 import type { RmanApplication } from '../application.js';
 import type { Package } from '../classes/package.js';
@@ -163,6 +163,20 @@ export namespace PublishTarget {
     detail?: string;
     reason?: string;
   }
+}
+
+/**
+ * `publish.<target>.files` - files copied into the package just before that target publishes it,
+ * and put back afterwards. Every target's block takes it; `publish` itself does the copying.
+ */
+export interface PublishFilesKeys {
+  /**
+   * Destination -> source, both relative to the package: `{ "dist/config.json":
+   * "deploy/cloudflare/config.json" }`. A source may be a file of any kind or a directory. What a
+   * destination held is moved aside and put back once the target is done, so each target sees only
+   * its own files.
+   */
+  files?: ConfigValue<Record<string, string>>;
 }
 
 /**

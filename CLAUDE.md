@@ -2151,6 +2151,18 @@ saw one thing to release and it was the one thing that must never be published.
   - **No credentials is an `'error'` in the plan**, not a guess - the check needs the token anyway.
   - The class's steps are `protected` members (`resolveDeploy`, `isDeployed`, `wrangler`), per the
     rule above; `docker`'s module functions predate it.
+- **`publish.<target>.files` copies files in for one target and puts the package back before the
+  next** (`utils/publish-files.ts`, wrapped around each target's `applyPlan` in `publish.command.ts`).
+  Asked for one build shipped to Docker and Cloudflare with different settings.
+  - **Copied, never written from config** - the user's call, after a first design that wrote a
+    `config.json` from a value in `.rmanrc`: a platform's file may be an image, and kept as a real
+    file it has a diff and a history.
+  - **What a destination held is moved aside, not copied**, into `.git/rman/publish-files`: inside
+    the repository so the next run finds it, never committed, and surviving a reboot, which a temp
+    directory may not. A rename is instant for an image or a directory.
+  - **The journal is written before anything is touched**, and the restore is synchronous so
+    `signal-exit` can run it on Ctrl-C. A run that died outright is finished by the next publish,
+    first thing (`PublishFiles.recover`), so one target's file can never ship with another.
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
 - In CI, gate the release pipeline on **this** plan, not on `version --json`.

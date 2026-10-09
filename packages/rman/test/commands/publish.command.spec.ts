@@ -322,6 +322,76 @@ describe('commands/publish', () => {
     });
   });
 
+  /**
+   * **`publish.<target>.files`: each target sees its own files, and none is left behind.** Two
+   * targets copy different content to one path; each reads that path while it publishes. The
+   * reason it is pinned: a file one target needs, left in place, ships with the next target.
+   */
+  describe('publish.<target>.files', () => {
+    /** What `dist/config.json` held while this target was publishing - `absent` when nothing. */
+    const seen: Record<string, string> = {};
+    function peekTarget(name: string): PublishTarget {
+      return {
+        name,
+        describe: `peeks at the package while "${name}" publishes`,
+        async getPlan(ctx) {
+          return ctx.repository.getPackages().map(pkg => ({
+            package: pkg,
+            version: pkg.version,
+            status: 'publish' as const,
+          }));
+        },
+        async applyPlan(_ctx, plan) {
+          for (const entry of plan) {
+            const file = path.join(entry.package.dirname, 'dist/config.json');
+            seen[name] = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : 'absent';
+          }
+          return plan;
+        },
+      };
+    }
+    useTarget(peekTarget('first'));
+    useTarget(peekTarget('second'));
+    beforeEach(() => {
+      for (const k of Object.keys(seen)) delete seen[k];
+    });
+
+    function filesRepo(secondSource = 'deploy/second.json'): string {
+      const dir = fixtureRepo({
+        target: ['first', 'second'],
+        first: { files: { 'dist/config.json': 'deploy/first.json' } },
+        second: { files: { 'dist/config.json': secondSource } },
+      });
+      writeJson(dir, 'packages/a/deploy/first.json', { platform: 'first' });
+      writeJson(dir, 'packages/a/deploy/second.json', { platform: 'second' });
+      return dir;
+    }
+
+    it("copies each target's own file in while it publishes, and leaves nothing behind", async () => {
+      const dir = filesRepo();
+      await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes'] }));
+      expect(JSON.parse(seen.first!)).toEqual({ platform: 'first' });
+      expect(JSON.parse(seen.second!)).toEqual({ platform: 'second' });
+      expect(fs.existsSync(path.join(dir, 'packages/a/dist'))).toBe(false);
+    });
+
+    it('--dry-run says what it would copy, and copies nothing', async () => {
+      const dir = filesRepo();
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--dry-run'] }));
+      expect(lines.some(l => l.includes('pkg-a: dist/config.json <- deploy/first.json'))).toBe(true);
+      expect(fs.existsSync(path.join(dir, 'packages/a/dist'))).toBe(false);
+    });
+
+    it('fails the plan on a source that does not exist, before anything is published', async () => {
+      const dir = filesRepo('deploy/missing.json');
+      const lines = await captureLogs(() => expectCliFailure(() => runCli({ cwd: dir, argv: ['publish', '--yes'] })));
+      expect(lines.join('\n')).toMatch(
+        /publish\.second\.files\["dist\/config\.json"\]: deploy\/missing\.json does not exist/,
+      );
+      expect(seen).toEqual({});
+    });
+  });
+
   describe('a target nothing implements', () => {
     /**
      * This used to be impossible to write: `publish.target` was typed `'npm' | 'docker'` and
