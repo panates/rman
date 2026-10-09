@@ -2256,6 +2256,13 @@ four behaviours still fire.
 - A `.d.ts` with **no** matching `.ts`/`.tsx` is left alone - that is a hand-written declaration,
   not build output. Don't "simplify" that check away.
 - Never touches `node_modules`; that is `ci`'s job.
+- **A symbolic link is removed as a link and never followed** - every glob in `clean.service.ts`
+  says `followSymbolicLinks: false`, and a match is `lstat`ed. fast-glob follows links by default,
+  so `build/node_modules/@syncbridge/common` (a link into a sibling's build) was walked into: cleaning
+  `syncbuild` emptied `common/build` on `panates/syncbridge`, then failed `rmdir` on the link with
+  `ENOTDIR`. **And a failure is said with no panel too** - it went only into the item's `log`, which
+  nothing replays without a panel, so a build's nested `rman clean` reported `0 succeeded, 1 failed`
+  and no reason.
 - `clean` and `ci` are the two commands still wholly `rman-node`'s. `publish` is no longer one of
   them - see above. Both are **declared**, not built, like every built-in.
 

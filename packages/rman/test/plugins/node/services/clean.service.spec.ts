@@ -306,6 +306,58 @@ describe('services/clean', () => {
     });
   });
 
+  /**
+   * **A link is removed as a link, never followed.** A build directory can hold one into another
+   * package's own build - measured on `panates/syncbridge`, where cleaning `syncbuild` went through
+   * `build/node_modules/@syncbridge/common`, emptied `common/build`, and then failed `rmdir` on the
+   * link with `ENOTDIR`, saying nothing but `0 succeeded, 1 failed`.
+   */
+  describe('symbolic links', () => {
+    function linkedRepo(): string {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ '[*]': { clean: { include: 'build' } } }));
+      writeJson(dir, 'packages/common/package.json', { name: 'common', version: '1.0.0' });
+      writeJson(dir, 'packages/app/package.json', { name: 'app', version: '1.0.0' });
+      writeFile(dir, 'packages/common/build/index.js', 'export {};');
+      writeFile(dir, 'packages/app/build/main.js', 'export {};');
+      fs.mkdirSync(path.join(dir, 'packages/app/build/node_modules'), { recursive: true });
+      fs.symlinkSync('../../../common/build', path.join(dir, 'packages/app/build/node_modules/common'));
+      return dir;
+    }
+
+    it('removes the link and leaves what it points at alone', async () => {
+      const dir = linkedRepo();
+      const repo = await createRepository(path.join(dir, 'packages/app'));
+
+      await captureLogs(() => CleanService.clean(repo, { progress: false }));
+
+      expect(exists(dir, 'packages/app/build')).toBe(false);
+      expect(exists(dir, 'packages/common/build/index.js')).toBe(true);
+    });
+
+    it('says why a package failed when there is no panel to replay it', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'solo', version: '1.0.0' });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ clean: { include: 'build' } }));
+      writeFile(dir, 'build/locked/out.js');
+      fs.chmodSync(path.join(dir, 'build/locked'), 0o500);
+      const repo = await createRepository(dir);
+
+      /** `logger.error` writes to stdout, like the rest of clean's classic lines. */
+      const original = console.log;
+      const errors: string[] = [];
+      console.log = (...args: unknown[]) => void errors.push(args.map(String).join(' '));
+      try {
+        await CleanService.clean(repo, { progress: false }).catch(() => undefined);
+      } finally {
+        console.log = original;
+        fs.chmodSync(path.join(dir, 'build/locked'), 0o700);
+      }
+      expect(errors.join('\n')).toMatch(/root[\s\S]*(EACCES|EPERM)/);
+    });
+  });
+
   describe('*.tsbuildinfo cleanup', () => {
     it('removes tsc incremental-build cache files anywhere in the package, but not in node_modules', async () => {
       const dir = tmp();

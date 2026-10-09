@@ -142,7 +142,9 @@ async function remove(file: string, dryRun: boolean): Promise<void> {
  *  deleted, so there's nothing that could have been left empty. */
 function pruneEmptyDirs(dir: string, includeSelf: boolean, dryRun: boolean): void {
   if (dryRun || !fs.existsSync(dir)) return;
-  const entries = fg.sync('**', { cwd: dir, onlyDirectories: true, dot: true });
+  /** Not through a link: a link to a directory is not a directory of this one to prune - removing
+   *  it as one is `ENOTDIR`, and walking into it reaches somewhere else entirely. */
+  const entries = fg.sync('**', { cwd: dir, onlyDirectories: true, dot: true, followSymbolicLinks: false });
   entries.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length);
   for (const rel of entries) {
     const abs = path.join(dir, rel);
@@ -162,21 +164,47 @@ function pruneEmptyDirs(dir: string, includeSelf: boolean, dryRun: boolean): voi
  * matching files *inside* an otherwise-deleted directory, leaving the rest of it gone and the
  * protected files (and their now non-empty parent) in place.
  */
+/* **A symbolic link is removed as a link, and never followed.** A build directory routinely holds
+ * one - `build/node_modules/@scope/sibling` pointing at another package's own build - and walking
+ * through it deleted *that* package's output, then failed `rmdir` on the link with `ENOTDIR`.
+ * Measured on `panates/syncbridge`: cleaning `syncbuild` emptied `common/build`, and the run
+ * reported only `0 succeeded, 1 failed`. fast-glob follows links by default, so every glob here
+ * says `followSymbolicLinks: false`. */
 async function cleanGlobs(dirname: string, include: string[], exclude: string[], dryRun: boolean): Promise<string[]> {
   if (!include.length) return [];
-  const matches = await fg(include, { cwd: dirname, ignore: exclude, onlyFiles: false, dot: true, absolute: true });
+  const matches = await fg(include, {
+    cwd: dirname,
+    ignore: exclude,
+    onlyFiles: false,
+    dot: true,
+    absolute: true,
+    followSymbolicLinks: false,
+  });
   const protectedFiles = exclude.length
-    ? new Set(await fg(exclude, { cwd: dirname, onlyFiles: true, dot: true, absolute: true }))
+    ? new Set(
+        await fg(exclude, { cwd: dirname, onlyFiles: true, dot: true, absolute: true, followSymbolicLinks: false }),
+      )
     : new Set<string>();
 
   const removed: string[] = [];
   for (const m of matches) {
-    const stat = await fs.promises.stat(m).catch(() => undefined);
+    /** `lstat`, not `stat`: a link is removed as the link it is, and never read as the thing it
+     *  points at. */
+    const stat = await fs.promises.lstat(m).catch(() => undefined);
     if (!stat) continue;
     if (stat.isDirectory()) {
-      const filesInside = await fg('**', { cwd: m, onlyFiles: true, dot: true, absolute: true });
-      for (const f of filesInside) {
+      /** Files *and* links inside, and a link never entered - see `cleanGlobs`' own note. */
+      const inside = await fg('**', {
+        cwd: m,
+        onlyFiles: false,
+        dot: true,
+        absolute: true,
+        followSymbolicLinks: false,
+      });
+      for (const f of inside) {
         if (protectedFiles.has(f)) continue;
+        const entry = await fs.promises.lstat(f).catch(() => undefined);
+        if (!entry || entry.isDirectory()) continue;
         await remove(f, dryRun);
         removed.push(path.relative(dirname, f));
       }
@@ -228,6 +256,8 @@ async function cleanTsArtifacts(pkg: Package, dryRun: boolean): Promise<string[]
     onlyFiles: true,
     dot: true,
     absolute: true,
+    /** A link to a directory elsewhere is not this package's source to sweep. */
+    followSymbolicLinks: false,
   });
 
   const removed: string[] = [];
@@ -299,6 +329,7 @@ async function cleanTsBuildInfo(dirname: string, dryRun: boolean): Promise<strin
     onlyFiles: true,
     dot: true,
     absolute: true,
+    followSymbolicLinks: false,
   });
   for (const f of files) await remove(f, dryRun);
   return files.map(f => path.relative(dirname, f));
@@ -336,7 +367,11 @@ async function cleanPackage(
     item.status = 'success';
   } catch (e) {
     item.status = 'failed';
-    item.log.push((e as Error)?.message ?? String(e));
+    const message = (e as Error)?.message ?? String(e);
+    item.log.push(message);
+    /** The panel replays `log` in its recap; with no panel nothing does, and the run said only
+     *  `0 succeeded, 1 failed` - which is how the link bug above went unexplained. */
+    if (!panelEnabled) logger.error(colors.red('clean'), colors.cyan(item.name), message);
     throw e;
   } finally {
     item.finishedAt = Date.now();
