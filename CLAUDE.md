@@ -2679,10 +2679,11 @@ so none of them has anything a function could replace.
 a plugin package. In `--json` it was worse and quieter: `JSON.stringify` drops a function-valued key
 entirely, so the step simply vanished from the output.
 
-**Known, pre-existing, and not this feature's:** an error thrown from a command handler without the
-`logged` marker is printed **twice** - once to stdout by yargs' `.fail()`, once to stderr by
-`runCli`'s catch. Measured on untouched paths too (`rman version banana` prints it three times).
-Don't take a doubled message as evidence that a new throw site is wrong.
+**A failing command says its reason once, and used to say it twice** (three times for `rman
+version banana`). yargs rejects `parseAsync` with the handler's own error, not with the one the
+`fail` handler throws - so marking only the latter `logged` left `runCli`'s catch printing the same
+line again on stderr. The `fail` handler marks the handler's error too now; pinned in `cli.spec.ts`
+("a failing command"), whose control turns red without it.
 
 ## How a command is declared
 

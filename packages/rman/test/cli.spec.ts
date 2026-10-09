@@ -731,3 +731,49 @@ describe('cli: an extends preset that cannot be found', () => {
     expect(stderr).toContain('These presets could not be found');
   });
 });
+
+/**
+ * **A command's failure is said once.** yargs rejects `parseAsync` with the handler's own error, not
+ * with the one its `fail` handler throws, so marking only the latter as printed left `runCli`'s
+ * catch to print the same reason again on stderr - every failing command said why twice, and
+ * `rman version banana` three times. Reported on a failing `rman lint` inside a build.
+ */
+describe('cli: a failing command', () => {
+  useTestEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  it('prints its reason once, and still rejects', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-cli-fail-'));
+    dirs.push(dir);
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'root', version: '1.0.0' }));
+    fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+    fs.mkdirSync(path.join(dir, '.rman'));
+    fs.writeFileSync(
+      path.join(dir, '.rman', 'boom.mjs'),
+      `export default { describe: 'fails', handler: () => { throw new Error('boom-once'); } };`,
+    );
+
+    const said: string[] = [];
+    const original = { log: console.log, error: console.error };
+    console.log = console.error = (...args: unknown[]) => void said.push(args.map(String).join(' '));
+    let rejected = false;
+    let stderr: string;
+    try {
+      stderr = await captureStderr(async () => {
+        await runCli({ cwd: dir, argv: ['boom'] }).catch(() => {
+          rejected = true;
+        });
+      });
+    } finally {
+      Object.assign(console, original);
+    }
+
+    expect(rejected).toBe(true);
+    const all = [...said, stderr].join('\n');
+    expect(all.split('boom-once').length - 1).toBe(1);
+  });
+});

@@ -122,6 +122,11 @@ export async function runCli(options?: {
               ? err.message
               : '';
           console.log('\n' + colors.red(text));
+          /** The handler's own error is marked too, because it is the one that comes back: yargs
+           *  rejects `parseAsync` with what the handler threw, not with what this throws, so
+           *  `runCli`'s catch saw it unmarked and printed the same line again on stderr - every
+           *  failing command said its reason twice. */
+          if (err && typeof err === 'object') err.logged = true;
           /** A real `Error`, marked `logged` since the text above just went out: yargs hands the
            *  reason over as a bare string, and rethrowing that raw made bad argv indistinguishable
            *  from success to anything holding the promise - or the shell. */
