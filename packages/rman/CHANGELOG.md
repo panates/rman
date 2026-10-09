@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to b9723e355a5418cd680f3616cc244954394bd571 -->
+<!-- rman:documented-up-to 5fbe1f304b702afd0e609d1df5a857b99d3119f0 -->
+
+## v2.21.0 (2026-10-09)
+
+### ✨ Features
+
+- **run:** a failed package's recap shows the failing step's output, the passing steps a line each (5fbe1f3)
+
+### 🐛 Bug Fixes
+
+- **cli:** a failing command says its reason once (f16df7e)
+
+---
 
 ## v2.20.0 (2026-10-09)
 
