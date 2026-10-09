@@ -325,10 +325,32 @@ variables to log in (once per run, before any package's build) and `docker build
 Each `'publish'` entry builds and pushes `<image>:<version>` and a floating tag via a single
 `docker buildx build --push` - `latest` for a release, the identifier for a prerelease
 (`2.0.0-beta.1` goes to `beta`, never `latest`; one with no word to name it, `2.0.0-1`, gets none) -
-the plan shows every tag beside the package; whether the tag already exists (`docker manifest inspect`) decides
+plus any `publish.docker.tags`; the plan shows every tag beside the package; whether the tag already exists (`docker manifest inspect`) decides
 `'publish'` vs `'up-to-date'`, the same idea `npm view` serves on the npm side. A
 `publish.docker.readme` file (default `DOCKER_README.md`, relative to the package's own directory),
 if present, updates the DockerHub repository's description afterward.
+
+More of `docker buildx build`, each optional:
+
+```yaml
+publish:
+  docker:
+    image: my-app
+    secrets:                       # --secret: build-time values the image layers never record
+      npm_token: $NPM_TOKEN        #   "$NAME" reads the environment...
+      cert: certs/ca.pem           #   ...anything else is a file in the package
+    tags: ['${{ semver.major(pkg.version) }}']   # pushed besides the version and its floating tag
+    target: runtime                # --target: the stage of a multi-stage Dockerfile
+    cache:                         # --cache-from / --cache-to, a value or a list each
+      from: type=gha
+      to: type=gha,mode=max
+    labels:                        # --label, beside the Dockerfile's own
+      org.opencontainers.image.vendor: Panates
+```
+
+A Dockerfile reads a secret with `RUN --mount=type=secret,id=npm_token`. Use `secrets` rather than
+`buildArgs` for anything secret: a build argument is visible in the image's history. A secret
+naming a variable that is not set fails that package before its build starts.
 
 ```bash
 rman publish --target docker              # only the packages configured for the "docker" target

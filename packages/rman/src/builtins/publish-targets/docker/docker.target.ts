@@ -47,6 +47,23 @@ export interface DockerPublishOptionsKeys extends PublishFilesKeys {
   /** A file (relative to the package's own directory) whose contents become the DockerHub repo's
    *  full description, if present. Default `"DOCKER_README.md"`. */
   readme?: ConfigValue<string>;
+  /**
+   * `docker buildx build --secret` entries, keyed by the secret's id: a build-time value the image's
+   * layers never record, where a `buildArgs` value is visible in its history. `"$NAME"` takes it
+   * from `process.env.NAME`; anything else is a file, relative to the package. A Dockerfile reads
+   * one with `RUN --mount=type=secret,id=<id>`.
+   */
+  secrets?: ConfigValue<Record<string, string>>;
+  /** Tags pushed besides the version's own and its floating one (`latest`, or a prerelease's
+   *  identifier) - `"${{ semver.major(pkg.version) }}"` for a major line. */
+  tags?: ConfigValue<string[]>;
+  /** `docker buildx build --target` - the stage of a multi-stage Dockerfile that becomes the image. */
+  target?: ConfigValue<string>;
+  /** `--cache-from` / `--cache-to` - where the build reads and writes its layer cache
+   *  (`type=gha` on GitHub Actions). Each a single value or a list. */
+  cache?: ConfigValue<{ from?: string | string[]; to?: string | string[] }>;
+  /** `docker buildx build --label` entries - labels on the image beside the Dockerfile's own. */
+  labels?: ConfigValue<Record<string, string>>;
 }
 
 /**

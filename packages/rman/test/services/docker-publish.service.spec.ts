@@ -320,6 +320,38 @@ describe('services/docker-publish', () => {
       return { dir, plan, result: result!, build: calls.find(c => c.includes('buildx build')) };
     }
 
+    it('passes secrets, labels, the target stage, the cache and extra tags to the build', async () => {
+      process.env.RMAN_TEST_NPM_TOKEN = 'secret';
+      try {
+        const { dir, build } = await buildWith('1.2.3', {
+          secrets: { npm_token: '$RMAN_TEST_NPM_TOKEN', cert: 'cert.pem' },
+          labels: { team: 'platform' },
+          target: 'runtime',
+          cache: { from: 'type=gha', to: ['type=gha,mode=max'] },
+          tags: ['1', '1.2'],
+        });
+        expect(build).toContain('--secret id=npm_token,env=RMAN_TEST_NPM_TOKEN');
+        expect(build).toContain(`--secret id=cert,src=${path.join(dir, 'packages/a/cert.pem')}`);
+        expect(build).toContain('--label team=platform');
+        expect(build).toContain('--target runtime');
+        expect(build).toContain('--cache-from type=gha');
+        expect(build).toContain('--cache-to type=gha,mode=max');
+        for (const tag of ['1.2.3', 'latest', '1', '1.2']) expect(build).toContain(`-t myorg/pkg-a:${tag} `);
+      } finally {
+        delete process.env.RMAN_TEST_NPM_TOKEN;
+      }
+    });
+
+    /** A secret's value never appears on the command line - only the variable's name. */
+    it('fails the package when a secret names a variable that is not set, before building', async () => {
+      const { result, build } = await buildWith('1.2.3', { secrets: { npm_token: '$RMAN_TEST_UNSET' } });
+      expect(result).toMatchObject({
+        status: 'error',
+        reason: expect.stringMatching(/RMAN_TEST_UNSET, which is not set/),
+      });
+      expect(build).toBeUndefined();
+    });
+
     /**
      * **A prerelease is not `latest`.** Every image was pushed as `latest`, a beta included, so a
      * plain `docker pull` took whatever went up last - npm's dist-tag rule, missing on this registry.

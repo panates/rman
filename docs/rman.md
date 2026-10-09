@@ -1638,6 +1638,11 @@ step there is mistaken for a value.
 | `publish.docker.buildContexts` | `Record<string, string>` | `{}` | Named `--build-context <name>=<path>` entries, each path relative to the package's own directory. |
 | `publish.docker.buildArgs` | `Record<string, string>` | `{}` | `--build-arg <name>=<value>` entries. A value of exactly `"$NAME"` expands from `process.env.NAME`. |
 | `publish.docker.readme` | `string` | `'DOCKER_README.md'` | Relative to the package's own directory - becomes the DockerHub repo's description, if present. |
+| `publish.docker.secrets` | `Record<string, string>` | `{}` | `--secret` entries by id: `"$NAME"` reads the environment, anything else is a file in the package. Never recorded in the image's layers. |
+| `publish.docker.tags` | `string[]` | `[]` | Pushed besides `<version>` and the floating tag (`latest`, or a prerelease's identifier - a prerelease is never `latest`). |
+| `publish.docker.target` | `string` | none | `--target` - the stage of a multi-stage Dockerfile. |
+| `publish.docker.cache` | `{ from?, to? }` | none | `--cache-from` / `--cache-to`, each a string or a list. |
+| `publish.docker.labels` | `Record<string, string>` | `{}` | `--label` entries. |
 | `publish.<target>.files` | `Record<string, string>` | none | Every target. Destination -> source, both relative to the package: copied in just before that target publishes it, and put back afterwards - what a destination held is moved aside into `.git/rman/publish-files` and moved back. A missing source fails the plan. |
 | `publish.cloudflare.kind` | `'pages' \| 'workers'` | none (required once `"cloudflare"` is a target) | A Pages project (`wrangler pages deploy`) or a Worker (`wrangler deploy`). |
 | `publish.cloudflare.project` | `string` | none (required for `pages`) | The Pages project. |

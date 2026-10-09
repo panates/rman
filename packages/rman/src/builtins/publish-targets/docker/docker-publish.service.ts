@@ -176,7 +176,8 @@ function resolveImageRef(image: string, namespaceOverride: string | undefined): 
 }
 
 /**
- * Every tag an image of `pkg` is pushed under: its version and its floating tag.
+ * Every tag an image of `pkg` is pushed under: its version, its floating tag, then
+ * `publish.docker.tags`, each once.
  *
  * The floating tag is `latest` for a release and the identifier for a prerelease - `2.0.0-beta.1`
  * goes to `beta`, and one with no word to name it (`2.0.0-1`) to none. A calendar version is a
@@ -189,7 +190,25 @@ function imageTags(pkg: Package): string[] {
   const version = pkg.version;
   const preview = !isCalendarVersion(version) && pkg.versionScheme.isPrerelease(version);
   const floating = preview ? pkg.versionScheme.prereleaseId(version) : 'latest';
-  return [version, ...(floating ? [floating] : [])];
+  const extra = (pkg.config.publish?.docker?.tags ?? []).filter((t): t is string => typeof t === 'string' && !!t);
+  return [...new Set([version, ...(floating ? [floating] : []), ...extra])];
+}
+
+/** `--secret`'s value: `"$NAME"` reads the environment, anything else is a file in the package. */
+function secretSpec(pkg: Package, id: string, value: string): string {
+  const env = /^\$([A-Za-z_][A-Za-z0-9_]*)$/.exec(value);
+  if (env) {
+    if (process.env[env[1]!] === undefined) {
+      throw new Error(`"publish.docker.secrets.${id}" reads ${env[1]}, which is not set`);
+    }
+    return `id=${id},env=${env[1]}`;
+  }
+  return `id=${id},src=${path.resolve(pkg.dirname, value)}`;
+}
+
+function asList(value: string | string[] | undefined): string[] {
+  if (!value) return [];
+  return Array.isArray(value) ? value : [value];
 }
 
 /** A value of exactly `"$NAME"` expands to `process.env.NAME` (empty string if unset) - anything
@@ -226,6 +245,12 @@ async function buildAndPush(repository: Repository, entry: DockerPublishService.
   for (const [name, value] of Object.entries(docker.buildArgs ?? {})) {
     args.push('--build-arg', `${name}="${expandEnvValue(value)}"`);
   }
+  for (const [id, value] of Object.entries(docker.secrets ?? {}))
+    args.push('--secret', `"${secretSpec(pkg, id, value)}"`);
+  for (const [name, value] of Object.entries(docker.labels ?? {})) args.push('--label', `"${name}=${value}"`);
+  if (docker.target) args.push('--target', `"${docker.target}"`);
+  for (const from of asList(docker.cache?.from)) args.push('--cache-from', `"${from}"`);
+  for (const to of asList(docker.cache?.to)) args.push('--cache-to', `"${to}"`);
   args.push('-f', `"${dockerfile}"`);
   for (const tag of imageTags(pkg)) args.push('-t', `"${entry.image}:${tag}"`);
   args.push('--push', '.');
