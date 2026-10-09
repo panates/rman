@@ -4,7 +4,7 @@ import fastGlob from 'fast-glob';
 import { Package } from '../core/classes/package.js';
 import { Repository } from '../core/classes/repository.js';
 import { Service } from '../core/classes/service.js';
-import { GitHelper } from '../utils/git.js';
+import { dirtyReason, GitHelper } from '../utils/git.js';
 import { expandReleaseTag, isCalendarVersion, releaseTagPattern } from '../utils/release-version.js';
 import { ChangeHashService } from './change-hash.service.js';
 
@@ -56,14 +56,15 @@ export class GithubReleaseService extends Service {
     }
 
     const tag = releaseTagFor(root);
-    if ((await git.listDirtyFiles()).length) {
+    const dirtyFiles = await git.listDirtyFiles();
+    if (dirtyFiles.length) {
       return [
         {
           ...base,
           tag,
           repository: repo,
           status: options.ignoreDirty ? 'skip' : 'error',
-          reason: 'uncommitted local changes',
+          reason: dirtyReason(dirtyFiles, repository.dirname),
         },
       ];
     }

@@ -4,7 +4,7 @@ import type { Package } from '../core/classes/package.js';
 import type { Repository } from '../core/classes/repository.js';
 import { assertOneScheme, type ChangeKind, semverScheme, VersionScheme } from '../core/classes/version-scheme.js';
 import { skipReasonFor, targetsOf } from '../core/interfaces/publish-target.js';
-import { type CommitInfo, GitHelper } from '../utils/git.js';
+import { type CommitInfo, dirtyReason, filesUnder, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { findLastReleaseVersion, formatCalendarVersion, usesCalendarVersion } from '../utils/release-version.js';
 import { groupKeyOf, ROOT_GROUP_KEY } from '../utils/version-group.js';
@@ -105,7 +105,8 @@ export abstract class VersionPlanService {
     const packages = filterPackages(repository.getPackages(), options);
 
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
-    const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
+    const isDirty = (pkg: Package) => filesUnder(dirtyFiles, pkg.dirname).length > 0;
+    const dirtyReasonOf = (pkg: Package) => dirtyReason(filesUnder(dirtyFiles, pkg.dirname), repository.dirname);
     const dirty = packages.filter(isDirty);
 
     const entries = new Map<string, VersionPlanService.Entry>();
@@ -156,7 +157,7 @@ export abstract class VersionPlanService {
         group: this.groupLabel(this.resolveGroupKey(pkg)),
         status: 'skip',
         from: pkg.version,
-        reason: 'uncommitted local changes',
+        reason: dirtyReasonOf(pkg),
       });
     }
 
@@ -224,7 +225,7 @@ export abstract class VersionPlanService {
         /** A package that is not versioned has nothing to protect from a dirty tree. */
         if (!entry || unversioned.has(pkg)) continue;
         entry.status = 'error';
-        entry.reason = entry.reason ? `uncommitted local changes (${entry.reason})` : 'uncommitted local changes';
+        entry.reason = entry.reason ? `${dirtyReasonOf(pkg)} (${entry.reason})` : dirtyReasonOf(pkg);
       }
     }
     return result;

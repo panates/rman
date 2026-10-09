@@ -509,3 +509,26 @@ const execFileP = promisify(execFile);
 function execFileAsync(file: string, args: readonly string[], options: { cwd: string }) {
   return execFileP(file, args, { maxBuffer: GIT_MAX_BUFFER, ...options });
 }
+
+/** What every "you have uncommitted changes" refusal starts with - compared against by callers, so
+ *  it lives once. */
+export const UNCOMMITTED = 'uncommitted local changes';
+
+/**
+ * `uncommitted local changes: a, b, c (+4 more)` - the refusal with the files that cause it,
+ * relative to `root`, at most three of them.
+ */
+/* **Named, because the bare sentence cost a release.** On `panates/syncbridge` a build rewrote a
+ * Dockerfile label, `rman github-release` answered only `uncommitted local changes`, and the file was
+ * found by reading every build script in the repository - the CI log had nothing else to say. */
+export function dirtyReason(files: readonly string[], root: string): string {
+  if (!files.length) return UNCOMMITTED;
+  const shown = files.slice(0, 3).map(f => (path.isAbsolute(f) ? path.relative(root, f) : f));
+  const more = files.length > shown.length ? ` (+${files.length - shown.length} more)` : '';
+  return `${UNCOMMITTED}: ${shown.join(', ')}${more}`;
+}
+
+/** The files in `files` that sit inside `dir` - both absolute. */
+export function filesUnder(files: readonly string[], dir: string): string[] {
+  return files.filter(f => !path.relative(dir, f).startsWith('..'));
+}

@@ -187,7 +187,8 @@ describe('services/github-release', () => {
 
       expect((await service('githubRelease').getPlan({}, releases(false)))[0]).toMatchObject({
         status: 'error',
-        reason: 'uncommitted local changes',
+        /** Named: the bare sentence left a CI log with nothing to go on. */
+        reason: 'uncommitted local changes: packages/a/dirty.txt',
       });
       expect((await service('githubRelease').getPlan({ ignoreDirty: true }, releases(false)))[0]).toMatchObject({
         status: 'skip',

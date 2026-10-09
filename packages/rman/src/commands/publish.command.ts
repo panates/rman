@@ -9,6 +9,7 @@ import type { Package } from '../core/classes/package.js';
 import { type PublishTarget, shipsTo, unknownTargets } from '../core/interfaces/publish-target.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
+import { UNCOMMITTED } from '../utils/git.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 import { PublishFiles } from '../utils/publish-files.js';
 
@@ -222,7 +223,7 @@ const publishCommand = registerCommand(app => {
       const all = [...plans.values()].flat();
       const errors = all.filter(e => e.status === 'error');
       if (errors.length) {
-        const allDirty = errors.every(e => e.reason === 'uncommitted local changes');
+        const allDirty = errors.every(e => e.reason?.startsWith(UNCOMMITTED));
         throw logged(
           allDirty
             ? `${errors.length} package(s) have uncommitted local changes ` +

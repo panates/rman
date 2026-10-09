@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Package } from '../../../core/classes/package.js';
 import { Service } from '../../../core/classes/service.js';
 import { type PublishTarget, targetsOf } from '../../../core/interfaces/publish-target.js';
-import { GitHelper } from '../../../utils/git.js';
+import { dirtyReason, filesUnder, GitHelper } from '../../../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../../../utils/package-filter.js';
 import { runBin } from '../../../utils/run-bin.js';
 import type { CloudflarePublishOptions } from './cloudflare.target.js';
@@ -44,7 +44,7 @@ export class CloudflarePublishService extends Service {
       pkg => targetsOf(this.app, pkg).some(t => t.name === CLOUDFLARE_TARGET) && !pkg.config.publish?.skip,
     );
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
-    const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
+    const isDirty = (pkg: Package) => filesUnder(dirtyFiles, pkg.dirname).length > 0;
     const credentials = this.credentials();
     const isDeployed = deps.isDeployed ?? ((deploy: CloudflarePublishService.Deploy) => this.isDeployed(deploy));
 
@@ -59,7 +59,11 @@ export class CloudflarePublishService extends Service {
         }
         const located = { ...base, deploy, detail: deploy.label };
         if (isDirty(pkg)) {
-          return { ...located, status: options.ignoreDirty ? 'skip' : 'error', reason: 'uncommitted local changes' };
+          return {
+            ...located,
+            status: options.ignoreDirty ? 'skip' : 'error',
+            reason: dirtyReason(filesUnder(dirtyFiles, pkg.dirname), repository.dirname),
+          };
         }
         if (!credentials) {
           return {

@@ -219,10 +219,16 @@ describe('services/docker-publish', () => {
       await createRepository(dir);
 
       const plan = await service('dockerPublish').getPlan({}, registry(false));
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'error', reason: 'uncommitted local changes' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({
+        status: 'error',
+        reason: 'uncommitted local changes: packages/a/x.txt',
+      });
 
       const plan2 = await service('dockerPublish').getPlan({ ignoreDirty: true }, registry(false));
-      expect(entryFor(plan2, 'pkg-a')).toMatchObject({ status: 'skip', reason: 'uncommitted local changes' });
+      expect(entryFor(plan2, 'pkg-a')).toMatchObject({
+        status: 'skip',
+        reason: 'uncommitted local changes: packages/a/x.txt',
+      });
     });
   });
 

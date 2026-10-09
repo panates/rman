@@ -19,7 +19,7 @@ import path from 'node:path';
 import type { Package } from '../../../../core/classes/package.js';
 import type { Repository } from '../../../../core/classes/repository.js';
 import { exec } from '../../../../utils/exec.js';
-import { GitHelper } from '../../../../utils/git.js';
+import { dirtyReason, filesUnder, GitHelper } from '../../../../utils/git.js';
 import type { PackageFilterOptions } from '../../../../utils/package-filter.js';
 import { filterPackages } from '../../../../utils/package-filter.js';
 import { isCalendarVersion } from '../../../../utils/release-version.js';
@@ -300,7 +300,7 @@ export namespace PublishService {
       pkg => options.shipsHere?.(pkg) ?? true,
     );
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
-    const isDirty = (pkg: Package) => dirtyFiles.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
+    const isDirty = (pkg: Package) => filesUnder(dirtyFiles, pkg.dirname).length > 0;
 
     /** Per package, not per run: `resolveRegistry` reads the package's own `publishConfig.registry`
      *  when `--registry` was not given, so the question is asked where the answer lives. The test
@@ -351,7 +351,7 @@ export namespace PublishService {
           package: pkg,
           version: pkg.version,
           status: options.ignoreDirty ? 'skip' : 'error',
-          reason: 'uncommitted local changes',
+          reason: dirtyReason(filesUnder(dirtyFiles, pkg.dirname), repository.dirname),
         });
       } else {
         toCheck.push(pkg);

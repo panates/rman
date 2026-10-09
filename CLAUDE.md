@@ -2274,6 +2274,10 @@ saw one thing to release and it was the one thing that must never be published.
 - Idempotent by construction: the tag already having a release reads `up-to-date`, so CI runs it
   unconditionally, after `publish` (a failed registry push must not leave a release announcing code
   that never arrived).
+- **A dirty-tree refusal names the files** (`dirtyReason` in `utils/git.ts`), here and in every
+  publish target and `version`: `uncommitted local changes: packages/web-ui/Dockerfile`. The bare
+  sentence cost a release on `panates/syncbridge` - a build script rewrote a Dockerfile label and the
+  CI log said nothing else. Callers compare against `UNCOMMITTED` with `startsWith`, never `===`.
 - A missing release tag is an **error**, never a silent skip - the notes' boundary is the previous
   release tag, so releasing without one would quietly produce notes covering the entire history.
 

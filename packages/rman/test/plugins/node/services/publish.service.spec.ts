@@ -387,7 +387,10 @@ describe('services/publish', () => {
             },
           },
         );
-        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'error', reason: 'uncommitted local changes' });
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({
+          status: 'error',
+          reason: expect.stringMatching(/^uncommitted local changes: .*dirty\.txt/),
+        });
         expect(queried).toBe(false);
       });
 
@@ -399,7 +402,10 @@ describe('services/publish', () => {
         const repo = await createRepository(dir);
 
         const plan = await PublishService.getPlan(repo, { ignoreDirty: true }, registry({}));
-        expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'skip', reason: 'uncommitted local changes' });
+        expect(entryFor(plan, 'pkg-a')).toMatchObject({
+          status: 'skip',
+          reason: expect.stringMatching(/^uncommitted local changes: .*dirty\.txt/),
+        });
       });
     });
 
