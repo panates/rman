@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 5fbe1f304b702afd0e609d1df5a857b99d3119f0 -->
+<!-- rman:documented-up-to 773fc4a740b6f31a02b25cac596d6e83f5e1d857 -->
+
+## v2.21.1 (2026-10-09)
+
+### 🐛 Bug Fixes
+
+- **clean:** remove a symbolic link as a link, never follow it into another package (773fc4a)
+
+---
 
 ## v2.21.0 (2026-10-09)
 
