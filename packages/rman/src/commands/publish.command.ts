@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import readline from 'node:readline/promises';
 import colors from 'ansi-colors';
+import type { CloudflarePublishOptions } from '../builtins/publish-targets/cloudflare/cloudflare.target.js';
 import type { DockerPublishOptions } from '../builtins/publish-targets/docker/docker.target.js';
 import type { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/classes/package.js';
@@ -93,6 +94,9 @@ export interface PublishTargetConfigs {
   /** Required once `"docker"` is one of a package's `publish.target`s - `publish --target docker`
    *  errors clearly on a package that opts in here but leaves this out. */
   docker?: DockerPublishOptions;
+  /** Required once `"cloudflare"` is one of a package's `publish.target`s - `kind` says Pages or
+   *  Workers. */
+  cloudflare?: CloudflarePublishOptions;
 }
 
 type Args = RmanConfig.ArgsOf<typeof config, typeof COMMAND>;

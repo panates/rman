@@ -2003,6 +2003,7 @@ saw one thing to release and it was the one thing that must never be published.
   | --- | --- | --- | --- |
   | **b-1** npm-targeted packages | the local version is among the registry's published `versions` | a package `rman-node` read the manifest of | `NpmPublishTarget` → `PublishService` (`rman-node`) |
   | **b-2** docker-targeted packages | `docker manifest inspect <image>:<version>` | nothing - opt-in | `dockerPublishTarget` → `DockerPublishService` (`builtins/publish-targets/docker/`) |
+  | **b-4** cloudflare-targeted packages | a Pages deployment labelled `<name>@<version>` (Cloudflare's API), or a Worker version tagged `v<version>` (`wrangler versions list`) | nothing - opt-in | `cloudflarePublishTarget` → `CloudflarePublishService` (`builtins/publish-targets/cloudflare/`) |
   | **b-3** the repository itself (see `github-release`) | a GitHub Release exists for the repository's release tag | n/a - never optional, and not a target | `GithubReleaseService` (core) |
 
 - **`publish` was `rman-node`'s command, and that had the ownership backwards.** Everything the
@@ -2139,6 +2140,17 @@ saw one thing to release and it was the one thing that must never be published.
   missing is named and the build goes ahead. The core knows no registry; each target answers for
   its own. The fuller fix - building the image from local `npm pack` tarballs so the registry is out
   of the path - was weighed and deferred: it needs every repository's `Dockerfile` to change.
+- **`cloudflare` deploys once per version, and the label is the registry.** A Pages deployment's
+  commit message is `<name>@<version>`, a Worker version's tag `v<version>`, and the plan reads them
+  back. Asked for by `panates/syncbridge`, whose two web UIs deployed from a workflow running
+  `wrangler` on every merge - outside `publish.skip`, `--dry-run` and `version`, so a merge tried to
+  deploy a UI the repository had taken out of publishing.
+  - **Pages through the API, Workers through wrangler**, and that asymmetry is wrangler's:
+    `pages deployment list --json` drops the commit message (measured in 4.81's source), while
+    `versions list --json` returns the annotations. The API takes the same token.
+  - **No credentials is an `'error'` in the plan**, not a guess - the check needs the token anyway.
+  - The class's steps are `protected` members (`resolveDeploy`, `isDeployed`, `wrangler`), per the
+    rule above; `docker`'s module functions predate it.
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
 - In CI, gate the release pipeline on **this** plan, not on `version --json`.

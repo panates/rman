@@ -1,3 +1,4 @@
+import { CloudflarePublishService, cloudflarePublishTarget } from '../builtins/publish-targets/cloudflare/index.js';
 import { DockerPublishService, dockerPublishTarget } from '../builtins/publish-targets/docker/index.js';
 import { ChangelogService } from '../services/changelog.service.js';
 import { ConfigService } from '../services/config-service.js';
@@ -107,6 +108,7 @@ export class RmanApplication {
     // Register core services.
     this.setService('config', a => new ConfigService(a));
     this.setService('changelog', a => new ChangelogService(a));
+    this.setService('cloudflarePublish', a => new CloudflarePublishService(a));
     this.setService('dockerPublish', a => new DockerPublishService(a));
     this.setService('githubRelease', a => new GithubReleaseService(a));
     this.setService('exec', a => new ExecService(a));
@@ -116,6 +118,7 @@ export class RmanApplication {
     this.setService('version', a => new VersionService(a));
     // Register core targets.
     this.publishTargets.add(dockerPublishTarget);
+    this.publishTargets.add(cloudflarePublishTarget);
   }
 
   /** Which platform claims a directory - the first whose manifest provider recognizes it, because

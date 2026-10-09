@@ -3,7 +3,8 @@
 # `rman publish`
 
 > **The command is rman's own.** *Where* a package ships is a [publish target](#publish-targets),
-> which a plugin contributes - so the flags below are not a fixed list. rman brings `docker`;
+> which a plugin contributes - so the flags below are not a fixed list. rman brings `docker` and
+> `cloudflare`;
 > `npm` comes from the [`node` built-in](../rman.md#the-node-built-in).
 
 ```
@@ -38,6 +39,7 @@ Two ship today, and a repository can install more:
 | --- | --- | --- | --- |
 | `npm` | the [`node` built-in](../rman.md#the-node-built-in) | the local `package.json` version is among the registry's published `versions` | every package whose manifest that plugin read |
 | `docker` | rman itself | `docker manifest inspect <image>:<version>` succeeds | nothing - opt-in, via `publish.target` |
+| `cloudflare` | rman itself | a Pages deployment whose commit message is `<name>@<version>`, or a Worker version tagged `v<version>` | nothing - opt-in, via `publish.target` |
 
 Two consequences worth knowing:
 
@@ -338,6 +340,54 @@ See [`DockerPublishService`](../rman.md#dockerpublishservice) for the full mecha
 target seam: any language's project can push an image, so a Cargo or Go repository reaches all of
 the above by naming `"docker"` in `publish.target` and nothing else.
 
+## Cloudflare publishing (`publish.cloudflare`)
+
+A package deploys to Cloudflare by naming `"cloudflare"` in its own `publish.target`, with a
+`publish.cloudflare` block saying how:
+
+```yaml
+# packages/web-ui/.rmanrc.yml - a static site on Pages
+publish:
+  target: [cloudflare]
+  cloudflare:
+    kind: pages
+    project: my-site      # required for pages
+    branch: main          # default "main" - the project's production branch puts it live
+    directory: dist       # default "dist", relative to the package
+```
+
+```yaml
+# packages/app/.rmanrc.yml - a Worker, static assets included
+publish:
+  target: [cloudflare]
+  cloudflare:
+    kind: workers
+    config: wrangler.jsonc  # default: the first of wrangler.jsonc, wrangler.json, wrangler.toml
+```
+
+| `kind` | Runs | Labelled with |
+| --- | --- | --- |
+| `pages` | `wrangler pages deploy <directory> --project-name <project> --branch <branch>` | commit message `<name>@<version>` |
+| `workers` | `wrangler deploy --config <config>` | tag `v<version>`, message `<name>@<version>` |
+
+**One deploy per version.** The label is what the plan reads back: a version already deployed is
+`up-to-date`, so a release run twice - or a merge that changes nothing a package versions - deploys
+nothing. `publish.skip`, `--dry-run` and `--json` apply as they do to every target, and a package
+`rman version` leaves alone keeps its version, so it is not deployed again either.
+
+- **Credentials** come from `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, the variables
+  wrangler itself reads. Without them the plan is an error for every Cloudflare package rather than
+  a guess.
+- **wrangler** is the package's or the repository's own when installed, and `npx wrangler`
+  otherwise.
+- **Build first.** The release builds the package before `publish`; a Pages `directory` that does
+  not exist is an error, and nothing is uploaded.
+- **Pages is checked through Cloudflare's API**, because `wrangler pages deployment list` does not
+  return a deployment's commit message. A check that fails reads as "not deployed", and the version
+  is deployed again - harmless, where failing the release over a question would not be.
+- **It runs last**, beside `docker`: a site's build may install what the other targets just
+  published.
+
 ## The GitHub Release is not a target
 
 A repository's GitHub Release used to be a third `publish.target`, and that was wrong twice over:
@@ -417,7 +467,7 @@ not marked optional; a package that lists the failed one only in `devDependencie
 what is published), as an optional peer, or in `optionalDependencies` is published anyway.
 Unrelated packages elsewhere in the plan are unaffected.
 
-**Targets run one after another, and `docker` runs last** (`PublishTarget.publishesLast`). An image
+**Targets run one after another, and `docker` and `cloudflare` run last** (`PublishTarget.publishesLast`). An image
 is built from what the other targets publish - a `Dockerfile` running `npm install` asks the registry
 for the versions this same run is about to push - so building it first fails with `ETARGET No
 matching version found` on a version that goes up a minute later.

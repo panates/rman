@@ -203,7 +203,7 @@ describe('commands/publish', () => {
     const repository = await createRepository(dir);
     const meta = publishCommand(repository.app);
     const keys = Object.keys(meta.config ?? {});
-    /** The core ships `docker` and nothing else, so this flag is there with no plugin asked - which
+    /** The core ships `docker` and `cloudflare`, so this flag is there with no plugin asked - which
      *  is the half of the move a Cargo repository actually feels. */
     expect(keys).toContain('dockerNamespace');
     /** And the contributed one beside it: the same mechanism, seen from the other side. */
@@ -215,7 +215,7 @@ describe('commands/publish', () => {
      *  rman's own presets go under every real repository root (`DEFAULT_PRESETS`) and the `node`
      *  preset contributes it; `test/_fixture.ts` passes `presets: []` because the core brings its
      *  own ecosystem - see there for what happened when it did not. */
-    expect(meta.config?.target?.choices).toEqual(['docker', 'fixture', 'optin']);
+    expect(meta.config?.target?.choices).toEqual(['docker', 'cloudflare', 'fixture', 'optin']);
   });
 
   /**
@@ -336,7 +336,7 @@ describe('commands/publish', () => {
       );
       const text = lines.join('\n');
       expect(text).toContain('cargo');
-      expect(text).toContain('docker, fixture, optin');
+      expect(text).toContain('docker, cloudflare, fixture, optin');
     });
 
     it('--target naming one fails the same way', async () => {
