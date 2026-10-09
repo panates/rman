@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to d461177b60eeb94b78e1b5fde9da7211dfe66a56 -->
+<!-- rman:documented-up-to 396abcd81c95a228ff74379758c57056136cf1a7 -->
+
+## v2.23.0 (2026-10-09)
+
+### ✨ Features
+
+- **publish:** a cloudflare target, deploying to Pages or Workers once per version (396abcd)
+
+---
 
 ## v2.22.0 (2026-10-09)
 
