@@ -879,25 +879,82 @@ describe('services/version', () => {
     });
   });
 
-  describe('.rmanrc "publish.skip"', () => {
-    it('has no effect on version - the package still bumps normally', async () => {
-      // Deliberately independent of publish/changelog: a package can be meaningfully versioned
-      // even if it's never published, e.g. purely for internal tracking - see PublishService's
-      // and ChangelogService's own "publish.skip" handling for the commands that DO respect it.
+  /**
+   * **A package kept out of publishing takes no version.** This read the other way until 2.21 -
+   * "a package can be meaningfully versioned even if it's never published" - and the user reversed
+   * it: on `panates/syncbridge`, fourteen `publish.skip` packages were bumped, tagged and written
+   * into changelogs on every release, a number nobody could install. `version.skip` states it
+   * either way when the default is wrong for a package.
+   */
+  describe('a package kept out of publishing', () => {
+    /** Three packages, each its own version line, so a dependency moving reaches across lines. */
+    function repo(packages: Record<string, { rman?: unknown; deps?: string[] }>): string {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
-      /** Marks the repository root: `Workspace.findRoot` looks for an `.rmanrc*` or a `.git`,
-       *  since it runs before the plugins that would know what a package is. */
-      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
-      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0', rman: { publish: { skip: true } } });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ group: false }));
+      for (const [name, { rman, deps }] of Object.entries(packages)) {
+        writeJson(dir, `packages/${name}/package.json`, {
+          name,
+          version: '1.0.0',
+          ...(deps && { dependencies: Object.fromEntries(deps.map(d => [d, '^1.0.0'])) }),
+          ...(rman !== undefined && { rman }),
+        });
+      }
       initGit(dir);
       commitAll(dir, 'init');
-      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
-      commitAll(dir, 'fix: a bug');
+      /** Released once, so only the commits below count - with no tag the whole history would. */
+      for (const name of Object.keys(packages)) execFileSync('git', ['tag', `${name}@1.0.0`], { cwd: dir });
+      return dir;
+    }
 
-      const repo = await createRepository(dir);
-      const plan = await planner().getPlan(repo);
+    function change(dir: string, name: string): void {
+      fs.writeFileSync(path.join(dir, `packages/${name}/x.txt`), 'x');
+      commitAll(dir, `fix(${name}): a bug`);
+    }
+
+    it('is skipped - no version, and the reason says publish.skip', async () => {
+      const dir = repo({ 'pkg-a': { rman: { publish: { skip: true } } } });
+      change(dir, 'pkg-a');
+      const repository = await createRepository(dir);
+      const plan = await planner().getPlan(repository);
+      const entry = entryFor(plan, 'pkg-a');
+      expect(entry).toMatchObject({ status: 'skip', from: '1.0.0' });
+      expect(entry.to).toBeUndefined();
+      expect(entry.reason).toMatch(/publish\.skip/);
+    });
+
+    it('version.skip: false versions it anyway, and version.skip: true holds back one that publishes', async () => {
+      const dir = repo({
+        'pkg-a': { rman: { publish: { skip: true }, version: { skip: false } } },
+        'pkg-b': { rman: { version: { skip: true } } },
+      });
+      change(dir, 'pkg-a');
+      change(dir, 'pkg-b');
+      const repository = await createRepository(dir);
+      const plan = await planner().getPlan(repository);
       expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
+      expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'skip' });
+      expect(entryFor(plan, 'pkg-b').reason).toMatch(/version\.skip/);
+    });
+
+    /** A dependency moving does not bring it back into the release - it is out on purpose. */
+    it('is not rippled into when something it depends on moves', async () => {
+      const dir = repo({ 'pkg-a': {}, 'pkg-b': { rman: { publish: { skip: true } }, deps: ['pkg-a'] } });
+      change(dir, 'pkg-a');
+      const repository = await createRepository(dir);
+      const plan = await planner().getPlan(repository);
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
+      expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'skip' });
+    });
+
+    /** And its own change releases nothing that depends on it: no new version of it exists. */
+    it('ripples into nothing when it changes itself', async () => {
+      const dir = repo({ 'pkg-b': { rman: { publish: { skip: true } } }, 'pkg-c': { deps: ['pkg-b'] } });
+      change(dir, 'pkg-b');
+      const repository = await createRepository(dir);
+      const plan = await planner().getPlan(repository);
+      expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'skip' });
+      expect(entryFor(plan, 'pkg-c')).toMatchObject({ status: 'no-change' });
     });
   });
 

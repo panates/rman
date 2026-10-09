@@ -1604,6 +1604,7 @@ step there is mistaken for a value.
 | `allowBranch` | `string \| string[]` | none (no restriction) | Root-level only. A CLI `--allow-branch` **replaces** it entirely (never merges). |
 | `ignoreBranch` | `string \| string[]` | none (no restriction) | Same as `allowBranch`. |
 | `group` | `true \| false \| string` | `true` | Per-package cascaded. See [`VersionService`](#grouping-rmanrc-group) below. A **named** group is at most 15 characters of letters, digits, `.`, `-` and `_`, starting with a letter or digit - it is written into a file name under `changelog.groupBy: 'group'`, so anything else is refused where it is read. |
+| `version.skip` | `boolean` | unset | Per-package cascaded. Whether the package takes a version at all: unset, one kept out of publishing (`publish.skip`, or every target leaving it out, like a `private` npm package) is `skip` in the plan - no version, tag or changelog; `true` holds back one that publishes, `false` versions one that does not. |
 | `version.commitMessage` | `string` | `"chore(release): v{version}"` | Root-level only. `{version}` substituted when a commit's group shares one version. |
 | `version.changelog` | `boolean` | `false` | Root-level only. Default for `version --changelog` when the CLI flag isn't given - `--no-changelog` still overrides it off for one run. |
 | `version.releaseTagPattern` | `string` (glob) | `'release-*'` | Root-level only. Names the **repository's** release, as opposed to the per-package/group tags `changelog.tagPattern` names - created only when the root is on a calendar version. Must not match any package's own pattern. |
@@ -1646,7 +1647,7 @@ step there is mistaken for a value.
 | `githubRelease.repository` | `string` | parsed from the `origin` remote | Root-level only. `owner/repo` the release is created in. |
 | `githubRelease.draft` | `boolean` | `false` | Root-level only. Create the release as an unpublished draft. |
 | `githubRelease.prerelease` | `boolean` | whether the version is a semver prerelease | Root-level only. Mark the release as a prerelease. |
-| `publish.skip` | `boolean` | `false` | Per-package cascaded - excludes this package from `publish` entirely (every target), regardless of `target`/`"private"`. `changelog` also skips it by default (its own `--include-skipped` overrides). `version` never consults this. |
+| `publish.skip` | `boolean` | `false` | Per-package cascaded - excludes this package from `publish` entirely (every target), regardless of `target`/`"private"`. `changelog` also skips it by default (its own `--include-skipped` overrides), and `version` gives it no new version unless `version.skip` is `false`. |
 | `run.<script>.concurrency` | `number` | CPU count | **Read off the repository root only** - one scheduler, one answer. `--parallel` wins when given. See [`RunService`](#runservice) below. |
 | `run.<script>.topo` | `boolean` | `true` | Read both ways, meaning different things: the **root's** picks the sort (topological or alphabetical) for the whole list, a **package's** own decides whether *it* waits for its dependencies. `--topo`/`--no-topo` wins at both. **Which step it waits at** is a step's own `topo` - see [Step objects](#step-objects). |
 | `run.<script>.bail` | `boolean` | `true` | **Unusual precedence:** package config > CLI flag > fallback (see below). |

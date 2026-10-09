@@ -105,6 +105,14 @@ const config = {
    * `--message` is `commitMessage`'s flag and is declared above; the rest are settings a repository
    * states once, not things a single run overrides.
    */
+  skip: {
+    target: 'config',
+    describe:
+      'Whether this package takes a version at all. Unset, a package kept out of publishing ' +
+      '(publish.skip, or private) is left out; true leaves out one that publishes, false versions ' +
+      'one that does not.',
+    type: 'boolean',
+  },
   commitMessage: {
     target: 'config',
     describe:

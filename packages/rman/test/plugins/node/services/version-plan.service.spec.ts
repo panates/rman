@@ -145,3 +145,61 @@ describe('plugins/node/NodeVersionPlanService cascade', () => {
     expect(statusOf(plan, 'pkg-solo')).toEqual({ status: 'no-change', to: undefined });
   });
 });
+
+/**
+ * **npm's `private` rule keeps a package out of `version` too**, through the npm target's own
+ * `skipReason` - the same answer `publish` and `rman list` give, so the three cannot disagree about
+ * whether a package ships. A `private` package that declares a `publishConfig` is a source guard on
+ * something set up to publish from its build directory, and is versioned like any other.
+ */
+describe('plugins/node: a private package and version', () => {
+  useNodeEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  function git(cwd: string, ...args: string[]): void {
+    execFileSync('git', args, { cwd, stdio: 'pipe' });
+  }
+
+  function writeJson(dir: string, rel: string, value: unknown): void {
+    const file = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(value, undefined, 2));
+  }
+
+  it('skips a private package, and versions one whose private only guards the source', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-node-private-'));
+    dirs.push(dir);
+    writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ group: false }));
+    writeJson(dir, 'packages/app/package.json', { name: 'app', version: '1.0.0', private: true });
+    writeJson(dir, 'packages/lib/package.json', {
+      name: 'lib',
+      version: '1.0.0',
+      private: true,
+      /** Published from a build directory, so `private` guards only the source - see npm's
+       *  `skipReason`, which keeps a private package published in place private. */
+      publishConfig: { access: 'public', directory: 'build' },
+    });
+    git(dir, 'init');
+    git(dir, 'config', 'user.email', 'test@example.com');
+    git(dir, 'config', 'user.name', 'Test');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-m', 'init');
+    git(dir, 'tag', 'app@1.0.0');
+    git(dir, 'tag', 'lib@1.0.0');
+    for (const name of ['app', 'lib']) fs.writeFileSync(path.join(dir, `packages/${name}/x.txt`), 'x');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-m', 'fix: both');
+
+    const repo = await createRepository(dir);
+    const plan = await planner().getPlan(repo);
+    const app = plan.find(e => e.package.name === 'app')!;
+    expect(app).toMatchObject({ status: 'skip' });
+    expect(app.reason).toMatch(/private/);
+    expect(plan.find(e => e.package.name === 'lib')).toMatchObject({ status: 'bump', to: '1.0.1' });
+  });
+});

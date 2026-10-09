@@ -480,8 +480,27 @@ feat: needs to ship right now, not wait for the rest of the minor
 Release-As: patch
 ```
 
-`.rmanrc "publish.skip"` (see [`rman publish`](publish.md#excluding-a-package-entirely-rmanrc-publishskip))
-has no effect here - a package can still be meaningfully versioned even if it's never published.
+## A package that is not published takes no version
+
+A package kept out of publishing - `.rmanrc "publish.skip"` (see
+[`rman publish`](publish.md#excluding-a-package-entirely-rmanrc-publishskip)), or one every target
+leaves out, such as a `private` npm package published in place - is `skip` in the plan: no new
+version, no tag, no changelog entry. It does not move because a dependency did, and its own changes
+release nothing that depends on it. A version nobody can install is a number with nothing behind it.
+
+`.rmanrc "version.skip"` says it outright, either way:
+
+```yaml
+"[my-app]":
+  version:
+    skip: false   # versioned although nothing publishes it - deployed by other means
+"[my-lib]":
+  version:
+    skip: true    # published, but not versioned by rman
+```
+
+A package that no publish target ships to at all is still versioned - rman cannot tell "not
+published" from "published by something else".
 
 ## Dependency ranges and `"workspace:"`
 

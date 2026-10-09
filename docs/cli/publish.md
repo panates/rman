@@ -404,8 +404,9 @@ package's own file, never reached the copy at all.
 
 A package with `.rmanrc "publish": { "skip": true }` is never a candidate for any target - not
 shown, not published - regardless of `target`/`"private"`. [`rman changelog`](changelog.md) also
-skips it by default (its own `--include-skipped` overrides); [`rman version`](version.md) never
-consults this at all - a package can still be meaningfully versioned without ever being published.
+skips it by default (its own `--include-skipped` overrides), and
+[`rman version`](version.md#a-package-that-is-not-published-takes-no-version) gives it no new version
+unless `.rmanrc "version.skip": false` says otherwise.
 
 ## Failure handling
 

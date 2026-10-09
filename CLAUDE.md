@@ -1287,8 +1287,8 @@ command reads, which is the point of having it.
     real run would do.
   - The finer-grained keys stay, and are not the same statement: `run.<script>.skip` stops one
     script, `publish.skip` means "never distributed, by any target" - which `changelog` reuses on
-    purpose - and `version` deliberately honours *neither* of those (a package can be meaningfully
-    versioned without ever being published). A blanket `skip` replacing them would flatten that.
+    purpose - and since 2.22 `version` honours `publish.skip` too (see `version` below), with its
+    own `version.skip` to say otherwise. A blanket `skip` replacing them would flatten that.
 - **`--from-root`/`-r` comes from one `fromRootOption(verb)`** (`applyFromRootOption` for the
   hand-written builder form), not from four near-identical option blocks. It means something **only
   where a command scopes by the current directory** - `run`/`build`/`test`/`lint`, `exec`, `clean`,
@@ -1626,8 +1626,20 @@ saw one thing to release and it was the one thing that must never be published.
     `before`/`exec`/`after` - so this needed no second seam and no extra line in the plugin. **Never
     read `manifest.raw.scripts` from core again**, and don't re-add a script runner here: the
     own-beats-fallback rule belongs to `RunService`, which applies the identical rule for `run`.
-- **Never consults `.rmanrc "publish.skip"`.** A package that is never published can still be
-  meaningfully versioned.
+- **A package kept out of publishing takes no version** (`VersionPlanService.notVersionedReason`):
+  `publish.skip`, or every target that ships it leaving it out (npm's `private`, asked through the
+  same `skipReasonFor` `publish` and `list` use). It is a `'skip'` entry - no `to`, no tag, no
+  changelog - and it neither ripples nor is rippled into across groups. `version.skip` decides first,
+  both ways: `true` holds back a package that publishes, `false` versions one that does not.
+  - **This said the opposite until the user reversed it**: "a package that is never published can
+    still be meaningfully versioned". Measured on `panates/syncbridge`: fourteen `publish.skip`
+    packages bumped, tagged and written into changelogs every release - tags with nothing on the
+    registry behind them, and a version line that had jumped by the time publishing came back on.
+  - **A package no target ships to is still versioned.** Read as "not published" it stopped every
+    package of a repository with no publish target at all - one that versions with rman and
+    publishes by other means - which was most of the core's own spec fixtures (measured, 40 red).
+  - **`'skip'` is never rippled into**, which also closed a quieter hole: a package excluded by
+    `--ignore-dirty` could be bumped back in by a dependency in another group.
 - When folding the changelog into the bump commit (`--changelog`, or `.rmanrc "version.changelog"`)
   it passes `ChangelogService` an **explicit** boundary: the pre-bump tag (`expandTag(pkg,
   entry.from)`). It cannot be left to auto-detection - see the trap below.

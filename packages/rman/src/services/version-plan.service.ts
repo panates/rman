@@ -3,6 +3,7 @@ import { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/classes/package.js';
 import type { Repository } from '../core/classes/repository.js';
 import { assertOneScheme, type ChangeKind, semverScheme, VersionScheme } from '../core/classes/version-scheme.js';
+import { skipReasonFor, targetsOf } from '../core/interfaces/publish-target.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { findLastReleaseVersion, formatCalendarVersion, usesCalendarVersion } from '../utils/release-version.js';
@@ -129,8 +130,26 @@ export abstract class VersionPlanService {
      * `usesCalendarVersion`'s "one line" case, and the root reported `0.0.5 -> 2.1.6` on the
      * *semver* path instead of the calendar version it takes with four.
      */
-    const eligible = options.ignoreDirty ? packages.filter(pkg => !dirty.includes(pkg)) : packages;
-    for (const pkg of options.ignoreDirty ? dirty : []) {
+    /** Not versioned at all - see `notVersionedReason`. Out before `eligible`, for the reason a
+     *  skipped dirty package is: a number its group's other members get cannot come from it. */
+    const unversioned = new Map<Package, string>();
+    for (const pkg of packages) {
+      const reason = this.notVersionedReason(pkg);
+      if (reason) unversioned.set(pkg, reason);
+    }
+    for (const [pkg, reason] of unversioned) {
+      entries.set(pkg.name, {
+        package: pkg,
+        groupKey: this.resolveGroupKey(pkg),
+        group: this.groupLabel(this.resolveGroupKey(pkg)),
+        status: 'skip',
+        from: pkg.version,
+        reason,
+      });
+    }
+    const versioned = packages.filter(pkg => !unversioned.has(pkg));
+    const eligible = options.ignoreDirty ? versioned.filter(pkg => !dirty.includes(pkg)) : versioned;
+    for (const pkg of options.ignoreDirty ? dirty.filter(d => !unversioned.has(d)) : []) {
       entries.set(pkg.name, {
         package: pkg,
         groupKey: this.resolveGroupKey(pkg),
@@ -202,12 +221,48 @@ export abstract class VersionPlanService {
     if (!options.ignoreDirty) {
       for (const pkg of dirty) {
         const entry = entries.get(pkg.name);
-        if (!entry) continue;
+        /** A package that is not versioned has nothing to protect from a dirty tree. */
+        if (!entry || unversioned.has(pkg)) continue;
         entry.status = 'error';
         entry.reason = entry.reason ? `uncommitted local changes (${entry.reason})` : 'uncommitted local changes';
       }
     }
     return result;
+  }
+
+  /**
+   * Why `pkg` takes no version at all, or `undefined` when it does: `.rmanrc "version.skip"` when
+   * it says so, and otherwise whether it has been kept out of publishing - `publish.skip`, or every
+   * target that ships it leaving it out (npm's `private`).
+   */
+  /* **A version nothing publishes is a number nobody can install**, and that is the user's reason
+   * for reversing the old rule that `version` never reads `publish.skip`. Measured on
+   * `panates/syncbridge`: fourteen packages kept out of publishing were still bumped, tagged and
+   * written into changelogs on every release - tags with nothing on the registry behind them, and a
+   * version line that had jumped by the time publishing was switched back on.
+   *
+   * `version.skip` decides first, both ways: `true` holds back a package that does publish, `false`
+   * versions one that does not - an application deployed by other means, whose number still
+   * matters. A monorepo's root never reaches here; its version is the repository's release
+   * identity, decided by `buildRootEntry`.
+   *
+   * **A package no target ships to is still versioned**, deliberately. Tried the other way first,
+   * and it stopped versioning every package of a repository that has no publish target at all - one
+   * that versions with rman and publishes by other means, or a technology rman has no target for -
+   * which is most of the core's own spec fixtures. Only a package kept out *on purpose* is left
+   * out. */
+  protected notVersionedReason(pkg: Package): string | undefined {
+    const declared = pkg.config.version?.skip;
+    if (declared === true) return 'excluded via .rmanrc "version.skip"';
+    if (declared === false) return undefined;
+    if (pkg.config.publish?.skip) return 'not published - .rmanrc "publish.skip"';
+    const app = pkg.repository?.app;
+    if (!app) return undefined;
+    const targets = targetsOf(app, pkg);
+    if (!targets.length) return undefined;
+    const reasons = targets.map(target => skipReasonFor(pkg, target));
+    if (reasons.every(Boolean)) return `not published - ${reasons[0]}`;
+    return undefined;
   }
 
   /**
@@ -535,7 +590,9 @@ export abstract class VersionPlanService {
       const source = worklist.shift()!;
       for (const pkg of packages) {
         const entry = entries.get(pkg.name)!;
-        if (entry.status === 'bump' || entry.groupKey === source.groupKey) continue;
+        /** A skipped package stays skipped: it is out of the release on purpose (not published, or
+         *  dirty under `--ignore-dirty`), and a dependency moving does not change that. */
+        if (entry.status === 'bump' || entry.status === 'skip' || entry.groupKey === source.groupKey) continue;
         if (!pkg.dependencies.includes(source.package)) continue;
 
         /** The group always contains `pkg` itself, so there is always at least one version here -
