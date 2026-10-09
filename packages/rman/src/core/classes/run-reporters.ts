@@ -146,14 +146,21 @@ export class PanelReporter extends PlainReporter {
     super(commandName, panel);
   }
 
-  /** The row names the step itself; there is no separate line to print. */
-  protected override started(): void {}
+  /** The row names the step itself; there is no separate line to print - but the recap needs to
+   *  know which lines were whose, so a step is opened here. */
+  protected override started(event: Extract<LogEvent, { event: 'start' }>, origin: ReportOrigin): void {
+    origin.item.steps?.push({ label: event.command ? `${event.step}: ${event.command}` : event.step, lines: [] });
+  }
 
   protected override output(event: Extract<LogEvent, { event: 'output' }>, origin: ReportOrigin): void {
     origin.item.log.push(event.line);
+    origin.item.steps?.at(-1)?.lines.push(event.line);
     origin.item.lastLine = event.line;
   }
 
-  /** The row shows the step's outcome; the recap prints the package's. */
-  protected override ended(): void {}
+  /** The row shows the step's outcome; the recap prints the package's - and reads it from here. */
+  protected override ended(event: Extract<LogEvent, { event: 'end' }>, origin: ReportOrigin): void {
+    const step = origin.item.steps?.at(-1);
+    if (step) step.status = event.status;
+  }
 }

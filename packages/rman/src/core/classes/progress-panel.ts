@@ -27,6 +27,21 @@ export interface ProgressItem {
   finishedAt?: number;
   /** Captured output, printed back out if the item ends up failing. */
   log: string[];
+  /**
+   * The same output split by the step that printed it, when the driver reports steps (`run`'s
+   * scheduler does). A failed item's recap then names the steps that passed in a line each and
+   * prints the output of the one that failed; without it, `log` is printed whole.
+   */
+  steps?: StepLog[];
+}
+
+/** One step of an item, as the recap shows it - see `ProgressItem.steps`. */
+export interface StepLog {
+  /** `before: rman check` - the slot and what ran in it. */
+  label: string;
+  /** Unset while it runs, and for a step that never got to end. */
+  status?: 'success' | 'failed';
+  lines: string[];
 }
 
 export interface ProgressSummary {
@@ -120,6 +135,28 @@ export class ProgressPanel implements TerminalRegion {
     this.live.clear();
     process.stdout.write(text);
     this.render();
+  }
+
+  /**
+   * A failed item's steps: one line for each that passed, and the one that failed - or never got to
+   * end - with its whole output under it.
+   */
+  /* **Only the failing step's output, and the user's call.** The whole log used to be replayed, on
+   * the reasoning that an earlier step's output can explain a later failure. In a real build that
+   * put `rman check`'s file count and its own recap above every lint error, four lines of success
+   * the reader had to skip to reach the one that mattered. The passing steps keep a line each, so
+   * the order is still there; `--log-file` keeps every line. */
+  protected stepRecap(steps: readonly StepLog[]): string {
+    const out: string[] = [];
+    for (const step of steps) {
+      if (step.status === 'success') {
+        out.push(`${colors.green('✔')} ${colors.gray(step.label)}`);
+        continue;
+      }
+      out.push(`${colors.red('✖')} ${step.label}`);
+      if (step.lines.length) out.push(this.indentLog(step.lines.join('\n')));
+    }
+    return out.join('\n');
   }
 
   /** Every line of a replayed log moved two columns right - an empty line left empty. */
@@ -329,7 +366,8 @@ export class ProgressPanel implements TerminalRegion {
            *
            * **Indented two columns**, so the log reads as belonging to the `X` line above it - level
            * with the recap's own lines it ran together with them, a nested rman's recap most of all. */
-          if (item.log.length) console.log(this.indentLog(item.log.join('\n')));
+          if (item.steps?.length) console.log(this.indentLog(this.stepRecap(item.steps)));
+          else if (item.log.length) console.log(this.indentLog(item.log.join('\n')));
         }
       } else if (this.live.enabled) {
         console.log(colors.gray('○'), item.name, colors.gray('skipped'));
@@ -394,6 +432,7 @@ class PanelItem implements ProgressItem {
   startedAt?: number;
   finishedAt?: number;
   readonly log: string[] = [];
+  readonly steps: StepLog[] = [];
   private _currentStep?: string;
   private _currentCommand?: string;
 

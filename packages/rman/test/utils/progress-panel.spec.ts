@@ -1,6 +1,7 @@
 import colors from 'ansi-colors';
 import { expect } from 'expect';
 import { ProgressPanel } from '../../src/core/classes/progress-panel.js';
+import { PanelReporter } from '../../src/core/classes/run-reporters.js';
 
 /**
  * **Every CSI sequence, not just the colours.** A redraw also writes cursor moves and erases
@@ -338,6 +339,36 @@ describe('utils/ProgressPanel', () => {
       const lines = captureLogs(() => panel.printSummary());
       expect(lines.some(l => l.includes('X') && l.includes('a'))).toBe(true);
       expect(lines.some(l => l.includes('boom'))).toBe(true);
+    });
+
+    /**
+     * **Only the failing step's output, each passing step in one line.** Fed through the reporter
+     * that fills a row in a real run, so the step boundaries come from the same `start`/`end`
+     * events the scheduler emits.
+     */
+    it("names the steps that passed in a line each and prints only the failing step's output", () => {
+      const panel = new ProgressPanel('X', true);
+      const item = panel.addItem('pkg-a');
+      const reporter = new PanelReporter('build', panel);
+      const origin = { item, logLevel: 'info' as const };
+      const step = (name: string, command: string, lines: string[], status: 'success' | 'failed') => {
+        reporter.report({ event: 'start', package: 'pkg-a', step: name, command }, origin);
+        for (const line of lines)
+          reporter.report({ event: 'output', package: 'pkg-a', stream: 'stdout', line }, origin);
+        reporter.report({ event: 'end', package: 'pkg-a', step: name, status, ms: 1 }, origin);
+      };
+      step('before', 'rman check', ['85 files, no circular dependency', '1 succeeded, 0 failed'], 'success');
+      step('before', 'rman lint', ['cli.ts 9:25 error', '"eslint ." exited with code 1'], 'failed');
+      item.status = 'failed';
+      panel.start();
+      panel.stop();
+
+      const text = captureLogs(() => panel.printSummary()).join('\n');
+      expect(text).toContain('  ✔ before: rman check');
+      expect(text).not.toContain('no circular dependency');
+      expect(text).toContain('  ✖ before: rman lint\n    cli.ts 9:25 error\n    "eslint ." exited with code 1');
+      /** The flat log is still kept whole, for whatever reads it. */
+      expect(item.log).toHaveLength(4);
     });
 
     /** Indented under its `X` line, so a nested rman's own recap in it is not read as this one's. */

@@ -2297,8 +2297,13 @@ four behaviours still fire.
     header. Below the running rows and only with the space they leave - work in progress is what
     the panel is for, and a repository that fails early would otherwise fill the block with corpses
     and push the live rows off the screen. One line each rather than two: a failed row's value is
-    that it is *named*, and its output is replayed in full at the end. What does not fit is counted
+    that it is *named*, and its output is replayed at the end. What does not fit is counted
     in the one trailing `… and N more` line, which now covers both kinds.
+  - **The replay is the failing step's output, the passing steps a line each** (`ProgressItem.steps`,
+    `ProgressPanel.stepRecap`, filled by `PanelReporter` from the `start`/`end` events). It was the
+    whole log, on the reasoning that an earlier step can explain a later failure; in a real build
+    that put `rman check`'s file count and its own recap above every lint error. The user's call.
+    `log` is still kept flat, and is what `ci`, `exec` and `clean` - which report no steps - replay.
   - **A failed row names the command that failed, not the step's own name.** `createStepContext`
     hands the step label back on a *successful* `runBin` only; a rejection skips it, so the row
     keeps the `tsc -b <tsconfig>` that exited non-zero rather than reverting to `buildWithTsc()`.

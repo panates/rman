@@ -201,8 +201,10 @@ cleared when the step or the command changes, so one command's output never sits
 - **A failed package stays on the list**, below the running ones and only with the room they leave,
   naming the command that failed. What does not fit is counted in one trailing line (`… and 3 more running, 1 more failed`).
 - **A step's output is captured, not printed**, shell and function steps alike - a child writing
-  straight to the terminal would scroll the panel. A failed package's captured output is printed
-  once, after the panel stops, followed by the recap: `2 succeeded, 1 failed (4.1s)`.
+  straight to the terminal would scroll the panel. A failed package's output is printed once, after
+  the panel stops - each step that passed in one line, the one that failed with everything it
+  printed, indented under the package - followed by the recap: `2 succeeded, 1 failed (4.1s)`.
+  `--log-file` keeps every line of every step.
 - **The bar fills from step progress**, so a nine-step build advances within a package instead of
   jumping when it ends. The `done/total` counter beside it counts packages.
 
