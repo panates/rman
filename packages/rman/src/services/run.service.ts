@@ -78,7 +78,7 @@ export class RunService extends Service {
       !!cwdScope ||
       !repository.monorepo ||
       rootCfg.skip === true ||
-      !(await passesIf(repository, repository.rootPackage, rootCfg.if, repository.dirname, ifStatusCache));
+      !(await passesIf(repository, repository.rootPackage, rootCfg.if, repository.dirname, ifStatusCache, cwdScope));
     const rootSteps = rootSkipped ? [] : getScriptSteps(repository.rootPackage, script);
     /** Filtered on the slot, not on `'pre' + script`: the step labels are `before`/`exec`/`after`
      *  now - the same words the config uses - rather than npm's `pre<script>` naming, which moved
@@ -92,6 +92,7 @@ export class RunService extends Service {
         label: 'root',
         steps,
         cwd: repository.dirname,
+        scopedTo: cwdScope,
         topo: false,
         bail: resolveBail(options.bail, repository.rootPackage, script, true),
         logLevel: resolveLogLevel(options.logLevel, repository.rootPackage, script, logLevelDefault),
@@ -104,7 +105,7 @@ export class RunService extends Service {
     for (const pkg of packages) {
       const pkgCfg = RunService.getConfig(pkg, script);
       if (pkgCfg.skip === true) continue;
-      if (!(await passesIf(repository, pkg, pkgCfg.if, pkg.dirname, ifStatusCache))) continue;
+      if (!(await passesIf(repository, pkg, pkgCfg.if, pkg.dirname, ifStatusCache, cwdScope))) continue;
       const steps = getScriptSteps(pkg, script);
       if (!steps.length) continue;
       plans.push({
@@ -113,6 +114,7 @@ export class RunService extends Service {
         label: pkg.name,
         steps,
         cwd: pkg.dirname,
+        scopedTo: cwdScope,
         topo: resolveBool(options.topo, pkg, script, 'topo', topo),
         bail: resolveBail(options.bail, pkg, script, true),
         logLevel: resolveLogLevel(options.logLevel, pkg, script, logLevelDefault),
@@ -192,6 +194,8 @@ export class RunService extends Service {
      *  abort using *its own* resolved bail setting (see `runSteps` below) - power-tasks' own
      *  `bail` is a single blanket policy for the whole batch, it can't vary per package. */
     let rootTask: Task | undefined;
+    /** One `git` query per reference for every step's `if: changed`, as the scripts' share one. */
+    const stepIfCache = new Map<string, Record<string, Repository.PackageStatus>>();
 
     const runSteps = async (
       ctx: ProgressItem,
@@ -205,7 +209,7 @@ export class RunService extends Service {
        */
       part?: { from: number; more?: boolean },
     ) => {
-      const { pkg, cwd, bail: pkgBail, logLevel: pkgLogLevel, label: pkgLabel } = plan;
+      const { pkg, cwd, bail: pkgBail, logLevel: pkgLogLevel, label: pkgLabel, scopedTo } = plan;
       const from = part?.from ?? 0;
       /** Only the first part starts the clock: the row's elapsed time is the package's, and a
        *  package waiting at a `topo` barrier is waiting as part of its own run. */
@@ -216,6 +220,12 @@ export class RunService extends Service {
       try {
         for (let i = from; i < steps.length; i++) {
           const step = steps[i];
+          /** Asked when the step's turn comes, not when the plan is made - a condition may read
+           *  what the steps before it left behind. A step that says no is passed over in silence:
+           *  it is not a failure, and announcing it on every package would bury the steps that ran. */
+          if (step.if !== undefined && !(await passesIf(pkg.repository, pkg, step.if, cwd, stepIfCache, scopedTo))) {
+            continue;
+          }
           ctx.currentStep = step.name;
           /** The command for a shell step, the function's own name for a JS one - and a bare
            *  marker for an anonymous function, which is still worth saying: the slot label alone
@@ -252,7 +262,7 @@ export class RunService extends Service {
              * nested rman and nothing else. The cost, stated: a child cannot prompt. Nothing in a
              * run step should.
              */
-            if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine, onCommand);
+            if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine, onCommand, scopedTo);
             else {
               await exec(step.command, {
                 cwd,
@@ -656,6 +666,8 @@ export namespace RunService {
     steps: ScriptStep[];
     /** The directory the steps run in - the package's own, or the repository root for a bookend. */
     cwd: string;
+    /** The package the run was narrowed to by the directory it started in - `RunStepContext.scopedTo`. */
+    scopedTo?: Package;
     topo: boolean;
     bail: boolean;
     logLevel: LogLevel;
@@ -708,6 +720,8 @@ export namespace RunService {
      *  and the three are three different answers, which is why this is not a plain boolean. See
      *  `RunStepObject.topo`. */
     topo?: boolean;
+    /** The step's own condition, from its object form - see `RunStepObject.if`. */
+    if?: string | RunConditionFn;
   }
 
   export interface CommandStep extends StepBase {
@@ -791,6 +805,7 @@ export namespace RunService {
        *  (`{ command }` / `{ run }`) reaches here too and only one place knows the three spellings.
        *  `topo` cannot be set on this path - `normalizeScriptValue` refuses it for a version hook. */
       const step = toStep(slot, value);
+      if (step.if !== undefined && !(await passesIf(pkg.repository, pkg, step.if, pkg.dirname, new Map()))) continue;
       if (step.run) {
         await step.run(createStepContext(pkg, pkg.dirname));
         continue;
@@ -931,12 +946,14 @@ export namespace RunService {
     cwd: string,
     onCommand?: (command: string | undefined) => void,
     onLine?: (line: string, stream?: 'stdout' | 'stderr') => void,
+    scopedTo?: Package,
   ): RunStepContext {
     const logLevel = resolveRootLogLevel(pkg.repository);
     return {
       pkg,
       repository: pkg.repository,
       cwd,
+      scopedTo,
       runBin: async (bin, argv, opts) => {
         onCommand?.([bin, ...argv].join(' '));
         const result = await runBin(bin, argv, { cwd, logLevel, app: pkg.repository.app, onLine, ...opts });
@@ -1064,9 +1081,12 @@ function describeValue(value: unknown): string {
  *  the slot's own word for one passed inline, which has no name at all. */
 function toStep(slot: string, value: RunStepValue): RunService.ScriptStep {
   const topo = typeof value === 'object' ? value.topo : undefined;
+  const condition = typeof value === 'object' ? value.if : undefined;
   const step = typeof value === 'object' ? value.command! : value;
-  if (typeof step === 'function') return { name: slot, label: step.name || `${slot} (js)`, run: step, topo };
-  return { name: slot, label: step, command: step, topo };
+  if (typeof step === 'function') {
+    return { name: slot, label: step.name || `${slot} (js)`, run: step, topo, if: condition };
+  }
+  return { name: slot, label: step, command: step, topo, if: condition };
 }
 
 /**
@@ -1113,11 +1133,23 @@ function assertStepObject(item: Record<string, unknown>, where: string, allowTop
       throw new Error(`"${where}" must set "topo" to true or false, but it is ${describeValue(item.topo)}.`);
     }
   }
-  return { command: item.command as string | RunStepFn, topo: item.topo as boolean | undefined };
+  /** The same two forms `run.<script>.if` takes. An empty string is refused rather than read as
+   *  "no condition": a key written and left blank is more likely a mistake than a decision. */
+  if (item.if !== undefined && typeof item.if !== 'function' && (typeof item.if !== 'string' || !item.if.trim())) {
+    throw new Error(
+      `"${where}" must set "if" to a condition (\`changed\`, \`dirty and not committed\`) or a function, ` +
+        `but it is ${describeValue(item.if)}.`,
+    );
+  }
+  return {
+    command: item.command as string | RunStepFn,
+    topo: item.topo as boolean | undefined,
+    ...(item.if !== undefined && { if: item.if as string | RunConditionFn }),
+  };
 }
 
-/** What a step object may hold - the step itself, and the marker beside it. */
-const STEP_OBJECT_KEYS = ['command', 'topo'];
+/** What a step object may hold - the step itself, and the markers beside it. */
+const STEP_OBJECT_KEYS = ['command', 'topo', 'if'];
 
 /**
  * Runs a function step, with its `console` captured into `onLine` - the step's own lines, routed to
@@ -1142,8 +1174,9 @@ async function runFunctionStep(
   cwd: string,
   onLine: (line: string, stream?: 'stdout' | 'stderr', level?: 'error') => void,
   onCommand?: (command: string | undefined) => void,
+  scopedTo?: Package,
 ): Promise<void> {
-  const context = RunService.createStepContext(pkg, cwd, onCommand, onLine);
+  const context = RunService.createStepContext(pkg, cwd, onCommand, onLine, scopedTo);
   try {
     await RunService.withCapturedConsole(onLine, () => run(context));
   } catch (e: any) {
@@ -1171,7 +1204,8 @@ function format(args: any[]): string {
 }
 
 /**
- * Whether a script runs for `pkg` at all - `run.<script>.if`, in either of its two forms.
+ * Whether a script runs for `pkg` at all - `run.<script>.if` - or a single step does (a step
+ * object's own `if`), in either of their two forms.
  *
  * The function form is checked **first**: `parseIfExpr` answers `undefined` for anything that is
  * not a string, which the caller reads as "no condition given", so a function reaching it would be
@@ -1183,9 +1217,10 @@ async function passesIf(
   raw: unknown,
   cwd: string,
   statusCache: Map<string, Record<string, Repository.PackageStatus>>,
+  scopedTo?: Package,
 ): Promise<boolean> {
   if (typeof raw === 'function') {
-    return !!(await (raw as RunConditionFn)(RunService.createStepContext(pkg, cwd)));
+    return !!(await (raw as RunConditionFn)(RunService.createStepContext(pkg, cwd, undefined, undefined, scopedTo)));
   }
   const node = RunService.parseIfExpr(raw);
   return node ? RunService.evaluateIf(repository, pkg, node, statusCache) : true;

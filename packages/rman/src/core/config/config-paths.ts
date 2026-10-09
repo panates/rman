@@ -91,6 +91,15 @@ export const STEP_PATHS = [
   'version.before.command',
   'version.exec.command',
   'version.after.command',
+  /** A step object's own `if`, for the reason `run.*.if` is here: called while the config loads it
+   *  would collapse to a boolean and stop being a condition. `run.*.if` already covers the
+   *  shorthand's (`run: { build: [{ if, command }] }`), which arrives at the same path. */
+  'run.*.before.if',
+  'run.*.exec.if',
+  'run.*.after.if',
+  'version.before.if',
+  'version.exec.if',
+  'version.after.if',
 ];
 
 /**

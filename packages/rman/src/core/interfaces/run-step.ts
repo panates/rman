@@ -49,6 +49,16 @@ export interface RunStepContext {
    */
   cwd: string;
   /**
+   * The package the run was narrowed to because rman was started inside it, or `undefined` when it
+   * covers the repository - started at the root, or with `--from-root`.
+   *
+   * What a step asks to tell "the whole repository is building" from "just this package is":
+   * `repository.currentPackage` answers where rman was started and cannot see `--from-root`. Set by
+   * `run` and the commands built on it (`build`, `test`); `undefined` in a `version` hook, which
+   * always covers the repository.
+   */
+  scopedTo?: Package;
+  /**
    * The repository's locally installed binaries, already carrying this run's `cwd` and log level -
    * handed over rather than imported, for the reason `CommandContext.runBin` is.
    */
@@ -110,6 +120,17 @@ export interface RunStepObject {
    * with no package graph to join, and the key is refused there rather than quietly doing nothing.
    */
   topo?: boolean;
+  /**
+   * Whether this one step runs, asked when its turn comes - the same two forms
+   * `run.<script>.if` takes: a condition (`changed`, `dirty and not committed`) or a function
+   * handed the step's context. A step that says no is passed over, and the ones after it still
+   * run.
+   *
+   * @example
+   * // lint the package only when the build was started inside it
+   * { if: ({ scopedTo }) => !!scopedTo, command: 'rman lint' }
+   */
+  if?: string | RunConditionFn;
 }
 
 /** One entry of a `before`/`exec`/`after` slot: a shell command, a function, or a

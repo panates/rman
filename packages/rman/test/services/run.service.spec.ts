@@ -1357,6 +1357,77 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('SHOULD-NOT-RUN'))).toBe(false);
     });
   });
+
+  /**
+   * One step's own condition, beside the script's. Asked when the step's turn comes; a step that
+   * says no is passed over and the steps after it still run.
+   *
+   * Through a real `.rmanrc.cjs`, which is also the test that the condition survives config
+   * loading: called there, it would arrive as `false`, which the step object refuses outright.
+   */
+  describe('if, on one step', () => {
+    it('passes over a step whose condition says no, and runs the ones beside it', async () => {
+      await fixture({
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { before: [
+            { if: () => false, command: ${JSON.stringify(quiet('echo STEP-SKIPPED'))} },
+            { if: async () => true, command: ${JSON.stringify(quiet('echo STEP-KEPT'))} },
+          ], exec: ${JSON.stringify(quiet('echo EXEC-RAN'))} } } }`,
+        },
+      });
+      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      expect(lines.some(l => l.includes('STEP-SKIPPED'))).toBe(false);
+      expect(lines.some(l => l.includes('STEP-KEPT'))).toBe(true);
+      expect(lines.some(l => l.includes('EXEC-RAN'))).toBe(true);
+    });
+
+    /** The case the key was added for: a step that runs only when the build was started inside its
+     *  package. `scopedTo` is that package there, and nothing from the root or under `--from-root`. */
+    it('hands the condition scopedTo: the package the run was narrowed to, or nothing', async () => {
+      const dir = mkTmp();
+      dirs.push(dir);
+      const step = (marker: string) =>
+        `{ if: ({ scopedTo }) => !!scopedTo, command: ${JSON.stringify(quiet(`echo ${marker}`))} }`;
+      writeFixture(dir, {
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { before: [${step('SCOPED-RAN')}], exec: ${JSON.stringify(quiet('echo A'))} } } }`,
+        },
+      });
+      const run = async (cwd: string, fromRoot?: boolean) => {
+        await createRepository(cwd);
+        return (await captureLogs(() => service('run').runScript('build', { progress: false, fromRoot }))).lines;
+      };
+
+      expect((await run(path.join(dir, 'packages', 'pkg-a'))).some(l => l.includes('SCOPED-RAN'))).toBe(true);
+      expect((await run(dir)).some(l => l.includes('SCOPED-RAN'))).toBe(false);
+      expect((await run(path.join(dir, 'packages', 'pkg-a'), true)).some(l => l.includes('SCOPED-RAN'))).toBe(false);
+    });
+
+    it("hands the script's own if scopedTo too", async () => {
+      const dir = mkTmp();
+      dirs.push(dir);
+      writeFixture(dir, {
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { if: ({ scopedTo }) => scopedTo?.name === 'pkg-a', exec: ${JSON.stringify(quiet('echo A-SCOPED'))} } } }`,
+        },
+      });
+      await createRepository(path.join(dir, 'packages', 'pkg-a'));
+      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      expect(lines.some(l => l.includes('A-SCOPED'))).toBe(true);
+    });
+
+    it('takes the condition grammar too', async () => {
+      await fixture({
+        'pkg-a': {
+          rmanrcJs: `{ run: { build: { before: [{ if: 'dirty', command: ${JSON.stringify(quiet('echo DIRTY-ONLY'))} }], exec: ${JSON.stringify(quiet('echo A'))} } } }`,
+        },
+      });
+      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      /** Not a git repository at all, so nothing reads as dirty. */
+      expect(lines.some(l => l.includes('DIRTY-ONLY'))).toBe(false);
+      expect(lines.some(l => l.includes('echo A'))).toBe(true);
+    });
+  });
 });
 
 describe('run: Run.normalizeScriptValue()', () => {
@@ -1421,6 +1492,22 @@ describe('run: Run.normalizeScriptValue()', () => {
       );
       expect(() => RunService.normalizeScriptValue({ command: 'x', topo: 'yes' }, 'run.build.exec')).toThrow(
         /must set "topo" to true or false/,
+      );
+    });
+
+    it("carries a step's own if - a condition or a function - and refuses anything else there", () => {
+      const cond = () => true;
+      expect(RunService.normalizeScriptValue([{ if: 'changed', command: 'x' }], 'run.build.before')).toEqual([
+        { command: 'x', topo: undefined, if: 'changed' },
+      ]);
+      expect(VersionService.normalizeScriptValue([{ if: cond, command: 'x' }], 'version.before')).toEqual([
+        { command: 'x', topo: undefined, if: cond },
+      ]);
+      expect(() => RunService.normalizeScriptValue({ if: '', command: 'x' }, 'run.build.exec')).toThrow(
+        /must set "if" to a condition/,
+      );
+      expect(() => RunService.normalizeScriptValue({ if: false, command: 'x' }, 'run.build.exec')).toThrow(
+        /must set "if" to a condition/,
       );
     });
 

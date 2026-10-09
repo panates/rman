@@ -1359,6 +1359,7 @@ when the work is genuinely code; write a shell command when the step is a shell 
 | `pkg` | the package this step is for - always set, and spelled `pkg` as in `${{ pkg }}` |
 | `repository` | the whole repository |
 | `cwd` | the directory the step is *about* - the package's, or the root for a monorepo bookend |
+| `scopedTo` | the package the run was narrowed to because rman was started inside it; `undefined` from the root or under `--from-root` (and in a `version` hook) |
 | `runBin(bin, argv, opts?)` | the repository's locally installed binaries, already bound to `cwd` and this run's log level |
 | `logger` | at this run's resolved log level |
 
@@ -1387,8 +1388,8 @@ use them on behalf of repositories that stay in YAML.
 ### Step objects
 
 A step may also be written as an object, which is how it says something **about itself** rather than
-about what it does. One such thing exists today: where the package starts waiting for its
-dependencies.
+about what it does: where the package starts waiting for its dependencies, and whether the step runs
+at all.
 
 ```yaml
 "[*]":
@@ -1403,6 +1404,7 @@ dependencies.
 | --- | --- |
 | `command` | the step itself - a shell command **or a function**, exactly as the plain value form. `${{ }}` in a string is interpolated as usual |
 | `topo` | whether this step waits for every package this one depends on to finish |
+| `if` | whether this one step runs - the two forms `run.<script>.if` takes, a condition (`changed`, `dirty and not committed`) or a function handed the step's context |
 
 One key for the step, because `run.<script>.exec` is already one key taking both forms - a second
 name for the function case would be two spellings of one thing plus a rule about which to use.
@@ -1429,7 +1431,19 @@ and their costs:
 - **`run.<script>` only.** A `version` hook runs for one package around its own version write, with
   no package graph to wait on, and the key is refused there instead of quietly doing nothing.
 
-The step-vs-value rule extends to the object: a function under `command`, at any depth inside a step
+**A step's `if` is asked when its turn comes**, and a step that says no is passed over in silence -
+the steps after it still run. It works in `version` hooks too. The case it was added for: lint one
+package when the build was started inside it, and leave the whole-repository lint to the root
+bookend otherwise:
+
+```js
+before: [{ topo: false, if: ({ repository, scopedTo }) => !repository.monorepo || !!scopedTo, command: 'rman lint' }]
+```
+
+`scopedTo` rather than `repository.currentPackage`, because only the former knows about
+`--from-root`.
+
+The step-vs-value rule extends to the object: a function under `command` (or `if`), at any depth inside a step
 slot, is still a **step**. Measured on `@panates/rman-preset`, whose build hook is exactly that:
 without the rule, every command in a repository extending it died with `Config function in
 "run.build.after.command" ... failed`, the hook called with the config scope while the config was

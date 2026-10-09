@@ -166,6 +166,25 @@ silently ran nothing while the run reported success is the failure this refusal 
 - **Only in `run.<script>`.** A `version` hook runs for one package around its own version write,
   with no package graph to wait on, so `topo` is refused there.
 
+### A step that runs only sometimes (`if`, per step)
+
+`run.<script>.if` decides whether a package runs the script at all; a step object's own `if` decides
+about one step. Same two forms - a condition (`changed`, `dirty and not committed`) or, in a JS
+config, a function handed the step's context - asked when the step's turn comes. A step that says no
+is passed over and the steps after it still run.
+
+```js
+before: [
+  { topo: false, command: 'rman check' },
+  /* lint just this package when the build was started inside it - from the root, a bookend lints
+   * the whole repository once instead */
+  { topo: false, if: ({ repository, scopedTo }) => !repository.monorepo || !!scopedTo, command: 'rman lint' },
+]
+```
+
+`scopedTo` is the package the run was narrowed to because rman was started inside it, and
+`undefined` from the root or under `--from-root` - which `repository.currentPackage` cannot see.
+
 Measured on two packages where `pkg-b` depends on `pkg-a`, with a slow first step: marked, both
 packages' first step runs at once and `pkg-b`'s codegen starts after `pkg-a` finishes; unmarked, the
 whole of `pkg-b` waits (227ms against 451ms for the same work).
