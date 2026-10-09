@@ -1,6 +1,21 @@
 # Changelog
 
-<!-- rman:documented-up-to 396abcd81c95a228ff74379758c57056136cf1a7 -->
+<!-- rman:documented-up-to 5cb0462714e2cbcaa13cf2fee94b953696bf6ed4 -->
+
+## v2.24.0 (2026-10-09)
+
+### ✨ Features
+
+- **publish:** publish.<target>.files copies files in for one target, and puts them back (7a64a85)
+- **docker:** secrets, extra tags, target stage, cache and labels (12f0b7a)
+- **cloudflare:** a Worker's wrangler environment and run-time variables (643a67b)
+
+### 🐛 Bug Fixes
+
+- **docker:** a prerelease image is not pushed as latest (4974dd0)
+- a dirty-tree refusal names the files that make it dirty (5cb0462)
+
+---
 
 ## v2.23.0 (2026-10-09)
 
