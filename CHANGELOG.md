@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 773fc4a740b6f31a02b25cac596d6e83f5e1d857 -->
+<!-- rman:documented-up-to d461177b60eeb94b78e1b5fde9da7211dfe66a56 -->
+
+## v2.22.0 (2026-10-09)
+
+### ✨ Features
+
+- **version:** a package kept out of publishing takes no version (d461177)
+
+---
 
 ## v2.21.1 (2026-10-09)
 
