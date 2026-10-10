@@ -170,6 +170,48 @@ describe('services/clean', () => {
     });
 
     /**
+     * **A `.js` with a hand-written `.d.ts` and no `.ts` is not output**, under `src` too. Measured
+     * on `panates/hl7v2`: a generated plain-JS data module in `src/data` was swept before every
+     * build, and the build then failed on the import, nowhere near `clean`.
+     */
+    it('leaves a .js under src alone when a .d.ts without a .ts declares it', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeFile(dir, 'packages/a/src/data/hl7-data.js', 'export default {}');
+      writeFile(dir, 'packages/a/src/data/hl7-data.d.ts', 'declare const d: object; export default d;');
+      /** The control: compiled output with its source beside it still goes. */
+      writeFile(dir, 'packages/a/src/index.ts', 'export {}');
+      writeFile(dir, 'packages/a/src/index.js');
+      writeFile(dir, 'packages/a/src/index.d.ts');
+      const repo = await createRepository(dir);
+
+      await captureLogs(() => CleanService.clean(repo));
+
+      expect(exists(dir, 'packages/a/src/data/hl7-data.js')).toBe(true);
+      expect(exists(dir, 'packages/a/src/data/hl7-data.d.ts')).toBe(true);
+      expect(exists(dir, 'packages/a/src/index.js')).toBe(false);
+      expect(exists(dir, 'packages/a/src/index.d.ts')).toBe(false);
+    });
+
+    it('leaves a file clean.exclude names, even one the rules read as output', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      writeFile(dir, 'packages/a/.rmanrc', JSON.stringify({ clean: { exclude: ['src/vendor/**'] } }));
+      writeFile(dir, 'packages/a/src/vendor/lib.js', 'hand written');
+      writeFile(dir, 'packages/a/src/orphan.js');
+      const repo = await createRepository(dir);
+
+      await captureLogs(() => CleanService.clean(repo));
+
+      expect(exists(dir, 'packages/a/src/vendor/lib.js')).toBe(true);
+      expect(exists(dir, 'packages/a/src/orphan.js')).toBe(false);
+    });
+
+    /**
      * **The build directory is named by the config, never assumed to be `build`.** A repository
      * that calls it `dist` would otherwise have every emitted file in it swept one at a time - each
      * sits beside nothing, so the guard above would not fire either. Its contents are the *point*

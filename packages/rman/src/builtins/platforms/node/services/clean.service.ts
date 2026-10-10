@@ -247,12 +247,14 @@ async function cleanGlobs(dirname: string, include: string[], exclude: string[],
  * **The build directory is excluded by name from the config, never as the literal `build`** - see
  * `buildDirOf`. Its contents are the *point* of a build and are removed by `clean.include` when the
  * repository asks, not by a rule about stray files. */
-async function cleanTsArtifacts(pkg: Package, dryRun: boolean): Promise<string[]> {
+async function cleanTsArtifacts(pkg: Package, exclude: string[], dryRun: boolean): Promise<string[]> {
   const dirname = pkg.dirname;
   const buildDir = buildDirOf(pkg);
   const files = await fg('**/*.{js,js.map,d.ts}', {
     cwd: dirname,
-    ignore: ['**/node_modules/**', `${buildDir}/**`, `**/${buildDir}/**`],
+    /** `clean.exclude` protects a file from this sweep too - the one way to keep a file the rules
+     *  below would read as output. */
+    ignore: ['**/node_modules/**', `${buildDir}/**`, `**/${buildDir}/**`, ...exclude],
     onlyFiles: true,
     dot: true,
     absolute: true,
@@ -285,15 +287,22 @@ async function cleanTsArtifacts(pkg: Package, dryRun: boolean): Promise<string[]
  * - **A `.d.ts` always needs its `.ts`/`.tsx` beside it**, everywhere including `src` - a
  *   hand-written declaration is an ordinary thing to keep in a source tree, and this is the rule
  *   that has always been here.
- * - **A `.js`/`.js.map` under `src`/`test` goes regardless.** Everything there is TypeScript, so an
- *   orphan - output whose source was renamed or deleted - is still output, and sweeping it is the
- *   `ts-cleanup --all` behaviour this replaced.
+ * - **A `.js`/`.js.map` under `src`/`test` goes**, unless a `.d.ts` with no `.ts` sits beside the
+ *   `.js`. Everything else there is TypeScript, so an orphan - output whose source was renamed or
+ *   deleted - is still output, and sweeping it is the `ts-cleanup --all` behaviour this replaced.
  * - **A `.js`/`.js.map` anywhere else needs its source beside it**, because out there it could just
  *   as easily be `index.js`, `*.config.js` or `scripts/*.js`, which nobody generated.
  */
+/* **A `.js` declared by a hand-written `.d.ts` is kept**, because the first rule already reads that
+ * `.d.ts` as hand-written - and a declaration nobody generated describes a module nobody compiled.
+ * Measured on `panates/hl7v2`: `src/data/hl7-data.js`, a generated plain-JS data module with its
+ * `.d.ts` beside it, was deleted by the preset's `rman clean` before every build, and the next step
+ * failed with esbuild's `Could not resolve "./data/hl7-data.js"` - an error about the import, far
+ * from the cause. The cost, stated: a tsc orphan *pair* (`.js` and `.d.ts` whose `.ts` was renamed)
+ * now stays, where before only its `.d.ts` did. */
 function isBuildOutput(dirname: string, file: string): boolean {
   if (file.endsWith('.d.ts')) return hasTsSource(file, '.d.ts');
-  if (insideTsSourceDir(dirname, file)) return true;
+  if (insideTsSourceDir(dirname, file)) return !(file.endsWith('.js') && isDeclaredByHand(file));
   return hasTsSource(file, file.endsWith('.js.map') ? '.js.map' : '.js');
 }
 
@@ -314,6 +323,12 @@ function insideTsSourceDir(dirname: string, file: string): boolean {
 function hasTsSource(file: string, suffix: string): boolean {
   const base = file.slice(0, -suffix.length);
   return fs.existsSync(base + '.ts') || fs.existsSync(base + '.tsx');
+}
+
+/** Whether a `.js` has a `.d.ts` beside it and no `.ts`/`.tsx` - a module with a hand-written
+ *  declaration, not compiled output. */
+function isDeclaredByHand(file: string): boolean {
+  return fs.existsSync(file.slice(0, -'.js'.length) + '.d.ts') && !hasTsSource(file, '.js');
 }
 
 /**
@@ -345,12 +360,12 @@ async function cleanPackage(
   item.status = 'running';
   item.startedAt = Date.now();
   try {
+    const { include, exclude } = cleanConfig(pkg);
     item.currentStep = 'ts';
-    const tsRemoved = await cleanTsArtifacts(pkg, dryRun);
+    const tsRemoved = await cleanTsArtifacts(pkg, exclude, dryRun);
     const buildInfoRemoved = await cleanTsBuildInfo(pkg.dirname, dryRun);
 
     item.currentStep = 'glob';
-    const { include, exclude } = cleanConfig(pkg);
     const globRemoved = await cleanGlobs(pkg.dirname, include, exclude, dryRun);
 
     const removed = [...tsRemoved, ...buildInfoRemoved, ...globRemoved];

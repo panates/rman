@@ -20,13 +20,15 @@ For every package not opted out via its own (cascaded) `clean.skip: true`:
 - deletes compiled `.js`/`.js.map`/`.d.ts` output **anywhere in the package**, except
   `node_modules` and its build directory (the resolved `publish.npm.directory`, `build` when unset):
   - under `src`/`test`, where everything is TypeScript, a `.js`/`.js.map` goes even when its `.ts`
-    was since renamed or deleted;
+    was since renamed or deleted - unless a `.d.ts` with no `.ts` declares the `.js`, which makes
+    it a plain-JS module with a hand-written declaration (a generated data file, say);
   - anywhere else, a file goes **only when a matching `.ts`/`.tsx` sits beside it** - that is what
     tells `tsc` output from a hand-written `index.js`, `*.config.js` or `scripts/*.js`, which are
     left alone. A compiled file there whose source is gone is left alone too, since nothing on disk
     says it was generated;
   - a `.d.ts` always needs its `.ts`/`.tsx` beside it, `src` included - one without is a
     hand-written declaration;
+  - a file `clean.exclude` matches is left alone, whatever these rules say about it;
   - directories left empty are pruned under `src`/`test` only;
 - deletes any `*.tsbuildinfo` incremental-build cache file anywhere in it (skips `node_modules`);
 - deletes anything matching its own `clean.include` glob(s), minus `clean.exclude`.

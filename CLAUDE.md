@@ -2303,6 +2303,12 @@ four behaviours still fire.
   core plus this one, i.e. two commands with one name and a precedence rule between them.
 - A `.d.ts` with **no** matching `.ts`/`.tsx` is left alone - that is a hand-written declaration,
   not build output. Don't "simplify" that check away.
+  - **The `.js` it declares stays too, `src` included** (`isDeclaredByHand`). Measured on
+    `panates/hl7v2`: a generated plain-JS data module in `src/data` with its `.d.ts` was swept by
+    the preset's `rman clean` before every build, and esbuild then failed on the *import* - an error
+    nowhere near the cause. The cost: a tsc orphan pair whose `.ts` was renamed now stays whole.
+  - **`clean.exclude` reaches this sweep as well as `include`'s**, so a file the rules misread has a
+    way out. It used to filter `include` alone.
 - Never touches `node_modules`; that is `ci`'s job.
 - **A symbolic link is removed as a link and never followed** - every glob in `clean.service.ts`
   says `followSymbolicLinks: false`, and a match is `lstat`ed. fast-glob follows links by default,
