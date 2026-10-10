@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 5cb0462714e2cbcaa13cf2fee94b953696bf6ed4 -->
+<!-- rman:documented-up-to 620c2c2692c8100badfc53dc7f10581378480666 -->
+
+## v2.24.1 (2026-10-10)
+
+### 🐛 Bug Fixes
+
+- **clean:** keep a .js a hand-written .d.ts declares, and honour clean.exclude (620c2c2)
+
+---
 
 ## v2.24.0 (2026-10-09)
 
