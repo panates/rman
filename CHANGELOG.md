@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 620c2c2692c8100badfc53dc7f10581378480666 -->
+<!-- rman:documented-up-to 4f9afbaa62e552dec83606b822bfb006f65c5c4c -->
+
+## v2.25.0 (2026-10-11)
+
+### ✨ Features
+
+- **version:** version.dependentRanges keeps hand-written ranges on in-repo packages (4f9afba)
+
+---
 
 ## v2.24.1 (2026-10-10)
 
