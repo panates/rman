@@ -3,8 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
+import { NodeManifestProvider } from '../../../../src/builtins/platforms/node/node-manifest.provider.js';
 import type { VersionPlanService } from '../../../../src/services/version-plan.service.js';
-import { createRepository, planner, useNodeEcosystem } from '../_fixture.js';
+import { createRepository, planner, service, useNodeEcosystem } from '../_fixture.js';
 
 /**
  * **npm's own cascade table, which nothing tested until this file existed.**
@@ -201,5 +202,162 @@ describe('plugins/node: a private package and version', () => {
     expect(app).toMatchObject({ status: 'skip' });
     expect(app.reason).toMatch(/private/);
     expect(plan.find(e => e.package.name === 'lib')).toMatchObject({ status: 'bump', to: '1.0.1' });
+  });
+});
+
+/**
+ * **`.rmanrc "version.dependentRanges": keep`** - a hand-written range is left alone while it
+ * accepts the new version, refused when it does not, and has its floor raised when its package is
+ * released for changes of its own. Asked for by `panates/syncbridge`, whose extensions declare
+ * `"@syncbridge/common": ">=1.1.0 <2"` so a release of `common` need not release all nine.
+ */
+describe('plugins/node: version.dependentRanges keep', () => {
+  useNodeEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  function git(cwd: string, ...args: string[]): void {
+    execFileSync('git', args, { cwd, stdio: 'pipe' });
+  }
+
+  function writeJson(dir: string, rel: string, value: unknown): void {
+    const file = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(value, undefined, 2));
+  }
+
+  const readJson = (dir: string, rel: string) => JSON.parse(fs.readFileSync(path.join(dir, rel), 'utf-8'));
+
+  /** syncbridge's shape: independent versioning, an extension ranging over `common`. */
+  function fixture(config: Record<string, unknown> = { version: { dependentRanges: 'keep' } }): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-node-ranges-'));
+    dirs.push(dir);
+    writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ group: false, ...config }));
+    writeJson(dir, 'packages/common/package.json', { name: 'common', version: '1.1.0' });
+    writeJson(dir, 'packages/ext/package.json', {
+      name: 'ext',
+      version: '1.0.0',
+      peerDependencies: { common: '>=1.1.0 <2' },
+      devDependencies: { common: 'workspace:^' },
+    });
+    git(dir, 'init');
+    git(dir, 'config', 'user.email', 'test@example.com');
+    git(dir, 'config', 'user.name', 'Test');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-m', 'init');
+    git(dir, 'tag', 'common@1.1.0');
+    git(dir, 'tag', 'ext@1.0.0');
+    /** The release boundary a `group: true` variant reads - one version line tags `v*`. */
+    git(dir, 'tag', 'v1.1.0');
+    return dir;
+  }
+
+  function commit(dir: string, pkg: string, subject: string): void {
+    fs.appendFileSync(path.join(dir, `packages/${pkg}/x.txt`), subject);
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-m', subject);
+  }
+
+  const entryOf = (plan: VersionPlanService.Entry[], name: string) => plan.find(e => e.package.name === name)!;
+
+  it('leaves a dependent alone while its range accepts the new version, and says why', async () => {
+    const dir = fixture();
+    commit(dir, 'common', 'feat: something new');
+    const repo = await createRepository(dir);
+    const plan = await planner().getPlan(repo);
+
+    expect(entryOf(plan, 'common')).toMatchObject({ status: 'bump', to: '1.2.0' });
+    expect(entryOf(plan, 'ext')).toMatchObject({ status: 'no-change' });
+    expect(entryOf(plan, 'ext').reason).toMatch(/common ">=1.1.0 <2" still satisfied/);
+
+    await service('version').applyPlan(plan);
+    expect(readJson(dir, 'packages/ext/package.json').peerDependencies.common).toBe('>=1.1.0 <2');
+  });
+
+  /** The control: the same repository under `rewrite` releases the dependent for it. */
+  it('releases it under the default, as before', async () => {
+    const dir = fixture({});
+    commit(dir, 'common', 'feat: something new');
+    const repo = await createRepository(dir);
+    const plan = await planner().getPlan(repo);
+    expect(entryOf(plan, 'ext')).toMatchObject({ status: 'bump', to: '1.0.1' });
+  });
+
+  it('refuses a version the range does not accept, naming the field, the range and the version', async () => {
+    const dir = fixture();
+    commit(dir, 'common', 'feat!: breaking');
+    const repo = await createRepository(dir);
+    const plan = await planner().getPlan(repo);
+
+    const ext = entryOf(plan, 'ext');
+    expect(ext.status).toBe('error');
+    expect(ext.reason).toContain('peerDependencies "common": ">=1.1.0 <2" does not accept 2.0.0');
+  });
+
+  /** A beta is never meant for a stable range, so it neither fails one nor moves one. */
+  it('lets a prerelease through without failing or touching the range', async () => {
+    const dir = fixture();
+    commit(dir, 'common', 'feat!: breaking');
+    const repo = await createRepository(dir);
+    const plan = await planner().getPlan(repo, { preid: 'beta' });
+    expect(entryOf(plan, 'common')).toMatchObject({ status: 'bump', to: '2.0.0-beta.0' });
+    expect(entryOf(plan, 'ext').status).toBe('no-change');
+  });
+
+  /**
+   * **Released for a change of its own, the dependent's floor follows what it was built against** -
+   * the only time it can have started relying on something new. The upper bound stays, and the
+   * `workspace:^` reference, which follows the sibling by itself, is not touched.
+   */
+  it('raises the floor of a dependent released for its own change', async () => {
+    const dir = fixture();
+    commit(dir, 'common', 'feat: something new');
+    commit(dir, 'ext', 'feat: uses it');
+    const repo = await createRepository(dir);
+    const plan = await planner().getPlan(repo);
+    expect(entryOf(plan, 'ext')).toMatchObject({ status: 'bump', to: '1.1.0' });
+
+    await service('version').applyPlan(plan);
+    const ext = readJson(dir, 'packages/ext/package.json');
+    expect(ext.peerDependencies.common).toBe('>=1.2.0 <2');
+    expect(ext.devDependencies.common).toBe('workspace:^');
+  });
+
+  /** Inside one version line the same rule holds: npm's `dependents` cascade skips a dependent
+   *  whose range still accepts the group's new version. */
+  it('keeps an in-group dependent out of the cascade while its range accepts', async () => {
+    const dir = fixture({ group: true, version: { dependentRanges: 'keep' } });
+    commit(dir, 'common', 'fix: a bug');
+    const repo = await createRepository(dir);
+    const plan = await planner().getPlan(repo);
+    expect(entryOf(plan, 'common')).toMatchObject({ status: 'bump' });
+    expect(entryOf(plan, 'ext').status).toBe('no-change');
+  });
+});
+
+describe('plugins/node: NodeManifestProvider.referencesTo', () => {
+  const provider = new NodeManifestProvider();
+  const refs = (range: string, version: string) =>
+    provider.referencesTo({ name: 'x', version: '1.0.0', raw: { dependencies: { dep: range } } }, 'dep', version)[0];
+
+  it('raises the floor of the shapes a hand-written range takes, keeping the upper bound', () => {
+    expect(refs('^1.1.0', '1.2.0')).toMatchObject({ accepts: true, raised: '^1.2.0' });
+    expect(refs('~1.1.0', '1.1.3')).toMatchObject({ accepts: true, raised: '~1.1.3' });
+    expect(refs('>=1.1.0', '1.4.0')).toMatchObject({ accepts: true, raised: '>=1.4.0' });
+    expect(refs('>=1.1.0 <2', '1.2.0')).toMatchObject({ accepts: true, raised: '>=1.2.0 <2' });
+    expect(refs('1.1.0 - 1.9.0', '1.2.0')).toMatchObject({ accepts: true, raised: '1.2.0 - 1.9.0' });
+    expect(refs('workspace:>=1.1.0 <2', '1.2.0')).toMatchObject({ accepts: true, raised: 'workspace:>=1.2.0 <2' });
+  });
+
+  it('leaves a floor already there, and refuses to guess at an alternative', () => {
+    expect(refs('^1.2.0', '1.2.0').raised).toBeUndefined();
+    expect(refs('1.2.0', '1.2.0').raised).toBeUndefined();
+    expect(refs('^1.0.0 || ^2.0.0', '1.2.0')).toMatchObject({ accepts: true, unraisable: true });
+    expect(refs('>=1.1.0 <2', '2.0.0')).toMatchObject({ accepts: false });
+    expect(refs('workspace:^', '9.0.0')).toMatchObject({ dynamic: true, accepts: true });
   });
 });

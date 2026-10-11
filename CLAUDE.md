@@ -1592,6 +1592,27 @@ saw one thing to release and it was the one thing that must never be published.
       changed with reason `explicit version <v>` and a group's members come from `eligible`, so all
       of them move already. A declared cascade read on that path was written, measured unreachable
       and removed; the spec that asserted the narrow reading is the only reason it was caught.
+- **`.rmanrc "version.dependentRanges": keep` is the one key that narrows a release, and it does it
+  through the range rather than through `cascade`** (`VersionPlanService.rangeVerdict`,
+  `checkKeptRanges`, `VersionService.raiseKeptFloors`; npm's half is
+  `NodeManifestProvider.referencesTo`). Asked for by `panates/syncbridge`: nine extensions declare
+  `"@syncbridge/common": ">=1.1.0 <2"` so a release of `common` need not release all nine, and
+  `rewrite` turned the range back into `^1.2.0` and released them anyway.
+  - **A range that accepts the new version takes the dependent out of both the in-group cascade and
+    the cross-group ripple; one that refuses it is an `'error'` row**, naming field, range and
+    version, so `version` writes nothing. That is why it does not contradict "a floor, never a
+    ceiling": the floor protects a dependent's published range, and here the range is checked
+    rather than assumed.
+  - **The lower bound is raised only when the dependent is released for changes of its own** - the
+    user's point, and the only moment the dependent can have started relying on something new.
+    Raising it on every dependency release was weighed and is meaningless: a range changes nothing
+    for consumers until the dependent is republished, and republishing is `rewrite`.
+  - **A prerelease neither fails nor raises a range** - otherwise every beta of `common` would fail
+    nine extensions, and a stable range floored on a beta installs for nobody on stable releases.
+  - **Every kept package is checked, a `publish.skip` one included**: npm workspaces link a sibling
+    only while the range accepts its version, and otherwise install it from the registry.
+  - The cost, stated: a dependent that bundles its dependency keeps shipping the older code until
+    it is released itself. Not the default for that reason.
 - **The bump *names* belong to the version scheme, not to rman** (`VersionScheme.bumpNames`,
   smallest first). `patch`/`minor`/`major` are semver's words for how a *number* moves, and a
   `major.minor.build.revision` scheme has four sizes and no `patch` - so `rman version <bump>`

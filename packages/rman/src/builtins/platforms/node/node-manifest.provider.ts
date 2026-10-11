@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import semver from 'semver';
 import type { Package } from '../../../core/classes/package.js';
 import type { ManifestProvider } from '../../../core/interfaces/manifest.js';
 import { Manifest } from '../../../core/interfaces/manifest.js';
@@ -93,6 +94,44 @@ export class NodeManifestProvider implements ManifestProvider {
   }
 
   /**
+   * Every field naming `dependency`, with npm's answer to whether its range accepts `version` and
+   * the range with its floor raised to it - see `ManifestProvider.referencesTo`.
+   *
+   * A bare `"workspace:*"`/`"^"`/`"~"` is `dynamic`: it already follows the sibling, so there is
+   * nothing to keep or raise. An explicit `"workspace:<range>"` is judged by the range after it.
+   */
+  referencesTo(manifest: Manifest, dependency: string, version: string): ManifestProvider.Reference[] {
+    const refs: ManifestProvider.Reference[] = [];
+    for (const field of DEPENDENCY_KEYS) {
+      const declared = manifest.raw[field]?.[dependency];
+      if (typeof declared !== 'string') continue;
+      const workspace = parseWorkspaceRange(declared);
+      if (workspace && workspace.selector !== 'explicit') {
+        refs.push({ field, range: declared, dynamic: true, accepts: true });
+        continue;
+      }
+      const range = workspace ? workspace.range! : declared;
+      const raised = this.raiseFloor(range, version);
+      refs.push({
+        field,
+        range: declared,
+        accepts: semver.satisfies(version, range),
+        ...(raised === null
+          ? { unraisable: true }
+          : raised
+            ? { raised: workspace ? `workspace:${raised}` : raised }
+            : {}),
+      });
+    }
+    return refs;
+  }
+
+  setReference(manifest: Manifest, field: string, dependency: string, range: string): void {
+    const deps = manifest.raw[field];
+    if (deps && typeof deps === 'object') deps[dependency] = range;
+  }
+
+  /**
    * What the npm registry says this package's current version is - used *only* by
    * `detectChangeHash`, to guess a tag name for a package that has no git tag yet. See
    * `Plugin.publishedVersion` for why that is not a "has this been published" check.
@@ -116,6 +155,38 @@ export class NodeManifestProvider implements ManifestProvider {
    */
   stampVersion(file: string, content: string, version: string, options?: { constant?: string }) {
     return stampVersionConstant(content, version, options?.constant);
+  }
+
+  /**
+   * `range` with its lower bound moved up to `version`, keeping its upper bound and its operator -
+   * `undefined` when the floor is already at or above it, `null` for a shape with no single floor
+   * to move.
+   *
+   * The shapes a hand-written range takes: `^a`, `~a`, `>=a`, `>=a <b` (or `<=b`) and `a - b`. An
+   * exact pin never needs moving - one that accepts `version` already is it.
+   */
+  /* **`null` rather than a guess for anything else**, `||` above all: which alternative's floor is
+   * meant cannot be read off the range, and rewriting the wrong one changes what it accepts.
+   * `version` reports it instead, so the range can be raised by hand. */
+  protected raiseFloor(range: string, version: string): string | null | undefined {
+    const r = range.trim();
+    let floor: semver.SemVer | null;
+    try {
+      floor = semver.minVersion(r);
+    } catch {
+      return null;
+    }
+    if (!floor) return null;
+    if (semver.lte(version, floor)) return undefined;
+    if (semver.valid(r)) return undefined;
+    const caret = /^([\^~])\s*v?\d[^\s|]*$/.exec(r);
+    if (caret) return `${caret[1]}${version}`;
+    if (/^>=\s*v?\d\S*$/.test(r)) return `>=${version}`;
+    const bounded = /^>=\s*v?\d\S*\s+(<=?\s*v?\d\S*)$/.exec(r);
+    if (bounded) return `>=${version} ${bounded[1]}`;
+    const hyphen = /^v?\d\S*\s+-\s+(v?\d\S*)$/.exec(r);
+    if (hyphen) return `${version} - ${hyphen[1]}`;
+    return null;
   }
 
   write(dir: string, manifest: Manifest): void {

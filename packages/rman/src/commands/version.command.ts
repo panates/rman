@@ -8,6 +8,7 @@ import type { VersionService } from '../services/version.service.js';
 import { VersionPlanService } from '../services/version-plan.service.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { fitTable } from '../utils/fit-table.js';
+import { UNCOMMITTED } from '../utils/git.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
 import { isNamedGroupKey, isSoloGroupKey, ROOT_GROUP_KEY } from '../utils/version-group.js';
 
@@ -132,6 +133,18 @@ const config = {
       'no-op there. Per-package cascaded; a group whose members disagree takes the widest.',
     type: 'string',
     choices: ['changed', 'dependents', 'group'] as const,
+  },
+  dependentRanges: {
+    target: 'config',
+    describe:
+      "What happens to this package's range on an in-repo dependency that is getting a new " +
+      'version: "rewrite" (the default) sets it to the new version and releases this package for ' +
+      'it; "keep" leaves a range that still accepts the new version alone and does not release ' +
+      "this package for it, refuses the run when the range does not, and raises the range's " +
+      'lower bound when this package is released for changes of its own. A prerelease never ' +
+      "fails a range and never raises one. Per-package cascaded - the range is the package's own.",
+    type: 'string',
+    choices: ['rewrite', 'keep'] as const,
   },
   releaseTagPattern: {
     target: 'config',
@@ -328,9 +341,12 @@ const versionCommand = registerCommand(app => {
 
       const errors = plan.filter(e => e.status === 'error');
       if (errors.length) {
+        const dirty = errors.filter(e => e.reason?.startsWith(UNCOMMITTED)).length;
         const message =
-          `${errors.length} package(s) have uncommitted local changes ` +
-          '(pass --ignore-dirty to exclude them instead of aborting)';
+          dirty === errors.length
+            ? `${errors.length} package(s) have uncommitted local changes ` +
+              '(pass --ignore-dirty to exclude them instead of aborting)'
+            : `${errors.length} package(s) cannot be versioned - see the Reason column`;
         console.log(colors.red(message));
         const err: any = new Error(message);
         err.logged = true;

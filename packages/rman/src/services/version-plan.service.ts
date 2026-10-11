@@ -3,6 +3,7 @@ import { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/classes/package.js';
 import type { Repository } from '../core/classes/repository.js';
 import { assertOneScheme, type ChangeKind, semverScheme, VersionScheme } from '../core/classes/version-scheme.js';
+import { Manifest } from '../core/interfaces/manifest.js';
 import { skipReasonFor, targetsOf } from '../core/interfaces/publish-target.js';
 import { type CommitInfo, dirtyReason, filesUnder, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
@@ -197,6 +198,7 @@ export abstract class VersionPlanService {
     }
 
     this.rippleCrossGroup(packages, entries, options.preid);
+    this.checkKeptRanges(packages, entries);
 
     const result = packages.map(pkg => entries.get(pkg.name)!);
     if (repository.monorepo) {
@@ -411,6 +413,78 @@ export abstract class VersionPlanService {
   }
 
   /**
+   * Whether `dependent` keeps its range on `dependency` (`.rmanrc "version.dependentRanges": keep`)
+   * and that range still accepts `version` - so the new version reaches it without a release of
+   * its own. `undefined` means "release it as `rewrite` would": the key says `rewrite`, the range
+   * no longer accepts the version (refused later, by `checkKeptRanges`), or there is no range to
+   * judge - a reference that follows the dependency by itself, or an edge `.rmanrc
+   * "dependencies"` declared with no range at all.
+   *
+   * A prerelease is accepted whatever the range says: a range written for stable releases is not
+   * meant to take a beta, and the dependent keeps resolving the stable one it was built against.
+   */
+  /* **Why `keep` exists**, asked for by `panates/syncbridge`: nine extensions declare
+   * `"@syncbridge/common": ">=1.1.0 <2"` so that a release of `common` does not have to release
+   * all nine. `rewrite` turned the range back into `^1.2.0` and released every one of them anyway.
+   * That narrows the cascade npm's own table asks for, and the cost is stated rather than hidden: a
+   * dependent that bundles its dependency keeps shipping the older code until it is released
+   * itself. Choosing `keep` is the repository accepting that; it is not the default. */
+  protected rangeVerdict(dependent: Package, dependency: Package, version: string): 'accepts' | undefined {
+    if (dependent.config?.version?.dependentRanges !== 'keep') return undefined;
+    const refs = Manifest.referencesTo(dependent, dependency.name, version).filter(r => !r.dynamic);
+    if (!refs.length) return undefined;
+    if (dependency.versionScheme.isPrerelease(version)) return 'accepts';
+    return refs.every(r => r.accepts) ? 'accepts' : undefined;
+  }
+
+  /**
+   * The plan's last word on kept ranges: every package that keeps its ranges is checked against
+   * the versions its in-repo dependencies are getting. A range that refuses one makes the package
+   * an `'error'` naming the field, the range and the version, so `version` writes nothing and the
+   * range can be widened by hand. One left out of the release because its range still accepts says
+   * so in its reason, and one being released notes a range whose floor cannot be raised.
+   */
+  /* **Every kept package, released or not - a `publish.skip` one included.** A range that no longer
+   * accepts its sibling breaks more than a publish: npm workspaces link a sibling only while the
+   * range accepts its version, and otherwise install it from the registry, silently. */
+  protected checkKeptRanges(packages: Package[], entries: Map<string, VersionPlanService.Entry>): void {
+    for (const pkg of packages) {
+      if (pkg.config?.version?.dependentRanges !== 'keep') continue;
+      const entry = entries.get(pkg.name);
+      if (!entry) continue;
+      const refused: string[] = [];
+      const kept: string[] = [];
+      const unraisable: string[] = [];
+      for (const dep of pkg.dependencies) {
+        const depEntry = entries.get(dep.name);
+        const version = depEntry?.status === 'bump' ? depEntry.to! : dep.version;
+        const refs = Manifest.referencesTo(pkg, dep.name, version).filter(r => !r.dynamic);
+        if (!refs.length || dep.versionScheme.isPrerelease(version)) continue;
+        for (const ref of refs) {
+          if (!ref.accepts) {
+            /** Only a version this run gives: a range already refusing the version on disk is not
+             *  this run's doing, and npm reports it at install time. */
+            if (depEntry?.status === 'bump') {
+              refused.push(`${ref.field} "${dep.name}": "${ref.range}" does not accept ${version}`);
+            }
+          } else if (entry.status === 'bump' && ref.unraisable) {
+            unraisable.push(`${dep.name} "${ref.range}"`);
+          }
+        }
+        if (depEntry?.status === 'bump' && refs.every(r => r.accepts)) kept.push(`${dep.name} "${refs[0]!.range}"`);
+      }
+      if (refused.length) {
+        entry.status = 'error';
+        entry.reason = `range does not accept the new version - ${refused.join('; ')}`;
+      } else if (entry.status === 'no-change' && kept.length) {
+        entry.reason = `range ${kept.join(', ')} still satisfied`;
+      } else if (unraisable.length) {
+        entry.reason = `${entry.reason ? `${entry.reason}; ` : ''}lower bound not raised: ${unraisable.join(', ')}`;
+      }
+    }
+  }
+
+  /**
    * The largest bump `commits` ask for, in `scheme`'s own names.
    *
    * Two steps, and keeping them apart is the point. **What happened** comes from the commit message
@@ -533,7 +607,7 @@ export abstract class VersionPlanService {
         const cur = worklist.pop()!;
         for (const m of members) {
           if (bumping.has(m)) continue;
-          if (m.dependencies.includes(cur)) {
+          if (m.dependencies.includes(cur) && !this.rangeVerdict(m, cur, to)) {
             bumping.add(m);
             worklist.push(m);
           }
@@ -595,6 +669,9 @@ export abstract class VersionPlanService {
          *  dirty under `--ignore-dirty`), and a dependency moving does not change that. */
         if (entry.status === 'bump' || entry.status === 'skip' || entry.groupKey === source.groupKey) continue;
         if (!pkg.dependencies.includes(source.package)) continue;
+        /** Its range still takes the new version, so nothing it publishes is out of date; one that
+         *  does not is refused by `checkKeptRanges`, after every bump is known. */
+        if (this.rangeVerdict(pkg, source.package, source.to!)) continue;
 
         /** The group always contains `pkg` itself, so there is always at least one version here -
          *  the fallback is for the type, not for a case that can happen. */

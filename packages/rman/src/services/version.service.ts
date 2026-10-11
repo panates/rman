@@ -115,7 +115,8 @@ export class VersionService extends Service {
       /** Which fields hold a sibling reference, and what a reference even looks like, is the
        *  ecosystem's - npm's four fields and its `"workspace:"` protocol used to be spelled out
        *  here. See `Plugin.updateDependencyVersions`. */
-      Manifest.updateDependencyVersions(pkg, bumpedVersions);
+      if (pkg.config?.version?.dependentRanges === 'keep') VersionService.raiseKeptFloors(pkg, bumpedVersions);
+      else Manifest.updateDependencyVersions(pkg, bumpedVersions);
       await hook('exec');
       pkg.writeManifest();
       // Before the `after` hook, so a script reacting to the bump sees the whole new state.
@@ -387,6 +388,30 @@ export namespace VersionService {
    *  version hook has no package ordering to join. */
   export function normalizeScriptValue(value: unknown, at: string): RunStepValue[] {
     return RunService.normalizeScriptValue(value, at, { topo: false });
+  }
+
+  /**
+   * Raises the lower bound of each of `pkg`'s ranges on an in-repo dependency to the version that
+   * dependency now has - `bumped`'s for one this run moves, its own otherwise. Upper bounds stay.
+   * What `.rmanrc "version.dependentRanges": keep` does for a package released for changes of its
+   * own, in place of `Manifest.updateDependencyVersions`.
+   */
+  /* **Only when the package itself is released**, because that is the only time it can have
+   * started using something new: code relying on a newer dependency is a change in the dependent,
+   * and a change is what releases it. Left unreleased, the range it published is still true. The
+   * floor may end up higher than strictly needed - that errs toward what was built and tested, and
+   * the upper bound keeps every consumer installable.
+   *
+   * A prerelease never raises one: a stable range floored on a beta would no longer install for
+   * anyone on stable releases. */
+  export function raiseKeptFloors(pkg: Package, bumped: ReadonlyMap<Package, string>): void {
+    for (const dep of pkg.dependencies) {
+      const version = bumped.get(dep) ?? dep.version;
+      if (dep.versionScheme.isPrerelease(version)) continue;
+      for (const ref of Manifest.referencesTo(pkg, dep.name, version)) {
+        if (ref.raised && ref.accepts) Manifest.setReference(pkg, ref.field, dep.name, ref.raised);
+      }
+    }
   }
 
   /**

@@ -157,6 +157,43 @@ export interface ManifestProvider {
    * by path.
    */
   updateDependencyVersions?(manifest: Manifest, bumped: ReadonlyMap<Package, string>): void;
+  /**
+   * Every reference this manifest makes to the in-repo package `dependency`, one per field naming
+   * it, each judged against `version` - whether the range written there accepts it, and the range
+   * with its lower bound raised to it.
+   *
+   * What `.rmanrc "version.dependentRanges": keep` asks instead of `updateDependencyVersions`: a
+   * hand-written range is left alone while it accepts the new version, refused when it does not,
+   * and has its floor raised when the package holding it is released for reasons of its own.
+   *
+   * Omit it and a package has no ranges to keep, so `keep` behaves like `rewrite` for it.
+   */
+  referencesTo?(manifest: Manifest, dependency: string, version: string): ManifestProvider.Reference[];
+  /**
+   * Writes `range` as this manifest's reference to `dependency` in `field` - one of the fields
+   * `referencesTo` reported. Mutates `manifest.raw`, like `updateDependencyVersions`.
+   */
+  setReference?(manifest: Manifest, field: string, dependency: string, range: string): void;
+}
+
+export namespace ManifestProvider {
+  /** One field's reference to an in-repo package - see `ManifestProvider.referencesTo`. */
+  export interface Reference {
+    /** Where it is written - npm's `dependencies`, `peerDependencies`, ... */
+    field: string;
+    /** The range as written. */
+    range: string;
+    /** It follows the dependency by itself (npm's bare `"workspace:^"`) - always accepts, never
+     *  rewritten, and keeps `rewrite`'s handling under `keep` too. */
+    dynamic?: boolean;
+    /** Whether the range accepts the version asked about. */
+    accepts: boolean;
+    /** The range with its lower bound raised to the version asked about, when that moves it.
+     *  Unset when the floor is already there, or when `unraisable`. */
+    raised?: string;
+    /** The range's shape has no single lower bound this provider knows how to move. */
+    unraisable?: boolean;
+  }
 }
 
 /**
@@ -251,6 +288,17 @@ export namespace Manifest {
    */
   export function updateDependencyVersions(pkg: Package, bumped: ReadonlyMap<Package, string>): void {
     platformOf(pkg)?.manifestProvider.updateDependencyVersions?.(pkg.manifest, bumped);
+  }
+
+  /** `pkg`'s references to `dependency`, judged against `version` - see
+   *  `ManifestProvider.referencesTo`. Empty where the provider has no opinion. */
+  export function referencesTo(pkg: Package, dependency: string, version: string): ManifestProvider.Reference[] {
+    return platformOf(pkg)?.manifestProvider.referencesTo?.(pkg.manifest, dependency, version) ?? [];
+  }
+
+  /** Writes one of `pkg`'s references - see `ManifestProvider.setReference`. */
+  export function setReference(pkg: Package, field: string, dependency: string, range: string): void {
+    platformOf(pkg)?.manifestProvider.setReference?.(pkg.manifest, field, dependency, range);
   }
 
   /**

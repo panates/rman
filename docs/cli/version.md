@@ -509,6 +509,40 @@ published" from "published by something else".
 explicit `workspace:<range>` (e.g. `workspace:^1.0.0`) is bumped the same way a plain range would
 be.
 
+### Keeping hand-written ranges (`.rmanrc "version.dependentRanges"`)
+
+`rewrite`, the default, is what the paragraph above describes: a sibling's new version is written
+into every dependent's range, and the dependent is released for it. A repository whose packages
+declare ranges on purpose - `"@scope/common": ">=1.1.0 <2"`, so a release of `common` need not
+release everything depending on it - writes `keep`:
+
+```yaml
+version:
+  dependentRanges: keep
+```
+
+| the sibling's new version | what happens to the dependent |
+| --- | --- |
+| accepted by the range (`1.2.0` against `>=1.1.0 <2`) | range untouched, **not released for it** - `--show` says `range ... still satisfied` |
+| refused by the range (`2.0.0` against `<2`) | an `error` row naming the field, the range and the version; `version` writes nothing, so the range can be widened by hand |
+| a prerelease (`2.0.0-beta.0`) | neither fails the range nor moves it - a stable range keeps resolving the stable release |
+
+- **A dependent released for changes of its own has its lower bound raised** to the version each
+  in-repo dependency now has, keeping the upper bound: `>=1.1.0 <2` becomes `>=1.2.0 <2`. Code
+  relying on something new in a dependency is a change in the dependent, and a change is what
+  releases it - so that is the moment its published range has to say what it was built against.
+  `^a`, `~a`, `>=a`, `>=a <b` and `a - b` are raised; anything else (`||` above all) is left as
+  written and named in the plan's reason.
+- **Every kept range is checked, released or not** - a `publish.skip` package's too, since npm
+  workspaces link a sibling only while the range accepts its version and otherwise install it from
+  the registry.
+- `workspace:*`/`workspace:^`/`workspace:~` keep their handling: they follow the sibling by
+  themselves.
+- `version.cascade: group` still releases every member - it is a release-identity decision, and
+  `keep` only narrows "released because a dependency moved".
+- **The cost, stated:** a dependent that bundles its dependency keeps shipping the older code until
+  it is released itself. Choosing `keep` is accepting that.
+
 See [`VersionService`](../rman.md#versionservice) for the complete algorithm (including
 [prereleases](../rman.md#prereleases---preid--optionspreid) and cross-group ripple mechanics) and
 its full test-verified examples. How a number actually moves is the **version scheme**'s
