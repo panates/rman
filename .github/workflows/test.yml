@@ -33,6 +33,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# **A push whose last commit is a release commit tests nothing new.** The release run pushes its
+# `chore(release): ...` commit to `main` with `GITHUB_TOKEN`, which triggers no workflow; it reaches
+# `dev` only when `dev` is fast-forwarded to `main` afterwards, and then holds a version bump and a
+# changelog for code the release run has just tested. Measured on v2.25.0: a full Test run for it.
+# The release run's own call is unaffected - its head commit is never a `chore(release):` one.
 jobs:
   # ***********************************
   # Job: Type check
@@ -51,6 +56,7 @@ jobs:
       (
         github.event_name == 'push' &&
         !(
+          startsWith(github.event.head_commit.message, 'chore(release):') ||
           contains(github.event.head_commit.message, 'no-test') ||
           (
             startsWith(github.event.head_commit.message, 'Merge pull request') &&
@@ -101,6 +107,7 @@ jobs:
       (
         github.event_name == 'push' &&
         !(
+          startsWith(github.event.head_commit.message, 'chore(release):') ||
           contains(github.event.head_commit.message, 'no-test') ||
           ( 
             startsWith(github.event.head_commit.message, 'Merge pull request') &&
