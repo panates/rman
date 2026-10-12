@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to 519b844813c5f5b2bea36ab226ac90ea9ac80e4d -->
+<!-- rman:documented-up-to fbb7bfa2e279d02b13d7d97f84a212d5b9c7fefd -->
+
+## v2.25.2 (2026-10-12)
+
+### 🐛 Bug Fixes
+
+- **deps:** list a range rman does not move when a newer release falls outside it (f160e9d)
+
+### 🧪 Tests
+
+- tolerate an existing main branch in fixtures (269af05)
+
+---
 
 ## v2.25.1 (2026-10-12)
 
