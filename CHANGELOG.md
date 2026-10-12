@@ -1,6 +1,22 @@
 # Changelog
 
-<!-- rman:documented-up-to 4f9afbaa62e552dec83606b822bfb006f65c5c4c -->
+<!-- rman:documented-up-to 519b844813c5f5b2bea36ab226ac90ea9ac80e4d -->
+
+## v2.25.1 (2026-10-12)
+
+### 📚 Documentation
+
+- a release goes through a PR after dev has tested green (baebab9)
+
+### 🧪 Tests
+
+- keep specs off the CI job summary (7f812fa)
+
+### 🤖 Continuous Integration
+
+- skip Test for a push ending in a release commit (4064bf1)
+
+---
 
 ## v2.25.0 (2026-10-11)
 
