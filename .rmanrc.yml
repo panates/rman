@@ -18,6 +18,11 @@ changelog:
     # Root level, and that matters: `version` reads this off the *root's* config once per run.
     # Written under `"[*]"` it would reach the package and silently do nothing.
     changelog: true
+    # `[skip ci]` keeps the release commit from starting a Test run when `dev` is fast-forwarded to
+    # `main` after a release: GitHub starts no push workflow for a push whose last commit says so.
+    # The code in it was tested by the release run; the job-level guard in test.yml only skipped
+    # the jobs, and still left a "skipped" run in the list after every release.
+    commitMessage: 'chore(release): v{version} [skip ci]'
 
 '[*]':
   publish:

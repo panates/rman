@@ -102,6 +102,12 @@ export namespace DependencyUpdater {
     types: string[];
     /** The range as the manifest declares it. */
     current: string;
+    /** The version installed now, as the package would resolve it - unset when it is not
+     *  installed, or the ecosystem cannot say. */
+    installed?: string;
+    /** The newest version the declared range takes - what an install would put there. An
+     *  `'up-to-date'` entry whose `installed` differs from it is still listed. */
+    resolved?: string;
     status: 'update' | 'held' | 'skipped' | 'up-to-date' | 'error';
     /** The range it is rewritten to, on an `'update'`. */
     target?: string;
