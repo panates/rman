@@ -155,10 +155,32 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       await expect(plan(dir, new FakeRegistryUpdater({}))).rejects.toThrow(/deps\.targets.*"latest"/);
     });
 
-    it('leaves an exact version, a compound range, a tag and a URL out of the plan', async () => {
+    /**
+     * **Never moved, but listed when something newer is out**, as a `skipped` row. Left out of the
+     * table entirely, `"mocha": "11.7.5"` on `panates/hl7v2` read as up to date with 12.x out. A tag
+     * and a URL are not version ranges, so there is nothing to compare and no row.
+     */
+    it('lists an exact version and a compound range a newer release falls outside, without moving them', async () => {
       const dir = single({
         dependencies: { pinned: '1.0.0', compound: '>=1 <2', tagged: 'latest', remote: 'github:x/y' },
       });
+      const updater = new FakeRegistryUpdater({
+        pinned: { releases: releases('1.0.0', '2.0.0') },
+        compound: { releases: releases('1.0.0', '2.0.0') },
+      });
+      const { entries } = await plan(dir, updater);
+      expect(entries.map(e => e.name).sort()).toEqual(['compound', 'pinned']);
+      expect(entry(entries, 'pinned')).toMatchObject({
+        status: 'skipped',
+        current: '1.0.0',
+        latest: '2.0.0',
+        reason: expect.stringMatching(/not a \^ or ~ range/),
+      });
+      expect(entry(entries, 'compound')).toMatchObject({ status: 'skipped', current: '>=1 <2' });
+    });
+
+    it('leaves out a fixed range that still takes the newest release', async () => {
+      const dir = single({ dependencies: { pinned: '2.0.0', compound: '>=1 <3' } });
       const updater = new FakeRegistryUpdater({
         pinned: { releases: releases('1.0.0', '2.0.0') },
         compound: { releases: releases('1.0.0', '2.0.0') },

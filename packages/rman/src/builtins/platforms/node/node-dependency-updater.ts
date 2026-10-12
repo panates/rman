@@ -72,7 +72,7 @@ export class NodeDependencyUpdater implements DependencyUpdater {
     for (const d of decisions) this.prepare(d, registry.get(d.name));
 
     this.resolve(decisions, ctx);
-    return decisions.filter(d => d.wanted).map(d => this.toEntry(d));
+    return decisions.filter(d => d.wanted || d.unmovable).map(d => this.toEntry(d));
   }
 
   async applyPlan(
@@ -155,6 +155,7 @@ export class NodeDependencyUpdater implements DependencyUpdater {
             settings,
             fields: new Map(),
             movable: [],
+            fixed: [],
             wanted: false,
             allowed: [],
             candidates: [],
@@ -163,13 +164,16 @@ export class NodeDependencyUpdater implements DependencyUpdater {
           byName.set(name, d);
         }
         d.fields.set(field, range);
-        if (this.movablePattern.test(range) && (!kinds || kinds.includes(field))) d.movable.push(field);
+        if (kinds && !kinds.includes(field)) continue;
+        if (this.movablePattern.test(range)) d.movable.push(field);
+        else if (semver.validRange(range)) d.fixed.push(field);
       }
     }
     for (const d of byName.values()) {
       const picked = !options.names?.length || micromatch.isMatch(d.name, options.names);
       const rejected = settings.reject.length > 0 && micromatch.isMatch(d.name, settings.reject);
       d.wanted = d.movable.length > 0 && picked && !rejected;
+      d.listed = !d.wanted && d.fixed.length > 0 && picked && !rejected;
       if (d.wanted) {
         d.floor = d.movable.map(f => semver.minVersion(d.fields.get(f)!)!.version).sort(semver.rcompare)[0];
       }
@@ -218,6 +222,7 @@ export class NodeDependencyUpdater implements DependencyUpdater {
   protected prepare(d: NodeDependencyUpdater.Decision, info: NpmReleases | undefined): void {
     d.releases = new Map((info?.releases ?? []).map(r => [r.version, r]));
     d.latestTag = info?.latest;
+    if (d.listed && info) d.unmovable = this.outgrown(d, info.releases);
     if (!d.wanted) return;
     if (!info) {
       d.error = 'the registry gave no answer';
@@ -239,6 +244,33 @@ export class NodeDependencyUpdater implements DependencyUpdater {
       else if (version === d.allowed[0]) d.reason = `${version} refused: ${refusal}`;
     }
     d.index = d.candidates.length ? 0 : -1;
+  }
+
+  /**
+   * The first range of a dependency rman does not move - a pinned `11.7.5`, a `>=2 <3` - that the
+   * registry's newest offerable release falls outside, and that release. `undefined` when every
+   * such range still takes it, which is nothing worth a row.
+   */
+  /* **Listed, never moved.** Only a `^` or `~` range on a plain version is rewritten, since anything
+   * else was written that way on purpose. But leaving such a dependency out of the table entirely
+   * hid it: measured on `panates/hl7v2`, `"mocha": "11.7.5"` with 12.x out appeared nowhere, and a
+   * person reading the table took that for "up to date". A `skipped` row says what is there and why
+   * it stays. */
+  protected outgrown(
+    d: NodeDependencyUpdater.Decision,
+    releases: readonly NpmRelease[],
+  ): NodeDependencyUpdater.Decision['unmovable'] {
+    for (const field of d.fixed) {
+      const range = d.fields.get(field)!;
+      const newest = releases
+        .map(r => semver.parse(r.version))
+        .filter((v): v is semver.SemVer => !!v && !v.prerelease.length)
+        .filter(v => !releases.find(r => r.version === v.version)?.deprecated)
+        .filter(v => !d.latestTag || !semver.valid(d.latestTag) || semver.lte(v, d.latestTag))
+        .sort(semver.rcompare)[0];
+      if (newest && !semver.satisfies(newest, range)) return { field, range, version: newest.version };
+    }
+    return undefined;
   }
 
   /** Whether the registry offers `release` as a move at all: newer than what is declared, not
@@ -466,6 +498,19 @@ export class NodeDependencyUpdater implements DependencyUpdater {
   }
 
   protected toEntry(d: NodeDependencyUpdater.Decision): DependencyUpdater.Entry {
+    if (!d.wanted && d.unmovable) {
+      const { field, range, version } = d.unmovable;
+      return {
+        package: d.pkg,
+        name: d.name,
+        types: [field],
+        current: range,
+        status: 'skipped',
+        latest: version,
+        available: version,
+        reason: 'not a ^ or ~ range - rman moves only those',
+      };
+    }
     const entry: DependencyUpdater.Entry = {
       package: d.pkg,
       name: d.name,
@@ -517,6 +562,12 @@ export namespace NodeDependencyUpdater {
     fields: Map<string, string>;
     /** The fields whose range is rewritten. */
     movable: string[];
+    /** The fields holding a valid range rman does not rewrite - a pinned version, `>=a <b`. */
+    fixed: string[];
+    /** Not planned, but listed when a release falls outside a `fixed` range - see `outgrown`. */
+    listed?: boolean;
+    /** That release, and the range it falls outside. */
+    unmovable?: { field: string; range: string; version: string };
     /** Whether this name is planned at all - rather than only stating rules for the others. */
     wanted: boolean;
     /** What is declared now, as a version: the highest floor among the movable ranges. */

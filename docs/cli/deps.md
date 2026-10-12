@@ -52,6 +52,12 @@ prefix. An exact version (`1.2.3`), a compound range (`>=1 <2`, `a || b`), a dis
 `npm:` alias, a `workspace:` range and a package of this repository are left as they are - and every
 one of them still counts as a rule the others must keep.
 
+**Left alone, but not left out.** An exact version or a compound range that the newest release
+falls outside is listed as a `skipped` row - `mocha  11.7.5  -  12.0.3  skipped  not a ^ or ~ range`
+- so a pin is never mistaken for "up to date". `-u` still does not touch it; change it by hand, or
+write it as a caret range if it should move. A dist-tag, a URL and an alias have no version to
+compare and get no row.
+
 **`peerDependencies` move like the rest.** A peer range is a promise to the package's consumers, so
 moving it to a new major narrows what they may install. To keep a peer range where it is, write it
 as a range rman does not rewrite - `">=5.3.0 <6"` rather than `"^5.3.0"`. It then also holds the
