@@ -31,7 +31,10 @@ app
 - **Current** is the range the manifest declares.
 - **Installed** is the version the package resolves today - the first `node_modules/<name>` walking
   up from its directory, so a copy hoisted to a monorepo's root counts. `-` when it is not installed.
-- **Latest** is the newest version there is, whatever the settings say.
+  **Red** when it falls outside the declared range - `node_modules` is not what the manifest says.
+- **Latest** is the newest version there is, whatever the settings say. **Green** when the row
+  reaches it, **yellow** when it stops short - skipped, held, or an upgrade cut short - so that is
+  readable without the note.
 - **Upgrade** is the range `-u` would write; `-` when the dependency stays where it is. Last before
   the note, so a row reads from what is there to what it would become.
 - **Change** is the size of the move (`patch`, `minor`, `major`), or why there is none: `held` -
