@@ -3296,6 +3296,13 @@ safe only because *that* version calls rman nowhere: `@v2` drives the whole rele
 have had rman 2.x released by an rman that cannot read this repository's own `.rmanrc.yml`. Same
 bootstrap loop `npm run build` was taken off, and it bites exactly when a release is being cut.
 
+- **A release goes through a pull request, after `dev` has tested green - never a `main` pushed by
+  hand.** The order: push `dev`; wait for the Test run on `dev` to finish green; open a PR `dev` ->
+  `main` (`gh pr create --base main --head dev`) and merge it; watch the Release run; then
+  fast-forward `dev` to `main`. The user's rule, after `dev` and `main` were pushed seconds apart and
+  the Test and Release runs went at once - a release must not start before its tests have answered.
+  The workflows are built for this route too: `release.yml` skips its own test job only for a
+  `Merge pull request ... /dev` commit, so a hand-merged `main` tests the same commit a second time.
 - **Two builds, and both are load-bearing.** The first is the bootstrap - there is no rman to run
   `version` with until it finishes. The second is the artifact: `postbuild.cjs` bakes
   `package.json`'s version into `build/constants.js`, so a build made *before* the bump ships a CLI
