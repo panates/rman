@@ -211,6 +211,8 @@ function jsonPlan(entries: readonly DependencyUpdater.Entry[]) {
     types: e.types,
     status: e.status,
     current: e.current,
+    installed: e.installed,
+    resolved: e.resolved,
     target: e.target,
     latest: e.latest,
     available: e.available,
@@ -230,25 +232,33 @@ function jsonPlan(entries: readonly DependencyUpdater.Entry[]) {
  * own settings leave the newer version out) or `error`. Moves first, smallest first, then the rest. */
 function printPlan(entries: readonly DependencyUpdater.Entry[], root: string): void {
   const updated = entries.filter(e => e.status === 'update');
-  const shown = entries.filter(e => e.status !== 'up-to-date');
+  const shown = entries.filter(e => e.status !== 'up-to-date' || reinstall(e));
   /** Said first when nothing moves, so a run whose only rows are majors left behind does not read
    *  as a list of things to do. */
   if (!updated.length) {
+    const why = [
+      ...(shown.some(e => e.status !== 'up-to-date')
+        ? ['newer versions their settings leave out, or another rule holds back']
+        : []),
+      ...(shown.some(reinstall) ? ['installed versions that differ from what the range takes'] : []),
+    ];
     console.log(
-      colors.green('All dependencies are up to date') +
-        (shown.length ? colors.gray(' - newer versions their settings leave out, or another rule holds back:') : '.'),
+      colors.green('All dependencies are up to date') + (why.length ? colors.gray(` - ${why.join('; ')}:`) : '.'),
     );
     if (!shown.length) return;
   }
 
-  const header = ['Dependency', 'Current', 'Upgrade', 'Latest', 'Change'];
+  /** The upgrade last before the note, so the row reads from what is there to what it would become. */
+  const header = ['Dependency', 'Current', 'Installed', 'Latest', 'Change', 'Upgrade'];
   const cells = (e: DependencyUpdater.Entry): string[] => [
     e.name,
     e.current,
-    e.status === 'update' ? (e.target ?? '') : '-',
-    e.status === 'error' ? '-' : (e.available ?? e.latest ?? ''),
+    e.installed ?? '-',
+    e.status === 'error' ? '-' : (e.available ?? e.latest ?? e.resolved ?? ''),
     changeOf(e),
+    e.status === 'update' ? (e.target ?? '') : '-',
   ];
+  const last = header.length - 1;
   const widths = header.map((h, i) => Math.max(h.length, ...shown.map(e => cells(e)[i]!.length)));
   /** Padded to the column, except a last value nothing follows - trailing spaces inside a colour
    *  code are past the reach of `trimEnd`. */
@@ -258,7 +268,9 @@ function printPlan(entries: readonly DependencyUpdater.Entry[], root: string): v
   for (const pkg of [...new Set(shown.map(e => e.package))]) {
     const sizes = pkg.versionScheme.bumpNames;
     const rank = (e: DependencyUpdater.Entry) =>
-      e.status === 'update' ? sizes.indexOf(e.bump!) : sizes.length + ['held', 'skipped', 'error'].indexOf(e.status);
+      e.status === 'update'
+        ? sizes.indexOf(e.bump!)
+        : sizes.length + ['held', 'skipped', 'error', 'up-to-date'].indexOf(e.status);
     const rows = shown.filter(e => e.package === pkg).sort((x, y) => rank(x) - rank(y));
 
     const where = path.relative(root, pkg.dirname);
@@ -267,15 +279,16 @@ function printPlan(entries: readonly DependencyUpdater.Entry[], root: string): v
     for (const e of rows) {
       const paint = e.status === 'update' ? sizeColor(e.bump, sizes) : changeColor(e.status);
       const values = cells(e);
-      if (e.reason) values[4] = values[4]!.padEnd(widths[4]!);
-      const text = line(values, (v, column) => (column === 2 || column === 4 ? paint(v) : v));
-      if (!e.reason) {
+      const note = e.reason ?? (reinstall(e) ? `"${e.current}" takes ${e.resolved} - install again` : undefined);
+      if (note) values[last] = values[last]!.padEnd(widths[last]!);
+      const text = line(values, (v, column) => (column === 4 || column === 5 ? paint(v) : v));
+      if (!note) {
         console.log(text);
         continue;
       }
       const indent = 2 + widths.reduce((sum, w) => sum + w + 2, 0);
-      const note = wrapNote(e.reason, process.stdout.isTTY ? process.stdout.columns - indent : 0);
-      console.log(`${text}  ${note.map(l => colors.gray(l)).join('\n' + ' '.repeat(indent))}`);
+      const wrapped = wrapNote(note, process.stdout.isTTY ? process.stdout.columns - indent : 0);
+      console.log(`${text}  ${wrapped.map(l => colors.gray(l)).join('\n' + ' '.repeat(indent))}`);
     }
   }
 }
@@ -301,7 +314,17 @@ function wrapNote(note: string, width: number): string[] {
 
 /** What the `Change` column says: the size of the move, or why there is none. */
 function changeOf(e: DependencyUpdater.Entry): string {
+  if (e.status === 'up-to-date') return reinstall(e) ? 'install' : e.status;
   return e.status === 'update' ? (e.bump ?? 'other') : e.status;
+}
+
+/**
+ * A range already at the newest version, with something else installed - a `node_modules` behind
+ * its manifest. Listed although nothing moves: hidden, it read as up to date while the code ran
+ * against the older version.
+ */
+function reinstall(e: DependencyUpdater.Entry): boolean {
+  return e.status === 'up-to-date' && !!e.installed && !!e.resolved && e.installed !== e.resolved;
 }
 
 /** `held` and `skipped` in yellow, an error in red - a row with no move to colour by size. */

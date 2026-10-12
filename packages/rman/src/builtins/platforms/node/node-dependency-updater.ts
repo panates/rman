@@ -72,7 +72,15 @@ export class NodeDependencyUpdater implements DependencyUpdater {
     for (const d of decisions) this.prepare(d, registry.get(d.name));
 
     this.resolve(decisions, ctx);
-    return decisions.filter(d => d.wanted || d.unmovable).map(d => this.toEntry(d));
+    return decisions
+      .filter(d => d.wanted || d.unmovable)
+      .map(d => {
+        /** Set on the entry itself, never a copy: `planned` is keyed by that object. */
+        const entry = this.toEntry(d);
+        entry.installed = this.installedVersion(d.pkg, d.name);
+        entry.resolved = this.resolvedVersion(d, entry.current);
+        return entry;
+      });
   }
 
   async applyPlan(
@@ -536,6 +544,40 @@ export class NodeDependencyUpdater implements DependencyUpdater {
     };
     this.planned.set(result, d);
     return result;
+  }
+
+  /**
+   * The version of `name` that `pkg` resolves today: the first `node_modules/<name>/package.json`
+   * walking up from its directory, which is Node's own lookup - so a hoisted copy at a monorepo's
+   * root counts, and a nested one under the package wins over it.
+   */
+  protected installedVersion(pkg: Package, name: string): string | undefined {
+    let dir = pkg.dirname;
+    for (;;) {
+      const file = path.join(dir, 'node_modules', name, 'package.json');
+      if (fs.existsSync(file)) {
+        try {
+          const version = JSON.parse(fs.readFileSync(file, 'utf-8'))?.version;
+          return typeof version === 'string' ? version : undefined;
+        } catch {
+          return undefined;
+        }
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) return undefined;
+      dir = parent;
+    }
+  }
+
+  /** The newest release `range` takes, as npm's install would pick it: no prerelease unless the
+   *  range asks for one, nothing above the `latest` tag, a deprecated one only when nothing else is. */
+  protected resolvedVersion(d: NodeDependencyUpdater.Decision, range: string): string | undefined {
+    if (!d.releases || !semver.validRange(range)) return undefined;
+    const taken = [...d.releases.values()]
+      .filter(r => semver.satisfies(r.version, range))
+      .filter(r => !d.latestTag || !semver.valid(d.latestTag) || semver.lte(r.version, d.latestTag))
+      .sort((a, b) => semver.rcompare(a.version, b.version));
+    return (taken.find(r => !r.deprecated) ?? taken[0])?.version;
   }
 
   protected manifestFile(pkg: Package): string {

@@ -22,6 +22,8 @@ class FakeUpdater implements DependencyUpdater {
   reason = 'major - deps.target is "minor"';
   /** What every entry reports - `'update'` unless a case says otherwise. */
   status: DependencyUpdater.Entry['status'] = 'update';
+  /** What the declared range takes - unset unless a case says. */
+  resolved: string | undefined;
 
   async getPlan(_ctx: DependencyUpdater.Context, packages: readonly Package[]): Promise<DependencyUpdater.Entry[]> {
     this.planned = packages.map(p => p.name);
@@ -30,6 +32,8 @@ class FakeUpdater implements DependencyUpdater {
       name: 'left-pad',
       types: ['dependencies'],
       current: '^1.0.0',
+      installed: '1.0.2',
+      resolved: this.resolved,
       status: this.status,
       ...(this.status === 'update' ? { target: '^1.3.0', bump: 'minor' } : {}),
       latest: '1.3.0',
@@ -61,6 +65,7 @@ describe('commands/deps', () => {
       restored: 0,
       verified: 0,
       refusal: undefined,
+      resolved: undefined,
       status: 'update',
       reason: 'major - deps.target is "minor"',
     });
@@ -116,8 +121,13 @@ describe('commands/deps', () => {
   it('prints a table with a header, one row per dependency', async () => {
     const dir = monorepo();
     const { lines } = await capture(() => runCli({ argv: ['deps', '--scope', 'pkg-a'], cwd: dir }));
-    expect(lines).toContainEqual(expect.stringMatching(/^\s+Dependency\s+Current\s+Upgrade\s+Latest\s+Change\s+Note$/));
-    expect(lines).toContainEqual(expect.stringMatching(/^\s+left-pad\s+\^1\.0\.0\s+\^1\.3\.0\s+1\.3\.0\s+minor$/));
+    /** What is declared, what is installed, what is out - then what it would become, last. */
+    expect(lines).toContainEqual(
+      expect.stringMatching(/^\s+Dependency\s+Current\s+Installed\s+Latest\s+Change\s+Upgrade\s+Note$/),
+    );
+    expect(lines).toContainEqual(
+      expect.stringMatching(/^\s+left-pad\s+\^1\.0\.0\s+1\.0\.2\s+1\.3\.0\s+minor\s+\^1\.3\.0$/),
+    );
   });
 
   it('narrows to --scope', async () => {
@@ -160,6 +170,20 @@ describe('commands/deps', () => {
     expect(lines.join('\n')).not.toContain('rman deps -u');
   });
 
+  /** A manifest already at the newest version, and `node_modules` behind it: nothing moves, and the
+   *  row is still shown, since hidden it read as up to date while the older version ran. */
+  it('lists an up-to-date range whose installed version is not the one it takes', async () => {
+    const dir = monorepo();
+    updater.status = 'up-to-date';
+    updater.resolved = '1.3.0';
+    const { lines } = await capture(() => runCli({ argv: ['deps', '--scope', 'pkg-a'], cwd: dir }));
+    const text = lines.join('\n');
+    expect(text).toMatch(/^All dependencies are up to date - installed versions that differ/m);
+    expect(text).toMatch(
+      /left-pad\s+\^1\.0\.0\s+1\.0\.2\s+1\.3\.0\s+install\s+-\s+"\^1\.0\.0" takes 1\.3\.0 - install again/,
+    );
+  });
+
   it('says so first, then lists what was left out, when nothing moves but a major exists', async () => {
     const dir = monorepo();
     updater.status = 'skipped';
@@ -167,7 +191,7 @@ describe('commands/deps', () => {
     const text = lines.join('\n');
     expect(text).toMatch(/^All dependencies are up to date - newer versions/m);
     expect(text).not.toContain('not updated');
-    expect(text).toMatch(/left-pad\s+\^1\.0\.0\s+-\s+2\.0\.0\s+skipped\s+major - deps\.target is "minor"/);
+    expect(text).toMatch(/left-pad\s+\^1\.0\.0\s+1\.0\.2\s+2\.0\.0\s+skipped\s+-\s+major - deps\.target is "minor"/);
     expect(text).not.toContain('rman deps -u');
   });
 

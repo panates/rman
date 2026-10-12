@@ -22,18 +22,24 @@ one row per dependency that has something newer:
 
 ```
 app
-  Dependency  Current  Upgrade  Latest   Change   Note
-  esbuild     ^0.24.0  ^0.24.2  0.28.2   patch    major - deps.target is "minor"
-  typescript  ^5.3.0   ^5.9.3   7.0.2    minor    major - deps.target is "minor"
-  eslint      ^9.0.0   -        10.12.0  skipped  major - deps.target is "minor"
+  Dependency  Current  Installed  Latest   Change   Upgrade  Note
+  esbuild     ^0.24.0  0.24.0     0.28.2   patch    ^0.24.2  major - deps.target is "minor"
+  typescript  ^5.3.0   5.3.3      7.0.2    minor    ^5.9.3   major - deps.target is "minor"
+  eslint      ^9.0.0   9.39.1     10.12.0  skipped  -        major - deps.target is "minor"
 ```
 
-- **Upgrade** is the range `-u` would write; `-` when the dependency stays where it is.
+- **Current** is the range the manifest declares.
+- **Installed** is the version the package resolves today - the first `node_modules/<name>` walking
+  up from its directory, so a copy hoisted to a monorepo's root counts. `-` when it is not installed.
 - **Latest** is the newest version there is, whatever the settings say.
+- **Upgrade** is the range `-u` would write; `-` when the dependency stays where it is. Last before
+  the note, so a row reads from what is there to what it would become.
 - **Change** is the size of the move (`patch`, `minor`, `major`), or why there is none: `held` -
   another dependency's rule refuses the newer version, named in full in the note - `skipped` - the
   package's own settings leave it out (a major under `target: minor`, a version younger than
-  `minAge`) - or `error`. Rows that move come first, smallest first.
+  `minAge`) - `install` - the range is already at the newest version but something else is
+  installed, so `node_modules` is behind its manifest and an install puts it right - or `error`.
+  Rows that move come first, smallest first.
 - **Note** says why a row stops short of **Latest**, for instance
   `7.0.2 refused: @typescript-eslint/parser@8.40.0 needs typescript >=4.8.4 <6.0.0`.
 

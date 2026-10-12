@@ -179,6 +179,21 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       expect(entry(entries, 'compound')).toMatchObject({ status: 'skipped', current: '>=1 <2' });
     });
 
+    /** Node's own lookup: the first `node_modules/<name>` walking up, so a hoisted copy counts. */
+    it('reports the version installed now, and none for one that is not', async () => {
+      const dir = single({ dependencies: { a: '^1.0.0', b: '^1.0.0' } });
+      writeJson(dir, 'node_modules/a/package.json', { name: 'a', version: '1.0.4' });
+      const updater = new FakeRegistryUpdater({
+        a: { releases: releases('1.0.0', '1.1.0') },
+        b: { releases: releases('1.0.0', '1.1.0') },
+      });
+      const { entries } = await plan(dir, updater);
+      expect(entry(entries, 'a').installed).toBe('1.0.4');
+      /** And what an install would put there - the newest release the declared range takes. */
+      expect(entry(entries, 'a').resolved).toBe('1.1.0');
+      expect(entry(entries, 'b').installed).toBeUndefined();
+    });
+
     it('leaves out a fixed range that still takes the newest release', async () => {
       const dir = single({ dependencies: { pinned: '2.0.0', compound: '>=1 <3' } });
       const updater = new FakeRegistryUpdater({
