@@ -38,6 +38,8 @@ concurrency:
 # `dev` only when `dev` is fast-forwarded to `main` afterwards, and then holds a version bump and a
 # changelog for code the release run has just tested. Measured on v2.25.0: a full Test run for it.
 # The release run's own call is unaffected - its head commit is never a `chore(release):` one.
+# Since v2.25.2 the release commit also carries `[skip ci]` (.rmanrc.yml `version.commitMessage`),
+# so GitHub starts no run for it at all; this guard stays for a release commit written without it.
 jobs:
   # ***********************************
   # Job: Type check

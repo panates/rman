@@ -24,6 +24,13 @@ describe('utils/conventional-commits', () => {
     it('matches a repo\'s own .rmanrc "version.commitMessage" template', () => {
       expect(ConventionalCommitsService.isReleaseCommit('release: v1.2.0', 'release: v{version}')).toBe(true);
       expect(ConventionalCommitsService.isReleaseCommit('chore(release): v1.2.0', 'release: v{version}')).toBe(true); // built-ins still count
+      /** This repository's own, with GitHub's `[skip ci]` after the version. */
+      expect(
+        ConventionalCommitsService.isReleaseCommit(
+          'chore(release): v1.2.0 [skip ci]',
+          'chore(release): v{version} [skip ci]',
+        ),
+      ).toBe(true);
     });
 
     it('treats regex-special characters in a template as literals', () => {
