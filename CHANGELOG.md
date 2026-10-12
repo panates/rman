@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to fbb7bfa2e279d02b13d7d97f84a212d5b9c7fefd -->
+<!-- rman:documented-up-to 1f0f5d9f60072aef619c3de8373d68718b804f54 -->
+
+## v2.26.0 (2026-10-12)
+
+### ✨ Features
+
+- **deps:** an Installed column, and a row when node_modules is behind its manifest (3c91d40)
+
+### 🤖 Continuous Integration
+
+- write the release commit with [skip ci] (254c9e0)
+
+---
 
 ## v2.25.2 (2026-10-12)
 
