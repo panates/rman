@@ -201,7 +201,8 @@ describe('commands/clean', () => {
       git(dir, 'config', 'user.name', 't');
       git(dir, 'add', '-A');
       git(dir, 'commit', '-q', '-m', 'init');
-      git(dir, 'checkout', '-q', '-b', 'main');
+      /** `-B`: `git init` may already have made `main` (`init.defaultBranch`). */
+      git(dir, 'checkout', '-q', '-B', 'main');
 
       await captureLogs(() => runCli({ cwd: dir, argv: ['clean', '--allow-branch', 'main'] }));
       expect(fs.existsSync(path.join(dir, 'packages/a/src/foo.js'))).toBe(false);
