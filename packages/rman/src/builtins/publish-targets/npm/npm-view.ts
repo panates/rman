@@ -130,7 +130,14 @@ export async function npmViewReleases(
   const list = Array.isArray(releases) ? releases : releases ? [releases] : [];
   const meta = (options.withTime ? tags : { 'dist-tags': tags }) as { 'dist-tags'?: any; time?: any };
   return {
-    releases: list.filter((r: any) => typeof r?.version === 'string') as NpmRelease[],
+    /** **A bare version string is a release too.** Asked for several fields, npm answers with one
+     *  object per version - unless no version in the range has any of them set, and then it
+     *  collapses to a plain list of version strings. Measured on `ts-gems@>=3.12.0`: six strings,
+     *  so every release was dropped and `rman deps` reported 4.0.4 as nothing to offer - not even
+     *  a skipped major. */
+    releases: list
+      .map((r: any) => (typeof r === 'string' ? { version: r } : r))
+      .filter((r: any) => typeof r?.version === 'string') as NpmRelease[],
     latest: meta['dist-tags']?.latest,
     time: meta.time,
   };
