@@ -55,7 +55,9 @@ describe('utils/branch-guard', () => {
     git(dir, 'config', 'user.name', 't');
     git(dir, 'add', '-A');
     git(dir, 'commit', '-q', '-m', 'init');
-    git(dir, 'checkout', '-q', '-b', branch);
+    /** `-B`, not `-b`: with `init.defaultBranch = main` in the user's git config, `git init` has
+     *  already made `main`, and `-b main` refuses a branch that exists. */
+    git(dir, 'checkout', '-q', '-B', branch);
     return createRepository(dir);
   }
 
