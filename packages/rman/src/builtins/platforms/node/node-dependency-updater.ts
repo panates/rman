@@ -79,6 +79,9 @@ export class NodeDependencyUpdater implements DependencyUpdater {
         const entry = this.toEntry(d);
         entry.installed = this.installedVersion(d.pkg, d.name);
         entry.resolved = this.resolvedVersion(d, entry.current);
+        if (entry.installed && semver.validRange(entry.current)) {
+          entry.installedInRange = semver.satisfies(entry.installed, entry.current, { includePrerelease: true });
+        }
         return entry;
       });
   }

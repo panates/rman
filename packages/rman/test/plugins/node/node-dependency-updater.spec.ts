@@ -191,6 +191,8 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       expect(entry(entries, 'a').installed).toBe('1.0.4');
       /** And what an install would put there - the newest release the declared range takes. */
       expect(entry(entries, 'a').resolved).toBe('1.1.0');
+      expect(entry(entries, 'a').installedInRange).toBe(true);
+      expect(entry(entries, 'b').installedInRange).toBeUndefined();
       expect(entry(entries, 'b').installed).toBeUndefined();
     });
 

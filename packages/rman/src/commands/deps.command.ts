@@ -212,6 +212,7 @@ function jsonPlan(entries: readonly DependencyUpdater.Entry[]) {
     status: e.status,
     current: e.current,
     installed: e.installed,
+    installedInRange: e.installedInRange,
     resolved: e.resolved,
     target: e.target,
     latest: e.latest,
@@ -281,7 +282,11 @@ function printPlan(entries: readonly DependencyUpdater.Entry[], root: string): v
       const values = cells(e);
       const note = e.reason ?? (reinstall(e) ? `"${e.current}" takes ${e.resolved} - install again` : undefined);
       if (note) values[last] = values[last]!.padEnd(widths[last]!);
-      const text = line(values, (v, column) => (column === 4 || column === 5 ? paint(v) : v));
+      const text = line(values, (v, column) => {
+        if (column === 2 && e.installedInRange === false) return colors.red(v);
+        if (column === 3 && values[3] !== '-') return reachesLatest(e) ? colors.green(v) : colors.yellow(v);
+        return column === 4 || column === 5 ? paint(v) : v;
+      });
       if (!note) {
         console.log(text);
         continue;
@@ -324,7 +329,26 @@ function changeOf(e: DependencyUpdater.Entry): string {
  * against the older version.
  */
 function reinstall(e: DependencyUpdater.Entry): boolean {
-  return e.status === 'up-to-date' && !!e.installed && !!e.resolved && e.installed !== e.resolved;
+  return e.status === 'up-to-date' && installedDiffers(e);
+}
+
+/** What is installed is not what the declared range takes. */
+function installedDiffers(e: DependencyUpdater.Entry): boolean {
+  return !!e.installed && !!e.resolved && e.installed !== e.resolved;
+}
+
+/**
+ * Whether this row ends on the newest version - an upgrade that goes all the way, or a range that
+ * already takes it. What the Latest column's colour says at a glance: green when it is reached,
+ * yellow when the row stops short of it (skipped, held, or an upgrade cut short), so a reader need
+ * not go to the note to tell the two apart.
+ */
+/* **Installed is red only outside the declared range**, never merely behind the newest: a lockfile
+ * pinning an older version inside the range is the ordinary state of every row that moves, and
+ * colouring it would light up the whole column - the user's first version, yellow everywhere. */
+function reachesLatest(e: DependencyUpdater.Entry): boolean {
+  if (e.status === 'update') return !e.reason;
+  return e.status === 'up-to-date';
 }
 
 /** `held` and `skipped` in yellow, an error in red - a row with no move to colour by size. */

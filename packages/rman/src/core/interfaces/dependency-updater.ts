@@ -105,6 +105,9 @@ export namespace DependencyUpdater {
     /** The version installed now, as the package would resolve it - unset when it is not
      *  installed, or the ecosystem cannot say. */
     installed?: string;
+    /** Whether `installed` is one the declared range accepts - `false` means the installed copy
+     *  is not what the manifest says, and an install is due. Unset when nothing is installed. */
+    installedInRange?: boolean;
     /** The newest version the declared range takes - what an install would put there. An
      *  `'up-to-date'` entry whose `installed` differs from it is still listed. */
     resolved?: string;

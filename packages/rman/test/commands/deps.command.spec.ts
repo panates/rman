@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import colors from 'ansi-colors';
 import { expect } from 'expect';
 import type { Package } from '../../src/core/classes/package.js';
 import type { DependencyUpdater } from '../../src/core/interfaces/dependency-updater.js';
@@ -24,6 +25,8 @@ class FakeUpdater implements DependencyUpdater {
   status: DependencyUpdater.Entry['status'] = 'update';
   /** What the declared range takes - unset unless a case says. */
   resolved: string | undefined;
+  /** Whether the installed copy is in the declared range - unset unless a case says. */
+  installedInRange: boolean | undefined;
 
   async getPlan(_ctx: DependencyUpdater.Context, packages: readonly Package[]): Promise<DependencyUpdater.Entry[]> {
     this.planned = packages.map(p => p.name);
@@ -34,6 +37,7 @@ class FakeUpdater implements DependencyUpdater {
       current: '^1.0.0',
       installed: '1.0.2',
       resolved: this.resolved,
+      installedInRange: this.installedInRange,
       status: this.status,
       ...(this.status === 'update' ? { target: '^1.3.0', bump: 'minor' } : {}),
       latest: '1.3.0',
@@ -66,6 +70,7 @@ describe('commands/deps', () => {
       verified: 0,
       refusal: undefined,
       resolved: undefined,
+      installedInRange: undefined,
       status: 'update',
       reason: 'major - deps.target is "minor"',
     });
@@ -182,6 +187,40 @@ describe('commands/deps', () => {
     expect(text).toMatch(
       /left-pad\s+\^1\.0\.0\s+1\.0\.2\s+1\.3\.0\s+install\s+-\s+"\^1\.0\.0" takes 1\.3\.0 - install again/,
     );
+  });
+
+  /** Latest is green where the row reaches it and yellow where it stops short; Installed is red
+   *  only where it falls outside the declared range. */
+  it('colours Latest by whether the row reaches it, and Installed only outside its range', async () => {
+    const dir = monorepo();
+    const code = (n: number, text: string) => `\u001b[${n}m${text}`;
+    const raw = async () => {
+      const lines: string[] = [];
+      const original = { log: console.log, enabled: colors.enabled };
+      console.log = (...args: unknown[]) => void lines.push(args.map(String).join(' '));
+      /** On whatever the environment says (`FORCE_COLOR=0`, a CI runner), so the case is the same
+       *  everywhere. */
+      colors.enabled = true;
+      try {
+        await runCli({ argv: ['deps', '--scope', 'pkg-a'], cwd: dir });
+      } finally {
+        console.log = original.log;
+        colors.enabled = original.enabled;
+      }
+      return lines.find(l => l.includes('left-pad'))!;
+    };
+    /** An upgrade to the newest version, its installed copy inside the range. */
+    updater.installedInRange = true;
+    let row = await raw();
+    expect(row).toContain(code(32, '1.3.0'));
+    expect(row).not.toContain(code(31, '1.0.2'));
+
+    /** Left behind, and the installed copy is not what the manifest says. */
+    updater.status = 'skipped';
+    updater.installedInRange = false;
+    row = await raw();
+    expect(row).toContain(code(33, '2.0.0'));
+    expect(row).toContain(code(31, '1.0.2'));
   });
 
   it('says so first, then lists what was left out, when nothing moves but a major exists', async () => {
