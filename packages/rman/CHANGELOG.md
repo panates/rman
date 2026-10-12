@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 4f9afbaa62e552dec83606b822bfb006f65c5c4c -->
+<!-- rman:documented-up-to 519b844813c5f5b2bea36ab226ac90ea9ac80e4d -->
+
+## v2.25.1 (2026-10-12)
+
+### 🐛 Bug Fixes
+
+- **deps:** read npm's plain version list as releases (3b1dc69)
+
+---
 
 ## v2.25.0 (2026-10-11)
 
