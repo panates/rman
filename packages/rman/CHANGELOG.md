@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 1f0f5d9f60072aef619c3de8373d68718b804f54 -->
+<!-- rman:documented-up-to 2f96e640e5a918c514c2eb834a905908c2d41d35 -->
+
+## v2.27.0 (2026-10-12)
+
+### ✨ Features
+
+- **deps:** colour Latest by whether the row reaches it, Installed when outside its range (62989d5)
+
+---
 
 ## v2.26.0 (2026-10-12)
 
