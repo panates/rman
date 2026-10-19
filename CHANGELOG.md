@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 98942c3884eae576b5cab7261c3bc107fcd653d8 -->
+<!-- rman:documented-up-to 09f45f24a665b5355422905dd31bae87f81fd542 -->
+
+## v2.28.0 (2026-10-19)
+
+### ✨ Features
+
+- **run:** a function step and a condition get the vars their slot sees (3367436)
+
+---
 
 ## v2.27.1 (2026-10-19)
 
