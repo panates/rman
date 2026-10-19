@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 09f45f24a665b5355422905dd31bae87f81fd542 -->
+<!-- rman:documented-up-to dfebc4ca9b3194f1d8c2252688b8400061f10233 -->
+
+## v2.29.0 (2026-10-19)
+
+### ✨ Features
+
+- **deps:** hold back the upgrade npm refuses, keep the rest (6e898fa)
+
+---
 
 ## v2.28.0 (2026-10-19)
 
