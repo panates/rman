@@ -416,7 +416,7 @@ export abstract class VersionPlanService {
    * Whether `dependent` keeps its range on `dependency` (`.rmanrc "version.dependentRanges": keep`)
    * and that range still accepts `version` - so the new version reaches it without a release of
    * its own. `undefined` means "release it as `rewrite` would": the key says `rewrite`, the range
-   * no longer accepts the version (refused later, by `checkKeptRanges`), or there is no range to
+   * no longer accepts the version (moved, or refused, by `checkKeptRanges`), or there is no range to
    * judge - a reference that follows the dependency by itself, or an edge `.rmanrc
    * "dependencies"` declared with no range at all.
    *
@@ -439,10 +439,12 @@ export abstract class VersionPlanService {
 
   /**
    * The plan's last word on kept ranges: every package that keeps its ranges is checked against
-   * the versions its in-repo dependencies are getting. A range that refuses one makes the package
-   * an `'error'` naming the field, the range and the version, so `version` writes nothing and the
-   * range can be widened by hand. One left out of the release because its range still accepts says
-   * so in its reason, and one being released notes a range whose floor cannot be raised.
+   * the versions its in-repo dependencies are getting. A range that refuses one is moved to accept
+   * it where its shape allows (`^1.1.4` -> `^2.0.0`, noted in the reason) - the package is then
+   * released as under `rewrite` - and makes the package an `'error'` naming the field, the range
+   * and the version where it does not, so `version` writes nothing and the range is fixed by hand.
+   * One left out of the release because its range still accepts says so in its reason, and one
+   * being released notes a range whose floor cannot be raised.
    */
   /* **Every kept package, released or not - a `publish.skip` one included.** A range that no longer
    * accepts its sibling breaks more than a publish: npm workspaces link a sibling only while the
@@ -453,6 +455,7 @@ export abstract class VersionPlanService {
       const entry = entries.get(pkg.name);
       if (!entry) continue;
       const refused: string[] = [];
+      const moved: string[] = [];
       const kept: string[] = [];
       const unraisable: string[] = [];
       for (const dep of pkg.dependencies) {
@@ -464,23 +467,26 @@ export abstract class VersionPlanService {
           if (!ref.accepts) {
             /** Only a version this run gives: a range already refusing the version on disk is not
              *  this run's doing, and npm reports it at install time. */
-            if (depEntry?.status === 'bump') {
-              refused.push(`${ref.field} "${dep.name}": "${ref.range}" does not accept ${version}`);
-            }
+            if (depEntry?.status !== 'bump') continue;
+            if (ref.rewritten) moved.push(`${dep.name} "${ref.range}" -> "${ref.rewritten}"`);
+            else refused.push(`${ref.field} "${dep.name}": "${ref.range}" does not accept ${version}`);
           } else if (entry.status === 'bump' && ref.unraisable) {
             unraisable.push(`${dep.name} "${ref.range}"`);
           }
         }
         if (depEntry?.status === 'bump' && refs.every(r => r.accepts)) kept.push(`${dep.name} "${refs[0]!.range}"`);
       }
+      const note = (text: string) => (entry.reason = `${entry.reason ? `${entry.reason}; ` : ''}${text}`);
       if (refused.length) {
         entry.status = 'error';
         entry.reason = `range does not accept the new version - ${refused.join('; ')}`;
-      } else if (entry.status === 'no-change' && kept.length) {
-        entry.reason = `range ${kept.join(', ')} still satisfied`;
-      } else if (unraisable.length) {
-        entry.reason = `${entry.reason ? `${entry.reason}; ` : ''}lower bound not raised: ${unraisable.join(', ')}`;
+        continue;
       }
+      if (entry.status === 'no-change' && kept.length && !moved.length) {
+        entry.reason = `range ${kept.join(', ')} still satisfied`;
+      }
+      if (moved.length) note(`range moved: ${moved.join(', ')}`);
+      if (unraisable.length) note(`lower bound not raised: ${unraisable.join(', ')}`);
     }
   }
 

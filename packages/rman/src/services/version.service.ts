@@ -133,6 +133,29 @@ export class VersionService extends Service {
       await hook('after');
     }
 
+    /** A kept package left out of versioning (`publish.skip`) still has its ranges moved where one
+     *  no longer accepts a sibling, or npm workspaces would install that sibling from the registry
+     *  instead of linking it. It takes no version, so its manifest rides the root's sync commit. */
+    const movedOnly: string[] = [];
+    for (const entry of plan) {
+      const pkg = entry.package;
+      if (entry.status !== 'skip' || pkg.config?.version?.dependentRanges !== 'keep') continue;
+      let changed = false;
+      for (const dep of pkg.dependencies) {
+        const version = bumpedVersions.get(dep);
+        if (!version || dep.versionScheme.isPrerelease(version)) continue;
+        for (const ref of Manifest.referencesTo(pkg, dep.name, version)) {
+          if (ref.accepts || !ref.rewritten) continue;
+          Manifest.setReference(pkg, ref.field, dep.name, ref.rewritten);
+          changed = true;
+        }
+      }
+      if (changed) {
+        pkg.writeManifest();
+        movedOnly.push(path.relative(repository.dirname, pkg.manifestFileName));
+      }
+    }
+
     const rootEntry = repository.monorepo ? plan.find(e => e.package === repository.rootPackage) : undefined;
     if (rootEntry?.status === 'bump') {
       repository.rootPackage.manifest.version = rootEntry.to!;
@@ -220,7 +243,7 @@ export class VersionService extends Service {
       /** The root's own `CHANGELOG.md` rides along here, for the same reason its manifest does:
        *  it belongs to no group, so no group commit would carry it and it would be left behind as
        *  an uncommitted edit that `publish` then reads as a dirty tree. */
-      const files = [path.relative(repository.dirname, repository.rootPackage.manifestFileName)];
+      const files = [path.relative(repository.dirname, repository.rootPackage.manifestFileName), ...movedOnly];
       const rootChangelog = changelogFileByPackage.get(repository.rootPackage.name);
       /** **Unless a group commit below is already carrying it**, which is the ordinary case under
        *  `changelog.groupBy: 'group'`: the root is a member of the default group, so its file *is*
@@ -392,9 +415,10 @@ export namespace VersionService {
 
   /**
    * Raises the lower bound of each of `pkg`'s ranges on an in-repo dependency to the version that
-   * dependency now has - `bumped`'s for one this run moves, its own otherwise. Upper bounds stay.
-   * What `.rmanrc "version.dependentRanges": keep` does for a package released for changes of its
-   * own, in place of `Manifest.updateDependencyVersions`.
+   * dependency now has - `bumped`'s for one this run moves, its own otherwise. Upper bounds stay;
+   * a range that does not accept the version is moved to its shape's next window instead
+   * (`^1.1.4` -> `^2.0.0`). What `.rmanrc "version.dependentRanges": keep` does for a package
+   * released for changes of its own, in place of `Manifest.updateDependencyVersions`.
    */
   /* **Only when the package itself is released**, because that is the only time it can have
    * started using something new: code relying on a newer dependency is a change in the dependent,
@@ -409,7 +433,8 @@ export namespace VersionService {
       const version = bumped.get(dep) ?? dep.version;
       if (dep.versionScheme.isPrerelease(version)) continue;
       for (const ref of Manifest.referencesTo(pkg, dep.name, version)) {
-        if (ref.raised && ref.accepts) Manifest.setReference(pkg, ref.field, dep.name, ref.raised);
+        const to = ref.accepts ? ref.raised : ref.rewritten;
+        if (to) Manifest.setReference(pkg, ref.field, dep.name, to);
       }
     }
   }

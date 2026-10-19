@@ -163,8 +163,9 @@ export interface ManifestProvider {
    * with its lower bound raised to it.
    *
    * What `.rmanrc "version.dependentRanges": keep` asks instead of `updateDependencyVersions`: a
-   * hand-written range is left alone while it accepts the new version, refused when it does not,
-   * and has its floor raised when the package holding it is released for reasons of its own.
+   * hand-written range is left alone while it accepts the new version, moved to accept it when it
+   * does not, and has its floor raised when the package holding it is released for reasons of its
+   * own.
    *
    * Omit it and a package has no ranges to keep, so `keep` behaves like `rewrite` for it.
    */
@@ -193,6 +194,9 @@ export namespace ManifestProvider {
     raised?: string;
     /** The range's shape has no single lower bound this provider knows how to move. */
     unraisable?: boolean;
+    /** For a range that does not accept the version: the same shape moved to accept it - `^1.1.4`
+     *  to `^2.0.0`. Unset when the shape cannot be moved without guessing at what was meant. */
+    rewritten?: string;
   }
 }
 

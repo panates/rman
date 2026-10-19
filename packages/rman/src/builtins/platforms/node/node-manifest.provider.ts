@@ -111,16 +111,16 @@ export class NodeManifestProvider implements ManifestProvider {
         continue;
       }
       const range = workspace ? workspace.range! : declared;
+      const prefix = workspace ? 'workspace:' : '';
+      const accepts = semver.satisfies(version, range);
       const raised = this.raiseFloor(range, version);
+      const rewritten = accepts ? undefined : this.moveRange(range, version);
       refs.push({
         field,
         range: declared,
-        accepts: semver.satisfies(version, range),
-        ...(raised === null
-          ? { unraisable: true }
-          : raised
-            ? { raised: workspace ? `workspace:${raised}` : raised }
-            : {}),
+        accepts,
+        ...(raised === null ? { unraisable: true } : raised ? { raised: prefix + raised } : {}),
+        ...(rewritten ? { rewritten: prefix + rewritten } : {}),
       });
     }
     return refs;
@@ -155,6 +155,32 @@ export class NodeManifestProvider implements ManifestProvider {
    */
   stampVersion(file: string, content: string, version: string, options?: { constant?: string }) {
     return stampVersionConstant(content, version, options?.constant);
+  }
+
+  /**
+   * `range` moved to accept a `version` it does not: `^1.1.4` -> `^2.0.0`, `~1.1.4` -> `~2.0.0`, a
+   * pinned `1.1.4` -> `2.0.0`, and `>=1.1.0 <2` -> `>=2.0.0 <3` - a window spanning one major moves
+   * to the next. `undefined` for any other shape: `||`, a hyphen range, an upper bound that is not
+   * the next major.
+   */
+  /* **Moved rather than refused**, which is what `keep` first did - and measured wrong on
+   * `panates/syncbridge`: `@syncbridge/common` went 1.1.4 -> 2.0.0 and four packages of its own
+   * group, every one already planned for 2.0.0, were refused for `^1.1.4`. A range that no longer
+   * accepts its sibling has to change whatever the setting says; `keep` is about the ranges that
+   * still do. Only a shape this can move without guessing is moved - the rest still refuse. */
+  protected moveRange(range: string, version: string): string | undefined {
+    const r = range.trim();
+    const v = semver.parse(version);
+    if (!v) return undefined;
+    if (semver.valid(r)) return version;
+    const caret = /^([\^~])\s*v?\d[^\s|]*$/.exec(r);
+    if (caret) return `${caret[1]}${version}`;
+    const bounded = /^>=\s*v?(\d\S*)\s+<\s*v?(\d+)(\.0(\.0)?)?$/.exec(r);
+    if (bounded) {
+      const floor = semver.coerce(bounded[1]);
+      if (floor && Number(bounded[2]) === floor.major + 1) return `>=${version} <${v.major + 1}${bounded[3] ?? ''}`;
+    }
+    return undefined;
   }
 
   /**
