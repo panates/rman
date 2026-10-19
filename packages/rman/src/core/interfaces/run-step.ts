@@ -59,6 +59,12 @@ export interface RunStepContext {
    */
   scopedTo?: Package;
   /**
+   * The `vars` this step's slot sees - what a `${{ vars.x }}` written in the same place resolves
+   * to: the top-level `vars`, then each `vars` block on the way down to the script (`run.vars`,
+   * `run.<script>.vars`, or `version.vars` in a version hook), merged per key, closest last.
+   */
+  vars: Record<string, unknown>;
+  /**
    * The repository's locally installed binaries, already carrying this run's `cwd` and log level -
    * handed over rather than imported, for the reason `CommandContext.runBin` is.
    */

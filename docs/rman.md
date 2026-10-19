@@ -1360,6 +1360,7 @@ when the work is genuinely code; write a shell command when the step is a shell 
 | `repository` | the whole repository |
 | `cwd` | the directory the step is *about* - the package's, or the root for a monorepo bookend |
 | `scopedTo` | the package the run was narrowed to because rman was started inside it; `undefined` from the root or under `--from-root` (and in a `version` hook) |
+| `vars` | the `vars` this slot sees - the top-level block, then `run.vars` and `run.<script>.vars` (or `version.vars` in a version hook), merged per key, closest last; what `${{ vars.x }}` resolves to in the same place |
 | `runBin(bin, argv, opts?)` | the repository's locally installed binaries, already bound to `cwd` and this run's log level |
 | `logger` | at this run's resolved log level |
 

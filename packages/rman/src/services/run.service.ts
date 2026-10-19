@@ -78,7 +78,10 @@ export class RunService extends Service {
       !!cwdScope ||
       !repository.monorepo ||
       rootCfg.skip === true ||
-      !(await passesIf(repository, repository.rootPackage, rootCfg.if, repository.dirname, ifStatusCache, cwdScope));
+      !(await passesIf(repository, repository.rootPackage, rootCfg.if, repository.dirname, ifStatusCache, cwdScope, [
+        'run',
+        script,
+      ]));
     const rootSteps = rootSkipped ? [] : getScriptSteps(repository.rootPackage, script);
     /** Filtered on the slot, not on `'pre' + script`: the step labels are `before`/`exec`/`after`
      *  now - the same words the config uses - rather than npm's `pre<script>` naming, which moved
@@ -93,6 +96,7 @@ export class RunService extends Service {
         steps,
         cwd: repository.dirname,
         scopedTo: cwdScope,
+        at: ['run', script],
         topo: false,
         bail: resolveBail(options.bail, repository.rootPackage, script, true),
         logLevel: resolveLogLevel(options.logLevel, repository.rootPackage, script, logLevelDefault),
@@ -105,7 +109,8 @@ export class RunService extends Service {
     for (const pkg of packages) {
       const pkgCfg = RunService.getConfig(pkg, script);
       if (pkgCfg.skip === true) continue;
-      if (!(await passesIf(repository, pkg, pkgCfg.if, pkg.dirname, ifStatusCache, cwdScope))) continue;
+      if (!(await passesIf(repository, pkg, pkgCfg.if, pkg.dirname, ifStatusCache, cwdScope, ['run', script])))
+        continue;
       const steps = getScriptSteps(pkg, script);
       if (!steps.length) continue;
       plans.push({
@@ -115,6 +120,7 @@ export class RunService extends Service {
         steps,
         cwd: pkg.dirname,
         scopedTo: cwdScope,
+        at: ['run', script],
         topo: resolveBool(options.topo, pkg, script, 'topo', topo),
         bail: resolveBail(options.bail, pkg, script, true),
         logLevel: resolveLogLevel(options.logLevel, pkg, script, logLevelDefault),
@@ -209,7 +215,7 @@ export class RunService extends Service {
        */
       part?: { from: number; more?: boolean },
     ) => {
-      const { pkg, cwd, bail: pkgBail, logLevel: pkgLogLevel, label: pkgLabel, scopedTo } = plan;
+      const { pkg, cwd, bail: pkgBail, logLevel: pkgLogLevel, label: pkgLabel, scopedTo, at } = plan;
       const from = part?.from ?? 0;
       /** Only the first part starts the clock: the row's elapsed time is the package's, and a
        *  package waiting at a `topo` barrier is waiting as part of its own run. */
@@ -223,7 +229,10 @@ export class RunService extends Service {
           /** Asked when the step's turn comes, not when the plan is made - a condition may read
            *  what the steps before it left behind. A step that says no is passed over in silence:
            *  it is not a failure, and announcing it on every package would bury the steps that ran. */
-          if (step.if !== undefined && !(await passesIf(pkg.repository, pkg, step.if, cwd, stepIfCache, scopedTo))) {
+          if (
+            step.if !== undefined &&
+            !(await passesIf(pkg.repository, pkg, step.if, cwd, stepIfCache, scopedTo, at))
+          ) {
             continue;
           }
           ctx.currentStep = step.name;
@@ -262,7 +271,7 @@ export class RunService extends Service {
              * nested rman and nothing else. The cost, stated: a child cannot prompt. Nothing in a
              * run step should.
              */
-            if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine, onCommand, scopedTo);
+            if (step.run) await runFunctionStep(step.run, pkg, cwd, onLine, onCommand, scopedTo, at);
             else {
               await exec(step.command, {
                 cwd,
@@ -668,6 +677,9 @@ export namespace RunService {
     cwd: string;
     /** The package the run was narrowed to by the directory it started in - `RunStepContext.scopedTo`. */
     scopedTo?: Package;
+    /** Where this script sits in the config (`['run', 'build']`) - what `RunStepContext.vars` is
+     *  scoped to. Unset for a run with no script of its own, whose steps see the top-level `vars`. */
+    at?: readonly string[];
     topo: boolean;
     bail: boolean;
     logLevel: LogLevel;
@@ -805,9 +817,14 @@ export namespace RunService {
        *  (`{ command }` / `{ run }`) reaches here too and only one place knows the three spellings.
        *  `topo` cannot be set on this path - `normalizeScriptValue` refuses it for a version hook. */
       const step = toStep(slot, value);
-      if (step.if !== undefined && !(await passesIf(pkg.repository, pkg, step.if, pkg.dirname, new Map()))) continue;
+      if (
+        step.if !== undefined &&
+        !(await passesIf(pkg.repository, pkg, step.if, pkg.dirname, new Map(), undefined, [script]))
+      ) {
+        continue;
+      }
       if (step.run) {
-        await step.run(createStepContext(pkg, pkg.dirname));
+        await step.run(createStepContext(pkg, pkg.dirname, undefined, undefined, undefined, [script]));
         continue;
       }
       await exec(step.command, { cwd: pkg.dirname, stdio: 'inherit', app: pkg.repository.app });
@@ -947,6 +964,7 @@ export namespace RunService {
     onCommand?: (command: string | undefined) => void,
     onLine?: (line: string, stream?: 'stdout' | 'stderr') => void,
     scopedTo?: Package,
+    at: readonly string[] = [],
   ): RunStepContext {
     const logLevel = resolveRootLogLevel(pkg.repository);
     return {
@@ -954,6 +972,7 @@ export namespace RunService {
       repository: pkg.repository,
       cwd,
       scopedTo,
+      vars: scopedVars(pkg, at),
       runBin: async (bin, argv, opts) => {
         onCommand?.([bin, ...argv].join(' '));
         const result = await runBin(bin, argv, { cwd, logLevel, app: pkg.repository.app, onLine, ...opts });
@@ -1175,8 +1194,9 @@ async function runFunctionStep(
   onLine: (line: string, stream?: 'stdout' | 'stderr', level?: 'error') => void,
   onCommand?: (command: string | undefined) => void,
   scopedTo?: Package,
+  at: readonly string[] = [],
 ): Promise<void> {
-  const context = RunService.createStepContext(pkg, cwd, onCommand, onLine, scopedTo);
+  const context = RunService.createStepContext(pkg, cwd, onCommand, onLine, scopedTo, at);
   try {
     await RunService.withCapturedConsole(onLine, () => run(context));
   } catch (e: any) {
@@ -1218,9 +1238,12 @@ async function passesIf(
   cwd: string,
   statusCache: Map<string, Record<string, Repository.PackageStatus>>,
   scopedTo?: Package,
+  at: readonly string[] = [],
 ): Promise<boolean> {
   if (typeof raw === 'function') {
-    return !!(await (raw as RunConditionFn)(RunService.createStepContext(pkg, cwd, undefined, undefined, scopedTo)));
+    return !!(await (raw as RunConditionFn)(
+      RunService.createStepContext(pkg, cwd, undefined, undefined, scopedTo, at),
+    ));
   }
   const node = RunService.parseIfExpr(raw);
   return node ? RunService.evaluateIf(repository, pkg, node, statusCache) : true;
@@ -1471,4 +1494,27 @@ declare module '../core/classes/service.js' {
   interface ServiceMap {
     run: RunService;
   }
+}
+
+/**
+ * The `vars` a step at config path `at` (`['run', 'build']`) sees: the top-level block, then each
+ * one on the way down, merged per key with the closest last - the scope `${{ vars }}` has there.
+ */
+/* **A function step could not see a scoped `vars` at all**, while a shell step in the same slot
+ * could: `@panates/rman-preset` moved `copyFiles` into `run.build.vars`, its `${{ vars.copyFiles }}`
+ * would have resolved, and its `after` function - reading `pkg.config.vars` - found nothing, so
+ * README and LICENSE stopped reaching the build directory. `pkg.config` keeps every `vars` block it
+ * resolved, so this reads them back rather than repeating the interpolator's walk. */
+function scopedVars(pkg: Package, at: readonly string[]): Record<string, unknown> {
+  const blockOf = (node: unknown) => {
+    const vars = node && typeof node === 'object' ? (node as Record<string, unknown>).vars : undefined;
+    return vars && typeof vars === 'object' ? (vars as Record<string, unknown>) : {};
+  };
+  let node: unknown = pkg.config;
+  let vars = { ...blockOf(node) };
+  for (const key of at) {
+    node = node && typeof node === 'object' ? (node as Record<string, unknown>)[key] : undefined;
+    vars = { ...vars, ...blockOf(node) };
+  }
+  return vars;
 }

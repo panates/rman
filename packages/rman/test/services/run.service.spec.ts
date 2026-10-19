@@ -1416,6 +1416,35 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('A-SCOPED'))).toBe(true);
     });
 
+    /**
+     * **A function step sees the `vars` its slot does** - the top-level block, then `run.vars`,
+     * then `run.<script>.vars`, closest last - as a `${{ vars.x }}` in the same place would. It saw
+     * none: `@panates/rman-preset` moved `copyFiles` into `run.build.vars` and its `after` function
+     * found nothing there, so README and LICENSE stopped reaching the build directory.
+     */
+    it('hands a function step and a condition the vars their slot sees', async () => {
+      const repo = await fixture({
+        'pkg-a': {
+          /** Written to a file: a function step's console goes to the run's own reporter. */
+          rmanrcJs: `{
+            vars: { top: 'T', shadowed: 'top' },
+            run: {
+              vars: { all: 'R' },
+              build: {
+                vars: { shadowed: 'build' },
+                if: ({ vars }) => vars.shadowed === 'build',
+                exec: ({ vars, cwd }) =>
+                  require('fs').writeFileSync(require('path').join(cwd, 'vars.json'), JSON.stringify(vars)),
+              },
+            },
+          }`,
+        },
+      });
+      await captureLogs(() => service('run').runScript('build', { progress: false }));
+      const written = path.join(repo.dirname, 'packages', 'pkg-a', 'vars.json');
+      expect(JSON.parse(fs.readFileSync(written, 'utf-8'))).toEqual({ top: 'T', shadowed: 'build', all: 'R' });
+    });
+
     it('takes the condition grammar too', async () => {
       await fixture({
         'pkg-a': {

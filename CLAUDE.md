@@ -2695,6 +2695,13 @@ so none of them has anything a function could replace.
   invoked. Measured, and silent: a hook writing `fs.appendFileSync('steps.txt', ...)` landed in the
   repository root while the shell steps beside it wrote to the package. `ctx.runBin` is pre-bound to
   `cwd`, so a binary run through it needs no care.
+- **`ctx.vars` is the slot's own scope** (`scopedVars` in `run.service.ts`): the top-level `vars`,
+  then each block down to the script - `run.vars`, `run.<script>.vars`, or `version.vars` in a
+  version hook - closest last, exactly what `${{ vars.x }}` resolves to beside it. It was missing,
+  so a function step could see no scoped `vars` while a shell step in the same slot could:
+  `@panates/rman-preset` moved `copyFiles` into `run.build.vars`, its `after` function read
+  `pkg.config.vars`, and README and LICENSE stopped reaching the build directory. Read back from
+  `pkg.config`, which keeps every resolved `vars` block, rather than re-walking the interpolator.
 - **The context is `pkg`, not `package`** - matching `${{ pkg }}` rather than
   `CommandContext.package`. `package` is a reserved word, so that spelling forces every author to
   rename while destructuring (`{ package: current }`, as `check.js` does). The two contexts
