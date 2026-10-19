@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 98942c3884eae576b5cab7261c3bc107fcd653d8 -->
+<!-- rman:documented-up-to 696faa5ee5f4d8ddcc228fec03d7efd4aa796c3a -->
+
+## v2.27.2 (2026-10-19)
+
+### 🐛 Bug Fixes
+
+- **cli:** a failing command's reason goes to stderr (b9451a7)
+
+---
 
 ## v2.27.1 (2026-10-19)
 
