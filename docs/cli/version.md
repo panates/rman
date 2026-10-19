@@ -524,7 +524,8 @@ version:
 | the sibling's new version | what happens to the dependent |
 | --- | --- |
 | accepted by the range (`1.2.0` against `>=1.1.0 <2`) | range untouched, **not released for it** - `--show` says `range ... still satisfied` |
-| refused by the range (`2.0.0` against `<2`) | an `error` row naming the field, the range and the version; `version` writes nothing, so the range can be widened by hand |
+| refused by the range (`2.0.0` against `^1.1.4`) | the range is **moved** to accept it, keeping its shape - `^1.1.4` -> `^2.0.0`, `~1.1.4` -> `~2.0.0`, a pinned `1.1.4` -> `2.0.0`, `>=1.1.0 <2` -> `>=2.0.0 <3` - and the dependent is released as under `rewrite`; the reason says `range moved: ...` |
+| refused, and the shape has no single window to move (`a \|\| b`, `a - b`, an upper bound that is not the next major) | an `error` row naming the field, the range and the version; `version` writes nothing, so the range is fixed by hand |
 | a prerelease (`2.0.0-beta.0`) | neither fails the range nor moves it - a stable range keeps resolving the stable release |
 
 - **A dependent released for changes of its own has its lower bound raised** to the version each
@@ -535,7 +536,8 @@ version:
   written and named in the plan's reason.
 - **Every kept range is checked, released or not** - a `publish.skip` package's too, since npm
   workspaces link a sibling only while the range accepts its version and otherwise install it from
-  the registry.
+  the registry. Such a package takes no version, so a moved range of its own rides the root's
+  `chore: sync root version` commit.
 - `workspace:*`/`workspace:^`/`workspace:~` keep their handling: they follow the sibling by
   themselves.
 - `version.cascade: group` still releases every member - it is a release-identity decision, and

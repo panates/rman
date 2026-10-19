@@ -140,7 +140,7 @@ const config = {
       "What happens to this package's range on an in-repo dependency that is getting a new " +
       'version: "rewrite" (the default) sets it to the new version and releases this package for ' +
       'it; "keep" leaves a range that still accepts the new version alone and does not release ' +
-      "this package for it, refuses the run when the range does not, and raises the range's " +
+      "this package for it, moves the range to accept it when it does not (refusing the run only for a shape it cannot move), and raises the range's " +
       'lower bound when this package is released for changes of its own. A prerelease never ' +
       "fails a range and never raises one. Per-package cascaded - the range is the package's own.",
     type: 'string',

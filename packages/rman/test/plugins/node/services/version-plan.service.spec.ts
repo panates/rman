@@ -232,7 +232,10 @@ describe('plugins/node: version.dependentRanges keep', () => {
   const readJson = (dir: string, rel: string) => JSON.parse(fs.readFileSync(path.join(dir, rel), 'utf-8'));
 
   /** syncbridge's shape: independent versioning, an extension ranging over `common`. */
-  function fixture(config: Record<string, unknown> = { version: { dependentRanges: 'keep' } }): string {
+  function fixture(
+    config: Record<string, unknown> = { version: { dependentRanges: 'keep' } },
+    extRange = '>=1.1.0 <2',
+  ): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-node-ranges-'));
     dirs.push(dir);
     writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
@@ -241,7 +244,7 @@ describe('plugins/node: version.dependentRanges keep', () => {
     writeJson(dir, 'packages/ext/package.json', {
       name: 'ext',
       version: '1.0.0',
-      peerDependencies: { common: '>=1.1.0 <2' },
+      peerDependencies: { common: extRange },
       devDependencies: { common: 'workspace:^' },
     });
     git(dir, 'init');
@@ -287,15 +290,64 @@ describe('plugins/node: version.dependentRanges keep', () => {
     expect(entryOf(plan, 'ext')).toMatchObject({ status: 'bump', to: '1.0.1' });
   });
 
-  it('refuses a version the range does not accept, naming the field, the range and the version', async () => {
+  /**
+   * **A range that no longer accepts its sibling is moved to the next window**, and the dependent
+   * is released for it as under `rewrite`. It was refused instead, and measured wrong on
+   * `panates/syncbridge`: a `common` major refused four packages of its own group for `^1.1.4`,
+   * though every one was already planned for 2.0.0.
+   */
+  it('moves a range that does not accept the new version, and releases its package', async () => {
     const dir = fixture();
     commit(dir, 'common', 'feat!: breaking');
     const repo = await createRepository(dir);
     const plan = await planner().getPlan(repo);
 
     const ext = entryOf(plan, 'ext');
+    expect(ext).toMatchObject({ status: 'bump', to: '1.0.1' });
+    expect(ext.reason).toContain('range moved: common ">=1.1.0 <2" -> ">=2.0.0 <3"');
+
+    await service('version').applyPlan(plan);
+    expect(readJson(dir, 'packages/ext/package.json').peerDependencies.common).toBe('>=2.0.0 <3');
+  });
+
+  /** Inside one version line the whole group moves on a major - the case syncbridge hit. */
+  it('moves an in-group caret range to the group major', async () => {
+    const dir = fixture({ group: true, version: { dependentRanges: 'keep' } }, '^1.1.0');
+    commit(dir, 'common', 'feat!: breaking');
+    const repo = await createRepository(dir);
+    const plan = await planner().getPlan(repo);
+    expect(entryOf(plan, 'ext')).toMatchObject({ status: 'bump', to: '2.0.0' });
+
+    await service('version').applyPlan(plan);
+    expect(readJson(dir, 'packages/ext/package.json').peerDependencies.common).toBe('^2.0.0');
+  });
+
+  /** A shape with no single window to move - `||` - is still refused, naming what to fix by hand. */
+  it('refuses a range whose shape cannot be moved, naming the field, the range and the version', async () => {
+    const dir = fixture(undefined, '^1.1.0 || ^1.5.0');
+    commit(dir, 'common', 'feat!: breaking');
+    const repo = await createRepository(dir);
+    const plan = await planner().getPlan(repo);
+
+    const ext = entryOf(plan, 'ext');
     expect(ext.status).toBe('error');
-    expect(ext.reason).toContain('peerDependencies "common": ">=1.1.0 <2" does not accept 2.0.0');
+    expect(ext.reason).toContain('peerDependencies "common": "^1.1.0 || ^1.5.0" does not accept 2.0.0');
+  });
+
+  /** Kept out of versioning, its range still moves - npm workspaces would otherwise install the
+   *  sibling from the registry - and the edit rides the root's sync commit, leaving no dirty tree. */
+  it('moves the range of a package kept out of versioning, and commits it', async () => {
+    const dir = fixture({ version: { dependentRanges: 'keep' }, '[ext]': { publish: { skip: true } } });
+    commit(dir, 'common', 'feat!: breaking');
+    const repo = await createRepository(dir);
+    const plan = await planner().getPlan(repo);
+    expect(entryOf(plan, 'ext').status).toBe('skip');
+
+    await service('version').applyPlan(plan);
+    const ext = readJson(dir, 'packages/ext/package.json');
+    expect(ext.peerDependencies.common).toBe('>=2.0.0 <3');
+    expect(ext.version).toBe('1.0.0');
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd: dir }).toString().trim()).toBe('');
   });
 
   /** A beta is never meant for a stable range, so it neither fails one nor moves one. */
@@ -357,7 +409,13 @@ describe('plugins/node: NodeManifestProvider.referencesTo', () => {
     expect(refs('^1.2.0', '1.2.0').raised).toBeUndefined();
     expect(refs('1.2.0', '1.2.0').raised).toBeUndefined();
     expect(refs('^1.0.0 || ^2.0.0', '1.2.0')).toMatchObject({ accepts: true, unraisable: true });
-    expect(refs('>=1.1.0 <2', '2.0.0')).toMatchObject({ accepts: false });
+    expect(refs('>=1.1.0 <2', '2.0.0')).toMatchObject({ accepts: false, rewritten: '>=2.0.0 <3' });
+    expect(refs('^1.1.4', '2.0.0')).toMatchObject({ accepts: false, rewritten: '^2.0.0' });
+    expect(refs('~1.1.4', '1.2.0')).toMatchObject({ accepts: false, rewritten: '~1.2.0' });
+    expect(refs('1.1.4', '2.0.0')).toMatchObject({ accepts: false, rewritten: '2.0.0' });
+    expect(refs('workspace:^1.1.4', '2.0.0')).toMatchObject({ accepts: false, rewritten: 'workspace:^2.0.0' });
+    expect(refs('>=1.1.0 <3', '3.0.0').rewritten).toBeUndefined();
+    expect(refs('^1.0.0 || ^1.5.0', '2.0.0').rewritten).toBeUndefined();
     expect(refs('workspace:^', '9.0.0')).toMatchObject({ dynamic: true, accepts: true });
   });
 });

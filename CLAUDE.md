@@ -1599,10 +1599,17 @@ saw one thing to release and it was the one thing that must never be published.
   `"@syncbridge/common": ">=1.1.0 <2"` so a release of `common` need not release all nine, and
   `rewrite` turned the range back into `^1.2.0` and released them anyway.
   - **A range that accepts the new version takes the dependent out of both the in-group cascade and
-    the cross-group ripple; one that refuses it is an `'error'` row**, naming field, range and
-    version, so `version` writes nothing. That is why it does not contradict "a floor, never a
-    ceiling": the floor protects a dependent's published range, and here the range is checked
-    rather than assumed.
+    the cross-group ripple; one that refuses it is moved to its shape's next window**
+    (`NodeManifestProvider.moveRange`: `^1.1.4` -> `^2.0.0`, `>=1.1.0 <2` -> `>=2.0.0 <3`) and the
+    dependent is released as under `rewrite`. Only a shape with no single window (`||`, a hyphen
+    range) is an `'error'` row, naming field, range and version. That is why it does not contradict
+    "a floor, never a ceiling": the floor protects a dependent's published range, and here the range
+    is checked rather than assumed.
+    - **It refused every out-of-range version at first, and that was measured wrong on
+      `panates/syncbridge`**: `@syncbridge/common` went 1.1.4 -> 2.0.0 and four packages of its own
+      group - each already planned for 2.0.0 - were refused for `^1.1.4`. A range that no longer
+      accepts its sibling has to change whatever the setting says; `keep` is about the ones that
+      still do. A `publish.skip` package's moved range rides the root's sync commit.
   - **The lower bound is raised only when the dependent is released for changes of its own** - the
     user's point, and the only moment the dependent can have started relying on something new.
     Raising it on every dependency release was weighed and is meaningless: a range changes nothing
