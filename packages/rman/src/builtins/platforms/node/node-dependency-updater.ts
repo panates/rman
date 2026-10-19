@@ -140,7 +140,33 @@ export class NodeDependencyUpdater implements DependencyUpdater {
       .filter(line => /^npm (error|ERR!)/.test(line) && !/complete log|_logs/.test(line))
       .map(line => line.replace(/^npm (error|ERR!)\s?/, '  '))
       .filter(line => line.trim());
-    return lines.slice(0, 20).join('\n') || `  npm install --dry-run exited ${result.code}`;
+    return lines.join('\n') || `  npm install --dry-run exited ${result.code}`;
+  }
+
+  /**
+   * The upgrades an `ERESOLVE` names at the version they move to - the one under `Could not resolve
+   * dependency:` when it is one of them, else every one the output mentions.
+   */
+  /* **The version is what makes the name evidence.** `@hookform/resolvers@6.0.0` appears in the
+   * output only because this run moved it there; the name alone also appears on every line about the
+   * tree around it. The `Could not resolve dependency:` line is npm's own verdict - measured on the
+   * `@hookform/resolvers` case it reads `peerOptional effect@"^4.0.0" from @hookform/resolvers@6.0.0`
+   * - so a move it names is the one to hold, and the others it merely passes through stay. That line
+   * sat past the 20 lines `verify` used to keep, which is why it now keeps them all. */
+  blame(refusal: string, plan: readonly DependencyUpdater.Entry[]): DependencyUpdater.Blame[] {
+    const moves = plan.flatMap(entry => {
+      const d = this.planned.get(entry);
+      return entry.status === 'update' && d ? [{ entry, token: `${d.name}@${d.candidates[d.index]}` }] : [];
+    });
+    const lines = refusal.split('\n').map(line => line.trim());
+    const at = lines.indexOf('Could not resolve dependency:');
+    const verdict = at >= 0 ? lines.slice(at + 1).find(Boolean) : undefined;
+    const named = verdict ? moves.filter(m => this.mentions(verdict, m.token)) : [];
+    if (named.length) return named.map(m => ({ entry: m.entry, reason: `npm cannot install it: ${verdict}` }));
+    return moves.flatMap(m => {
+      const line = lines.find(l => this.mentions(l, m.token));
+      return line ? [{ entry: m.entry, reason: `npm cannot install it: ${verdict ?? line}` }] : [];
+    });
   }
 
   /** One decision per dependency name `pkg` declares, whether or not it may move - one that may not
@@ -490,6 +516,12 @@ export class NodeDependencyUpdater implements DependencyUpdater {
   }
 
   /** What `d` declares in `field` once it has moved. */
+  /** Whether `line` names `token` (`name@version`) whole - not `1.2.3` inside `1.2.30`. */
+  protected mentions(line: string, token: string): boolean {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[\\s"'(])${escaped}(?![\\w.+-])`).test(line);
+  }
+
   protected rangeFor(d: NodeDependencyUpdater.Decision, field: string): string {
     const declared = d.fields.get(field) ?? '';
     if (d.index < 0 || !d.movable.includes(field)) return declared;

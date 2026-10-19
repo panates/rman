@@ -125,8 +125,9 @@ const depsCommand = registerCommand(app => {
       for (const [updater, packages] of byUpdater) plans.set(updater, await updater.getPlan(ctx, packages));
       const all = [...plans.values()].flat();
 
-      if (args.json) console.log(JSON.stringify(jsonPlan(all), undefined, 2));
-      else printPlan(all, repository.dirname);
+      /** Under `-u --json` the document waits for the resolver, so it holds what was really written. */
+      if (!args.json) printPlan(all, repository.dirname);
+      else if (!args.upgrade) console.log(JSON.stringify(jsonPlan(all), undefined, 2));
 
       const errors = all.filter(e => e.status === 'error');
       const updates = all.filter(e => e.status === 'update');
@@ -137,22 +138,50 @@ const depsCommand = registerCommand(app => {
         return;
       }
 
-      const applied: DependencyUpdater.Applied[] = [];
-      for (const [updater, plan] of plans) {
-        if (plan.some(e => e.status === 'update')) applied.push(await updater.applyPlan(ctx, plan));
-      }
-      const files = applied.flatMap(a => a.files);
+      const applied = new Map<DependencyUpdater, DependencyUpdater.Applied>();
+      const apply = async (updater: DependencyUpdater, plan: readonly DependencyUpdater.Entry[]) => {
+        if (plan.some(e => e.status === 'update')) applied.set(updater, await updater.applyPlan(ctx, plan));
+        else applied.delete(updater);
+      };
+      for (const [updater, plan] of plans) await apply(updater, plan);
 
-      if (files.length && args.verify !== false) {
+      /* A refusal the updater can pin on some of the moves holds those back and asks again with the
+       * rest - each round holds at least one, so it ends. One it cannot pin puts everything back. */
+      const held: DependencyUpdater.Blame[] = [];
+      if (applied.size && args.verify !== false) {
         for (const [updater, packages] of byUpdater) {
-          const refused = await updater.verify?.(ctx, packages);
-          if (!refused) continue;
-          for (const a of applied) a.restore();
-          throw logged(`The upgraded manifests do not install, so they were put back:\n${refused}`);
+          const plan = plans.get(updater)!;
+          while (applied.has(updater)) {
+            const refused = await updater.verify?.(ctx, packages);
+            if (!refused) break;
+            const blamed = updater.blame?.(refused, plan).filter(b => b.entry.status === 'update') ?? [];
+            applied.get(updater)!.restore();
+            applied.delete(updater);
+            if (!blamed.length) {
+              for (const a of applied.values()) a.restore();
+              const shown = refused.split('\n');
+              const text = shown.slice(0, 40).join('\n') + (shown.length > 40 ? '\n  ...' : '');
+              throw logged(`The upgraded manifests do not install, so they were put back:\n${text}`);
+            }
+            for (const b of blamed) {
+              Object.assign(b.entry, { status: 'held', target: undefined, bump: undefined, reason: b.reason });
+              held.push(b);
+            }
+            await apply(updater, plan);
+          }
         }
       }
+      const files = [...applied.values()].flatMap(a => a.files);
 
-      if (!args.json) {
+      if (args.json) console.log(JSON.stringify(jsonPlan(all), undefined, 2));
+      else {
+        if (held.length) {
+          console.log(colors.yellow('\nHeld back - the resolver refused them:'));
+          for (const { entry, reason } of held) {
+            console.log(`  ${colors.cyan(entry.package.name)} ${entry.name} ${entry.current}  ${colors.gray(reason)}`);
+          }
+        }
+        if (held.length && !files.length) console.log(colors.yellow('Nothing upgraded.'));
         for (const file of files) console.log(colors.green('updated'), path.relative(repository.dirname, file));
       }
       if (errors.length) throw logged(`${errors.length} dependency lookup(s) failed - see above.`);

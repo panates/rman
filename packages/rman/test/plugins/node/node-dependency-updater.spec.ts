@@ -442,6 +442,63 @@ describe('plugins/node/NodeDependencyUpdater', () => {
     });
   });
 
+  /**
+   * What `deps -u` holds back when npm refuses the written manifests. The refusal is the one measured
+   * on `panates/syncbridge-cloud`: `@hookform/resolvers@6.0.0` cannot be installed by npm anywhere,
+   * since its own optional peers ask for `effect ^4` and, through `@typeschema/main`, `effect ^3`.
+   */
+  describe('blame', () => {
+    const ERESOLVE = [
+      '  code ERESOLVE',
+      '  ERESOLVE unable to resolve dependency tree',
+      '  While resolving: app@1.0.0',
+      '  Found: effect@3.22.3',
+      '  node_modules/effect',
+      '    peerOptional effect@"^3.6.5" from @typeschema/effect@0.14.0',
+      '      peerOptional @typeschema/main@">=0.13.7" from @hookform/resolvers@6.0.0',
+      '        node_modules/@hookform/resolvers',
+      '          @hookform/resolvers@"^6.0.0" from app@1.0.0',
+      '    peer a@"^1.0.0" from b@2.0.0',
+      '  Could not resolve dependency:',
+      '  peerOptional effect@"^4.0.0" from @hookform/resolvers@6.0.0',
+      '  node_modules/@hookform/resolvers',
+    ].join('\n');
+
+    async function planned() {
+      const dir = single({ dependencies: { '@hookform/resolvers': '^5.9.2', a: '^1.0.0', b: '^1.0.0' } });
+      const updater = new FakeRegistryUpdater({
+        '@hookform/resolvers': { releases: releases('5.9.2', '6.0.0') },
+        a: { releases: releases('1.0.0', '1.1.0') },
+        b: { releases: releases('1.0.0', '2.0.0') },
+      });
+      const { entries } = await plan(dir, updater, { target: 'major' });
+      return { updater, entries };
+    }
+
+    it('holds the move npm names under "Could not resolve dependency:" and no other', async () => {
+      const { updater, entries } = await planned();
+      const blamed = updater.blame(ERESOLVE, entries);
+      expect(blamed.map(b => b.entry.name)).toEqual(['@hookform/resolvers']);
+      expect(blamed[0]!.reason).toBe(
+        'npm cannot install it: peerOptional effect@"^4.0.0" from @hookform/resolvers@6.0.0',
+      );
+    });
+
+    /** `b@2.0.0` is mentioned only on the way, and a name at a version nothing moved to is no
+     *  evidence at all - `effect@3.22.3` is what is installed. */
+    it('falls back to every move the output names at its new version', async () => {
+      const { updater, entries } = await planned();
+      const withoutVerdict = ERESOLVE.split('\n').slice(0, -3).join('\n');
+      const blamed = updater.blame(withoutVerdict, entries);
+      expect(blamed.map(b => b.entry.name).sort()).toEqual(['@hookform/resolvers', 'b']);
+    });
+
+    it('blames nothing when no move appears at its new version', async () => {
+      const { updater, entries } = await planned();
+      expect(updater.blame('  ERESOLVE unable to resolve dependency tree\n  from b@2.0.01', entries)).toEqual([]);
+    });
+  });
+
   describe('applyPlan', () => {
     it('writes only the update entries, and restore puts the file back byte for byte', async () => {
       const dir = single({ dependencies: { a: '^1.0.0', b: '^1.0.0' } }, { deps: { reject: ['b'] } });
