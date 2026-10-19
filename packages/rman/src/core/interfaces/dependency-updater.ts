@@ -42,6 +42,18 @@ export interface DependencyUpdater {
    * and seeing it would mean writing the ecosystem's resolver again. Asking the real one is cheaper
    * and cannot be wrong about its own rules. */
   verify?(ctx: DependencyUpdater.Context, packages: readonly Package[]): Promise<string | undefined>;
+
+  /**
+   * The `'update'` entries of `plan` that `refusal` - what `verify` returned - is about, each with
+   * the reason to show for it. The command holds those back and tries the rest again; an empty
+   * answer, or none at all, puts every write back.
+   */
+  /* **One bad release must not cost the others.** Asked for on `panates/syncbridge-cloud`:
+   * `@hookform/resolvers@6.0.0` cannot be installed by npm anywhere - its own optional peers want
+   * `effect ^4` and, through `@typeschema/main`, `effect ^3` - and `deps -u` put every upgrade back
+   * over it. A conflict inside a release's own peers is out of `getPlan`'s sight by design, so it is
+   * the resolver's answer that has to say which move to leave out. */
+  blame?(refusal: string, plan: readonly DependencyUpdater.Entry[]): DependencyUpdater.Blame[];
 }
 
 export namespace DependencyUpdater {
@@ -88,7 +100,7 @@ export namespace DependencyUpdater {
    *
    * - `'update'`: `target` is the new range; `reason` says why it is lower than `latest`, if it is.
    * - `'held'`: a newer version exists and is allowed, but another dependency's rule refuses it -
-   *   `reason` names that rule.
+   *   `reason` names that rule - or, under `--upgrade`, the ecosystem's resolver refused it.
    * - `'skipped'`: a newer version exists, and the package's own settings leave it out - a major
    *   under `target: minor`, or one younger than `minAge`. `reason` says which.
    * - `'up-to-date'`: nothing newer exists.
@@ -122,6 +134,12 @@ export namespace DependencyUpdater {
     /** How far `target` moves, in the version scheme's own words - `major`. */
     bump?: string;
     reason?: string;
+  }
+
+  /** One entry a resolver's refusal is about, and the reason to show for it. */
+  export interface Blame {
+    entry: Entry;
+    reason: string;
   }
 
   /** What `applyPlan` wrote. */

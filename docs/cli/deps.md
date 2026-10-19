@@ -103,9 +103,22 @@ current state, not something this run introduced.
 **A dependency's own dependency is out of sight.** Seeing it would mean reimplementing npm's
 resolver, so `-u` asks the real one instead: after writing, rman runs
 `npm install --dry-run --ignore-scripts` at the repository root. That writes nothing, and npm
-refuses a peer conflict anywhere in the tree with `ERESOLVE`. If it does, **every manifest is put
-back as it was** and the command fails with npm's own lines. `--no-verify` skips the check. Another
-package manager (`.rmanrc "packageManager.node"`) is not asked, and a note says so.
+refuses a peer conflict anywhere in the tree with `ERESOLVE`. If it does:
+
+- **The upgrade npm names is held back, and the rest are written again.** npm's verdict is the
+  line under `Could not resolve dependency:`; an upgrade it names at the version this run moved it
+  to is listed under _Held back_ with that line as the reason, and npm is asked again without it.
+  When that line names none, every upgrade the output mentions at its new version is held. A
+  release whose own peers contradict each other is caught this way - `@hookform/resolvers@6.0.0`,
+  whose optional peers want `effect ^4` and, through `@typeschema/main`, `effect ^3`, installs
+  nowhere with npm.
+- **When the refusal names no upgrade, every manifest is put back as it was** and the command
+  fails with npm's own lines.
+
+Under `-u --json` the document is printed after this, so a held upgrade reads `held`. A plain
+`rman deps` does not ask npm, so a conflict like this shows only once you run `-u`.
+`--no-verify` skips the check. Another package manager (`.rmanrc "packageManager.node"`) is not
+asked, and a note says so.
 
 `-u` does not install anything and does not touch the lockfile. Run your usual install afterwards.
 

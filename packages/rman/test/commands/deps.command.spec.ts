@@ -53,7 +53,18 @@ class FakeUpdater implements DependencyUpdater {
 
   async verify(): Promise<string | undefined> {
     this.verified++;
-    return this.refusal;
+    return this.refusals.length ? this.refusals.shift() : this.refusal;
+  }
+
+  /** Refusals answered in turn before `refusal` - for a case where the second ask passes. */
+  refusals: string[] = [];
+  /** Which packages' entries `blame` pins the refusal on - none unless a case says. */
+  blamed: string[] = [];
+
+  blame(_refusal: string, plan: readonly DependencyUpdater.Entry[]): DependencyUpdater.Blame[] {
+    return plan
+      .filter(e => this.blamed.includes(e.package.name))
+      .map(entry => ({ entry, reason: 'npm cannot install it: left-pad@1.3.0 is broken' }));
   }
 }
 
@@ -69,6 +80,8 @@ describe('commands/deps', () => {
       restored: 0,
       verified: 0,
       refusal: undefined,
+      refusals: [],
+      blamed: [],
       resolved: undefined,
       installedInRange: undefined,
       status: 'update',
@@ -157,6 +170,47 @@ describe('commands/deps', () => {
     expect(failed).toBe(true);
     expect(updater.restored).toBe(1);
     expect(lines.join('\n')).toContain('ERESOLVE unable to resolve dependency tree');
+  });
+
+  /** One bad release must not cost the other upgrades: the refusal names it, it is held, and the
+   *  rest are written again and asked about again. */
+  it('holds back what the resolver blames and keeps the rest', async () => {
+    const dir = monorepo();
+    updater.refusals = ['  Could not resolve dependency: left-pad@1.3.0'];
+    updater.blamed = ['pkg-a'];
+    const { lines, failed } = await capture(() => runCli({ argv: ['deps', '-u'], cwd: dir }));
+    const text = lines.join('\n');
+    expect(failed).toBe(false);
+    expect(updater.verified).toBe(2);
+    expect(updater.applied).toBe(2);
+    expect(updater.restored).toBe(1);
+    expect(text).toContain('Held back - the resolver refused them:');
+    expect(text).toMatch(/pkg-a left-pad \^1\.0\.0\s+npm cannot install it: left-pad@1\.3\.0 is broken/);
+    expect(text).toContain('updated');
+  });
+
+  it('writes nothing when every upgrade is blamed', async () => {
+    const dir = monorepo();
+    updater.refusals = ['  Could not resolve dependency: left-pad@1.3.0'];
+    updater.blamed = ['root', 'pkg-a', 'pkg-b'];
+    const { lines, failed } = await capture(() => runCli({ argv: ['deps', '-u'], cwd: dir }));
+    expect(failed).toBe(false);
+    expect(updater.verified).toBe(1);
+    expect(updater.applied).toBe(1);
+    expect(updater.restored).toBe(1);
+    expect(lines).toContain('Nothing upgraded.');
+    expect(lines.join('\n')).not.toMatch(/^updated/m);
+  });
+
+  /** `-u --json` prints after the resolver, so a held entry says `held` rather than `update`. */
+  it('prints the plan as it was written under -u --json', async () => {
+    const dir = monorepo();
+    updater.refusals = ['  Could not resolve dependency: left-pad@1.3.0'];
+    updater.blamed = ['pkg-a'];
+    const { lines } = await capture(() => runCli({ argv: ['deps', '-u', '--json'], cwd: dir }));
+    const doc = JSON.parse(lines.join('\n'));
+    const byPkg = Object.fromEntries(doc.map((e: any) => [e.package, e.status]));
+    expect(byPkg).toEqual({ root: 'update', 'pkg-a': 'held', 'pkg-b': 'update' });
   });
 
   it('does not ask the resolver under --no-verify', async () => {
