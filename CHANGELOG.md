@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 2f96e640e5a918c514c2eb834a905908c2d41d35 -->
+<!-- rman:documented-up-to 98942c3884eae576b5cab7261c3bc107fcd653d8 -->
+
+## v2.27.1 (2026-10-19)
+
+### 🐛 Bug Fixes
+
+- **version:** a kept range that refuses the new version is moved, not refused (e3884f7)
+
+---
 
 ## v2.27.0 (2026-10-12)
 
