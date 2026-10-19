@@ -121,7 +121,12 @@ export async function runCli(options?: {
             : err
               ? err.message
               : '';
-          console.log('\n' + colors.red(text));
+          /** **On stderr**, with every other failure line: printed to stdout, the reason left the
+           *  stream a caller reads for errors with nothing on it but the status line - measured in
+           *  `@panates/rman-preset`'s specs, whose `rman test` refusal came back as `✖ test 5ms`.
+           *  It went to stdout all along; `runCli`'s catch used to print it a second time on stderr,
+           *  which hid that until the marking below stopped the duplicate. */
+          console.error('\n' + colors.red(text));
           /** The handler's own error is marked too, because it is the one that comes back: yargs
            *  rejects `parseAsync` with what the handler threw, not with what this throws, so
            *  `runCli`'s catch saw it unmarked and printed the same line again on stderr - every

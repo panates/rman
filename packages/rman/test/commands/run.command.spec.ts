@@ -26,16 +26,17 @@ function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '');
 }
 
+/** Both streams: a command's own lines go to stdout and a refusal's reason to stderr. */
 async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
-  const original = console.log;
+  const original = { log: console.log, error: console.error };
   const lines: string[] = [];
-  console.log = (...args: unknown[]) => {
+  console.log = console.error = (...args: unknown[]) => {
     lines.push(stripAnsi(args.map(a => (typeof a === 'string' ? a : String(a))).join(' ')));
   };
   try {
     await fn();
   } finally {
-    console.log = original;
+    Object.assign(console, original);
   }
   return lines;
 }
