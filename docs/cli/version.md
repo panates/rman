@@ -485,8 +485,29 @@ Release-As: patch
 A package kept out of publishing - `.rmanrc "publish.skip"` (see
 [`rman publish`](publish.md#excluding-a-package-entirely-rmanrc-publishskip)), or one every target
 leaves out, such as a `private` npm package published in place - is `skip` in the plan: no new
-version, no tag, no changelog entry. It does not move because a dependency did, and its own changes
-release nothing that depends on it. A version nobody can install is a number with nothing behind it.
+version, no tag, no changelog entry. It does not move because a dependency did. A version nobody
+can install is a number with nothing behind it.
+
+**Its changes still release the published packages that carry it.** A published package that needs
+it at run time can only ship it inside its own artifact - a Docker image built from the workspace,
+a bundle - so a commit under the unpublished package counts as one of the published package's own:
+
+```
+server   bump  1.0.1 -> 1.0.2  changed since server@1.0.1 (via services)
+services skip  0.0.6           not published - .rmanrc "publish.skip"
+```
+
+- **Run-time dependencies only.** For npm that is `dependencies`, `optionalDependencies` and the
+  peers not marked optional. A `devDependencies` edge does not count: a test helper changing must
+  not release every library that tests with it.
+- **Through a chain of them**: what an unpublished package carries is carried too. A versioned
+  package in between stops it - that one releases itself, and its dependents follow with the
+  ordinary cascade.
+- **The bump comes from those commits**, a `fix:` giving a patch. The group's `cascade` then applies
+  as for any change.
+- **The changelog follows**: the commit appears in the published package's entry.
+- **Uncommitted changes under the unpublished package stop the published one**, here and in
+  `rman publish`, since they would be built into its artifact.
 
 `.rmanrc "version.skip"` says it outright, either way:
 

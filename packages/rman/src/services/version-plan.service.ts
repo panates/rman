@@ -4,7 +4,7 @@ import type { Package } from '../core/classes/package.js';
 import type { Repository } from '../core/classes/repository.js';
 import { assertOneScheme, type ChangeKind, semverScheme, VersionScheme } from '../core/classes/version-scheme.js';
 import { Manifest } from '../core/interfaces/manifest.js';
-import { skipReasonFor, targetsOf } from '../core/interfaces/publish-target.js';
+import { bundledPackages, unversionedReason } from '../utils/bundled-packages.js';
 import { type CommitInfo, dirtyReason, filesUnder, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { findLastReleaseVersion, formatCalendarVersion, usesCalendarVersion } from '../utils/release-version.js';
@@ -105,9 +105,16 @@ export abstract class VersionPlanService {
     const git = new GitHelper({ cwd: repository.dirname });
     const packages = filterPackages(repository.getPackages(), options);
 
+    /** Each package with the unversioned packages it carries - see `bundledPackages`. Their files
+     *  are the package's own for every question below: commits, and a dirty tree. */
+    const carried = new Map(
+      packages.map(pkg => [pkg, bundledPackages(pkg, p => !!this.notVersionedReason(p))] as const),
+    );
+    const homesOf = (pkg: Package) => [pkg, ...(carried.get(pkg) ?? [])].map(p => p.dirname);
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
-    const isDirty = (pkg: Package) => filesUnder(dirtyFiles, pkg.dirname).length > 0;
-    const dirtyReasonOf = (pkg: Package) => dirtyReason(filesUnder(dirtyFiles, pkg.dirname), repository.dirname);
+    const dirtyOf = (pkg: Package) => [...new Set(homesOf(pkg).flatMap(dir => filesUnder(dirtyFiles, dir)))];
+    const isDirty = (pkg: Package) => dirtyOf(pkg).length > 0;
+    const dirtyReasonOf = (pkg: Package) => dirtyReason(dirtyOf(pkg), repository.dirname);
     const dirty = packages.filter(isDirty);
 
     const entries = new Map<string, VersionPlanService.Entry>();
@@ -172,14 +179,20 @@ export abstract class VersionPlanService {
         }
         const since = await this.plannerFor(pkg).detectBoundary(git, pkg, options);
         const commits = since ? await git.listCommits({ hash: since }) : await git.listAllCommits();
-        const belongsToPkg = (c: CommitInfo) => c.files.some(f => !path.relative(pkg.dirname, f).startsWith('..'));
+        const homes = homesOf(pkg);
+        const under = (dir: string, f: string) => !path.relative(dir, f).startsWith('..');
+        const belongsToPkg = (c: CommitInfo) => c.files.some(f => homes.some(dir => under(dir, f)));
         const real = commits.filter(
           c => belongsToPkg(c) && !ConventionalCommitsService.isReleaseCommit(c.subject, commitMessage),
         );
         if (!real.length) return;
+        /** Named when a carried package is all that changed, or part of it - the one thing that
+         *  explains a bump with no commit under the package's own directory. */
+        const via = (carried.get(pkg) ?? []).filter(dep => real.some(c => c.files.some(f => under(dep.dirname, f))));
+        const base = since ? `changed since ${since}` : 'unreleased commits';
         changeByPackage.set(pkg.name, {
           bump: explicitBump ?? this.detectBump(real, pkg.versionScheme),
-          reason: since ? `changed since ${since}` : 'unreleased commits',
+          reason: via.length ? `${base} (via ${via.map(d => d.name).join(', ')})` : base,
         });
       }),
     );
@@ -234,38 +247,12 @@ export abstract class VersionPlanService {
   }
 
   /**
-   * Why `pkg` takes no version at all, or `undefined` when it does: `.rmanrc "version.skip"` when
-   * it says so, and otherwise whether it has been kept out of publishing - `publish.skip`, or every
-   * target that ships it leaving it out (npm's `private`).
+   * Why `pkg` takes no version at all, or `undefined` when it does - `unversionedReason`'s answer,
+   * kept `protected` so a planner can override it. A package this answers for is also one whose
+   * commits count toward the published packages that carry it (`bundledPackages`).
    */
-  /* **A version nothing publishes is a number nobody can install**, and that is the user's reason
-   * for reversing the old rule that `version` never reads `publish.skip`. Measured on
-   * `panates/syncbridge`: fourteen packages kept out of publishing were still bumped, tagged and
-   * written into changelogs on every release - tags with nothing on the registry behind them, and a
-   * version line that had jumped by the time publishing was switched back on.
-   *
-   * `version.skip` decides first, both ways: `true` holds back a package that does publish, `false`
-   * versions one that does not - an application deployed by other means, whose number still
-   * matters. A monorepo's root never reaches here; its version is the repository's release
-   * identity, decided by `buildRootEntry`.
-   *
-   * **A package no target ships to is still versioned**, deliberately. Tried the other way first,
-   * and it stopped versioning every package of a repository that has no publish target at all - one
-   * that versions with rman and publishes by other means, or a technology rman has no target for -
-   * which is most of the core's own spec fixtures. Only a package kept out *on purpose* is left
-   * out. */
   protected notVersionedReason(pkg: Package): string | undefined {
-    const declared = pkg.config.version?.skip;
-    if (declared === true) return 'excluded via .rmanrc "version.skip"';
-    if (declared === false) return undefined;
-    if (pkg.config.publish?.skip) return 'not published - .rmanrc "publish.skip"';
-    const app = pkg.repository?.app;
-    if (!app) return undefined;
-    const targets = targetsOf(app, pkg);
-    if (!targets.length) return undefined;
-    const reasons = targets.map(target => skipReasonFor(pkg, target));
-    if (reasons.every(Boolean)) return `not published - ${reasons[0]}`;
-    return undefined;
+    return unversionedReason(pkg);
   }
 
   /**

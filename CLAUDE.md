@@ -1668,6 +1668,24 @@ saw one thing to release and it was the one thing that must never be published.
     publishes by other means - which was most of the core's own spec fixtures (measured, 40 red).
   - **`'skip'` is never rippled into**, which also closed a quieter hole: a package excluded by
     `--ignore-dirty` could be bumped back in by a dependency in another group.
+  - **But its commits count for the published packages that carry it** (`bundledPackages`,
+    `utils/bundled-packages.ts`): a published package's run-time in-repo dependencies that take no
+    version, transitively, stopping at a versioned one. Measured on `panates/syncbridge-cloud`: the
+    Docker-only server bundles four `publish.skip` packages, a fix to `services` (a348f94f) left it
+    `no-change`, and the image would never have shipped the fix. The 2.22 rule above was made
+    without that case in view.
+    - **Run-time edges only** (`ManifestProvider.runtimeDependencies`; npm: `dependencies`,
+      `optionalDependencies`, non-optional peers). `Package.dependencies` includes `devDependencies`,
+      and a dev edge would release every library on each change to an unpublished test helper.
+    - **One rule, four readers**: the planner's commit attribution and dirty check, the changelog's
+      attribution, and the dirty check of each publish target (`filesOwnedBy`). Any one left on the
+      package's own directory reopens the gap one step later - a release for a fix its notes never
+      mention, or an image built from a carried package's uncommitted changes.
+    - `unversionedReason` moved out of the planner for the reason `groupKeyOf` did: the changelog
+      asks the same question and must work with no planner registered. `notVersionedReason` stays
+      `protected` and delegates.
+    - **The alternative was versioning them** (`version.skip: false`, which works today): tags and
+      changelog entries for packages nothing publishes, exactly what the 2.22 rule removed.
 - When folding the changelog into the bump commit (`--changelog`, or `.rmanrc "version.changelog"`)
   it passes `ChangelogService` an **explicit** boundary: the pre-bump tag (`expandTag(pkg,
   entry.from)`). It cannot be left to auto-detection - see the trap below.

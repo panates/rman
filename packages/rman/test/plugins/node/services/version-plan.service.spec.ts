@@ -419,3 +419,89 @@ describe('plugins/node: NodeManifestProvider.referencesTo', () => {
     expect(refs('workspace:^', '9.0.0')).toMatchObject({ dynamic: true, accepts: true });
   });
 });
+
+/**
+ * A package kept out of publishing whose commits count as a published dependent's - npm's half:
+ * which edges carry it. Run-time ones only, so a test helper does not release every library that
+ * tests with it.
+ */
+describe('plugins/node: a published package carrying an unpublished one', () => {
+  useNodeEcosystem();
+
+  const dirs: string[] = [];
+  after(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  function git(cwd: string, ...args: string[]): void {
+    execFileSync('git', args, { cwd, stdio: 'pipe' });
+  }
+
+  function writeJson(dir: string, rel: string, value: unknown): void {
+    const file = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(value, undefined, 2));
+  }
+
+  /** `server` ships, `services` does not, and `field` says how one names the other. */
+  function fixture(field: string, extra: object = {}): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-node-carried-'));
+    dirs.push(dir);
+    writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+    fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ group: false }));
+    writeJson(dir, 'packages/services/package.json', {
+      name: 'services',
+      version: '0.0.6',
+      rman: { publish: { skip: true } },
+    });
+    writeJson(dir, 'packages/server/package.json', {
+      name: 'server',
+      version: '1.0.1',
+      [field]: { services: '^0.0.6' },
+      ...extra,
+    });
+    git(dir, 'init');
+    git(dir, 'config', 'user.email', 'test@example.com');
+    git(dir, 'config', 'user.name', 'Test');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-m', 'init');
+    git(dir, 'tag', 'server@1.0.1');
+    fs.writeFileSync(path.join(dir, 'packages/services/redis.ts'), 'fixed');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-m', 'fix(services): redis reconnects');
+    return dir;
+  }
+
+  async function serverEntry(dir: string): Promise<VersionPlanService.Entry> {
+    const repository = await createRepository(dir);
+    return (await planner().getPlan(repository)).find(e => e.package.name === 'server')!;
+  }
+
+  it('releases the dependent for a fix in a package it lists under dependencies', async () => {
+    expect(await serverEntry(fixture('dependencies'))).toMatchObject({
+      status: 'bump',
+      to: '1.0.2',
+      reason: 'changed since server@1.0.1 (via services)',
+    });
+  });
+
+  /** The control: the same edge, dev-only - nothing of `services` ships inside `server`. */
+  it('does not for one it lists under devDependencies only', async () => {
+    expect(await serverEntry(fixture('devDependencies'))).toMatchObject({ status: 'no-change' });
+  });
+
+  it('nor for an optional peer', async () => {
+    const dir = fixture('peerDependencies', { peerDependenciesMeta: { services: { optional: true } } });
+    expect(await serverEntry(dir)).toMatchObject({ status: 'no-change' });
+  });
+
+  /** A release cut for that fix whose notes never mention it would be the same gap one step on. */
+  it("puts the carried package's commit into the dependent's changelog", async () => {
+    const dir = fixture('dependencies');
+    const repository = await createRepository(dir);
+    const entries = await repository.app.getService('changelog').getEntries({ fromRoot: true });
+    const server = entries.find(e => e.package.name === 'server');
+    expect(server?.content).toContain('redis reconnects');
+    expect(entries.find(e => e.package.name === 'services')).toBeUndefined();
+  });
+});

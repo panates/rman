@@ -18,8 +18,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Package } from '../../../../core/classes/package.js';
 import type { Repository } from '../../../../core/classes/repository.js';
+import { filesOwnedBy } from '../../../../utils/bundled-packages.js';
 import { exec } from '../../../../utils/exec.js';
-import { dirtyReason, filesUnder, GitHelper } from '../../../../utils/git.js';
+import { dirtyReason, GitHelper } from '../../../../utils/git.js';
 import type { PackageFilterOptions } from '../../../../utils/package-filter.js';
 import { filterPackages } from '../../../../utils/package-filter.js';
 import { isCalendarVersion } from '../../../../utils/release-version.js';
@@ -300,7 +301,7 @@ export namespace PublishService {
       pkg => options.shipsHere?.(pkg) ?? true,
     );
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
-    const isDirty = (pkg: Package) => filesUnder(dirtyFiles, pkg.dirname).length > 0;
+    const isDirty = (pkg: Package) => filesOwnedBy(dirtyFiles, pkg).length > 0;
 
     /** Per package, not per run: `resolveRegistry` reads the package's own `publishConfig.registry`
      *  when `--registry` was not given, so the question is asked where the answer lives. The test
@@ -351,7 +352,7 @@ export namespace PublishService {
           package: pkg,
           version: pkg.version,
           status: options.ignoreDirty ? 'skip' : 'error',
-          reason: dirtyReason(filesUnder(dirtyFiles, pkg.dirname), repository.dirname),
+          reason: dirtyReason(filesOwnedBy(dirtyFiles, pkg), repository.dirname),
         });
       } else {
         toCheck.push(pkg);

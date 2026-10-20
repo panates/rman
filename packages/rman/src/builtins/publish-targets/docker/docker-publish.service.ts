@@ -7,8 +7,9 @@ import type { Package } from '../../../core/classes/package.js';
 import type { Repository } from '../../../core/classes/repository.js';
 import { Service } from '../../../core/classes/service.js';
 import { type PublishTarget, targetsOf } from '../../../core/interfaces/publish-target.js';
+import { filesOwnedBy } from '../../../utils/bundled-packages.js';
 import { exec } from '../../../utils/exec.js';
-import { dirtyReason, filesUnder, GitHelper } from '../../../utils/git.js';
+import { dirtyReason, GitHelper } from '../../../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../../../utils/package-filter.js';
 import { isCalendarVersion } from '../../../utils/release-version.js';
 
@@ -53,7 +54,7 @@ export class DockerPublishService extends Service {
       pkg => targetsOf(this.app, pkg).some(t => t.name === DOCKER_TARGET) && !pkg.config.publish?.skip,
     );
     const dirtyFiles = await git.listDirtyFiles({ absolute: true });
-    const isDirty = (pkg: Package) => filesUnder(dirtyFiles, pkg.dirname).length > 0;
+    const isDirty = (pkg: Package) => filesOwnedBy(dirtyFiles, pkg).length > 0;
     const imageExists = deps.imageExists ?? defaultImageExists;
 
     const entries = new Map<string, DockerPublishService.Entry>();
@@ -83,7 +84,7 @@ export class DockerPublishService extends Service {
           image,
           detail: image,
           status: options.ignoreDirty ? 'skip' : 'error',
-          reason: dirtyReason(filesUnder(dirtyFiles, pkg.dirname), repository.dirname),
+          reason: dirtyReason(filesOwnedBy(dirtyFiles, pkg), repository.dirname),
         });
         continue;
       }
