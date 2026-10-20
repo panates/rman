@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 0b72bef7af699c439397c3c2c77c3754d2faceff -->
+<!-- rman:documented-up-to 43aaf205cc174fd853e3ce8ea4e920f4421f15f3 -->
+
+## v2.31.0 (2026-10-20)
+
+### ✨ Features
+
+- **publish:** report the digest a docker push returned, in a JSON document printed after the run (268e4ca)
+
+---
 
 ## v2.30.0 (2026-10-20)
 
