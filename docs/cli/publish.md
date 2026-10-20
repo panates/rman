@@ -60,7 +60,7 @@ options, in addition to:
 | --- | --- | --- | --- | --- |
 | `--yes` | `-y` | boolean | - | Skip the confirmation prompt and publish immediately. |
 | `--dry-run` | - | boolean | - | Only show the plan - never publishes, regardless of `--yes`. |
-| `--json` | `-j` | boolean | - | Print the plan as JSON (one row per package **and** target: `name`, `target`, `status`, `version`, `detail`, `reason`) instead of text. |
+| `--json` | `-j` | boolean | - | Print JSON instead of text, one row per package **and** target: `name`, `target`, `status`, `version`, `detail`, `reason`. With `--dry-run` it is the plan; otherwise it is printed once the run is over - see [What a run published](#what-a-run-published---json-without---dry-run). |
 | `--target <name>` | - | array | *the installed targets* | Restrict this run to just these target(s) (repeatable). Default: whatever each package is configured for. A target named here that matches no package is an error rather than an empty run. |
 | `--ignore-dirty` | - | boolean | - | Exclude a package with uncommitted local changes instead of aborting the whole run. |
 
@@ -206,6 +206,30 @@ This is the right gate for a release pipeline - not [`rman version --json`](vers
 *other* question ("does anything need a new version number?") and correctly reports nothing when a
 version was bumped in an earlier run, or bumped locally and merged in, or when a previous publish
 failed after the tag was already pushed.
+
+### What a run published: `--json` without `--dry-run`
+
+Without `--dry-run`, `--json` waits until the run is over and prints **one document saying what
+happened**: a row that went up reads `published` (never the plan's `publish`), one that failed reads
+`error` with its reason, and every other row is as it was planned. A run that stops before
+publishing - nothing due, a refused prompt, a plan with errors - prints the plan instead. Everything
+else the run prints, `npm publish` and `docker` included, goes to stderr, so stdout stays that one
+document.
+
+A row the registry addresses by content also carries `artifact` - for `docker`, the image and the
+digest of the index buildx pushed (`containerimage.digest`):
+
+```json
+{ "name": "server", "target": "docker", "status": "published", "version": "1.2.0",
+  "artifact": { "ref": "myorg/server", "digest": "sha256:e7d97..." } }
+```
+
+That is what a deploy pinned to `<image>@sha256:...` should read: it comes from the push in this
+run, where a tag read back from the registry later may already point somewhere else.
+
+```bash
+rman publish --yes --json | jq -c '[.[] | select(.artifact) | {name, version, image: .artifact.ref, digest: .artifact.digest}]'
+```
 
 ## Publishing somewhere other than npmjs.org
 

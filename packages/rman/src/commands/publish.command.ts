@@ -43,8 +43,10 @@ const config = {
     target: 'cli',
     alias: 'j',
     describe:
-      'Print the plan as JSON instead of text - one entry per package and target. Combine with ' +
-      '--dry-run to ask "is there anything to publish?" without publishing (e.g. a CI release gate).',
+      'Print JSON instead of text - one entry per package and target. With --dry-run it is the plan ' +
+      '("is there anything to publish?", e.g. a CI release gate); otherwise it is printed once the ' +
+      'run is over and says what happened: "published" entries, with the digest a registry returned ' +
+      'under "artifact".',
     type: 'boolean',
   },
   ignoreDirty: {
@@ -200,9 +202,16 @@ const publishCommand = registerCommand(app => {
         }
       }
 
-      if (args.json) {
-        console.log(JSON.stringify(jsonPlan(plans), undefined, 2));
-      } else {
+      /** One document per run, whichever way it ends: the plan under `--dry-run` or on any exit
+       *  before publishing, what happened once it has. */
+      let printed = false;
+      const printJson = (doc: unknown) => {
+        if (!args.json || printed) return;
+        printed = true;
+        console.log(JSON.stringify(doc, undefined, 2));
+      };
+      if (args.dryRun) printJson(jsonPlan(plans));
+      if (!args.json) {
         for (const [target, plan] of plans) {
           printPlan(plan, target.name);
           printFiles(plan, target);
@@ -214,6 +223,7 @@ const publishCommand = registerCommand(app => {
       if (requested?.length) {
         const empty = [...plans].filter(([, plan]) => !plan.length).map(([target]) => target.name);
         if (empty.length) {
+          printJson(jsonPlan(plans));
           throw logged(
             `--target ${empty.join(', ')} was given, but no package ships there ` + '(see .rmanrc "publish.target").',
           );
@@ -223,6 +233,7 @@ const publishCommand = registerCommand(app => {
       const all = [...plans.values()].flat();
       const errors = all.filter(e => e.status === 'error');
       if (errors.length) {
+        printJson(jsonPlan(plans));
         const allDirty = errors.every(e => e.reason?.startsWith(UNCOMMITTED));
         throw logged(
           allDirty
@@ -233,6 +244,7 @@ const publishCommand = registerCommand(app => {
       }
 
       if (!all.some(e => e.status === 'publish')) {
+        printJson(jsonPlan(plans));
         if (!args.json) console.log(colors.gray('Nothing to publish.'));
         return;
       }
@@ -241,14 +253,19 @@ const publishCommand = registerCommand(app => {
       let proceed = !!args.yes;
       if (!proceed) {
         if (!process.stdout.isTTY) {
-          console.log(colors.gray('Not a TTY - refusing to prompt. Pass --yes to publish non-interactively.'));
+          printJson(jsonPlan(plans));
+          console.error(colors.gray('Not a TTY - refusing to prompt. Pass --yes to publish non-interactively.'));
           return;
         }
         proceed = await confirm('Publish these packages?');
       }
-      if (!proceed) return;
+      if (!proceed) {
+        printJson(jsonPlan(plans));
+        return;
+      }
 
       const outcomes: Outcome[] = [];
+      const results = new Map<PublishTarget, PublishTarget.Entry[]>();
       const publishedBy = new Map<PublishTarget, PublishTarget.Entry[]>();
       let waited = false;
       for (const [target, plan] of plans) {
@@ -266,13 +283,15 @@ const publishCommand = registerCommand(app => {
         } finally {
           staged?.restore();
         }
-        const done = printApplied(applied, plan, target.name);
+        results.set(target, applied);
+        const done = printApplied(applied, plan, target.name, args.json ? console.error : console.log);
         outcomes.push(...done);
         publishedBy.set(
           target,
           done.filter(o => o.entry.status === 'publish').map(o => o.entry),
         );
       }
+      printJson(jsonResult(plans, results));
       if (!args.json) printRecap(outcomes);
       writeStepSummary(outcomes);
       const failed = outcomes.filter(o => o.entry.status === 'error');
@@ -419,6 +438,37 @@ function jsonPlan(plans: Map<PublishTarget, PublishTarget.Entry[]>) {
   );
 }
 
+/**
+ * `--json` once the run has published: the plan's rows, each as it ended - `published` for one that
+ * went up (with the registry's `artifact`, where the target reports one), `error` for one that did
+ * not, and a row nothing was asked of as it was planned.
+ */
+/* **`published`, not the plan's `publish`**, so a document read after the run cannot be mistaken
+ * for a plan that has yet to happen. The release workflow counts these and takes the digests from
+ * `artifact` - `syncbridge-io/syncbridge` deploys by them. */
+function jsonResult(
+  plans: Map<PublishTarget, PublishTarget.Entry[]>,
+  results: Map<PublishTarget, PublishTarget.Entry[]>,
+) {
+  return [...plans].flatMap(([target, plan]) =>
+    plan.map(planned => {
+      const entry =
+        planned.status === 'publish'
+          ? (results.get(target)?.find(e => e.package === planned.package) ?? planned)
+          : planned;
+      return {
+        name: entry.package.name,
+        target: target.name,
+        status: planned.status === 'publish' && entry.status === 'publish' ? 'published' : entry.status,
+        version: entry.version,
+        detail: entry.detail,
+        reason: entry.reason,
+        ...(entry.artifact && { artifact: entry.artifact }),
+      };
+    }),
+  );
+}
+
 function printPlan(entries: PublishTarget.Entry[], label: string): void {
   const prefix = colors.gray(`[${label}] `);
   for (const e of entries) {
@@ -492,15 +542,20 @@ interface Outcome {
  * was already an error before anything ran has been printed once by `printPlan`, and printing it
  * again under "failed" would read as a push that was attempted and did not work.
  */
-function printApplied(applied: PublishTarget.Entry[], plan: PublishTarget.Entry[], label: string): Outcome[] {
+function printApplied(
+  applied: PublishTarget.Entry[],
+  plan: PublishTarget.Entry[],
+  label: string,
+  log: (...args: unknown[]) => void,
+): Outcome[] {
   const prefix = colors.gray(`[${label}] `);
   const outcomes: Outcome[] = [];
   for (const entry of applied) {
     if (plan.find(e => e.package === entry.package)?.status !== 'publish') continue;
     if (entry.status === 'publish') {
-      console.log(colors.green('published'), prefix + colors.cyan(entry.package.name), entry.detail ?? entry.version);
+      log(colors.green('published'), prefix + colors.cyan(entry.package.name), entry.detail ?? entry.version);
     } else if (entry.status === 'error') {
-      console.log(colors.red('failed'), prefix + colors.cyan(entry.package.name), colors.red(entry.reason ?? ''));
+      log(colors.red('failed'), prefix + colors.cyan(entry.package.name), colors.red(entry.reason ?? ''));
     } else continue;
     outcomes.push({ target: label, entry });
   }

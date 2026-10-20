@@ -14,8 +14,13 @@ export interface ExecOptions {
    */
   app?: RmanApplication;
   /** 'inherit' streams the child directly to our stdio (used for non-TTY/CI passthrough).
-   *  'pipe' (default) captures output so the caller can drive a live view via onLine. */
-  stdio?: 'inherit' | 'pipe';
+   *  'stderr' does the same with the child's stdout sent to our stderr, for a command whose own
+   *  stdout is a document. 'pipe' (default) captures output so the caller can drive a live view
+   *  via onLine. */
+  /* **'stderr' exists for `publish --json`**, whose stdout is one JSON document: `npm publish`
+   * prints `+ pkg@1.0.0` and `docker login` prints `Login Succeeded` to stdout, and either would have
+   * broken it. Nothing is lost on a terminal, where both streams land in the same place. */
+  stdio?: 'inherit' | 'stderr' | 'pipe';
   cwd?: string;
   env?: Record<string, string | undefined>;
   onLine?: (line: string, stdio: 'stderr' | 'stdout') => void;
@@ -53,7 +58,7 @@ export async function exec(command: string, options?: ExecOptions): Promise<Exec
   opts.cwd = opts.cwd || process.cwd();
 
   const spawnOptions: SpawnOptions = {
-    stdio: opts.stdio === 'inherit' ? 'inherit' : 'pipe',
+    stdio: opts.stdio === 'inherit' ? 'inherit' : opts.stdio === 'stderr' ? ['inherit', 2, 2] : 'pipe',
     env: opts.env,
     cwd: opts.cwd,
     shell: true,

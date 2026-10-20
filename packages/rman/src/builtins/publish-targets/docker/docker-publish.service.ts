@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { RmanApplication } from '../../../core/application.js';
@@ -129,7 +130,7 @@ export class DockerPublishService extends Service {
     await exec('docker buildx create --use', {
       cwd: repository.dirname,
       app: repository.app,
-      stdio: 'inherit',
+      stdio: 'stderr',
       throwOnError: false,
     });
 
@@ -140,9 +141,9 @@ export class DockerPublishService extends Service {
         continue;
       }
       try {
-        await buildAndPush(repository, entry);
+        const digest = await buildAndPush(repository, entry);
         await updateDescription(entry);
-        result.push(entry);
+        result.push(digest ? { ...entry, artifact: { ref: entry.image!, digest } } : entry);
       } catch (e: any) {
         result.push({ ...entry, status: 'error', reason: e.message });
       }
@@ -228,11 +229,11 @@ async function dockerLogin(app: RmanApplication, cwd: string): Promise<void> {
   await exec(`echo "${password}" | docker login --username "${username}" --password-stdin`, {
     cwd,
     app,
-    stdio: 'inherit',
+    stdio: 'stderr',
   });
 }
 
-async function buildAndPush(repository: Repository, entry: DockerPublishService.Entry): Promise<void> {
+async function buildAndPush(repository: Repository, entry: DockerPublishService.Entry): Promise<string | undefined> {
   const pkg = entry.package;
   const docker = pkg.config.publish!.docker!;
   const architectures = docker.architectures?.length ? docker.architectures : ['linux/amd64'];
@@ -254,6 +255,11 @@ async function buildAndPush(repository: Repository, entry: DockerPublishService.
   for (const to of asList(docker.cache?.to)) args.push('--cache-to', `"${to}"`);
   args.push('-f', `"${dockerfile}"`);
   for (const tag of imageTags(pkg)) args.push('-t', `"${entry.image}:${tag}"`);
+  /** buildx writes what it pushed here - `containerimage.digest` is the pushed index's own, the
+   *  address `docker buildx imagetools inspect` reports for the tag right after. */
+  const metadataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-buildx-'));
+  const metadataFile = path.join(metadataDir, 'metadata.json');
+  args.push('--metadata-file', `"${metadataFile}"`);
   args.push('--push', '.');
 
   /** **Shown as it runs and kept**, so a failure can say why. It ran with `stdio: 'inherit'`, and the
@@ -270,7 +276,24 @@ async function buildAndPush(repository: Repository, entry: DockerPublishService.
       process.stderr.write(line + '\n');
     },
   });
-  if (result.code) throw new Error(`docker build exited with code ${result.code}${failureLines(lines)}`);
+  try {
+    if (result.code) throw new Error(`docker build exited with code ${result.code}${failureLines(lines)}`);
+    return readPushedDigest(metadataFile);
+  } finally {
+    fs.rmSync(metadataDir, { recursive: true, force: true });
+  }
+}
+
+/** The digest buildx recorded for what it pushed, or `undefined` when its metadata says none. */
+/* Unreadable metadata is not a failed publish - the image is on the registry either way - so it
+ * reads as "no digest", which leaves the entry without an `artifact` rather than failing it. */
+function readPushedDigest(file: string): string | undefined {
+  try {
+    const digest = JSON.parse(fs.readFileSync(file, 'utf-8'))['containerimage.digest'];
+    return typeof digest === 'string' && /^sha256:[0-9a-f]{64}$/.test(digest) ? digest : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
