@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to dfebc4ca9b3194f1d8c2252688b8400061f10233 -->
+<!-- rman:documented-up-to 0b72bef7af699c439397c3c2c77c3754d2faceff -->
+
+## v2.30.0 (2026-10-20)
+
+### ✨ Features
+
+- **version:** an unpublished package's commits count for the published packages carrying it (5d99e13)
+
+---
 
 ## v2.29.0 (2026-10-19)
 
