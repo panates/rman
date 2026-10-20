@@ -947,14 +947,68 @@ describe('services/version', () => {
       expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'skip' });
     });
 
-    /** And its own change releases nothing that depends on it: no new version of it exists. */
-    it('ripples into nothing when it changes itself', async () => {
+    /**
+     * **Its own change is a change of the published package that carries it.** Kept out of
+     * publishing, it reaches anyone only inside a dependent's artifact - measured on
+     * `panates/syncbridge-cloud`, whose Docker-only server bundles four `publish.skip` packages and
+     * read `no-change` after a fix to one of them. It stays unversioned itself.
+     */
+    it("counts its commits as the published dependent's own, and says so", async () => {
       const dir = repo({ 'pkg-b': { rman: { publish: { skip: true } } }, 'pkg-c': { deps: ['pkg-b'] } });
       change(dir, 'pkg-b');
       const repository = await createRepository(dir);
       const plan = await planner().getPlan(repository);
       expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'skip' });
-      expect(entryFor(plan, 'pkg-c')).toMatchObject({ status: 'no-change' });
+      expect(entryFor(plan, 'pkg-c')).toMatchObject({
+        status: 'bump',
+        to: '1.0.1',
+        reason: 'changed since pkg-c@1.0.0 (via pkg-b)',
+      });
+    });
+
+    /** Through a chain of them - the image carries what its carried packages carry. */
+    it('reaches through an unpublished package to the one it carries', async () => {
+      const dir = repo({
+        'pkg-a': { rman: { publish: { skip: true } } },
+        'pkg-b': { rman: { publish: { skip: true } }, deps: ['pkg-a'] },
+        'pkg-c': { deps: ['pkg-b'] },
+      });
+      change(dir, 'pkg-a');
+      const repository = await createRepository(dir);
+      const plan = await planner().getPlan(repository);
+      expect(entryFor(plan, 'pkg-c')).toMatchObject({
+        status: 'bump',
+        reason: 'changed since pkg-c@1.0.0 (via pkg-a)',
+      });
+    });
+
+    /** A versioned package in between stops the walk: it releases on its own, and the ordinary
+     *  ripple carries that to its dependents - with its version, not with the commit. */
+    it('stops at a package that is versioned itself', async () => {
+      const dir = repo({
+        'pkg-a': { rman: { publish: { skip: true } } },
+        'pkg-b': { deps: ['pkg-a'] },
+        'pkg-c': { deps: ['pkg-b'] },
+      });
+      change(dir, 'pkg-a');
+      const repository = await createRepository(dir);
+      const plan = await planner().getPlan(repository);
+      expect(entryFor(plan, 'pkg-b')).toMatchObject({
+        status: 'bump',
+        reason: 'changed since pkg-b@1.0.0 (via pkg-a)',
+      });
+      expect(entryFor(plan, 'pkg-c')).toMatchObject({ status: 'bump', reason: 'depends on pkg-b@1.0.1' });
+    });
+
+    /** Its uncommitted changes would be built into the dependent's artifact, so they stop it. */
+    it('holds the dependent back while it is dirty', async () => {
+      const dir = repo({ 'pkg-b': { rman: { publish: { skip: true } } }, 'pkg-c': { deps: ['pkg-b'] } });
+      change(dir, 'pkg-c');
+      fs.writeFileSync(path.join(dir, 'packages/pkg-b/y.txt'), 'y');
+      const repository = await createRepository(dir);
+      const plan = await planner().getPlan(repository);
+      expect(entryFor(plan, 'pkg-c').status).toBe('error');
+      expect(entryFor(plan, 'pkg-c').reason).toContain('packages/pkg-b/y.txt');
     });
   });
 

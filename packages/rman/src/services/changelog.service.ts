@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { Package } from '../core/classes/package.js';
 import type { Repository } from '../core/classes/repository.js';
 import { Service } from '../core/classes/service.js';
+import { bundledPackages } from '../utils/bundled-packages.js';
 import { type CommitInfo, GitHelper } from '../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
 import { groupKeyOf } from '../utils/version-group.js';
@@ -195,6 +196,10 @@ export class ChangelogService extends Service {
        * --changelog` and `github-release` see too, since both pass an explicit boundary.
        */
       const dirsAt = homesAt(homes, commitsByTarget[i]);
+      /** A member's commits include those of the unversioned packages it carries - the same rule
+       *  `version` bumps by (`bundledPackages`), or a release would be cut for a change its notes
+       *  never mention. */
+      const owns = new Set([...group.members].flatMap(m => [m, ...bundledPackages(m)]));
       const floor = await resolveStartingPoint(git, pkg, options);
       const floorIndex = floor?.sha ? commitsByTarget[i].findIndex(c => c.sha === floor.sha) : -1;
       const withUnreleased = resolveUnreleased(pkg, options);
@@ -206,7 +211,7 @@ export class ChangelogService extends Service {
         /** A commit belongs to a group when it belongs to **any** of its members - one line for a
          *  commit touching two of them, which is the whole reason a group shares a file. */
         const ownCommits = dropVersionBumps(segment.commits).filter(c =>
-          [...ownersOf(repository, c, dirsAt(c))].some(owner => group.members.has(owner)),
+          [...ownersOf(repository, c, dirsAt(c))].some(owner => owns.has(owner)),
         );
         if (!ownCommits.length) continue;
         const sections = groupCommits(ownCommits, ignoreTypesConfig(pkg), titles, order, withCommitHash(pkg, options));

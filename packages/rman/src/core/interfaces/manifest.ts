@@ -115,6 +115,18 @@ export interface ManifestProvider {
    */
   dependencies?(manifest: Manifest, candidates: readonly Package[]): Package[];
   /**
+   * Which of `candidates` this package's artifact needs where it runs - what a consumer installs
+   * with it, or what an image built from it carries. A subset of `dependencies`: npm leaves out
+   * `devDependencies` and optional peers.
+   *
+   * Omit it and every dependency counts.
+   */
+  /* **What `version` reads it for**: a package kept out of publishing that a published one needs at
+   * run time can only reach anyone *inside* that published package's artifact, so its commits are
+   * the published package's too (`bundledPackages`). A dev-only edge must not count - a test helper
+   * changing would otherwise release every library that tests with it. */
+  runtimeDependencies?(manifest: Manifest, candidates: readonly Package[]): Package[];
+  /**
    * Splits a package name into the parts a config expression can ask for - `${{ pkg.scope }}` and
    * `${{ pkg.unscopedName }}`.
    *
@@ -272,6 +284,13 @@ export namespace Manifest {
    */
   export function dependenciesOf(pkg: Package, candidates: readonly Package[]): Package[] {
     return platformOf(pkg)?.manifestProvider.dependencies?.(pkg.manifest, candidates) ?? [];
+  }
+
+  /** The packages `pkg`'s artifact needs at run time - see `ManifestProvider.runtimeDependencies`.
+   *  Every declared dependency when the provider has no opinion. */
+  export function runtimeDependenciesOf(pkg: Package, candidates: readonly Package[]): Package[] {
+    const provider = platformOf(pkg)?.manifestProvider;
+    return (provider?.runtimeDependencies ?? provider?.dependencies)?.call(provider, pkg.manifest, candidates) ?? [];
   }
 
   /** `${{ pkg.scope }}`/`${{ pkg.unscopedName }}`, by whichever provider recognizes `dir` - and

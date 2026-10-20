@@ -60,6 +60,24 @@ export class NodeManifestProvider implements ManifestProvider {
     return result;
   }
 
+  /** `dependencies`, `optionalDependencies` and the peers that are not optional - everything but
+   *  what only a developer of the package installs. */
+  runtimeDependencies(manifest: Manifest, candidates: readonly Package[]): Package[] {
+    const optionalPeers = this.optionalPeerNames(manifest);
+    const byName = new Map(candidates.map(p => [p.name, p]));
+    const result: Package[] = [];
+    for (const key of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+      const declared = manifest.raw[key];
+      if (!declared || typeof declared !== 'object') continue;
+      for (const name of Object.keys(declared)) {
+        if (key === 'peerDependencies' && optionalPeers.has(name)) continue;
+        const pkg = byName.get(name);
+        if (pkg && !result.includes(pkg)) result.push(pkg);
+      }
+    }
+    return result;
+  }
+
   /** npm's `@scope/name`. A name with no `/` has no scope and is its own unscoped form; the
    *  *last* `/` splits it, so `@scope/a/b` keeps `@scope/a` as the scope the registry would. */
   splitName(name: string): { scope?: string; unscopedName: string } {
