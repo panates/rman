@@ -464,9 +464,17 @@ describe('commands/publish: order, recap and the job summary', () => {
       }));
     },
   };
+  /** Reports what it pushed by content, the way docker's target does with buildx's digest. */
+  const addressed: PublishTarget = {
+    ...fakeTarget('addressed', { claims: false }),
+    async applyPlan(_ctx, plan) {
+      return plan.map(e => ({ ...e, artifact: { ref: `org/${e.package.name}`, digest: 'sha256:abc' } }));
+    },
+  };
   useTarget(image);
   useTarget(registryTarget);
   useTarget(broken);
+  useTarget(addressed);
   beforeEach(() => {
     calls.length = 0;
     missing = [];
@@ -534,6 +542,62 @@ describe('commands/publish: order, recap and the job summary', () => {
     expect(text).toMatch(/publish.*1 published.*1 failed/);
     expect(text).toContain('npm error notarget');
     expect(error?.message).toContain('"publish" failed for [broken] pkg-a');
+  });
+
+  /** stdout alone - the document a pipeline parses - with everything else on stderr discarded. */
+  async function stdoutOf(fn: () => Promise<void>): Promise<string> {
+    const original = { log: console.log, error: console.error };
+    const out: string[] = [];
+    console.log = (...args: unknown[]) => void out.push(args.map(String).join(' '));
+    console.error = () => undefined;
+    try {
+      await fn();
+    } finally {
+      Object.assign(console, original);
+    }
+    return out.join('\n');
+  }
+
+  /**
+   * **Under `--yes`, `--json` is what happened, printed once it has**, so a release workflow reads the
+   * digest of what this run pushed from the run itself. Asked for by `syncbridge-io/syncbridge`,
+   * whose production deploy pins `<image>@sha256:...`.
+   */
+  it('prints one document after publishing - "published" rows, with the artifact a target reports', async () => {
+    const dir = repo({ target: ['reg', 'addressed'] });
+    const doc = JSON.parse(await stdoutOf(() => runCli({ cwd: dir, argv: ['publish', '--yes', '--json'] })));
+    expect(doc).toEqual([
+      expect.objectContaining({ name: 'pkg-a', target: 'reg', status: 'published', version: '1.0.0' }),
+      expect.objectContaining({
+        name: 'pkg-a',
+        target: 'addressed',
+        status: 'published',
+        artifact: { ref: 'org/pkg-a', digest: 'sha256:abc' },
+      }),
+    ]);
+    expect(doc[0].artifact).toBeUndefined();
+  });
+
+  /** A failed publish still leaves the document - the one thing a pipeline needs to say which. */
+  it('prints the document before failing, with the failed row as "error"', async () => {
+    const dir = repo({ target: ['reg', 'broken'] });
+    let failed = false;
+    const text = await stdoutOf(() =>
+      runCli({ cwd: dir, argv: ['publish', '--yes', '--json'] }).catch(() => {
+        failed = true;
+      }),
+    );
+    expect(failed).toBe(true);
+    expect(JSON.parse(text).map((e: any) => `${e.target} ${e.status}`)).toEqual(['reg published', 'broken error']);
+  });
+
+  /** The control: `--dry-run --json` is still the plan, exactly as a release gate reads it. */
+  it('keeps --dry-run --json the plan - "publish", and nothing applied', async () => {
+    const dir = repo({ target: ['addressed'] });
+    const doc = JSON.parse(await stdoutOf(() => runCli({ cwd: dir, argv: ['publish', '--dry-run', '--json'] })));
+    expect(doc).toEqual([expect.objectContaining({ target: 'addressed', status: 'publish' })]);
+    expect(doc[0].artifact).toBeUndefined();
+    expect(calls.some(c => c.method === 'applyPlan')).toBe(false);
   });
 
   it('writes the outcome to the GitHub job summary when there is one', async () => {

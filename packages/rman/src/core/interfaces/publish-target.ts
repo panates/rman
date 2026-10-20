@@ -162,6 +162,16 @@ export namespace PublishTarget {
     /** Printed after the package name - docker's resolved `<namespace>/<image>`, for instance. */
     detail?: string;
     reason?: string;
+    /**
+     * What `applyPlan` actually pushed, when the registry names it by content: `ref` is where it went
+     * and `digest` the content address the registry returned. Set by a target on a published entry,
+     * never in a plan - nothing has been pushed yet there.
+     */
+    /* **For a deploy pinned to what was built**, asked for by `syncbridge-io/syncbridge`: production
+     * pulls `<image>@sha256:...`, never a tag, and the digest has to come from the push itself in
+     * the same run - re-read from the registry by a later job, a tag moved in between would be what
+     * gets deployed. docker sets it; npm's integrity is not an address anything deploys by. */
+    artifact?: { ref: string; digest: string };
   }
 }
 

@@ -495,7 +495,7 @@ export namespace PublishService {
           {
             cwd: publishDir,
             app: pkg.repository.app,
-            stdio: 'inherit',
+            stdio: 'stderr',
           },
         );
         result.push(entry);

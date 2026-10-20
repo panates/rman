@@ -2161,7 +2161,8 @@ saw one thing to release and it was the one thing that must never be published.
     disagreement with no undo, since npm will not unpublish after 72 hours.
   - **Reported through `detail`**, which is how the dist-tag already travels - so `--dry-run --json`
     shows it without the core knowing anything about npm. The core's JSON shape is fixed
-    (`name`, `target`, `status`, `version`, `detail`, `reason`) and that is deliberate.
+    (`name`, `target`, `status`, `version`, `detail`, `reason`) and that is deliberate - with one
+    optional addition, `artifact`, below.
   - **A staged entry still reads `publish`, and that is a limitation rather than a decision.**
     Question B is "is this version on the registry", and a pending one is not - `npm view` does not
     report the queue - so a second run before an approval proposes the same package again. Whether
@@ -2217,6 +2218,21 @@ saw one thing to release and it was the one thing that must never be published.
   `${{ vars.x }}` scope), so a key by that name never reaches a target - and the type refused it
   first, since `CloudflarePublishOptions` cannot extend both that and `ScopedVars`. Any future
   target key mirroring a tool's `vars` needs another name.
+- **`--json` without `--dry-run` is printed after the run and says what happened**
+  (`jsonResult`): `published` rather than the plan's `publish`, `error` for a failure, and an
+  `artifact: { ref, digest }` where the target pushed something addressed by content
+  (`PublishTarget.Entry.artifact`). Asked for by `syncbridge-io/syncbridge`, whose production
+  deploy pins `<image>@sha256:...` and needs the digest from the push in the same run - a tag
+  re-read from Docker Hub by a later job could have moved. It used to print the plan *before*
+  publishing, which nothing read: the release workflow only ever ran `--dry-run --json`.
+  - **docker's digest is buildx's own `--metadata-file`** (`containerimage.digest`, the pushed
+    index). Unreadable metadata leaves `artifact` out and the publish succeeded - the image is up.
+  - **stdout has to stay one document, so every child on that path writes to stderr**
+    (`exec`'s `stdio: 'stderr'`, `['inherit', 2, 2]`): `npm publish` prints `+ pkg@1.0.0` and
+    `docker login` prints `Login Succeeded` on stdout, and the `published` lines go to stderr under
+    `--json`. Measured with the built `exec`: `stdio: 'stderr'` leaves stdout empty.
+  - **A run that stops before publishing prints the plan**, once - the `printed` guard is what keeps
+    a later exit from adding a second document.
 - **Never looks at whether `version` ran** - deliberately. It only inspects what's on disk and on the
   registry, so it behaves the same right after a bump or days later. Re-running is safe.
 - In CI, gate the release pipeline on **this** plan, not on `version --json`.

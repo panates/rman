@@ -6,6 +6,8 @@ import { expect } from 'expect';
 import { DockerPublishService } from '../../src/builtins/publish-targets/docker/docker-publish.service.js';
 import { createRepository, service, useLocalBin, useTestEcosystem } from '../_fixture.js';
 
+const DIGEST_HEX = 'e7d9'.repeat(16);
+
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-docker-publish-test-'));
 }
@@ -253,7 +255,10 @@ describe('services/docker-publish', () => {
       const script = path.join(binDir, 'docker');
       fs.writeFileSync(
         script,
-        `#!/usr/bin/env node\nrequire('fs').appendFileSync(${JSON.stringify(logFile)}, process.cwd() + ' ' + process.argv.slice(2).join(' ') + '\\n');\n`,
+        `#!/usr/bin/env node\nrequire('fs').appendFileSync(${JSON.stringify(logFile)}, process.cwd() + ' ' + process.argv.slice(2).join(' ') + '\\n');\n` +
+          /** What buildx writes for a push, unless a case asks for metadata without a digest. */
+          `const a = process.argv.slice(2), i = a.indexOf('--metadata-file');\n` +
+          `if (i >= 0) require('fs').writeFileSync(a[i + 1], process.env.RMAN_TEST_NO_DIGEST ? '{}' : JSON.stringify({ 'containerimage.digest': 'sha256:${DIGEST_HEX}' }));\n`,
       );
       fs.chmodSync(script, 0o755);
       return { logFile };
@@ -325,6 +330,27 @@ describe('services/docker-publish', () => {
       const calls = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf-8').trim().split('\n') : [];
       return { dir, plan, result: result!, build: calls.find(c => c.includes('buildx build')) };
     }
+
+    /** The digest comes from buildx's own metadata for the push, so a deploy can pin what this
+     *  run built - not whatever a tag points at by the time a later job reads the registry. */
+    it("reports the digest buildx pushed, as the entry's artifact", async () => {
+      const { result, build } = await buildWith('1.2.0', {});
+      expect(build).toContain('--metadata-file');
+      expect(result.status).toBe('publish');
+      expect(result.artifact).toEqual({ ref: 'myorg/pkg-a', digest: `sha256:${DIGEST_HEX}` });
+    });
+
+    /** No digest in the metadata is no `artifact`, never a failed publish - the image is up. */
+    it('leaves artifact out when buildx records no digest, and still succeeds', async () => {
+      process.env.RMAN_TEST_NO_DIGEST = '1';
+      try {
+        const { result } = await buildWith('1.2.0', {});
+        expect(result.status).toBe('publish');
+        expect(result.artifact).toBeUndefined();
+      } finally {
+        delete process.env.RMAN_TEST_NO_DIGEST;
+      }
+    });
 
     it('passes secrets, labels, the target stage, the cache and extra tags to the build', async () => {
       process.env.RMAN_TEST_NPM_TOKEN = 'secret';
