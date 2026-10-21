@@ -57,14 +57,20 @@ years only moves inside its minor until `deps.targets` says otherwise.
 ## What moves
 
 Only a caret or tilde range on a plain version (`^1.2.3`, `~1.2.3`) is rewritten, and it keeps its
-prefix. An exact version (`1.2.3`), a compound range (`>=1 <2`, `a || b`), a dist-tag, a URL, an
-`npm:` alias, a `workspace:` range and a package of this repository are left as they are - and every
-one of them still counts as a rule the others must keep.
+prefix. An exact version (`1.2.3`), a compound range (`>=1 <2`, `a || b`), a dist-tag, a URL, a
+`workspace:` range and a package of this repository are left as they are - and every one of them
+still counts as a rule the others must keep.
+
+**An `npm:` alias of a caret or tilde range moves too, under the package it names.** For
+`"@sb/hl7": "npm:@mirror/sb__hl7@^2.0.0"` the versions are asked of `@mirror/sb__hl7` - through the
+repository's `.npmrc`, so a scoped mirror (`@mirror:registry=...`) answers - and the rewrite keeps
+the `npm:@mirror/sb__hl7@` in front. Another field declaring the same name, a peer `"@sb/hl7":
+"^2.0.0"` beside it, is held to those versions and moves with it: the alias is what installs.
 
 **Left alone, but not left out.** An exact version or a compound range that the newest release
 falls outside is listed as a `skipped` row - `mocha  11.7.5  -  12.0.3  skipped  not a ^ or ~ range`
 - so a pin is never mistaken for "up to date". `-u` still does not touch it; change it by hand, or
-write it as a caret range if it should move. A dist-tag, a URL and an alias have no version to
+write it as a caret range if it should move. A dist-tag and a URL have no version to
 compare and get no row.
 
 **`peerDependencies` move like the rest.** A peer range is a promise to the package's consumers, so

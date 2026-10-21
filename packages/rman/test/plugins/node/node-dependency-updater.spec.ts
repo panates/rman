@@ -493,9 +493,81 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       expect(blamed.map(b => b.entry.name).sort()).toEqual(['@hookform/resolvers', 'b']);
     });
 
+    /** npm's verdict names a manifest's own dependency by its declared range, not a version -
+     *  measured on `abisena/syncbridge-iomt`. Only that move is held, with what it conflicts with. */
+    it('reads the verdict\'s `name@"range"` form, and holds only the move it names', async () => {
+      const dir = single({ devDependencies: { tool: '^1.0.4', helper: '^1.1.1' } });
+      const updater = new FakeRegistryUpdater({
+        tool: { releases: releases('1.0.4', '2.2.0') },
+        helper: { releases: releases('1.1.1', '2.0.0') },
+      });
+      const { entries } = await plan(dir, updater, { target: 'major' });
+      const refusal = [
+        '  While resolving: app@1.0.0',
+        '  Found: tool@1.0.4',
+        '    dev tool@"^2.2.0" from the root project',
+        '  Could not resolve dependency:',
+        '  dev tool@"^2.2.0" from the root project',
+        '  Conflicting peer dependency: common@2.0.1',
+        '    peer common@"^2.0.1" from tool@2.2.0',
+      ].join('\n');
+      const blamed = updater.blame(refusal, entries);
+      expect(blamed.map(b => b.entry.name)).toEqual(['tool']);
+      expect(blamed[0]!.reason).toBe(
+        'npm cannot install it: dev tool@"^2.2.0" from the root project - Conflicting peer dependency: common@2.0.1',
+      );
+    });
+
     it('blames nothing when no move appears at its new version', async () => {
       const { updater, entries } = await planned();
       expect(updater.blame('  ERESOLVE unable to resolve dependency tree\n  from b@2.0.01', entries)).toEqual([]);
+    });
+  });
+
+  /**
+   * **An npm alias moves, under the package it names** - measured missing on
+   * `abisena/syncbridge-iomt`: a dev `npm:@sbext/syncbridge__hl7@^2.0.0` beside a peer `^2.0.0` was
+   * never listed, and the peer was asked of `@syncbridge/hl7` on npmjs.org, which stops at 1.x.
+   */
+  describe('an npm alias', () => {
+    const aliased = () =>
+      single({
+        peerDependencies: { '@sb/hl7': '^2.0.0' },
+        devDependencies: { '@sb/hl7': 'npm:@mirror/sb__hl7@^2.0.0' },
+      });
+    const mirror = () =>
+      new FakeRegistryUpdater({
+        '@mirror/sb__hl7': { releases: releases('2.0.0', '2.1.0') },
+        /** What npmjs.org has under the plain name - must not be what decides. */
+        '@sb/hl7': { releases: releases('1.2.1') },
+      });
+
+    it('asks the registry under the aliased name, and moves the alias and the peer beside it together', async () => {
+      const updater = mirror();
+      const { entries } = await plan(aliased(), updater);
+      expect(updater.calls.map(c => c.split('@>=')[0])).toEqual(['@mirror/sb__hl7']);
+      expect(entry(entries, '@sb/hl7')).toMatchObject({
+        status: 'update',
+        current: 'npm:@mirror/sb__hl7@^2.0.0',
+        target: 'npm:@mirror/sb__hl7@^2.1.0',
+        bump: 'minor',
+      });
+    });
+
+    it('writes the alias back with its prefix, and the peer as a plain range', async () => {
+      const dir = aliased();
+      const updater = mirror();
+      const { repository, entries } = await plan(dir, updater);
+      await updater.applyPlan({ app: repository.app, repository, options: { concurrency: 1 } }, entries);
+      const written = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'));
+      expect(written.devDependencies).toEqual({ '@sb/hl7': 'npm:@mirror/sb__hl7@^2.1.0' });
+      expect(written.peerDependencies).toEqual({ '@sb/hl7': '^2.1.0' });
+    });
+
+    it('is up to date when the aliased package has nothing newer', async () => {
+      const updater = new FakeRegistryUpdater({ '@mirror/sb__hl7': { releases: releases('2.0.0') } });
+      const { entries } = await plan(aliased(), updater);
+      expect(entry(entries, '@sb/hl7').status).toBe('up-to-date');
     });
   });
 
