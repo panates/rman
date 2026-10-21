@@ -2215,6 +2215,19 @@ saw one thing to release and it was the one thing that must never be published.
     registry asking no approval still publishes unattended.
   - **The `--spm-` prefix is not style**: npm declares `--access` and `--registry`, and two targets
     declaring one option name is refused at startup.
+- **`publish.before` / `.after` and `publish.<target>.before` / `.after` are hooks around a
+  package's publish** (`RunService.runHook`, `hookSteps` in `publish.command.ts`), the user's shape
+  over a single pair: global ones around the package, each target's around its own publish. Asked
+  for by `syncbridge-io/public-modules`, to run `spm verify` for exactly the packages a run
+  publishes. `run.publish.*` never attached - it is `rman run publish`'s config.
+  - **`runHook`, not `runLifecycleSlot`**: a lifecycle slot also reads the package's own steps, and
+    npm's step source maps `prepublish` / `postpublish` - which `npm publish` runs itself. Through
+    the slot they would run twice.
+  - **A failed hook turns the entry into an `'error'` in the plan the target is handed**, so the
+    target leaves it alone and `--json` reports it. A failed `after` is a failure on a package that
+    is published; the reason says "published, but".
+  - In `STEP_PATHS` (`publish.before`, `publish.*.before`, ...), so a function there is a step.
+  - Output on stderr, like every child on the publish path.
 - **`publish.<target>.files` copies files in for one target and puts the package back before the
   next** (`utils/publish-files.ts`, wrapped around each target's `applyPlan` in `publish.command.ts`).
   Asked for one build shipped to Docker and Cloudflare with different settings.

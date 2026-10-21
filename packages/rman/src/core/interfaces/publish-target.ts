@@ -3,6 +3,7 @@ import type { PackageFilterOptions } from '../../utils/package-filter.js';
 import type { RmanApplication } from '../application.js';
 import type { Package } from '../classes/package.js';
 import type { Repository } from '../classes/repository.js';
+import type { RunStepValue } from './run-step.js';
 
 /**
  * **Where a package's artifact ships, as a contribution.**
@@ -173,6 +174,24 @@ export namespace PublishTarget {
      * gets deployed. docker sets it; npm's integrity is not an address anything deploys by. */
     artifact?: { ref: string; digest: string };
   }
+}
+
+/**
+ * `publish.before` / `publish.after`, and the same pair in every `publish.<target>` block - steps run
+ * in the package's directory around its publish, in this order: `publish.before`, then for each
+ * target `publish.<target>.before`, the publish, `publish.<target>.after`, and `publish.after` once
+ * every target has published it.
+ *
+ * Only for a package with something to publish - never for one `up-to-date` or skipped, never under
+ * `--dry-run`. A failing `before` fails that package (for every target, or for that one) with the
+ * step's output as the reason. A shell step sees `RMAN_PUBLISH_TARGET` (that target) or
+ * `RMAN_PUBLISH_TARGETS` (all of the package's, comma separated).
+ */
+export interface PublishHookKeys {
+  /** Run before publishing - `npx spm verify`, `npm run lint`. A string, a function, or a list. */
+  before?: RunStepValue | RunStepValue[];
+  /** Run after publishing succeeded. */
+  after?: RunStepValue | RunStepValue[];
 }
 
 /**

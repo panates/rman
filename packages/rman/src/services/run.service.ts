@@ -831,6 +831,56 @@ export namespace RunService {
     }
   }
 
+  /**
+   * Runs hook steps from the config alone - a `publish.before`, say - in the package's directory, in
+   * order, stopping at the first that fails. Output goes to stderr as it comes, so a command whose
+   * stdout is a document keeps it one. Throws with the failed step's last lines.
+   *
+   * `at` is where the values sit in the config (`['publish', 'spm']`), so a function step is handed
+   * the `vars` its own block sees; `env` is added to a shell step's environment.
+   */
+  /* **No contributed slots, unlike `runLifecycleSlot`.** A step source maps npm's
+   * `pre<script>`/`post<script>`, and for `publish` those are `prepublish`/`postpublish` - which
+   * `npm publish` runs itself. Read here too, they would run twice. */
+  export async function runHook(
+    pkg: Package,
+    values: RunStepValue[],
+    at: readonly string[],
+    env?: Record<string, string>,
+  ): Promise<void> {
+    for (const value of values) {
+      const step = toStep(at[at.length - 1] ?? 'hook', value);
+      if (
+        step.if !== undefined &&
+        !(await passesIf(pkg.repository, pkg, step.if, pkg.dirname, new Map(), undefined, at))
+      ) {
+        continue;
+      }
+      const lines: string[] = [];
+      const onLine = (line: string) => {
+        lines.push(line);
+        process.stderr.write(line + '\n');
+      };
+      try {
+        if (step.run) {
+          await step.run(createStepContext(pkg, pkg.dirname, undefined, onLine, undefined, at));
+        } else {
+          await exec(step.command!, { cwd: pkg.dirname, app: pkg.repository.app, env, onLine });
+        }
+      } catch (e: any) {
+        const tail = lines
+          .map(l => l.trim())
+          .filter(Boolean)
+          .slice(-4);
+        throw new Error(
+          `"${step.label}" failed${e?.message ? ` (${e.message})` : ''}` +
+            (tail.length ? ':\n' + tail.map(l => `    ${l}`).join('\n') : ''),
+          { cause: e },
+        );
+      }
+    }
+  }
+
   export function getConfig(pkg: Package, script: string): Record<string, unknown> {
     const runCfg = pkg.config?.run;
     const cfg = runCfg && typeof runCfg === 'object' ? (runCfg as Record<string, unknown>)[script] : undefined;

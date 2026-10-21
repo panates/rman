@@ -1,4 +1,4 @@
-import type { PublishFilesKeys, PublishTarget } from '../../../core/interfaces/publish-target.js';
+import type { PublishFilesKeys, PublishHookKeys, PublishTarget } from '../../../core/interfaces/publish-target.js';
 import type { ConfigValue, ScopedVars } from '../../../interfaces/rman-config.interface.js';
 import { SPM_TARGET, type SpmPublishService } from './spm-publish.service.js';
 
@@ -8,7 +8,7 @@ import { SPM_TARGET, type SpmPublishService } from './spm-publish.service.js';
  */
 export interface SpmPublishOptions extends SpmPublishOptionsKeys, ScopedVars {}
 
-export interface SpmPublishOptionsKeys extends PublishFilesKeys {
+export interface SpmPublishOptionsKeys extends PublishFilesKeys, PublishHookKeys {
   /** Who may see the package: `"public"` or `"private"`. spm's own default - a new package is
    *  private - applies when unset. `--spm-access` overrides it. */
   access?: ConfigValue<'public' | 'private'>;

@@ -1,4 +1,4 @@
-import type { PublishFilesKeys } from '../../../core/interfaces/publish-target.js';
+import type { PublishFilesKeys, PublishHookKeys } from '../../../core/interfaces/publish-target.js';
 import type { ConfigValue, RmanConfig, ScopedVars } from '../../../interfaces/rman-config.interface.js';
 import type { CiService } from './services/ci.service.js';
 
@@ -33,7 +33,7 @@ export namespace RmanNodeConfig {
    */
   export interface NpmPublishOptions extends NpmPublishOptionsKeys, ScopedVars {}
 
-  export interface NpmPublishOptionsKeys extends PublishFilesKeys {
+  export interface NpmPublishOptionsKeys extends PublishFilesKeys, PublishHookKeys {
     /** Where this package's publishable output lives, relative to its own directory (e.g.
      *  `"build"`). Per-package cascaded, so a root `"[*]"` block can say it once for the whole
      *  repository instead of repeating `publishConfig.directory` in every `package.json` - which

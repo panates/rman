@@ -7,8 +7,15 @@ import type { DockerPublishOptions } from '../builtins/publish-targets/docker/do
 import type { SpmPublishOptions } from '../builtins/publish-targets/spm/spm.target.js';
 import type { RmanApplication } from '../core/application.js';
 import type { Package } from '../core/classes/package.js';
-import { type PublishTarget, shipsTo, unknownTargets } from '../core/interfaces/publish-target.js';
+import {
+  type PublishHookKeys,
+  type PublishTarget,
+  shipsTo,
+  unknownTargets,
+} from '../core/interfaces/publish-target.js';
+import type { RunStepValue } from '../core/interfaces/run-step.js';
 import { registerCommand, type RmanConfig } from '../interfaces/rman-config.interface.js';
+import { RunService } from '../services/run.service.js';
 import { assertAllowedBranch, branchGuardOptions, readBranchGuardOptions } from '../utils/branch-guard.js';
 import { UNCOMMITTED } from '../utils/git.js';
 import { packageFilterOptions, readPackageFilterOptions } from '../utils/package-filter.js';
@@ -93,7 +100,7 @@ const config = {
  * ... are not identical` (measured) - so `publish` is contributed once, here, and everything under
  * it merges into this one interface first.
  */
-export interface PublishExtraKeys extends PublishTargetConfigs {}
+export interface PublishExtraKeys extends PublishTargetConfigs, PublishHookKeys {}
 
 /** Where a target declares its own `publish.<target>` config block. Augmented, never edited. */
 export interface PublishTargetConfigs {
@@ -270,6 +277,41 @@ const publishCommand = registerCommand(app => {
       const outcomes: Outcome[] = [];
       const results = new Map<PublishTarget, PublishTarget.Entry[]>();
       const publishedBy = new Map<PublishTarget, PublishTarget.Entry[]>();
+      const log = args.json ? console.error : console.log;
+      /** A hook that failed takes its package out: the entry becomes an `'error'` in the plan the
+       *  target is handed - so the target leaves it alone - and in the recap. */
+      const failHook = (label: string, plan: PublishTarget.Entry[], i: number, reason: string) => {
+        plan[i] = { ...plan[i]!, status: 'error', reason };
+        log(colors.red('failed'), colors.gray(`[${label}] `) + colors.cyan(plan[i]!.package.name), colors.red(reason));
+        outcomes.push({ target: label, entry: plan[i]! });
+      };
+
+      /** `publish.before`, once per package with anything to publish, ahead of every target. */
+      const publishing = new Map<Package, PublishTarget[]>();
+      for (const [target, plan] of plans) {
+        for (const e of plan)
+          if (e.status === 'publish') publishing.set(e.package, [...(publishing.get(e.package) ?? []), target]);
+      }
+      for (const [pkg, shipsWith] of publishing) {
+        const steps = hookSteps(pkg, ['publish'], 'before');
+        if (!steps.length) continue;
+        try {
+          await RunService.runHook(pkg, steps, ['publish'], {
+            RMAN_PUBLISH_TARGETS: shipsWith.map(t => t.name).join(','),
+          });
+        } catch (e: any) {
+          for (const target of shipsWith) {
+            const plan = plans.get(target)!;
+            failHook(
+              target.name,
+              plan,
+              plan.findIndex(x => x.package === pkg),
+              `publish.before: ${e.message}`,
+            );
+          }
+        }
+      }
+
       let waited = false;
       for (const [target, plan] of plans) {
         /** Once, before the first target built from what the others published - see
@@ -281,10 +323,40 @@ const publishCommand = registerCommand(app => {
         const files = plan.filter(e => e.status === 'publish').flatMap(e => filesFor(e.package, target));
         const staged = files.length ? PublishFiles.stage(repository.dirname, `[${target.name}]`, files) : undefined;
         let applied: PublishTarget.Entry[];
+        const at = ['publish', target.name];
         try {
+          /** The target's own `before`, with its files already in place - the package as it ships. */
+          for (let i = 0; i < plan.length; i++) {
+            const entry = plan[i]!;
+            const steps = entry.status === 'publish' ? hookSteps(entry.package, at, 'before') : [];
+            if (!steps.length) continue;
+            try {
+              await RunService.runHook(entry.package, steps, at, { RMAN_PUBLISH_TARGET: target.name });
+            } catch (e: any) {
+              failHook(target.name, plan, i, `publish.${target.name}.before: ${e.message}`);
+            }
+          }
           applied = await target.applyPlan(ctx, plan);
         } finally {
           staged?.restore();
+        }
+        /** The target's own `after`, for each package it did publish. A failure here is reported, but
+         *  the package is on the registry - the reason says so. */
+        for (let i = 0; i < applied.length; i++) {
+          const entry = applied[i]!;
+          const planned = plan.find(e => e.package === entry.package);
+          const steps =
+            entry.status === 'publish' && planned?.status === 'publish' ? hookSteps(entry.package, at, 'after') : [];
+          if (!steps.length) continue;
+          try {
+            await RunService.runHook(entry.package, steps, at, { RMAN_PUBLISH_TARGET: target.name });
+          } catch (e: any) {
+            applied[i] = {
+              ...entry,
+              status: 'error',
+              reason: `published, but publish.${target.name}.after: ${e.message}`,
+            };
+          }
         }
         results.set(target, applied);
         const done = printApplied(applied, plan, target.name, args.json ? console.error : console.log);
@@ -293,6 +365,22 @@ const publishCommand = registerCommand(app => {
           target,
           done.filter(o => o.entry.status === 'publish').map(o => o.entry),
         );
+      }
+      /** `publish.after`, once per package every one of whose targets published it. */
+      for (const [pkg, shipsWith] of publishing) {
+        const done = shipsWith.every(t => results.get(t)?.find(e => e.package === pkg)?.status === 'publish');
+        const steps = done ? hookSteps(pkg, ['publish'], 'after') : [];
+        if (!steps.length) continue;
+        try {
+          await RunService.runHook(pkg, steps, ['publish'], {
+            RMAN_PUBLISH_TARGETS: shipsWith.map(t => t.name).join(','),
+          });
+        } catch (e: any) {
+          const entry = results.get(shipsWith[0]!)!.find(x => x.package === pkg)!;
+          const reason = `published, but publish.after: ${e.message}`;
+          log(colors.red('failed'), colors.gray('[publish] ') + colors.cyan(pkg.name), colors.red(reason));
+          outcomes.push({ target: 'publish', entry: { ...entry, status: 'error', reason } });
+        }
       }
       printJson(jsonResult(plans, results));
       if (!args.json) printRecap(outcomes);
@@ -644,4 +732,13 @@ async function confirm(question: string): Promise<boolean> {
   } finally {
     rl.close();
   }
+}
+
+/** The hook steps at `at.<slot>` of `pkg`'s config - `publish.before`, `publish.spm.after` - as a
+ *  list, refused when one is not a step. */
+function hookSteps(pkg: Package, at: readonly string[], slot: 'before' | 'after'): RunStepValue[] {
+  let node: unknown = pkg.config;
+  for (const key of at) node = node && typeof node === 'object' ? (node as Record<string, unknown>)[key] : undefined;
+  const value = node && typeof node === 'object' ? (node as Record<string, unknown>)[slot] : undefined;
+  return value === undefined ? [] : RunService.normalizeScriptValue(value, `${at.join('.')}.${slot}`, { topo: false });
 }

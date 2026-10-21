@@ -67,6 +67,11 @@ export const STEP_PATHS = [
   'version.before',
   'version.exec',
   'version.after',
+  /** `rman publish`'s hooks, around the package's publish and around each target's. */
+  'publish.before',
+  'publish.after',
+  'publish.*.before',
+  'publish.*.after',
   /**
    * The step inside a step's **object** form (`{ topo: true, command: buildWithTsc() }`).
    *
