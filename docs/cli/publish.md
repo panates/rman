@@ -478,6 +478,39 @@ way the `npm` target runs `npm`.
 - Needs `@syncbridge/syncbuild` 2.2.0 or later, the first with `spm view` and `--no-wait`. An
   older one answers the lookup with no JSON, and the plan says so.
 
+## Hooks around a publish (`publish.before` / `.after`)
+
+Steps run in the package's directory around its publish - one pair for the package, and one in each
+target's own block:
+
+```yaml
+"[*]":
+  publish:
+    target: [spm]
+    before: npm run lint          # once per package, ahead of every target
+    spm:
+      before: npx spm verify      # right before spm publishes it, its files in place
+      after: echo published       # once spm has
+    after: echo done              # once every target has
+```
+
+The order is `publish.before`, then for each target `publish.<target>.before`, the publish and
+`publish.<target>.after`, and `publish.after` last.
+
+- **Only for a package with something to publish** - never for one `up-to-date` or skipped, and
+  never under `--dry-run`.
+- **A failing `before` fails the package** - every target for `publish.before`, that one for a
+  target's - with the step's last lines as the reason. Nothing of it is published and no later hook
+  of it runs. A failing `after` is a failure too, though the package is already on the registry; the
+  reason says so.
+- **Same forms as `run.<script>` hooks**: a shell command, a function, a list of either,
+  `${{ [...value, ...] }}`. A shell step sees `RMAN_PUBLISH_TARGET` (a target's hook) or
+  `RMAN_PUBLISH_TARGETS` (the package's, comma separated); name and version are
+  `${{ pkg.name }}` / `${{ pkg.version }}`.
+- **Output goes to stderr**, so `--json` stays one document.
+- **The package's own `prepublish` / `postpublish` scripts are not run by rman** - `npm publish`
+  runs them itself, and running them here too would run them twice.
+
 ## Files a target needs (`publish.<target>.files`)
 
 One build often ships to several places that each want something different - a `config.json`

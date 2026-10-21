@@ -1521,6 +1521,37 @@ describe('services/changelog', () => {
     });
   });
 
+  /**
+   * **A marker from another repository's history** - measured on `syncbridge-io/public-modules`,
+   * whose changelogs came over from a repository whose commits did not: `version` died at apply time
+   * with `fatal: Invalid revision range`. It reads as no marker now, and says so.
+   */
+  describe('a marker naming a commit this history does not have', () => {
+    it('falls back to the release boundary and warns, rather than failing the run', async () => {
+      const { dir } = fixtureWithUnpushedCommits();
+      await createRepository(dir);
+      const file = path.join(dir, 'packages/a/CHANGELOG.md');
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(
+        file,
+        '# Changelog\n\n<!-- rman:documented-up-to 06ba545d42c6c4e85a85e20293374c602af6a74e -->\n\n## old\n',
+      );
+
+      const warnings: string[] = [];
+      const original = console.error;
+      console.error = (...args: unknown[]) => void warnings.push(args.map(String).join(' '));
+      let entries;
+      try {
+        entries = await service('changelog').generateToFile({});
+      } finally {
+        console.error = original;
+      }
+      expect(entries.some(e => e.label === 'pkg-a')).toBe(true);
+      expect(warnings.join('\n')).toMatch(/documented up to 06ba545, which is not in this branch's history/);
+      expect(fs.readFileSync(file, 'utf-8')).not.toContain('06ba545d42c6c4e85a85e20293374c602af6a74e');
+    });
+  });
+
   describe('--rebuild', () => {
     it('ignores the marker and re-reads the whole range', async () => {
       const { dir } = fixtureWithUnpushedCommits();

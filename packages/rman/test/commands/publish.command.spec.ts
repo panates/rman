@@ -600,6 +600,85 @@ describe('commands/publish: order, recap and the job summary', () => {
     expect(calls.some(c => c.method === 'applyPlan')).toBe(false);
   });
 
+  /** Steps that append one line each to a log the case reads back - what ran, and in what order. */
+  function hookRepo(publish: Record<string, unknown>): { dir: string; log: () => string[] } {
+    const dir = repo(publish);
+    const file = path.join(dir, 'hooks.log');
+    return { dir, log: () => (fs.existsSync(file) ? fs.readFileSync(file, 'utf-8').trim().split('\n') : []) };
+  }
+  const say = (dir: string, word: string) => `echo ${word} >> ${JSON.stringify(path.join(dir, 'hooks.log'))}`;
+
+  /**
+   * **Global hooks around the package, and each target's around its own publish** - the user's
+   * shape: `publish.before` ahead of every target, `publish.<target>.before` / `.after` around that
+   * target, `publish.after` once all of them published it.
+   */
+  it("runs publish.before, each target's before/after around it, then publish.after", async () => {
+    const probe = hookRepo({});
+    const dir = probe.dir;
+    fs.writeFileSync(
+      path.join(dir, '.rmanrc'),
+      JSON.stringify({
+        '[*]': {
+          publish: {
+            target: ['reg', 'image'],
+            before: say(dir, 'before'),
+            after: say(dir, 'after'),
+            reg: { before: say(dir, 'reg-before-$RMAN_PUBLISH_TARGET'), after: say(dir, 'reg-after') },
+            image: { before: say(dir, 'image-before'), after: say(dir, 'image-after') },
+          },
+        },
+      }),
+    );
+    await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--yes'] }));
+    expect(probe.log()).toEqual(['before', 'reg-before-reg', 'reg-after', 'image-before', 'image-after', 'after']);
+    expect(calls.filter(c => c.method === 'applyPlan').map(c => c.target)).toEqual(['reg', 'image']);
+  });
+
+  /** A failing `before` fails the package and publishes nothing of it - the reason is the step's. */
+  it("fails the package when publish.before fails, and runs neither the targets' hooks nor publish.after", async () => {
+    const probe = hookRepo({});
+    const dir = probe.dir;
+    fs.writeFileSync(
+      path.join(dir, '.rmanrc'),
+      JSON.stringify({
+        '[*]': {
+          publish: {
+            target: ['reg'],
+            before: 'echo verification failed && exit 1',
+            after: say(dir, 'after'),
+            reg: { before: say(dir, 'reg-before') },
+          },
+        },
+      }),
+    );
+    let failed = false;
+    const text = await stdoutOf(() =>
+      runCli({ cwd: dir, argv: ['publish', '--yes', '--json'] }).catch(() => {
+        failed = true;
+      }),
+    );
+    expect(failed).toBe(true);
+    expect(probe.log()).toEqual([]);
+    const doc = JSON.parse(text);
+    expect(doc[0]).toMatchObject({ target: 'reg', status: 'error' });
+    expect(doc[0].reason).toContain('verification failed');
+    expect(doc[0].reason).toContain('publish.before');
+  });
+
+  it('runs no hook under --dry-run', async () => {
+    const probe = hookRepo({});
+    const dir = probe.dir;
+    fs.writeFileSync(
+      path.join(dir, '.rmanrc'),
+      JSON.stringify({
+        '[*]': { publish: { target: ['reg'], before: say(dir, 'before'), reg: { before: say(dir, 'x') } } },
+      }),
+    );
+    await captureLogs(() => runCli({ cwd: dir, argv: ['publish', '--dry-run'] }));
+    expect(probe.log()).toEqual([]);
+  });
+
   it('writes the outcome to the GitHub job summary when there is one', async () => {
     const dir = repo({ target: ['reg', 'broken'] });
     const summary = path.join(dir, 'summary.md');

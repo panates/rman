@@ -320,6 +320,17 @@ export class GitHelper {
     }
   }
 
+  /** Whether `sha` is a commit `ref` descends from - `false` for one this repository does not have
+   *  at all (history brought over without its commits, a rewritten branch). */
+  async isAncestor(sha: string, ref = 'HEAD'): Promise<boolean> {
+    try {
+      await execFileAsync('git', ['merge-base', '--is-ancestor', sha, ref], { cwd: this.cwd });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** The most recent tag matching the glob `pattern` that HEAD actually descends from (unlike
    *  `listTags`, this follows commit ancestry rather than just sorting tag names - the right
    *  choice for a single repo-wide tag scheme, where a package has no tag of its own). */
