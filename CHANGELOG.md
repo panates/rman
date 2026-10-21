@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 943bc0531212270e5cd583145273923bce971186 -->
+<!-- rman:documented-up-to c8b46cdcf290381c88e5a411cc14567de054f5af -->
+
+## v2.34.0 (2026-10-21)
+
+### ✨ Features
+
+- **deps:** move npm aliases under the package they name; hold only the move npm's verdict names (0db8b21)
+
+---
 
 ## v2.33.0 (2026-10-21)
 
