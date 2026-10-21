@@ -33,13 +33,14 @@ that is the only part of publishing an ecosystem owns. Everything else the comma
 candidates, the order, the plan, the confirmation, the JSON - is about a repository, so it lives in
 rman.
 
-Two ship today, and a repository can install more:
+Four ship today, and a repository can install more:
 
 | Target | From | "Already published?" | Claims by default |
 | --- | --- | --- | --- |
 | `npm` | the [`node` built-in](../rman.md#the-node-built-in) | the local `package.json` version is among the registry's published `versions` | every package whose manifest that plugin read |
 | `docker` | rman itself | `docker manifest inspect <image>:<version>` succeeds | nothing - opt-in, via `publish.target` |
 | `cloudflare` | rman itself | a Pages deployment whose commit message is `<name>@<version>`, or a Worker version tagged `v<version>` | nothing - opt-in, via `publish.target` |
+| `spm` | rman itself | `spm view <name> --json` lists the version | nothing - opt-in, via `publish.target` |
 
 Two consequences worth knowing:
 
@@ -442,6 +443,40 @@ nothing. `publish.skip`, `--dry-run` and `--json` apply as they do to every targ
   is deployed again - harmless, where failing the release over a question would not be.
 - **It runs last**, beside `docker`: a site's build may install what the other targets just
   published.
+
+## SyncBridge registry publishing (`publish.spm`)
+
+A package naming `"spm"` in its `publish.target` is published to the SyncBridge registry with the
+repository's own `spm` - `@syncbridge/syncbuild` installed there, run from `node_modules/.bin`, the
+way the `npm` target runs `npm`.
+
+```yaml
+# .rmanrc.yml
+"[*]":
+  publish:
+    target: [spm]
+    spm:
+      access: public                    # who may see it; spm's default for a new package is private
+      registry: https://registry.example  # default: SB_REGISTRY_URL, else registry.syncbridge.io
+```
+
+`--spm-access` and `--spm-registry` override both for one run.
+
+- **"Already published?" is `spm view <name> --json`**: `up-to-date` when the version is listed,
+  `publish` when it is not. A lookup that **fails** - the registry unreachable, a sign-in expired -
+  is an `error`, never "not published", so a broken registry cannot look like an empty one.
+- **The publish is `spm publish --skip-existing`** in the package's directory - spm packs the
+  package itself, so there is no build directory to name. A version the registry already has is
+  skipped and reported `up-to-date`, not `published`.
+- **In GitHub Actions it publishes as the job**, through its OIDC token - no secret, no prompt; the
+  job needs `permissions: id-token: write`, and the repository has to be a trusted publisher of the
+  organization in Console. Read the same way, a private package of that organization is visible to
+  the plan.
+- **Outside Actions it needs a person.** spm asks for an approval in Console; at a terminal rman
+  lets it, and with no terminal it passes `spm publish --no-wait`, which fails at once rather than
+  polling for ten minutes. The reason says where to publish from instead.
+- Needs `@syncbridge/syncbuild` 2.2.0 or later, the first with `spm view` and `--no-wait`. An
+  older one answers the lookup with no JSON, and the plan says so.
 
 ## Files a target needs (`publish.<target>.files`)
 

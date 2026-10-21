@@ -2050,6 +2050,7 @@ saw one thing to release and it was the one thing that must never be published.
   | **b-1** npm-targeted packages | the local version is among the registry's published `versions` | a package `rman-node` read the manifest of | `NpmPublishTarget` → `PublishService` (`rman-node`) |
   | **b-2** docker-targeted packages | `docker manifest inspect <image>:<version>` | nothing - opt-in | `dockerPublishTarget` → `DockerPublishService` (`builtins/publish-targets/docker/`) |
   | **b-4** cloudflare-targeted packages | a Pages deployment labelled `<name>@<version>` (Cloudflare's API), or a Worker version tagged `v<version>` (`wrangler versions list`) | nothing - opt-in | `cloudflarePublishTarget` → `CloudflarePublishService` (`builtins/publish-targets/cloudflare/`) |
+  | **b-5** spm-targeted packages | `spm view <name> --json` lists the version | nothing - opt-in | `spmPublishTarget` → `SpmPublishService` (`builtins/publish-targets/spm/`) |
   | **b-3** the repository itself (see `github-release`) | a GitHub Release exists for the repository's release tag | n/a - never optional, and not a target | `GithubReleaseService` (core) |
 
 - **`publish` was `rman-node`'s command, and that had the ownership backwards.** Everything the
@@ -2198,6 +2199,22 @@ saw one thing to release and it was the one thing that must never be published.
   - **No credentials is an `'error'` in the plan**, not a guess - the check needs the token anyway.
   - The class's steps are `protected` members (`resolveDeploy`, `isDeployed`, `wrangler`), per the
     rule above; `docker`'s module functions predate it.
+- **`spm` is built in, the user's call over a target shipped by `@syncbridge/syncbuild`**: rman
+  already carries the npm registry's half (`npm view`, `npm publish`), and the SyncBridge registry
+  is the same kind of thing and ours. The rule that came with it: **what rman needs from spm is
+  asked of spm, never reimplemented here** - `spm view --json` and `spm publish --no-wait` were added
+  to syncbuild for this target rather than rman calling the registry's HTTP API itself.
+  - **A failed lookup is an `'error'`**, the opposite of the npm and cloudflare checks: their
+    catch-everything shape is the measured cost recorded above (a failed `npm view` read as "never
+    published"), and `spm view` exits non-zero exactly so this one need not guess.
+  - **`--skip-existing` makes the publish exact where the read cannot be** - a private package is
+    `[]` to a reader without the right identity - and a skipped version comes back `up-to-date`,
+    so `--json` does not count it published.
+  - **`--no-wait` only when nobody can approve** (`unattended`: not GitHub Actions, no TTY); exit
+    code 3 is the approval it would have waited for. Asked of spm rather than refused here, so a
+    registry asking no approval still publishes unattended.
+  - **The `--spm-` prefix is not style**: npm declares `--access` and `--registry`, and two targets
+    declaring one option name is refused at startup.
 - **`publish.<target>.files` copies files in for one target and puts the package back before the
   next** (`utils/publish-files.ts`, wrapped around each target's `applyPlan` in `publish.command.ts`).
   Asked for one build shipped to Docker and Cloudflare with different settings.
