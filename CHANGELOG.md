@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 63ed610719ffc4402ccabba83de154a0485227e5 -->
+<!-- rman:documented-up-to 943bc0531212270e5cd583145273923bce971186 -->
+
+## v2.33.0 (2026-10-21)
+
+### ✨ Features
+
+- **publish:** before/after hooks, for the package and per target (94e1bfe)
+
+---
 
 ## v2.32.0 (2026-10-21)
 
