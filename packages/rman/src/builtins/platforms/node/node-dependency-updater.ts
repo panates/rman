@@ -16,10 +16,17 @@ import { parseWorkspaceRange } from './utils/workspace-range.js';
  * npm's answer to `rman deps`: which of a `package.json`'s dependencies have a newer version on the
  * registry, and which of those can be taken without breaking a rule another dependency states.
  *
- * Only a caret or tilde range on a plain version moves (`^1.2.3`, `~1.2.3`), keeping its prefix. An
- * exact version, a compound range (`>=1 <2`, `a || b`), a dist-tag, a URL, an alias and an in-repo
- * package are left as they are - but every one of them still counts as a rule the others must keep.
+ * Only a caret or tilde range on a plain version moves (`^1.2.3`, `~1.2.3`), keeping its prefix -
+ * an npm alias of one too (`npm:@scope/real@^1.2.3`), asked about under the package it names. An
+ * exact version, a compound range (`>=1 <2`, `a || b`), a dist-tag, a URL and an in-repo package
+ * are left as they are - but every one of them still counts as a rule the others must keep.
  */
+/* **Aliases were skipped outright, and silently**: `npm:...` is no semver range, so the field was
+ * neither moved nor listed. Measured on `abisena/syncbridge-iomt`, whose host modules are a peer
+ * `"@syncbridge/hl7": "^2.0.0"` beside a dev `"npm:@sbext/syncbridge__hl7@^2.0.0"` from a mirror:
+ * the alias never appeared, and the peer was asked of npmjs.org under its own name, which stops at
+ * 1.2.1 - so a 2.1.0 on the mirror would have read "up to date". The alias is what installs, so the
+ * whole name is held to the package it names, and the peer moves with it. */
 /* **The default is the policy every `.ncurc.yml` in this organization wrote by hand.** Twenty
  * repositories carried the same `rejectVersion: "/(\|\|)|(&&)|>|<|^[0-9]/"` - no `||`, no `&&`, no
  * comparator, no bare version - which leaves exactly a `^` or `~` range. Built in, it is a line
@@ -69,7 +76,7 @@ export class NodeDependencyUpdater implements DependencyUpdater {
 
     const withTime = decisions.some(d => d.settings.minAge > 0);
     const registry = await this.fetchAll(ctx, decisions, withTime);
-    for (const d of decisions) this.prepare(d, registry.get(d.name));
+    for (const d of decisions) this.prepare(d, registry.get(this.sourceOf(d)));
 
     this.resolve(decisions, ctx);
     return decisions
@@ -97,8 +104,8 @@ export class NodeDependencyUpdater implements DependencyUpdater {
       const version = d.candidates[d.index]!;
       if (!originals.has(d.pkg)) originals.set(d.pkg, fs.readFileSync(this.manifestFile(d.pkg), 'utf-8'));
       for (const field of d.movable) {
-        const deps = d.pkg.manifest.raw[field];
-        deps[d.name] = this.movablePattern.exec(deps[d.name])![1] + version;
+        d.pkg.manifest.raw[field][d.name] =
+          (d.aliases.get(field) ?? '') + this.movablePattern.exec(d.fields.get(field)!)![1] + version;
       }
     }
     for (const pkg of originals.keys()) Manifest.write(ctx.app, pkg.dirname, pkg.manifest);
@@ -152,20 +159,38 @@ export class NodeDependencyUpdater implements DependencyUpdater {
    * tree around it. The `Could not resolve dependency:` line is npm's own verdict - measured on the
    * `@hookform/resolvers` case it reads `peerOptional effect@"^4.0.0" from @hookform/resolvers@6.0.0`
    * - so a move it names is the one to hold, and the others it merely passes through stay. That line
-   * sat past the 20 lines `verify` used to keep, which is why it now keeps them all. */
+   * sat past the 20 lines `verify` used to keep, which is why it now keeps them all.
+   *
+   * **The range form is the other name npm uses**, and missing it misattributed the hold: measured on
+   * `abisena/syncbridge-iomt`, the verdict read `dev @syncbridge/syncbuild@"^2.2.0" from the root
+   * project`, matched nothing, and every move the output mentioned anywhere was held under that one
+   * line - `@syncbridge/testing` included, with syncbuild's reason. */
   blame(refusal: string, plan: readonly DependencyUpdater.Entry[]): DependencyUpdater.Blame[] {
     const moves = plan.flatMap(entry => {
       const d = this.planned.get(entry);
-      return entry.status === 'update' && d ? [{ entry, token: `${d.name}@${d.candidates[d.index]}` }] : [];
+      if (entry.status !== 'update' || !d) return [];
+      /** npm names a move two ways: at the version it resolved (`from x@2.2.0`) and as the range a
+       *  manifest declares (`dev x@"^2.2.0" from the root project`). */
+      const tokens = [
+        `${d.name}@${d.candidates[d.index]}`,
+        ...d.movable.map(f => `${d.name}@"${this.writtenFor(d, f)}"`),
+      ];
+      return [{ entry, tokens }];
     });
+    const names = (line: string, m: (typeof moves)[number]) => m.tokens.some(t => this.mentions(line, t));
     const lines = refusal.split('\n').map(line => line.trim());
     const at = lines.indexOf('Could not resolve dependency:');
     const verdict = at >= 0 ? lines.slice(at + 1).find(Boolean) : undefined;
-    const named = verdict ? moves.filter(m => this.mentions(verdict, m.token)) : [];
-    if (named.length) return named.map(m => ({ entry: m.entry, reason: `npm cannot install it: ${verdict}` }));
+    /** What it conflicts with, when npm says - the half of the verdict that explains it. */
+    const conflict = lines.find(l => l.startsWith('Conflicting peer dependency:'));
+    const named = verdict ? moves.filter(m => names(verdict, m)) : [];
+    if (named.length) {
+      const reason = `npm cannot install it: ${verdict}${conflict ? ` - ${conflict}` : ''}`;
+      return named.map(m => ({ entry: m.entry, reason }));
+    }
     return moves.flatMap(m => {
-      const line = lines.find(l => this.mentions(l, m.token));
-      return line ? [{ entry: m.entry, reason: `npm cannot install it: ${verdict ?? line}` }] : [];
+      const line = lines.find(l => names(l, m));
+      return line ? [{ entry: m.entry, reason: `npm cannot install it: ${line}` }] : [];
     });
   }
 
@@ -182,8 +207,8 @@ export class NodeDependencyUpdater implements DependencyUpdater {
     for (const field of DEPENDENCY_KEYS) {
       const declared = pkg.manifest.raw[field];
       if (!declared || typeof declared !== 'object') continue;
-      for (const [name, range] of Object.entries<unknown>(declared)) {
-        if (typeof range !== 'string' || inRepo.has(name) || parseWorkspaceRange(range)) continue;
+      for (const [name, value] of Object.entries<unknown>(declared)) {
+        if (typeof value !== 'string' || inRepo.has(name) || parseWorkspaceRange(value)) continue;
         let d = byName.get(name);
         if (!d) {
           d = {
@@ -191,6 +216,7 @@ export class NodeDependencyUpdater implements DependencyUpdater {
             name,
             settings,
             fields: new Map(),
+            aliases: new Map(),
             movable: [],
             fixed: [],
             wanted: false,
@@ -200,6 +226,17 @@ export class NodeDependencyUpdater implements DependencyUpdater {
           };
           byName.set(name, d);
         }
+        /** An alias is the range of the package it names: its versions are that package's, so the
+         *  rules compare the range and the rewrite keeps the `npm:<name>@` in front. */
+        /** Two fields aliasing one name to different packages have no one version list to share -
+         *  the second is left as written, which no rule moves. */
+        const parsed = this.aliasOf(value);
+        const alias = parsed && (!d.source || d.source === parsed.source) ? parsed : undefined;
+        if (alias) {
+          d.source = alias.source;
+          d.aliases.set(field, `npm:${alias.source}@`);
+        }
+        const range = alias ? alias.range : value;
         d.fields.set(field, range);
         if (kinds && !kinds.includes(field)) continue;
         if (this.movablePattern.test(range)) d.movable.push(field);
@@ -227,11 +264,12 @@ export class NodeDependencyUpdater implements DependencyUpdater {
   ): Promise<Map<string, NpmReleases | undefined>> {
     const floors = new Map<string, string>();
     for (const d of decisions) {
+      const source = this.sourceOf(d);
       for (const range of d.fields.values()) {
         const min = semver.validRange(range) ? semver.minVersion(range)?.version : undefined;
         if (!min) continue;
-        const known = floors.get(d.name);
-        if (!known || semver.lt(min, known)) floors.set(d.name, min);
+        const known = floors.get(source);
+        if (!known || semver.lt(min, known)) floors.set(source, min);
       }
     }
     const names = [...floors.keys()];
@@ -515,17 +553,36 @@ export class NodeDependencyUpdater implements DependencyUpdater {
       .sort(semver.rcompare)[0];
   }
 
-  /** What `d` declares in `field` once it has moved. */
   /** Whether `line` names `token` (`name@version`) whole - not `1.2.3` inside `1.2.30`. */
   protected mentions(line: string, token: string): boolean {
     const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`(^|[\\s"'(])${escaped}(?![\\w.+-])`).test(line);
   }
 
+  /** What `d` declares in `field` once it has moved - the range alone, an alias's `npm:<name>@`
+   *  left off, which is what every rule compares. */
   protected rangeFor(d: NodeDependencyUpdater.Decision, field: string): string {
     const declared = d.fields.get(field) ?? '';
     if (d.index < 0 || !d.movable.includes(field)) return declared;
     return this.movablePattern.exec(declared)![1] + d.candidates[d.index];
+  }
+
+  /** The name `d`'s versions are asked under - the package an alias names, else its own. */
+  protected sourceOf(d: NodeDependencyUpdater.Decision): string {
+    return d.source ?? d.name;
+  }
+
+  /** What `field` holds once `d` has moved, as the manifest spells it - an alias keeps its
+   *  `npm:<name>@`. */
+  protected writtenFor(d: NodeDependencyUpdater.Decision, field: string): string {
+    return (d.aliases.get(field) ?? '') + this.rangeFor(d, field);
+  }
+
+  /** `npm:<name>@<range>`, npm's alias form, as the package it names and the range - or `undefined`
+   *  for anything else. */
+  protected aliasOf(value: string): { source: string; range: string } | undefined {
+    const match = /^npm:((?:@[^/@\s]+\/)?[^@\s]+)@(.+)$/.exec(value);
+    return match ? { source: match[1]!, range: match[2]! } : undefined;
   }
 
   /** The in-repo packages `pkg` declares a dependency on. */
@@ -558,7 +615,7 @@ export class NodeDependencyUpdater implements DependencyUpdater {
       package: d.pkg,
       name: d.name,
       types: [...d.fields.keys()],
-      current: d.fields.get(d.movable[0]!)!,
+      current: (d.aliases.get(d.movable[0]!) ?? '') + d.fields.get(d.movable[0]!)!,
       status: 'up-to-date',
       latest: d.allowed[0],
       available: d.available,
@@ -571,7 +628,7 @@ export class NodeDependencyUpdater implements DependencyUpdater {
     const result: DependencyUpdater.Entry = {
       ...entry,
       status: 'update',
-      target: this.rangeFor(d, d.movable[0]!),
+      target: this.writtenFor(d, d.movable[0]!),
       bump: this.sizeOf(d.floor!, version),
       /** What stopped it short of `available`, if anything did - another rule first, since that is
        *  the nearer reason. */
@@ -635,8 +692,14 @@ export namespace NodeDependencyUpdater {
     pkg: Package;
     name: string;
     settings: DependencyUpdater.Settings;
-    /** Every field declaring the name, and its range there. */
+    /** Every field declaring the name, and its range there - an alias's range, its `npm:<name>@`
+     *  kept in `aliases`. */
     fields: Map<string, string>;
+    /** The fields declaring the name as an npm alias, and the `npm:<name>@` they write in front. */
+    aliases: Map<string, string>;
+    /** The package an alias names, whose versions every field of this name is held to - an alias
+     *  is what installs, so a plain peer range beside it is satisfied by that package. */
+    source?: string;
     /** The fields whose range is rewritten. */
     movable: string[];
     /** The fields holding a valid range rman does not rewrite - a pinned version, `>=a <b`. */
