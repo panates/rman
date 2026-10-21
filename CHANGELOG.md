@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to 43aaf205cc174fd853e3ce8ea4e920f4421f15f3 -->
+<!-- rman:documented-up-to 63ed610719ffc4402ccabba83de154a0485227e5 -->
+
+## v2.32.0 (2026-10-21)
+
+### ✨ Features
+
+- **publish:** spm target - publish to the SyncBridge registry through the repository's spm (7ffe885)
+
+### 🧹 Chores
+
+- dependencies - @panates/eslint-config-ts 2.3.3, @panates/tsconfig 2.1.8, @swc/core 1.16.18, @types/node 26.6.5, prettier 3.9.10 (45e2b85)
+
+---
 
 ## v2.31.0 (2026-10-20)
 
