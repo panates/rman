@@ -215,7 +215,7 @@ describe('commands/publish', () => {
      *  rman's own presets go under every real repository root (`DEFAULT_PRESETS`) and the `node`
      *  preset contributes it; `test/_fixture.ts` passes `presets: []` because the core brings its
      *  own ecosystem - see there for what happened when it did not. */
-    expect(meta.config?.target?.choices).toEqual(['docker', 'cloudflare', 'fixture', 'optin']);
+    expect(meta.config?.target?.choices).toEqual(['docker', 'cloudflare', 'spm', 'fixture', 'optin']);
   });
 
   /**
@@ -406,7 +406,7 @@ describe('commands/publish', () => {
       );
       const text = lines.join('\n');
       expect(text).toContain('cargo');
-      expect(text).toContain('docker, cloudflare, fixture, optin');
+      expect(text).toContain('docker, cloudflare, spm, fixture, optin');
     });
 
     it('--target naming one fails the same way', async () => {

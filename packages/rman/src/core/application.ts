@@ -1,5 +1,6 @@
 import { CloudflarePublishService, cloudflarePublishTarget } from '../builtins/publish-targets/cloudflare/index.js';
 import { DockerPublishService, dockerPublishTarget } from '../builtins/publish-targets/docker/index.js';
+import { SpmPublishService, spmPublishTarget } from '../builtins/publish-targets/spm/index.js';
 import { ChangelogService } from '../services/changelog.service.js';
 import { ConfigService } from '../services/config-service.js';
 import { ExecService } from '../services/exec.service.js';
@@ -115,10 +116,12 @@ export class RmanApplication {
     this.setService('import', a => new ImportService(a));
     this.setService('list', a => new ListService(a));
     this.setService('run', a => new RunService(a));
+    this.setService('spmPublish', a => new SpmPublishService(a));
     this.setService('version', a => new VersionService(a));
     // Register core targets.
     this.publishTargets.add(dockerPublishTarget);
     this.publishTargets.add(cloudflarePublishTarget);
+    this.publishTargets.add(spmPublishTarget);
   }
 
   /** Which platform claims a directory - the first whose manifest provider recognizes it, because
