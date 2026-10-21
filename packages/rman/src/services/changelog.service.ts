@@ -1144,6 +1144,11 @@ const MARKER = /^<!-- rman:documented-up-to ([0-9a-f]{7,40}) -->[ \t]*\r?\n+/m;
  * - **No file at all** - the whole history, because nothing has been documented. Measured without
  *   it: the first `--write` in a repository with a `v1.0.0` tag documented only the commits *after*
  *   that tag, and the ones before it were never written anywhere and never would be.
+ * - **A marker naming a commit HEAD does not descend from** - the file came from another repository
+ *   without its history, or its branch was rewritten - counts as no marker, with a warning.
+ *   Measured on `syncbridge-io/public-modules`: seven changelogs moved in from another repository
+ *   carried such a marker, and `version` died at apply time with `fatal: Invalid revision range`
+ *   while the plan had looked fine.
  * - **A file with no marker** - one rman did not write, or wrote before markers existed. Fall back
  *   to ordinary detection, which is where `catchUpFile` still earns its place: it widens the tag
  *   boundary backwards to the file's last commit, so a stale changelog catches up rather than
@@ -1176,7 +1181,16 @@ async function resolveBoundary(
     const exists = fs.existsSync(changelogFile);
     if (!exists) return undefined;
     const marker = MARKER.exec(fs.readFileSync(changelogFile, 'utf-8'));
-    if (marker) return marker[1];
+    if (marker && (await git.isAncestor(marker[1]))) return marker[1];
+    /** A marker naming a commit HEAD does not descend from is a record of somewhere else - the file
+     *  was copied in from another repository, or the branch it was written on was rewritten. Read
+     *  as "no marker", which is the case built to guess, and said so. */
+    if (marker) {
+      console.error(
+        `warning: ${path.relative(pkg.repository?.dirname ?? process.cwd(), changelogFile)} is documented up to ` +
+          `${marker[1].slice(0, 7)}, which is not in this branch's history - continuing from the package's last release`,
+      );
+    }
   }
 
   return ChangeHashService.detect(git, pkg, {
