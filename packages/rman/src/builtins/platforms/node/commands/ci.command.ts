@@ -15,7 +15,8 @@ const config = {
   packageManager: {
     target: 'cli',
     cliName: 'package-manager',
-    describe: 'Package manager to install with (default: npm, or .rmanrc "packageManager")',
+    describe:
+      'Package manager to install with (default: .rmanrc "packageManager.node", else the lockfile\'s, else npm)',
     choices: CiService.PACKAGE_MANAGERS,
   },
   progress: {

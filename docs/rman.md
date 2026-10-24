@@ -1600,7 +1600,7 @@ step there is mistaken for a value.
 | `publishTargets` | a publish target | none | Always appends. Where a package's artifact can ship - see [`PublishTarget`](#publishtarget). |
 | `platform` | `string` | the first loaded platform that recognizes the directory | Per-directory cascaded. Which technology claims this directory, by `Platform.name`. **It loads nothing** - a name no loaded technology provides is an error naming the file, and the fix is `platforms` or `extends`. A declaration is held to the directory: a platform that does not recognize it is an error naming the file it looked for. Never an expression; refused inside a `"[glob]"` block and inside a nested `"[/]"`. |
 | `name` | `string` | the platform's answer, else the manifest's name | Per-package cascaded. The selector this package answers to - what `"[glob]"` and `--scope` match. Does **not** rename the package: `pkg.name` stays what the manifest says. Must be unique; refused inside a `"[glob]"` block. |
-| `packageManager` | `{ [platform]: string }` | none | Which package manager each technology uses, keyed by `Platform.name`; cascades per package. The `node` built-in reads `packageManager.node` - `'npm' \| 'yarn' \| 'pnpm' \| 'bun'`, default `'npm'` - for `ci` (the root's), `publish` (each package's own) and `info`; `--package-manager` wins when given. An entry for a technology the repository does not load is ignored, so a shared preset can name several. The old bare string (`packageManager: pnpm`) is refused with the spelling to use instead. |
+| `packageManager` | `{ [platform]: string }` | none | Which package manager each technology uses, keyed by `Platform.name`; cascades per package. The `node` built-in reads `packageManager.node` - `'npm' \| 'yarn' \| 'pnpm' \| 'bun'`; unset, the nearest lockfile decides (`CiService.detectPackageManager`), and with none it is `'npm'` - for `ci` (the root's), `publish` (each package's own) and `info`; `--package-manager` wins when given. An entry for a technology the repository does not load is ignored, so a shared preset can name several. The old bare string (`packageManager: pnpm`) is refused with the spelling to use instead. |
 | `logLevel` | `'silent'\|'error'\|'info'\|'verbose'` | `'info'` | Root-level only. Invalid values fall back to `'info'`. CLI `--log-level` wins when given. |
 | `allowBranch` | `string \| string[]` | none (no restriction) | Root-level only. A CLI `--allow-branch` **replaces** it entirely (never merges). |
 | `ignoreBranch` | `string \| string[]` | none (no restriction) | Same as `allowBranch`. |
@@ -2903,7 +2903,7 @@ only append to it.
 **The `node` built-in is the worked example**, and it is bundled rather than separate: its
 `augmentSystemInfo()` adds `Options.packageManager`, wraps `getSystemInfo` so the report carries the
 configured package manager's version under `Binaries` plus the `npmPackages` sections, and defaults
-the value from `.rmanrc "packageManager.node"` read off `Options.repository`. It is applied when the
+the value from `.rmanrc "packageManager.node"` read off `Options.repository`, then from the repository's lockfile. It is applied when the
 built-in is *contributed*, not at import time - so `rman info` in a Cargo repository that never
 named `node` reports no npm tooling.
 

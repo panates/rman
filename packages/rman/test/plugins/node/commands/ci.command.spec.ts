@@ -176,6 +176,27 @@ describe('commands/ci', () => {
     expect(fs.existsSync(npm.logFile)).toBe(false);
   });
 
+  /** With neither a flag nor a setting, the lockfile decides - and it has to be read **before** the
+   *  wipe, which deletes it. Read after, there is nothing left to read and npm runs: the lockfile
+   *  being gone at the end is what proves the order. */
+  it('installs with the package manager whose lockfile the root holds, read before the wipe removes it', async () => {
+    const dir = fixtureNoRootScript();
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+    const binDir = tmp();
+    const pnpm = stubPackageManager('pnpm');
+    const npm = stubPackageManager('npm');
+    for (const from of [pnpm.dir, npm.dir]) {
+      for (const entry of fs.readdirSync(from)) fs.copyFileSync(path.join(from, entry), path.join(binDir, entry));
+    }
+    fs.chmodSync(path.join(binDir, 'pnpm'), 0o755);
+    fs.chmodSync(path.join(binDir, 'npm'), 0o755);
+
+    await captureLogs(() => runCli({ cwd: dir, argv: ['ci', '--no-progress'], app: appWithStubBin(binDir) }));
+    expect(fs.existsSync(pnpm.logFile)).toBe(true);
+    expect(fs.existsSync(npm.logFile)).toBe(false);
+    expect(fs.existsSync(path.join(dir, 'pnpm-lock.yaml'))).toBe(false);
+  });
+
   it('rejects a --package-manager outside the known choices before ever touching the filesystem', async () => {
     const dir = fixtureNoRootScript();
     const lines = await captureLogs(async () => {

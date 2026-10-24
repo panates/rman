@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { expect } from 'expect';
 import { augmentSystemInfo } from '../../../../src/builtins/platforms/node/augmentation/system-info.augmentation.js';
 import { type Repository, SystemInfo } from '../../../../src/index.js';
@@ -63,6 +66,25 @@ describe('augmentation/system-info', () => {
     const repository = { config: { packageManager: { node: 'pnpm' } } } as unknown as Repository;
     await SystemInfo.getSystemInfo({ repository });
     expect(seen?.envinfo?.Binaries).toEqual(['Node', 'pnpm']);
+  });
+
+  it("reports the lockfile's package manager when the config names none", async () => {
+    /** The same answer `ci` would install with - `info` reporting npm for a pnpm-locked repository
+     *  would send whoever is debugging it to the wrong tool. */
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-info-lock-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+      await SystemInfo.getSystemInfo({ repository: { config: {}, dirname: dir } as unknown as Repository });
+      expect(seen?.envinfo?.Binaries).toEqual(['Node', 'pnpm']);
+
+      /** A pair `ci` would refuse is no answer here, not a failure: `info` is what you run to find
+       *  out what is wrong. */
+      fs.writeFileSync(path.join(dir, 'yarn.lock'), '');
+      await SystemInfo.getSystemInfo({ repository: { config: {}, dirname: dir } as unknown as Repository });
+      expect(seen?.envinfo?.Binaries).toEqual(['Node', 'npm']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('prefers an explicit argument over the config', async () => {

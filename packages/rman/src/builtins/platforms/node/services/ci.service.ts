@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import colors from 'ansi-colors';
@@ -37,7 +38,8 @@ export namespace CiService {
 
   /**
    * The package manager `pkg` uses: `cliValue` when given, else its `.rmanrc "packageManager.node"`,
-   * else `npm`. Pass the repository for the one the repository installs with.
+   * else the one its lockfile belongs to (`detectPackageManager`), else `npm`. Pass the repository
+   * for the one the repository installs with.
    */
   /* **The bare string is refused rather than read.** `packageManager: pnpm` was the old spelling,
    * and rman validates no config keys, so read as an object it would simply have no `node` entry -
@@ -53,12 +55,46 @@ export namespace CiService {
       );
     }
     const node = (configured as { node?: unknown } | undefined)?.node;
-    if (node === undefined) return 'npm';
+    if (node === undefined) return detectPackageManager(pkg) ?? 'npm';
     if (typeof node === 'string' && (PACKAGE_MANAGERS as readonly string[]).includes(node))
       return node as PackageManager;
     throw new Error(
       `Invalid "packageManager.node" in .rmanrc: "${String(node)}" (expected one of: ${PACKAGE_MANAGERS.join(', ')})`,
     );
+  }
+
+  /**
+   * The package manager whose lockfile sits nearest `pkg` - its own directory, then each one above
+   * it up to the repository root - or `undefined` when there is none. Throws when the nearest
+   * directory holding a lockfile holds two package managers' lockfiles, naming them.
+   */
+  /* **The lockfile, not `package.json#packageManager`.** The lockfile is what the last install
+   * actually wrote; the field is a declaration nothing checks, and it goes stale. Measured on this
+   * repository: its root `package.json` says `yarn@3.4.1` and it has only ever installed with npm
+   * (`package-lock.json`, no `yarn.lock`) - read first, the field would have sent `rman ci` to yarn.
+   *
+   * **Two managers in one directory is refused, not ranked.** Any order picks a tool on the
+   * repository's behalf, and the wrong pick is silent: `ci` wipes every lockfile before it installs,
+   * so the one it guessed against is gone and the next run sees only what it wrote. The fix is one
+   * line of config, and the message says which.
+   *
+   * **Nearest, not root-only**: a package installing on its own keeps its lockfile beside its own
+   * `package.json`, and the walk stops at the repository root so a checkout nested inside another
+   * project never answers with the outer one's tool. */
+  export function detectPackageManager(pkg: Package): PackageManager | undefined {
+    if (!pkg.dirname) return undefined;
+    for (const dir of lockfileDirs(pkg)) {
+      const found = Object.keys(LOCKFILE_MANAGERS).filter(name => existsSync(path.join(dir, name)));
+      if (!found.length) continue;
+      const managers = [...new Set(found.map(name => LOCKFILE_MANAGERS[name]))];
+      if (managers.length === 1) return managers[0];
+      throw new Error(
+        `Cannot tell which package manager ${dir} uses: it holds lockfiles of ${managers.join(' and ')} ` +
+          `(${found.join(', ')}). Delete the stale one, or say which in .rmanrc: ` +
+          `packageManager: { node: ${managers.join(' | ')} }.`,
+      );
+    }
+    return undefined;
   }
 
   /** Deletes `node_modules` and any known lockfile directly under `dirname`. Returns the names
@@ -152,6 +188,34 @@ export namespace CiService {
 }
 
 const LOCK_FILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb'];
+
+/** Which package manager each lockfile belongs to, for `detectPackageManager`. */
+/* `npm-shrinkwrap.json` is here and not in `LOCK_FILES`: it says npm as surely as a
+ * `package-lock.json` does, but it is published with the package, so `ci` has no business deleting
+ * it. */
+const LOCKFILE_MANAGERS: Record<string, CiService.PackageManager> = {
+  'package-lock.json': 'npm',
+  'npm-shrinkwrap.json': 'npm',
+  'yarn.lock': 'yarn',
+  'pnpm-lock.yaml': 'pnpm',
+  'bun.lock': 'bun',
+  'bun.lockb': 'bun',
+};
+
+/** `pkg`'s own directory, then each one above it, ending at the repository root - only `pkg`'s own
+ *  when it has no repository or does not sit inside it. */
+function lockfileDirs(pkg: Package): string[] {
+  const root = pkg.repository?.dirname;
+  const dirs = [pkg.dirname];
+  if (!root || path.relative(root, pkg.dirname).startsWith('..')) return dirs;
+  let dir = pkg.dirname;
+  while (dir !== root) {
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dirs.push((dir = parent));
+  }
+  return dirs;
+}
 
 /** Runs a shell `command` in `cwd`, driving `item` for the live panel when it's on, or falling
  *  back to the plain "classic" log line `logLine` prints first - the same split `run`'s classic

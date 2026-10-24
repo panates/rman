@@ -975,6 +975,22 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
     repository of the organization wrote it, so the refusal shipped in a minor.
   - **An entry for a platform the repository does not load is ignored**, so one shared preset can
   name several technologies' tools.
+  - **Unset, the lockfile decides** (`CiService.detectPackageManager`): the nearest directory from
+    the package up to the repository root holding one, `npm-shrinkwrap.json` counting as npm. Order
+    is flag > `packageManager.node` > lockfile > npm, for `ci`, `publish`, `deps` and `info` alike.
+    - **`package.json#packageManager` is not read, and this repository is why**: its root says
+      `yarn@3.4.1` beside a `package-lock.json` and no `yarn.lock`. A declaration nothing checks
+      goes stale; the lockfile is what the last install wrote.
+    - **Two managers' lockfiles in one directory are refused, not ranked** - naming both and the
+      setting. A ranking is a silent pick, and `ci` then wipes the evidence: it deletes every
+      lockfile before installing, so the next run sees only what the guess wrote. `info` reads the
+      pair as no answer instead of failing, since it is what you run to find out what is wrong.
+    - **`ci` must resolve before it wipes**, and does (`reinstall`'s first line). The end-to-end
+      spec asserts the `pnpm-lock.yaml` is gone *and* pnpm ran, which is the only pair that proves
+      the order - controlled by making the resolver ignore the lockfile, which turns it and three
+      service cases red.
+    - **The walk stops at the repository root**, so a checkout nested inside another project never
+      installs with the outer one's tool.
 - **`dependencies` is core, and must stay.** It layers on top of whatever
   the plugin's manifest provider read, and it is the only way a repository with *no* provider has a
   graph at all - a repo whose manifests rman cannot read can still state its edges by hand.
