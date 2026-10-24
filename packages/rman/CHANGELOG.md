@@ -1,6 +1,15 @@
 # Changelog
 
-<!-- rman:documented-up-to ddddd77bb42000374dee3ba5d05251bbdf7ac2ed -->
+<!-- rman:documented-up-to c2e7ce52cf7436985f1a8980c3e7869ee6bfbfd0 -->
+
+## v2.36.0 (2026-10-24)
+
+### ✨ Features
+
+- **deps:** verify with pnpm, and judge Node by the running one and any overlap with engines (09134be)
+- **install:** `rman install` / `rman i` - install with the repository's own package manager (7e64e2f)
+
+---
 
 ## v2.35.0 (2026-10-24)
 
