@@ -1,7 +1,7 @@
 import { definePlatform, type Platform } from '../../core/interfaces/plugin.js';
 import type { RmanConfig } from '../../interfaces/rman-config.interface.js';
 import { defineConfig } from '../../interfaces/rman-config.interface.js';
-import { augmentSystemInfo, ciCommand, cleanCommand, NodePlatform } from '../platforms/node/index.js';
+import { augmentSystemInfo, ciCommand, cleanCommand, installCommand, NodePlatform } from '../platforms/node/index.js';
 import { NpmPublishTarget } from '../publish-targets/npm/index.js';
 
 /**
@@ -13,7 +13,7 @@ import { NpmPublishTarget } from '../publish-targets/npm/index.js';
  * ```
  *
  * It contributes the technology (how a `package.json` is read, where `workspaces` point, how
- * versions are planned), the two commands that are npm's alone (`clean`, `ci`), and the `npm`
+ * versions are planned), the commands that are npm's alone (`clean`, `ci`, `install`), and the `npm`
  * publish target. A polyglot repository names several: `extends: ['node', 'cargo']` holds both,
  * because every key here appends.
  */
@@ -30,7 +30,7 @@ export function nodePreset(): RmanConfig {
   augmentSystemInfo();
   return defineConfig({
     platforms: [(nodePlatform ??= definePlatform(new NodePlatform()))],
-    commands: [ciCommand, cleanCommand],
+    commands: [ciCommand, cleanCommand, installCommand],
     publishTargets: [(npmTarget ??= new NpmPublishTarget())],
   });
 }

@@ -147,7 +147,7 @@ classes are exported so you can name their types, not so you can construct one.
 
 **Everything npm-specific is the `node` built-in's** - `PublishService`, `CiService`,
 `CleanService`, the `package.json` manifest reader, the version planner, the dependency updater,
-`node_modules/.bin` on PATH, and the `ci`/`clean` commands. It ships inside rman and is laid under
+`node_modules/.bin` on PATH, and the `ci`/`install`/`clean` commands. It ships inside rman and is laid under
 every repository by default - see [The `node` built-in](#the-node-built-in). The core documented
 here knows nothing about npm: with `presets: []` there is no manifest reader at all, so a polyglot
 or non-Node repository declares its own through the same seams the built-in uses. `info` is a
@@ -3052,8 +3052,8 @@ the preset's contribution keys. rman ships one preset, so none of that is visibl
 
 | | |
 | --- | --- |
-| **Platform** | `manifestProvider` (`package.json`, `npm view` for `publishedVersion`, `stampVersion`), `getWorkspace` (the `workspaces` globs, asked of every directory the walk reaches), `getRunSteps` (`package.json#scripts`, including `pre`/`post` - which is also how npm's `preversion`/`version`/`postversion` reach `version`, with no second seam), `getBinPaths` (`node_modules/.bin`, walked up), `versionPlanner` (`detectBoundary` through `ChangeHashService.detect`; `cascade` is `dependents` for a patch or a minor and `group` for a major), `dependencyUpdater` (what [`deps`](cli/deps.md) asks: the registry, the package's own peer ranges, `engines.node` and its siblings' peers, and `npm install --dry-run` at the root as `verify`). |
-| **Commands** | [`ci`](cli/ci.md) and [`clean`](cli/clean.md). |
+| **Platform** | `manifestProvider` (`package.json`, `npm view` for `publishedVersion`, `stampVersion`), `getWorkspace` (the `workspaces` globs, asked of every directory the walk reaches), `getRunSteps` (`package.json#scripts`, including `pre`/`post` - which is also how npm's `preversion`/`version`/`postversion` reach `version`, with no second seam), `getBinPaths` (`node_modules/.bin`, walked up), `versionPlanner` (`detectBoundary` through `ChangeHashService.detect`; `cascade` is `dependents` for a patch or a minor and `group` for a major), `dependencyUpdater` (what [`deps`](cli/deps.md) asks: the registry, the package's own peer ranges, a release's `engines.node` against the running Node and the package's own `engines.node`, and its siblings' peers, and `npm install --dry-run` - or `pnpm install --dry-run --strict-peer-dependencies` in a pnpm repository - at the root as `verify`). |
+| **Commands** | [`ci`](cli/ci.md), [`install`](cli/install.md) and [`clean`](cli/clean.md). |
 | **Publish target** | `npm` - see [`PublishTarget`](#publishtarget). |
 | **Config keys** | `packageManager.node`, `clean.*`, `publish.npm.*`. (`deps.*` is the core's command; `deps.types` takes npm's words here.) |
 | **`SystemInfo`** | the npm half - see [`SystemInfo`](#systeminfo). |

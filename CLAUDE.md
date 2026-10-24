@@ -991,6 +991,33 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
       service cases red.
     - **The walk stops at the repository root**, so a checkout nested inside another project never
       installs with the outer one's tool.
+    - **`rman install` / `rman i` is the same resolution with nothing wiped** (`CiService.install`,
+      `installArgv`): one install at the root, so a repository's tool need not be known to install
+      it. Its flags are the ones npm and pnpm share, spelled once and translated per tool from one
+      table (`INSTALL_FLAGS`), each spelling read off that tool's own `install --help` - a flag with
+      no checked spelling is refused before anything runs, never guessed. `--frozen-lockfile` is
+      `npm ci` under npm, the one way it deletes anything: npm has no frozen install that keeps
+      `node_modules`, and refusing the flag would leave CI unable to say it without knowing the
+      tool. yarn gets `--frozen-lockfile` alone - berry's `install` has no production, offline,
+      dry-run or registry flag. No positional package: `npm install <pkg>` is `pnpm add <pkg>`.
+    - **It is what made `deps -u` print `Not verified: "pnpm"` in pnpm repositories**, which had been
+      silently verified with npm's resolver until then. So `verify` asks pnpm now
+      (`NodeDependencyUpdater.verifyWithPnpm`): `pnpm install --dry-run --strict-peer-dependencies`,
+      measured on pnpm 12.10.1 - plain `--dry-run` exits 0 on a peer conflict, strict exits 1 with
+      `ERR_PNPM_PEER_DEP_ISSUES`, neither writes anything, and a workspace member's conflict comes
+      back from the root under its own heading.
+      - **Only an issue one of the run's moves is part of counts** (`written`, recorded by
+        `applyPlan`). Strict is stricter than the repository, and without the filter a repository
+        living with one peer warning could never upgrade anything. Controlled: removing the filter
+        turns the "repository's own" spec red.
+      - **The peer is held before its requirers** - the move that answers "the peer outgrew them".
+        Holding both would cost a move that was fine.
+      - **pnpm below 11.8 is not asked** (`pnpmDryRunSince`, from the 11.8 release notes): no older
+        pnpm was measured, and the bad guess about an unknown flag is a real install. pnpm 12 is a
+        Rust binary answering `error: unexpected argument`, so matching an error text was never an
+        option either.
+      - `pnpm()` is the one spawn and the spec's seam, like `fetchReleases` - a stub on PATH would
+        lose to a real pnpm beside `node`, the trap `appWithStubBin` records.
 - **`dependencies` is core, and must stay.** It layers on top of whatever
   the plugin's manifest provider read, and it is the only way a repository with *no* provider has a
   graph at all - a repo whose manifests rman cannot read can still state its edges by hand.
@@ -2425,7 +2452,7 @@ four behaviours still fire.
   `ENOTDIR`. **And a failure is said with no panel too** - it went only into the item's `log`, which
   nothing replays without a panel, so a build's nested `rman clean` reported `0 succeeded, 1 failed`
   and no reason.
-- `clean` and `ci` are the two commands still wholly `rman-node`'s. `publish` is no longer one of
+- `clean`, `ci` and `install` are the commands still wholly `rman-node`'s. `publish` is no longer one of
   them - see above. Both are **declared**, not built, like every built-in.
 
 ### `list` / `run`

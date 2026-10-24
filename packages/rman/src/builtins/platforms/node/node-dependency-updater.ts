@@ -6,7 +6,7 @@ import semver from 'semver';
 import type { Package } from '../../../core/classes/package.js';
 import { DependencyUpdater } from '../../../core/interfaces/dependency-updater.js';
 import { Manifest } from '../../../core/interfaces/manifest.js';
-import { exec } from '../../../utils/exec.js';
+import { exec, type ExecResult } from '../../../utils/exec.js';
 import { type NpmRelease, type NpmReleases, npmViewReleases } from '../../publish-targets/npm/npm-view.js';
 import { DEPENDENCY_KEYS } from './node-manifest.provider.js';
 import { CiService } from './services/ci.service.js';
@@ -38,7 +38,8 @@ import { parseWorkspaceRange } from './utils/workspace-range.js';
  *    above the `latest` dist-tag, or a prerelease when the range is not on one;
  * 2. the package's own other declarations of the same name - a `devDependencies` caret cannot move
  *    outside the package's own `peerDependencies` range for that name;
- * 3. the runtime: a version whose `engines.node` does not cover every Node the package supports;
+ * 3. the runtime: a version whose `engines.node` leaves out the Node rman is running on, or shares
+ *    no Node at all with the package's own `engines.node`;
  * 4. the peer ranges of the other dependencies the package names, at the versions *they* move to;
  * 5. a sibling package's peer range, for a package naming that sibling.
  *
@@ -67,6 +68,16 @@ export class NodeDependencyUpdater implements DependencyUpdater {
 
   /** The plan each `'update'` entry was made from, for `applyPlan`. */
   protected readonly planned = new WeakMap<DependencyUpdater.Entry, NodeDependencyUpdater.Decision>();
+
+  /** The first pnpm whose `install` takes `--dry-run`; an older one is not asked. */
+  /* pnpm 11.8 (2026-06-18) is where the release notes put it. Below it there is nothing to ask, and
+   * no older pnpm was measured - what one makes of a flag it does not know is a guess, and the bad
+   * guess is a real install. */
+  protected readonly pnpmDryRunSince: string = '11.8.0';
+
+  /** `name@version` for each move the last `applyPlan` wrote - what a pnpm peer issue is matched
+   *  against, to tell the upgrade's issues from the repository's own. */
+  protected written = new Set<string>();
 
   async getPlan(ctx: DependencyUpdater.Context, packages: readonly Package[]): Promise<DependencyUpdater.Entry[]> {
     const inRepo = new Set([ctx.repository.rootPackage, ...ctx.repository.packages].map(p => p.name));
@@ -98,10 +109,12 @@ export class NodeDependencyUpdater implements DependencyUpdater {
     plan: readonly DependencyUpdater.Entry[],
   ): Promise<DependencyUpdater.Applied> {
     const originals = new Map<Package, string>();
+    this.written = new Set();
     for (const entry of plan) {
       const d = this.planned.get(entry);
       if (entry.status !== 'update' || !d) continue;
       const version = d.candidates[d.index]!;
+      this.written.add(`${d.name}@${version}`);
       if (!originals.has(d.pkg)) originals.set(d.pkg, fs.readFileSync(this.manifestFile(d.pkg), 'utf-8'));
       for (const field of d.movable) {
         d.pkg.manifest.raw[field][d.name] =
@@ -121,21 +134,35 @@ export class NodeDependencyUpdater implements DependencyUpdater {
   }
 
   /**
+   * The repository's own package manager, asked whether the manifests install, writing nothing:
+   * `npm install --dry-run` (`verifyWithNpm`) or `pnpm install --dry-run --strict-peer-dependencies`
+   * (`verifyWithPnpm`). yarn and bun are not asked, and a note says so.
+   */
+  async verify(ctx: DependencyUpdater.Context): Promise<string | undefined> {
+    const manager = CiService.resolvePackageManager(ctx.repository);
+    if (manager === 'npm') return this.verifyWithNpm(ctx);
+    if (manager === 'pnpm') return this.verifyWithPnpm(ctx);
+    console.error(colors.yellow(`Not verified: "${manager}" has no dry-run install to ask.`));
+    return undefined;
+  }
+
+  /**
+   * The upgrades a refusal names at the version they move to - see `blameNpm` and `blamePnpm`,
+   * which read the two package managers' own words.
+   */
+  blame(refusal: string, plan: readonly DependencyUpdater.Entry[]): DependencyUpdater.Blame[] {
+    return this.pnpmPeerIssues(refusal).length ? this.blamePnpm(refusal, plan) : this.blameNpm(refusal, plan);
+  }
+
+  /**
    * `npm install --dry-run` at the repository root: npm's own resolver, which refuses a peer
    * conflict anywhere in the tree with `ERESOLVE`, and writes nothing.
-   *
-   * Another package manager is not asked - its dry run is not the same question - and a note says so.
    */
   /* Measured on a manifest pairing `typescript@^7` with `@typescript-eslint/parser@8.40.0`, whose
    * peer range stops below 6: `--dry-run` exits 1 with `ERESOLVE unable to resolve dependency tree`
    * and the offending `peer typescript@">=4.8.4 <6.0.0"` line, as `--package-lock-only` does, but
    * without touching the lockfile. */
-  async verify(ctx: DependencyUpdater.Context): Promise<string | undefined> {
-    const manager = CiService.resolvePackageManager(ctx.repository);
-    if (manager !== 'npm') {
-      console.error(colors.yellow(`Not verified: "${manager}" has no dry-run install to ask.`));
-      return undefined;
-    }
+  protected async verifyWithNpm(ctx: DependencyUpdater.Context): Promise<string | undefined> {
     const result = await exec('npm install --dry-run --ignore-scripts --no-audit --no-fund', {
       cwd: ctx.repository.dirname,
       app: ctx.app,
@@ -148,6 +175,52 @@ export class NodeDependencyUpdater implements DependencyUpdater {
       .map(line => line.replace(/^npm (error|ERR!)\s?/, '  '))
       .filter(line => line.trim());
     return lines.join('\n') || `  npm install --dry-run exited ${result.code}`;
+  }
+
+  /**
+   * `pnpm install --dry-run --strict-peer-dependencies` at the repository root - pnpm's resolver,
+   * which writes nothing - counting only the peer issues one of this run's moves is part of. A pnpm
+   * older than `pnpmDryRunSince` is not asked.
+   */
+  /* **`--strict-peer-dependencies`, or there is nothing to refuse.** pnpm treats an unmet peer as a
+   * warning by default - measured on pnpm 12.10.1 with the npm case above: plain `--dry-run` exits 0
+   * with `Issues with peer dependencies found`, the strict form exits 1 with
+   * `ERR_PNPM_PEER_DEP_ISSUES`, and neither writes a lockfile or `node_modules`. A pnpm workspace is
+   * covered from the root: the same conflict in `packages/a` came back under a `packages/a` heading.
+   *
+   * **Strict is also stricter than the repository**, which has lived with its peer warnings, so an
+   * issue none of this run's moves is part of is the repository's own and is let through - otherwise
+   * a repository carrying one could never upgrade anything. The cost, stated: a conflict a move
+   * brings in only through a dependency of its own names that dependency, not the move, and passes
+   * as well - which is what pnpm itself does with it by default.
+   *
+   * **Any other failure is a refusal, as with npm**: the manifests did not resolve, whatever the
+   * reason, and with nothing to blame the command puts every write back and shows pnpm's lines. */
+  protected async verifyWithPnpm(ctx: DependencyUpdater.Context): Promise<string | undefined> {
+    const version = (await this.pnpm(ctx, '--version')).stdout?.trim();
+    if (!version || !semver.valid(version) || semver.lt(version, this.pnpmDryRunSince)) {
+      console.error(
+        colors.yellow(
+          `Not verified: pnpm ${version || '(not found)'} has no dry-run install - it needs pnpm ${this.pnpmDryRunSince}.`,
+        ),
+      );
+      return undefined;
+    }
+    const result = await this.pnpm(ctx, 'install --dry-run --strict-peer-dependencies --ignore-scripts');
+    if (!result.code) return undefined;
+    const output = result.stdout ?? '';
+    const issues = this.pnpmPeerIssues(output);
+    if (issues.length) {
+      const ours = issues.filter(issue => this.pnpmIssueMoves(issue).some(token => this.written.has(token)));
+      if (!ours.length) return undefined;
+      return ours.map(issue => issue.lines.map(line => `  ${line}`).join('\n')).join('\n');
+    }
+    /** Not a peer issue: pnpm's own error lines, without the dry run's list of what it would add. */
+    const lines = output
+      .split('\n')
+      .filter(line => /ERR_PNPM_|^\s*error\b|^\s*✕/i.test(line))
+      .map(line => `  ${line.trim()}`);
+    return lines.join('\n') || `  pnpm install --dry-run exited ${result.code}`;
   }
 
   /**
@@ -165,7 +238,7 @@ export class NodeDependencyUpdater implements DependencyUpdater {
    * `abisena/syncbridge-iomt`, the verdict read `dev @syncbridge/syncbuild@"^2.2.0" from the root
    * project`, matched nothing, and every move the output mentioned anywhere was held under that one
    * line - `@syncbridge/testing` included, with syncbuild's reason. */
-  blame(refusal: string, plan: readonly DependencyUpdater.Entry[]): DependencyUpdater.Blame[] {
+  protected blameNpm(refusal: string, plan: readonly DependencyUpdater.Entry[]): DependencyUpdater.Blame[] {
     const moves = plan.flatMap(entry => {
       const d = this.planned.get(entry);
       if (entry.status !== 'update' || !d) return [];
@@ -192,6 +265,86 @@ export class NodeDependencyUpdater implements DependencyUpdater {
       const line = lines.find(l => names(l, m));
       return line ? [{ entry: m.entry, reason: `npm cannot install it: ${line}` }] : [];
     });
+  }
+
+  /** Runs `pnpm <args>` at the repository root, never throwing - the one place this class spawns
+   *  pnpm, so a spec answers for it instead of whichever pnpm is on the machine. */
+  protected pnpm(ctx: DependencyUpdater.Context, args: string): Promise<ExecResult> {
+    return exec(`pnpm ${args}`, { cwd: ctx.repository.dirname, app: ctx.app, throwOnError: false });
+  }
+
+  /**
+   * The moves a pnpm peer issue is about: the peer at the version pnpm found, when this run moved it
+   * there, else the packages wanting it that this run moved.
+   */
+  /* **The peer first.** `typescript` moved to 7.0.2 and `@typescript-eslint/parser` wanting `<6` is
+   * the peer outgrowing its requirers, and holding the peer is the one move that answers it; only
+   * when the peer did not move is a requirer the one that changed. Each round holds at least one, so
+   * a run with both moved holds the peer, asks again, and ends. */
+  protected blamePnpm(refusal: string, plan: readonly DependencyUpdater.Entry[]): DependencyUpdater.Blame[] {
+    const byToken = new Map<string, DependencyUpdater.Entry>();
+    for (const entry of plan) {
+      const d = this.planned.get(entry);
+      if (entry.status === 'update' && d) byToken.set(`${d.name}@${d.candidates[d.index]}`, entry);
+    }
+    const blamed = new Map<DependencyUpdater.Entry, string>();
+    for (const issue of this.pnpmPeerIssues(refusal)) {
+      const peer = issue.installed && byToken.get(`${issue.peer}@${issue.installed}`);
+      const entries = peer ? [peer] : issue.wanted.flatMap(w => w.by.flatMap(by => byToken.get(by) ?? []));
+      for (const entry of entries) {
+        if (blamed.has(entry)) continue;
+        const wants = issue.wanted.map(w => `${w.range} by ${w.by[0]}`).join(', ');
+        const found = issue.installed ? ` (found ${issue.installed})` : '';
+        blamed.set(entry, `pnpm cannot install it: unmet peer ${issue.peer}${found}, wanted ${wants}`);
+      }
+    }
+    return [...blamed].map(([entry, reason]) => ({ entry, reason }));
+  }
+
+  /** Every `name@version` a pnpm peer issue names - the peer as found, and each package wanting it. */
+  protected pnpmIssueMoves(issue: NodeDependencyUpdater.PnpmPeerIssue): string[] {
+    return [...(issue.installed ? [`${issue.peer}@${issue.installed}`] : []), ...issue.wanted.flatMap(w => w.by)];
+  }
+
+  /**
+   * The peer issues in pnpm's `ERR_PNPM_PEER_DEP_ISSUES` report, each with its own lines.
+   */
+  /* The shape, measured on pnpm 12.10.1 - a workspace adds a project heading above and indents the
+   * rest, so lines are read trimmed:
+   *
+   *     ✕ unmet peer typescript
+   *       Installed: 7.0.2
+   *       Wanted:
+   *         ">=4.8.4 <6.0.0":
+   *           @typescript-eslint/parser@8.40.0
+   *           @typescript-eslint/typescript-estree@8.40.0
+   *
+   * `missing peer` is read the same way, with no `Installed`. */
+  protected pnpmPeerIssues(output: string): NodeDependencyUpdater.PnpmPeerIssue[] {
+    const issues: NodeDependencyUpdater.PnpmPeerIssue[] = [];
+    let issue: NodeDependencyUpdater.PnpmPeerIssue | undefined;
+    for (const raw of output.split('\n')) {
+      const line = raw.trim();
+      const head = /^✕ (?:unmet|missing) peer (\S+)$/.exec(line);
+      if (head) {
+        issue = { peer: head[1]!, wanted: [], lines: [line] };
+        issues.push(issue);
+        continue;
+      }
+      if (!issue) continue;
+      const installed = /^Installed: (\S+)$/.exec(line);
+      const range = /^(".*"):$/.exec(line);
+      const by = /^((?:@[^/@\s]+\/)?[^@\s]+@\S+)$/.exec(line);
+      if (installed) issue.installed = installed[1];
+      else if (range) issue.wanted.push({ range: range[1]!, by: [] });
+      else if (by && issue.wanted.length) issue.wanted.at(-1)!.by.push(by[1]!);
+      else if (line !== 'Wanted:') {
+        issue = undefined;
+        continue;
+      }
+      issue.lines.push(line);
+    }
+    return issues;
   }
 
   /** One decision per dependency name `pkg` declares, whether or not it may move - one that may not
@@ -312,7 +465,6 @@ export class NodeDependencyUpdater implements DependencyUpdater {
       d.skipReason = this.settingRefusal(d, newer[0]!, info.time);
     }
 
-    d.baselineNode = this.nodeCoverage(d.pkg, d.releases.get(d.floor!));
     for (const version of d.allowed) {
       const refusal = this.staticRefusal(d, d.releases.get(version)!);
       if (!refusal) d.candidates.push(version);
@@ -391,8 +543,8 @@ export class NodeDependencyUpdater implements DependencyUpdater {
     return diff.replace(/^pre(?!release)/, '') === 'prerelease' ? 'patch' : diff.replace(/^pre(?!release)/, '');
   }
 
-  /** Steps 2 and 3: the package's own other declarations of this name, and the runtime it supports.
-   *  The rule `release` breaks, or `undefined`. */
+  /** Steps 2 and 3: the package's own other declarations of this name, and Node - the one rman runs
+   *  on, and the ones the package supports. The rule `release` breaks, or `undefined`. */
   protected staticRefusal(d: NodeDependencyUpdater.Decision, release: NpmRelease): string | undefined {
     for (const [field, range] of d.fields) {
       if (d.movable.includes(field) || !semver.validRange(range)) continue;
@@ -400,35 +552,50 @@ export class NodeDependencyUpdater implements DependencyUpdater {
         return `${d.pkg.name} declares ${d.name} ${range} in ${field}`;
       }
     }
-    const covered = d.baselineNode;
-    const needed = release.engines?.node;
-    if (covered && needed && semver.validRange(needed) && !semver.subset(covered, needed)) {
-      return `${d.name}@${release.version} needs node ${needed}, ${d.pkg.name} supports ${this.supportedNode(d.pkg)}`;
+    const floor = d.floor ? d.releases?.get(d.floor) : undefined;
+    const node = this.runningNode();
+    if (!this.runsOn(release, node) && this.runsOn(floor, node)) {
+      return `${d.name}@${release.version} needs node ${release.engines!.node}, this is node ${node}`;
+    }
+    const supported = this.supportedNode(d.pkg);
+    if (supported && !this.sharesNode(release, supported) && this.sharesNode(floor, supported)) {
+      return `${d.name}@${release.version} needs node ${release.engines!.node}, none of which ${d.pkg.name} supports (${supported})`;
     }
     return undefined;
   }
 
-  /**
-   * The Node versions a newer release has to keep covering: those the package supports **and** the
-   * lowest release its declaration allows now (`current`) already runs on.
-   */
-  /* **Not the package's whole range**, and that was measured wrong first. A package declaring
-   * `node >=18` with `eslint ^9` was offered no 9.x at all, because every one of them needs
-   * `^18.18.0` - but so does the 9.x it already installs. A rule the current version breaks is not
-   * one a newer version can be held to; only taking away a Node that works today is a refusal.
+  /** The Node a release is checked against first - the one running rman, which is the one that
+   *  installs. */
+  /* **Two questions, and both are the user's.** Does it install on the Node running now, and does it
+   * share *any* Node with the package's own `engines.node` (`sharesNode`). The second was
+   * `semver.subset(supported, needed)` - every Node the package supports - until it was reported on
+   * `panates/peacox-ui`: jsdom 30.1.3 needs `^22.22.2 || ^24.15.0 || >=26.0.0`, Node 25 left out,
+   * and the package says `>=24.15`, so `deps --target major` held it on a machine running 24.15.0
+   * where it installs. A range is "I accept these"; a gap in a dependency's range is not a reason to
+   * refuse it, a range with nothing in common is. What that gives up, stated: a library whose runtime
+   * dependency drops *one* Node its own `engines` still names is no longer told so here.
    *
-   * **The floor, not the newest release the range allows.** `^1.0.0` installs 1.2.0 today, so
-   * measuring against that would wave 1.2.0 through - but raising the floor to it is exactly what
-   * stops a Node that 1.0.0 still served. */
-  protected nodeCoverage(pkg: Package, current: NpmRelease | undefined): string | undefined {
-    const supported = this.supportedNode(pkg);
-    const runs = current?.engines?.node;
-    if (!supported || !runs || !semver.validRange(runs)) return supported;
-    const sets = new semver.Range(supported).set.flatMap(a =>
-      new semver.Range(runs).set.map(b => [...a, ...b].map(c => c.value).join(' ')),
-    );
-    const both = sets.filter(set => semver.validRange(set) && semver.minVersion(set)).join(' || ');
-    return both || supported;
+   * **A Node the declared version already leaves out is no objection either** - the floor, measured
+   * the hard way under the old rule: `eslint ^9` needs `^18.18.0`, so a package on an older 18 was
+   * offered no 9.x at all, though the 9.x it installs today has the same requirement. Only a release
+   * that stops working where the current one works is refused. The floor rather than the newest the
+   * range allows, because raising the floor is what can stop it. */
+  protected runningNode(): string {
+    return process.versions.node;
+  }
+
+  /** Whether `release` declares that it runs on `node`. No `engines.node`, or one semver cannot
+   *  read, is no objection. */
+  protected runsOn(release: NpmRelease | undefined, node: string): boolean {
+    const needed = release?.engines?.node;
+    return !needed || !semver.validRange(needed) || semver.satisfies(node, needed, { includePrerelease: true });
+  }
+
+  /** Whether `release`'s `engines.node` and `supported` have at least one Node in common. No
+   *  `engines.node`, or one semver cannot read, is no objection. */
+  protected sharesNode(release: NpmRelease | undefined, supported: string): boolean {
+    const needed = release?.engines?.node;
+    return !needed || !semver.validRange(needed) || semver.intersects(supported, needed, { includePrerelease: true });
   }
 
   /** The Node versions `pkg` supports - its own `engines.node`, else the repository root's. */
@@ -724,9 +891,18 @@ export namespace NodeDependencyUpdater {
     index: number;
     releases?: Map<string, NpmRelease>;
     latestTag?: string;
-    /** The Node versions a newer release has to keep covering - see `nodeCoverage`. */
-    baselineNode?: string;
     reason?: string;
     error?: string;
+  }
+
+  /** One unmet or missing peer in pnpm's report - see `pnpmPeerIssues`. */
+  export interface PnpmPeerIssue {
+    peer: string;
+    /** The version pnpm found, absent for a missing peer. */
+    installed?: string;
+    /** Each range asked for, quoted as pnpm prints it, with the `name@version`s asking. */
+    wanted: { range: string; by: string[] }[];
+    /** The issue as pnpm printed it, trimmed. */
+    lines: string[];
   }
 }

@@ -12,6 +12,7 @@ import type { Repository } from '../../../../core/classes/repository.js';
 import { exec } from '../../../../utils/exec.js';
 import type { PackageFilterOptions } from '../../../../utils/package-filter.js';
 import { filterPackages } from '../../../../utils/package-filter.js';
+import { runBin } from '../../../../utils/run-bin.js';
 
 export namespace CiService {
   /**
@@ -95,6 +96,83 @@ export namespace CiService {
       );
     }
     return undefined;
+  }
+
+  /** What `rman install` hands on, in rman's own words - `installArgv` spells each one for the
+   *  package manager that runs. */
+  export interface InstallOptions {
+    packageManager?: PackageManager;
+    /** Install exactly what the lockfile says, failing rather than changing it. */
+    frozenLockfile?: boolean;
+    /** Production dependencies only - no `devDependencies`. */
+    prod?: boolean;
+    ignoreScripts?: boolean;
+    /** Bring the lockfile up to date with the manifests, installing nothing. */
+    lockfileOnly?: boolean;
+    offline?: boolean;
+    preferOffline?: boolean;
+    /** Report what an install would change, writing nothing. */
+    dryRun?: boolean;
+    registry?: string;
+    /** Handed on last, as written - whatever a package manager has and these do not say. */
+    extra?: string[];
+    logLevel?: LogLevel;
+  }
+
+  /**
+   * `rman install`: one install at the repository root, with the repository's own package manager
+   * (`resolvePackageManager`) - nothing is deleted first, which is what sets it apart from
+   * `reinstall`.
+   */
+  export async function install(repository: Repository, options: InstallOptions = {}): Promise<void> {
+    const manager = resolvePackageManager(repository, options.packageManager);
+    await runBin(manager, installArgv(manager, options), {
+      cwd: repository.dirname,
+      app: repository.app,
+      logLevel: options.logLevel ?? resolveRootLogLevel(repository),
+    });
+  }
+
+  /**
+   * The argv `manager` is run with for `options`. Throws, before anything runs, for an option
+   * `manager` has no spelling of, naming it and the way round it.
+   */
+  /* **One table, read flag by flag** (`INSTALL_FLAGS`, below), each spelling taken from that tool's
+   * own `install --help`: npm 11.12.1, pnpm 12.10.1, bun 1.4.2, yarn 3.4.1. A spelling nobody
+   * checked is left out rather than guessed - a flag that means something else, or nothing, to the
+   * tool that receives it is the silent version of this refusal.
+   *
+   * **`--frozen-lockfile` is `npm ci` under npm**, and that is the one place this command deletes
+   * anything: npm has no frozen install that keeps `node_modules`, and `ci` is npm's own answer to
+   * "exactly the lockfile". Refusing it would leave the one flag a CI script needs most unable to be
+   * written without knowing the tool, which is the whole point of the command.
+   *
+   * **yarn takes `--frozen-lockfile` and nothing else here.** Berry's `install` has no production,
+   * offline, dry-run or registry flag at all, and spells the rest as `--mode` values that cannot be
+   * combined; classic spells them differently again. Both accept `--frozen-lockfile` - berry as an
+   * alias of `--immutable`. */
+  export function installArgv(manager: PackageManager, options: InstallOptions): string[] {
+    if (options.frozenLockfile && options.lockfileOnly) {
+      throw new Error(
+        '--frozen-lockfile and --lockfile-only contradict each other: one refuses to change the lockfile, the other only changes it.',
+      );
+    }
+    const argv = manager === 'npm' && options.frozenLockfile ? ['ci'] : ['install'];
+    for (const flag of INSTALL_FLAGS) {
+      const value = options[flag.option];
+      if (value === undefined || value === false || value === '') continue;
+      const spelled = flag.spellings[manager];
+      if (spelled === undefined) {
+        throw new Error(
+          `${manager} install has no equivalent of --${flag.cliName}. Pass ${manager}'s own flag after --, ` +
+            `e.g. rman install -- <flag>.`,
+        );
+      }
+      if (!spelled) continue;
+      argv.push(typeof value === 'string' ? `${spelled}=${value}` : spelled);
+    }
+    argv.push(...(options.extra ?? []));
+    return argv;
   }
 
   /** Deletes `node_modules` and any known lockfile directly under `dirname`. Returns the names
@@ -188,6 +266,40 @@ export namespace CiService {
 }
 
 const LOCK_FILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb'];
+
+/** Each `rman install` option, as each package manager spells it: `''` when the subcommand already
+ *  says it (`npm ci`), missing when that tool has none. See `installArgv`. */
+const INSTALL_FLAGS: {
+  option:
+    'frozenLockfile' | 'prod' | 'ignoreScripts' | 'lockfileOnly' | 'offline' | 'preferOffline' | 'dryRun' | 'registry';
+  cliName: string;
+  spellings: Partial<Record<CiService.PackageManager, string>>;
+}[] = [
+  {
+    option: 'frozenLockfile',
+    cliName: 'frozen-lockfile',
+    spellings: { npm: '', pnpm: '--frozen-lockfile', bun: '--frozen-lockfile', yarn: '--frozen-lockfile' },
+  },
+  { option: 'prod', cliName: 'prod', spellings: { npm: '--omit=dev', pnpm: '--prod', bun: '--production' } },
+  {
+    option: 'ignoreScripts',
+    cliName: 'ignore-scripts',
+    spellings: { npm: '--ignore-scripts', pnpm: '--ignore-scripts', bun: '--ignore-scripts' },
+  },
+  {
+    option: 'lockfileOnly',
+    cliName: 'lockfile-only',
+    spellings: { npm: '--package-lock-only', pnpm: '--lockfile-only', bun: '--lockfile-only' },
+  },
+  { option: 'offline', cliName: 'offline', spellings: { npm: '--offline', pnpm: '--offline', bun: '--offline' } },
+  {
+    option: 'preferOffline',
+    cliName: 'prefer-offline',
+    spellings: { npm: '--prefer-offline', pnpm: '--prefer-offline', bun: '--prefer-offline' },
+  },
+  { option: 'dryRun', cliName: 'dry-run', spellings: { npm: '--dry-run', pnpm: '--dry-run', bun: '--dry-run' } },
+  { option: 'registry', cliName: 'registry', spellings: { npm: '--registry', pnpm: '--registry', bun: '--registry' } },
+];
 
 /** Which package manager each lockfile belongs to, for `detectPackageManager`. */
 /* `npm-shrinkwrap.json` is here and not in `LOCK_FILES`: it says npm as surely as a
