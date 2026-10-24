@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to c8b46cdcf290381c88e5a411cc14567de054f5af -->
+<!-- rman:documented-up-to ddddd77bb42000374dee3ba5d05251bbdf7ac2ed -->
+
+## v2.35.0 (2026-10-24)
+
+### ✨ Features
+
+- **ci:** pick the Node package manager from the lockfile when nothing names one (6c1e5b3)
+
+---
 
 ## v2.34.0 (2026-10-21)
 
