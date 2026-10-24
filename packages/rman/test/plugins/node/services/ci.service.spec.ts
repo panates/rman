@@ -95,6 +95,71 @@ describe('services/ci', () => {
       expect(CiService.resolvePackageManager(repo)).toBe('bun');
     });
 
+    /** A workspace whose root holds `rootLocks` and whose one package `pkg-a` holds `pkgLocks`. */
+    async function withLocks(rootLocks: string[], pkgLocks: string[] = [], rmanrc: unknown = {}) {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify(rmanrc));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+      for (const name of rootLocks) fs.writeFileSync(path.join(dir, name), '');
+      for (const name of pkgLocks) fs.writeFileSync(path.join(dir, 'packages/a', name), '');
+      const repo = await createRepository(dir);
+      return { dir, repo, pkgA: repo.getPackage('pkg-a')! };
+    }
+
+    it("falls back to the lockfile's package manager when nothing names one", async () => {
+      for (const [lock, manager] of [
+        ['package-lock.json', 'npm'],
+        ['npm-shrinkwrap.json', 'npm'],
+        ['yarn.lock', 'yarn'],
+        ['pnpm-lock.yaml', 'pnpm'],
+        ['bun.lock', 'bun'],
+        ['bun.lockb', 'bun'],
+      ]) {
+        const { repo, pkgA } = await withLocks([lock]);
+        expect([lock, CiService.resolvePackageManager(repo)]).toEqual([lock, manager]);
+        /** A member with no lockfile of its own installs with the repository's. */
+        expect([lock, CiService.resolvePackageManager(pkgA)]).toEqual([lock, manager]);
+      }
+    });
+
+    it('lets .rmanrc and the flag win over the lockfile', async () => {
+      const { repo } = await withLocks(['pnpm-lock.yaml'], [], { packageManager: { node: 'yarn' } });
+      expect(CiService.resolvePackageManager(repo)).toBe('yarn');
+      expect(CiService.resolvePackageManager(repo, 'bun')).toBe('bun');
+    });
+
+    it('takes the nearest lockfile, so a package installing on its own answers for itself', async () => {
+      const { repo, pkgA } = await withLocks(['package-lock.json'], ['yarn.lock']);
+      expect(CiService.resolvePackageManager(pkgA)).toBe('yarn');
+      expect(CiService.resolvePackageManager(repo)).toBe('npm');
+    });
+
+    it('two lockfiles of one manager are one answer', async () => {
+      const { repo } = await withLocks(['package-lock.json', 'npm-shrinkwrap.json']);
+      expect(CiService.resolvePackageManager(repo)).toBe('npm');
+    });
+
+    it("refuses two managers' lockfiles side by side, naming both and the setting that decides", async () => {
+      const { repo } = await withLocks(['package-lock.json', 'pnpm-lock.yaml']);
+      expect(() => CiService.resolvePackageManager(repo)).toThrow(
+        /npm and pnpm \(package-lock\.json, pnpm-lock\.yaml\).*packageManager: \{ node: npm \| pnpm \}/,
+      );
+      /** ...and the setting does decide: nothing is detected once one is named. */
+      fs.writeFileSync(path.join(repo.dirname, '.rmanrc'), JSON.stringify({ packageManager: { node: 'pnpm' } }));
+      expect(CiService.resolvePackageManager(await createRepository(repo.dirname))).toBe('pnpm');
+    });
+
+    it('does not look above the repository root', async () => {
+      const outer = tmp();
+      fs.writeFileSync(path.join(outer, 'yarn.lock'), '');
+      const dir = path.join(outer, 'repo');
+      writeJson(dir, 'package.json', { name: 'root', version: '1.0.0' });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      const repo = await createRepository(dir);
+      expect(CiService.resolvePackageManager(repo)).toBe('npm');
+    });
+
     it('throws for an unrecognized package manager', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'root', version: '1.0.0' });

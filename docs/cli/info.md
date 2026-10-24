@@ -7,7 +7,7 @@ rman info [options]
 ```
 
 Prints local environment information (OS, CPU, memory, shell, Node + whichever package manager
-`.rmanrc "packageManager.node"` actually configures (default npm), git, installed `rman`/`typescript`
+`.rmanrc "packageManager.node"` configures - or, with none, the one the root's lockfile belongs to (default npm) - git, installed `rman`/`typescript`
 versions) alongside basic repository information (monorepo vs. single package, name, version, root
 path, package count). Useful for bug reports and CI debugging. No package filtering options apply -
 this command reports on the whole environment/repository. The report is the whole output, so no
@@ -54,8 +54,8 @@ rman info
 `cargo, node` means a directory both recognize is a Cargo package. Which one claimed each package
 is [`rman list`](list.md)'s `Platform` column.
 
-With `.rmanrc { "packageManager": { "node": "pnpm" } }`, `Binaries` reports `pnpm`'s own version instead of
-npm's - every package-manager-aware command (`ci`/`publish`) already shells out to the configured
+With `.rmanrc { "packageManager": { "node": "pnpm" } }`, or a `pnpm-lock.yaml` at the root and no setting,
+`Binaries` reports `pnpm`'s own version instead of npm's - every package-manager-aware command (`ci`/`publish`) already shells out to the configured
 one, not npm, so that's the version actually relevant here.
 
 ```bash

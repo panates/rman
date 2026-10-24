@@ -23,7 +23,7 @@ options, in addition to:
 
 | Option | Type | Choices | Description |
 | --- | --- | --- | --- |
-| `--package-manager <name>` | string | `npm`, `yarn`, `pnpm`, `bun` | Package manager to install with. Default: the root's `.rmanrc "packageManager.node"`, else `npm`. |
+| `--package-manager <name>` | string | `npm`, `yarn`, `pnpm`, `bun` | Package manager to install with. Default: the root's `.rmanrc "packageManager.node"`, else the one the root's lockfile belongs to, else `npm`. |
 | `--progress` | boolean | - | Show a live progress panel while running (default `true`; auto-disabled when not a TTY). Unlike `run`/`build`, completion is **not** reported as a per-package tally - only failures are called out by name. |
 
 ## Examples
@@ -51,6 +51,14 @@ ci completed (4.2s)
   validated: a tool Node does not have throws `Invalid "packageManager.node" in .rmanrc: "<value>"
   (expected one of: npm, yarn, pnpm, bun)`, and the old bare `packageManager: pnpm` is refused with
   the spelling to use instead, rather than silently installing with npm.
+- **With neither the flag nor the setting, the lockfile decides** - `package-lock.json` or
+  `npm-shrinkwrap.json` is npm, `yarn.lock` yarn, `pnpm-lock.yaml` pnpm, `bun.lock`/`bun.lockb`
+  bun - and no lockfile is npm. It is read **before** the wipe deletes it, so `rman ci` in a
+  pnpm repository reinstalls with pnpm and writes a fresh `pnpm-lock.yaml`. Lockfiles of two
+  different managers side by side are refused, naming both, until one is deleted or
+  `packageManager.node` says which. `package.json#packageManager` is not read: it is a declaration
+  nothing checks, and it goes stale - this repository's own says `yarn@3.4.1` beside a
+  `package-lock.json`.
 
 ## See also
 

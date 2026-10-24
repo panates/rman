@@ -1,3 +1,4 @@
+import type { Repository } from '../../../../core/classes/repository.js';
 import { SystemInfo as OrgSystemInfo } from '../../../../services/system-info.js';
 import { CiService } from '../services/ci.service.js';
 /**
@@ -48,7 +49,10 @@ export function augmentSystemInfo(): void {
     const configured: unknown = options?.repository?.config?.packageManager;
     if (typeof configured === 'string') CiService.resolvePackageManager(options!.repository!);
     const packageManager: OrgSystemInfo.PackageManager =
-      options?.packageManager ?? asPackageManager((configured as { node?: unknown } | undefined)?.node) ?? 'npm';
+      options?.packageManager ??
+      asPackageManager((configured as { node?: unknown } | undefined)?.node) ??
+      detected(options?.repository) ??
+      'npm';
 
     return base({
       ...options,
@@ -84,6 +88,18 @@ function asPackageManager(value: unknown): OrgSystemInfo.PackageManager | undefi
   return typeof value === 'string' && value in PACKAGE_MANAGER_BINARY
     ? (value as OrgSystemInfo.PackageManager)
     : undefined;
+}
+
+/** The package manager the repository's lockfile names, as `ci` and `publish` would read it. */
+/* **A lockfile pair `ci` would refuse reads as no answer here**: `info` is what someone runs to find
+ * out what is wrong, so it must not be the command that stops on it - `ci` names the files. */
+function detected(repository: Repository | undefined): OrgSystemInfo.PackageManager | undefined {
+  if (!repository) return undefined;
+  try {
+    return CiService.detectPackageManager(repository);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Marks an implementation as already wrapped. A symbol rather than a property name so it cannot

@@ -37,7 +37,8 @@ export class NpmPublishTarget implements PublishTarget {
     packageManager: {
       target: 'cli',
       cliName: 'package-manager',
-      describe: 'Package manager to publish with (default: .rmanrc "packageManager.node", else npm)',
+      describe:
+        'Package manager to publish with (default: .rmanrc "packageManager.node", else the lockfile\'s, else npm)',
       choices: CiService.PACKAGE_MANAGERS,
     },
     access: {
