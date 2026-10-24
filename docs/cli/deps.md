@@ -93,8 +93,14 @@ In this order:
 2. **The package's other declarations of the same name.** A `devDependencies` caret is not moved
    outside the package's own `peerDependencies` range for that name. When every declaration of a
    name is a movable range, they move together.
-3. **Node.** A version whose `engines.node` drops a Node release that the package supports (its own
-   `engines.node`, or else the root's) and that the currently declared version still runs on.
+3. **Node**, two questions, and a version has to pass both:
+   - does its `engines.node` take the Node running rman;
+   - does it share **at least one** Node with the package's own `engines.node` (or else the root's).
+
+   A gap is not a refusal: jsdom 30.1.3 needs `^22.22.2 || ^24.15.0 || >=26.0.0`, leaving Node 25
+   out, and on Node 24.15.0 it is taken by a package saying `>=22`. A range with nothing in common
+   is - `>=22` against a package on `^20`. Either way a version is only held when the currently
+   declared one passes the same question, so a rule the repository already breaks holds nothing.
 4. **Another dependency's peer range**, at the version *that* dependency moves to - the
    `npm-check-updates --peer` check. When a newer version of the dependency stating the range would
    allow more, both move.
@@ -123,8 +129,27 @@ refuses a peer conflict anywhere in the tree with `ERESOLVE`. If it does:
 
 Under `-u --json` the document is printed after this, so a held upgrade reads `held`. A plain
 `rman deps` does not ask npm, so a conflict like this shows only once you run `-u`.
-`--no-verify` skips the check. Another package manager (`.rmanrc "packageManager.node"`) is not
-asked, and a note says so.
+`--no-verify` skips the check.
+
+**A pnpm repository is asked with pnpm** - `pnpm install --dry-run --strict-peer-dependencies
+--ignore-scripts`, which writes nothing either. Which package manager that is comes from
+`--package-manager`'s usual order: `.rmanrc "packageManager.node"`, else the lockfile, else npm.
+
+- **`--strict-peer-dependencies` is what makes it a check.** pnpm treats an unmet peer as a warning
+  by default, so the plain dry run exits 0 on exactly the conflict above.
+- **Only an issue one of this run's upgrades is part of counts** - the peer at the version this run
+  moved it to, or a package wanting it at its new version. Strict is stricter than the repository,
+  which has lived with its peer warnings; an issue none of the upgrades touches is the repository's
+  own and does not stop the run. A conflict an upgrade brings in only through a dependency of its
+  own names that dependency, not the upgrade, and passes too - as it would under pnpm's default.
+- **The peer is held before the packages wanting it**: `typescript` moved to 7.0.2 beside
+  `@typescript-eslint/parser` wanting `<6` holds `typescript`; with `typescript` already on 7, the
+  parser's move is held instead.
+- **pnpm 11.8 is the first with `--dry-run`.** An older one is not asked, and a note says which
+  version it found.
+- Any other failure puts every manifest back, as with npm.
+
+yarn and bun are not asked, and a note says so.
 
 `-u` does not install anything and does not touch the lockfile. Run your usual install afterwards.
 

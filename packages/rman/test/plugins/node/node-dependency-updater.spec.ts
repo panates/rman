@@ -16,11 +16,18 @@ class FakeRegistryUpdater extends NodeDependencyUpdater {
   readonly calls: string[] = [];
   inFlight = 0;
   peak = 0;
+  /** The Node a release is checked against, fixed - the suite runs on several, and an answer that
+   *  moved with the machine would be a different test on each. */
+  node = '24.15.0';
 
   constructor(
     readonly registry: Record<string, { latest?: string; releases: NpmRelease[]; time?: Record<string, string> }>,
   ) {
     super();
+  }
+
+  protected override runningNode(): string {
+    return this.node;
   }
 
   protected override async fetchReleases(name: string, range: string): Promise<NpmReleases | undefined> {
@@ -361,19 +368,76 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       expect(written.peerDependencies.react).toBe('^19.0.0');
     });
 
-    it('holds a version whose engines.node does not cover every Node the package supports', async () => {
-      const dir = single({ engines: { node: '>=20' }, dependencies: { a: '^1.0.0' } });
+    it('holds a version whose engines.node leaves out the Node rman runs on', async () => {
+      const dir = single({ dependencies: { a: '^1.0.0' } });
       const updater = new FakeRegistryUpdater({
         a: { releases: releases('1.0.0', { version: '1.1.0', engines: { node: '>=22' } }) },
+      });
+      updater.node = '20.19.0';
+      const { entries } = await plan(dir, updater, { target: 'major' });
+      const a = entry(entries, 'a');
+      expect(a).toMatchObject({ status: 'held', latest: '1.1.0' });
+      expect(a.reason).toContain('a@1.1.0 needs node >=22, this is node 20.19.0');
+    });
+
+    /** Reported on `panates/peacox-ui`: jsdom 30 leaves Node 25 out, the package's `engines` takes
+     *  it in, and the old rule - every Node the package supports - held the upgrade on a machine
+     *  running 24.15.0, where it installs. A gap in the range is not this Node's problem. */
+    it("takes a version whose engines.node has a gap the running Node is not in, whatever the package's engines say", async () => {
+      const dir = single({ engines: { node: '>=22' }, devDependencies: { jsdom: '^29.1.1' } });
+      const updater = new FakeRegistryUpdater({
+        jsdom: {
+          releases: releases(
+            { version: '29.1.1', engines: { node: '^20.19.0 || ^22.13.0 || >=24.0.0' } },
+            { version: '30.1.3', engines: { node: '^22.22.2 || ^24.15.0 || >=26.0.0' } },
+          ),
+        },
+      });
+      const { entries } = await plan(dir, updater, { target: 'major' });
+      expect(entry(entries, 'jsdom')).toMatchObject({ status: 'update', target: '^30.1.3' });
+
+      /** The same release, on the Node it leaves out. */
+      updater.node = '25.2.0';
+      const held = entry((await plan(dir, updater, { target: 'major' })).entries, 'jsdom');
+      expect(held).toMatchObject({ status: 'held' });
+      expect(held.reason).toContain('jsdom@30.1.3 needs node ^22.22.2 || ^24.15.0 || >=26.0.0, this is node 25.2.0');
+    });
+
+    /** The second question: a range with *nothing* in common with the package's own `engines` is
+     *  refused even where the running Node takes it - a gap would not be, which the case above pins. */
+    it("holds a version whose engines.node shares no Node with the package's engines", async () => {
+      const dir = single({ engines: { node: '^20' }, dependencies: { a: '^1.0.0' } });
+      const updater = new FakeRegistryUpdater({
+        a: {
+          releases: releases(
+            { version: '1.0.0', engines: { node: '>=20' } },
+            { version: '1.1.0', engines: { node: '>=22' } },
+          ),
+        },
       });
       const { entries } = await plan(dir, updater, { target: 'major' });
       const a = entry(entries, 'a');
       expect(a).toMatchObject({ status: 'held', latest: '1.1.0' });
-      expect(a.reason).toContain('a@1.1.0 needs node >=22, app supports >=20');
+      expect(a.reason).toContain('a@1.1.0 needs node >=22, none of which app supports (^20)');
+
+      /** One Node in common is enough. */
+      fs.writeFileSync(
+        path.join(dir, 'package.json'),
+        JSON.stringify({
+          name: 'app',
+          version: '1.0.0',
+          engines: { node: '^20 || ^22' },
+          dependencies: { a: '^1.0.0' },
+        }),
+      );
+      expect(entry((await plan(dir, updater, { target: 'major' })).entries, 'a')).toMatchObject({ status: 'update' });
     });
 
+    /** `eslint ^9` needs `^18.18.0`: on an older 18 the 9.x installed today does not run either, so
+     *  a newer 9.x is no worse - only a release that stops working where the current one works is
+     *  refused. */
     it('does not hold a version to a Node the current version already leaves out', async () => {
-      const dir = single({ engines: { node: '>=18' }, devDependencies: { a: '^1.0.0' } });
+      const dir = single({ devDependencies: { a: '^1.0.0' } });
       const updater = new FakeRegistryUpdater({
         a: {
           releases: releases(
@@ -383,10 +447,15 @@ describe('plugins/node/NodeDependencyUpdater', () => {
           ),
         },
       });
+      updater.node = '18.12.0';
       const { entries } = await plan(dir, updater, { target: 'major' });
-      const a = entry(entries, 'a');
+      expect(entry(entries, 'a')).toMatchObject({ status: 'update', target: '^1.2.0' });
+
+      /** On 18.18, where 1.0.0 runs, 1.2.0 would stop it: held, and 1.1.0 taken instead. */
+      updater.node = '18.18.0';
+      const a = entry((await plan(dir, updater, { target: 'major' })).entries, 'a');
       expect(a).toMatchObject({ status: 'update', target: '^1.1.0', latest: '1.2.0' });
-      expect(a.reason).toContain('a@1.2.0 needs node >=20, app supports >=18');
+      expect(a.reason).toContain('a@1.2.0 needs node >=20, this is node 18.18.0');
     });
 
     it("holds a version a sibling package's peer range refuses", async () => {
@@ -521,6 +590,129 @@ describe('plugins/node/NodeDependencyUpdater', () => {
     it('blames nothing when no move appears at its new version', async () => {
       const { updater, entries } = await planned();
       expect(updater.blame('  ERESOLVE unable to resolve dependency tree\n  from b@2.0.01', entries)).toEqual([]);
+    });
+  });
+
+  /**
+   * **pnpm is asked too**, through `pnpm install --dry-run --strict-peer-dependencies`. The report
+   * below is the one pnpm 12.10.1 printed for `typescript@^7` beside `@typescript-eslint/parser@8.40.0`,
+   * whose peer range stops below 6 - trimmed of the dry run's package list, workspace-indented as it
+   * comes from a member.
+   */
+  describe('verify with pnpm', () => {
+    const PEER_ISSUES = [
+      'Dry run complete. A real install would make the following changes (nothing was written to disk):',
+      '[ERR_PNPM_PEER_DEP_ISSUES] Unmet peer dependencies',
+      '',
+      'packages/a',
+      '  ✕ unmet peer typescript',
+      '    Installed: 7.0.2',
+      '    Wanted:',
+      '      ">=4.8.4 <6.0.0":',
+      '        @typescript-eslint/parser@8.40.0',
+      '        @typescript-eslint/typescript-estree@8.40.0',
+      'hint: To disable failing on peer dependency issues, add the following to pnpm-workspace.yaml in your project root:',
+    ].join('\n');
+
+    /** pnpm answered from a script, and every call it was asked recorded. */
+    class FakePnpmUpdater extends FakeRegistryUpdater {
+      readonly asked: string[] = [];
+      constructor(
+        registry: ConstructorParameters<typeof FakeRegistryUpdater>[0],
+        readonly answers: { version?: string; install?: { code: number; stdout: string } },
+      ) {
+        super(registry);
+      }
+      protected override async pnpm(_ctx: DependencyUpdater.Context, args: string) {
+        this.asked.push(args);
+        if (args === '--version') return { code: 0, stdout: `${this.answers.version ?? '12.10.1'}\n` };
+        return this.answers.install ?? { code: 0, stdout: '' };
+      }
+    }
+
+    /** A pnpm-locked repository whose plan moves the parser to 8.40.0 and, unless `typescript` says
+     *  it is already there, typescript to 7.0.2 - written, so `verify` sees what `deps -u` would leave
+     *  on disk. */
+    async function written(answers: FakePnpmUpdater['answers'], typescript = '^5.9.0') {
+      const dir = single({ devDependencies: { typescript, '@typescript-eslint/parser': '^8.0.0' } });
+      fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+      const updater = new FakePnpmUpdater(
+        {
+          typescript: { releases: releases('5.9.0', '7.0.2') },
+          '@typescript-eslint/parser': { releases: releases('8.0.0', '8.40.0') },
+        },
+        answers,
+      );
+      const { repository, entries } = await plan(dir, updater, { target: 'major' });
+      const ctx: DependencyUpdater.Context = { app: repository.app, repository, options: { concurrency: 4 } };
+      await updater.applyPlan(ctx, entries);
+      return { updater, entries, ctx };
+    }
+
+    /** `console.error` collected rather than printed, for the "Not verified" note. */
+    async function quietly<T>(fn: () => Promise<T>): Promise<{ result: T; notes: string[] }> {
+      const original = console.error;
+      const notes: string[] = [];
+      console.error = (...args: unknown[]) => void notes.push(args.join(' '));
+      try {
+        return { result: await fn(), notes };
+      } finally {
+        console.error = original;
+      }
+    }
+
+    it('asks pnpm with strict peers, and passes when it installs', async () => {
+      const { updater, ctx } = await written({});
+      expect(await updater.verify(ctx)).toBeUndefined();
+      expect(updater.asked).toEqual(['--version', 'install --dry-run --strict-peer-dependencies --ignore-scripts']);
+    });
+
+    /** Below 11.8 `install` has no `--dry-run`, and nothing about an older pnpm was measured. */
+    it('does not ask a pnpm older than 11.8, and says so', async () => {
+      const { updater, ctx } = await written({ version: '11.7.2' });
+      const { result, notes } = await quietly(() => updater.verify(ctx));
+      expect(result).toBeUndefined();
+      expect(updater.asked).toEqual(['--version']);
+      expect(notes.join('\n')).toContain('pnpm 11.7.2 has no dry-run install - it needs pnpm 11.8.0');
+    });
+
+    it('refuses on a peer issue one of the moves is part of, and holds the peer', async () => {
+      const { updater, entries, ctx } = await written({ install: { code: 1, stdout: PEER_ISSUES } });
+      const refusal = await updater.verify(ctx);
+      expect(refusal).toContain('✕ unmet peer typescript');
+      expect(refusal).not.toContain('Dry run complete');
+      /** Both moved: the peer outgrowing its requirer is the one to hold. */
+      const blamed = updater.blame(refusal!, entries);
+      expect(blamed.map(b => b.entry.name)).toEqual(['typescript']);
+      expect(blamed[0]!.reason).toBe(
+        'pnpm cannot install it: unmet peer typescript (found 7.0.2), wanted ">=4.8.4 <6.0.0" by @typescript-eslint/parser@8.40.0',
+      );
+    });
+
+    /** typescript was already on 7, so the parser moving to 8.40.0 is what changed. */
+    it('holds the requirer when the peer did not move', async () => {
+      const { updater, entries } = await written({}, '^7.0.2');
+      expect(entries.filter(e => e.status === 'update').map(e => e.name)).toEqual(['@typescript-eslint/parser']);
+      expect(updater.blame(PEER_ISSUES, entries).map(b => b.entry.name)).toEqual(['@typescript-eslint/parser']);
+    });
+
+    /** Strict is stricter than the repository, which has lived with its peer warnings. Counted, a
+     *  repository carrying one could never upgrade anything. */
+    it("lets through a peer issue none of the moves is part of - the repository's own", async () => {
+      const unrelated = PEER_ISSUES.replace('typescript\n', 'react\n')
+        .replace('Installed: 7.0.2', 'Installed: 19.0.0')
+        .replace(/@typescript-eslint\/[a-z-]+@8\.40\.0/g, 'old-widget@1.0.0');
+      const { updater, ctx } = await written({ install: { code: 1, stdout: unrelated } });
+      expect(await updater.verify(ctx)).toBeUndefined();
+    });
+
+    it("refuses on any other failure, with pnpm's own error lines", async () => {
+      const stdout = '+ typescript@7.0.2\n[ERR_PNPM_NO_MATCHING_VERSION] No matching version found for typescript@^9\n';
+      const { updater, entries, ctx } = await written({ install: { code: 1, stdout } });
+      const refusal = await updater.verify(ctx);
+      expect(refusal).toBe('  [ERR_PNPM_NO_MATCHING_VERSION] No matching version found for typescript@^9');
+      /** Nothing to pin it on, so the command puts every write back. */
+      expect(updater.blame(refusal!, entries)).toEqual([]);
     });
   });
 
