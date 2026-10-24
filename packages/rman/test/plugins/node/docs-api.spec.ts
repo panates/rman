@@ -64,10 +64,10 @@ describe('docs/node.md: the documented API surface', () => {
     expect(Object.keys(config).sort()).toEqual(['commands', 'platforms', 'publishTargets']);
     expect(config.platforms).toHaveLength(1);
     expect(config.publishTargets).toHaveLength(1);
-    /** `ci` and `clean` - the two commands the node preset brings, `publish` being the core's.
-     *  Declarative factories, so their names come from calling them, which needs an application;
-     *  the count is what this case can see. */
-    expect(config.commands).toHaveLength(2);
+    /** `ci`, `clean` and `install` - the commands the node preset brings, `publish` being the
+     *  core's. Declarative factories, so their names come from calling them, which needs an
+     *  application; the count is what this case can see. */
+    expect(config.commands).toHaveLength(3);
   });
 
   /**

@@ -94,7 +94,7 @@ worked examples of every single command, see **[docs/cli-rman.md](https://github
 | [`github-release`](#rman-github-release) | Creates the repository's GitHub Release for its release tag. |
 | [`import <path>`](#rman-import-path) | Imports an external git repository as a new package, with history. |
 
-**`ci` and `clean` come from the `node` built-in**, which ships inside this package - each is about
+**`ci`, `install` and `clean` come from the `node` built-in**, which ships inside this package - each is about
 npm or TypeScript rather than about repositories. It needs no declaration: rman lays its own `node`
 preset under every repository, so a clone with no `.rmanrc` at all already has them, plus the `node`
 technology itself and the npm publish target. It used to take a second package (`rman-node`) and a

@@ -52,12 +52,13 @@ rman <command> --help   # full option list for that one command
 | `github-release` | [`docs/cli/github-release.md`](cli/github-release.md) | Creates the repository's GitHub Release for the version that just shipped. |
 | `import <path>` | [`docs/cli/import.md`](cli/import.md) | Imports an external git repository as a new package, with history. |
 
-**`ci` and `clean` are listed apart** - they come from the
+**`ci`, `install` and `clean` are listed apart** - they come from the
 [`node` built-in](rman.md#the-node-built-in), because each is about npm or TypeScript rather than
 about repositories. It ships *inside* rman **and is laid under every repository by default**, so
 they are there in a clone with no `.rmanrc` at all:
 
 | `ci` | [`docs/cli/ci.md`](cli/ci.md) | Wipes `node_modules` and lockfiles, then reinstalls from scratch. |
+| `install`, `i` | [`docs/cli/install.md`](cli/install.md) | Installs with the repository's own package manager, deleting nothing first. |
 | `clean` | [`docs/cli/clean.md`](cli/clean.md) | Removes compiled TypeScript output and whatever `.rmanrc "clean"` lists. |
 
 They are still a *contribution* rather than core, which is the thing to hold onto: a repository of
