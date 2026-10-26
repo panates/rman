@@ -509,6 +509,26 @@ services skip  0.0.6           not published - .rmanrc "publish.skip"
 - **Uncommitted changes under the unpublished package stop the published one**, here and in
   `rman publish`, since they would be built into its artifact.
 
+**A package that goes in some other way is named with `.rmanrc "carries"`.** A Docker image that
+copies another package's build output in through `publish.docker.buildContexts`, or a build script
+that bundles a sibling's directory, has no dependency edge to read - so the package says it:
+
+```yaml
+# packages/engine/.rmanrc.yml
+carries: ['@acme/web-ui'] # a package name, or a directory relative to the repository root
+publish:
+  target: ['docker']
+  docker:
+    buildContexts:
+      webui: '../web-ui/dist'
+```
+
+Everything above then holds for `@acme/web-ui` as well - its commits release `engine`, its entry in
+the changelog, its uncommitted changes stopping the image - and what it needs at run time is
+carried too. Unlike a run-time dependency, a listed package is carried **even if it takes its own
+version**: nothing in a manifest connects the two, so no cascade would reach `engine` otherwise.
+An entry naming no package is an error.
+
 `.rmanrc "version.skip"` says it outright, either way:
 
 ```yaml

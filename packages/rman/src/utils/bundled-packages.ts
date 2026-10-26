@@ -43,10 +43,11 @@ export function unversionedReason(pkg: Package): string | undefined {
 }
 
 /**
- * The in-repo packages whose commits count as `pkg`'s own: those it needs at run time that take no
- * version themselves, and theirs in turn - a versioned one stops the walk, since it releases on its
- * own and reaches `pkg` through the ordinary cascade. Empty for a package that is itself not
- * versioned.
+ * The in-repo packages whose commits count as `pkg`'s own: every one its `.rmanrc "carries"` names,
+ * and those it needs at run time that take no version themselves - and theirs in turn. A versioned
+ * run-time dependency stops the walk, since it releases on its own and reaches `pkg` through the
+ * ordinary cascade. Empty for a package that is itself not versioned. Throws for a `carries` entry
+ * naming no package.
  *
  * `isUnversioned` is the planner's answer when one is asking; `unversionedReason` otherwise.
  */
@@ -75,6 +76,14 @@ export function bundledPackages(
       visit(dep);
     }
   };
+  /** Declared first and taken whatever their versioning - see `carries` for why a versioned one
+   *  counts here and not in the walk. What a carried package needs at run time is inside the
+   *  artifact as well, so the walk goes on from it. */
+  for (const carried of declaredCarries(pkg)) {
+    if (carried === pkg || result.includes(carried)) continue;
+    result.push(carried);
+    visit(carried);
+  }
   visit(pkg);
   return result;
 }
@@ -87,4 +96,22 @@ export function bundledPackages(
 export function filesOwnedBy(files: readonly string[], pkg: Package): string[] {
   const dirs = [pkg, ...bundledPackages(pkg)].map(p => p.dirname);
   return [...new Set(dirs.flatMap(dir => filesUnder(files, dir)))];
+}
+
+/** `pkg`'s `.rmanrc "carries"`, as packages - throwing for an entry that names none. */
+/* **An unknown entry is an error**, where `dependencies` ignores one. That key states edges for a
+ * graph and a missing end changes no answer; this one exists because a change went unreleased in
+ * silence, and a typo here would be that same silence again. */
+function declaredCarries(pkg: Package): Package[] {
+  const entries = pkg.config.carries ?? [];
+  return entries.map(entry => {
+    const found = pkg.repository.resolveDeclaredPackage(entry);
+    if (!found) {
+      throw new Error(
+        `.rmanrc "carries" of ${pkg.name} names "${entry}", which is no package in this repository ` +
+          `- write a package name, or a directory relative to the repository root.`,
+      );
+    }
+    return found;
+  });
 }
