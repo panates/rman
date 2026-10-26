@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to f2444cc2bb81affe7023429f075de36b37606452 -->
+<!-- rman:documented-up-to 75125e1132f2f6900dd110ca1ac33d09641473c4 -->
+
+## v2.39.0 (2026-10-26)
+
+### ✨ Features
+
+- **node:** find workspace members from pnpm-workspace.yaml (f3b83c6)
+
+### 🧪 Tests
+
+- **cli:** pass from a terminal as well - six specs assumed a pipe (779d100)
+
+---
 
 ## v2.38.0 (2026-10-26)
 
