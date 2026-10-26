@@ -6,13 +6,17 @@ import { version } from '../src/constants.js';
 import type { ArgsOf, CommandOption } from '../src/index.js';
 import { runCli, useTestEcosystem } from './_fixture.js';
 
-/** Runs `fn` with console.log captured (plain, unmodified) instead of printed - proves what the
+/** Runs `fn` with console.log captured, colour stripped, instead of printed - proves what the
  *  CLI actually logged without spamming test output. */
+/* **Colour is stripped, because mocha run from a terminal has a TTY.** `--config` colours its YAML
+ * when stdout is one, and the escape codes sit between a key and its colon - so `run.build:` was in
+ * the output and not in the string, and three cases failed on a developer's machine while CI, which
+ * has no TTY, stayed green. The same reason `config.command.spec.ts` strips rather than assumes. */
 async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
   const original = console.log;
   const lines: string[] = [];
   console.log = (...args: unknown[]) => {
-    lines.push(args.map(a => (typeof a === 'string' ? a : String(a))).join(' '));
+    lines.push(stripAnsi(args.map(a => (typeof a === 'string' ? a : String(a))).join(' ')));
   };
   try {
     await fn();
@@ -25,17 +29,28 @@ async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
 /** Runs `fn` with `process.stderr.write` captured. The status lines go to stderr on purpose - so a
  *  caller redirecting stdout into a file keeps the answer alone in it - which is also why
  *  `captureLogs` above cannot see them. */
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+/* **stderr is made a pipe for the run**, which is what every case below assumes: on a TTY the status
+ * line is live, so a spinner frame arrived beside the result line and "one line, not two" failed
+ * whenever mocha ran from a terminal. The live half is `status-region.spec.ts`'s. */
 async function captureStderr(fn: () => Promise<void>): Promise<string> {
   const original = process.stderr.write.bind(process.stderr);
+  const originalIsTTY = process.stderr.isTTY;
   let out = '';
   (process.stderr as NodeJS.WriteStream).write = ((chunk: any) => {
     out += String(chunk);
     return true;
   }) as typeof process.stderr.write;
+  Object.defineProperty(process.stderr, 'isTTY', { value: false, configurable: true });
   try {
     await fn();
   } finally {
     (process.stderr as NodeJS.WriteStream).write = original;
+    Object.defineProperty(process.stderr, 'isTTY', { value: originalIsTTY, configurable: true });
   }
   return out;
 }
