@@ -13,7 +13,7 @@
     "@panates/eslint-config-ts": "^2.3.3",
     "@panates/tsconfig": "^2.1.8",
     "@swc-node/register": "^1.12.1",
-    "@swc/core": "^1.16.18",
+    "@swc/core": "^1.16.20",
     "@swc/helpers": "^0.5.23",
     "@types/envinfo": "^7.8.4",
     "@types/ini": "^4.1.1",

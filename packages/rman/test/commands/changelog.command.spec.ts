@@ -976,9 +976,12 @@ describe('commands/changelog', () => {
      * exit 0. Deleting a stub that is load-bearing is how a suite starts shelling out to a real
      * binary, so the control came first.
      */
+    /** `--no-progress`, because this narration is the line printed where the panel does not draw -
+     *  on a terminal the panel shows the detection instead, and this case failed whenever mocha
+     *  ran from one. */
     it('narrates the boundary detection before generating, when --from is omitted', async () => {
       const { dir } = fixtureWithOneFeature();
-      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['changelog'] }));
+      const lines = await captureLogs(() => runCli({ cwd: dir, argv: ['changelog', '--no-progress'] }));
       expect(lines.some(l => l.includes("Detecting each package's last release..."))).toBe(true);
       /** Nothing is published, so detection falls back to "not yet pushed" and finds the real
        *  commit. */
