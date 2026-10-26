@@ -267,13 +267,13 @@ they still install.
 ```bash
 rman deps                       # what could move, and what holds it back
 rman deps -u                    # write the new ranges, then check that they install
-rman deps --target major        # across a major too
+rman deps --target minor        # stay inside each major
 rman deps '@types/*'            # only the dependencies matching this glob
 ```
 
-**A dependency stays inside its major by default** (`deps.target: minor`). Taking a major is a
-decision a person makes: `--target major` for one run, `.rmanrc "deps.target"` for a standing
-answer, or `deps.targets` for one dependency. Only a caret or tilde range is rewritten; a version is
+**A dependency may cross a major by default** (`deps.target: major`), as long as every other rule
+allows it. To keep majors a decision: `--target minor` for one run, `.rmanrc "deps.target": minor`
+for a standing answer, or `deps.targets` for one dependency. Only a caret or tilde range is rewritten; a version is
 offered only when every rule rman can see allows it. See
 [docs/cli/deps.md](https://github.com/panates/rman/blob/main/docs/cli/deps.md).
 

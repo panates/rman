@@ -14,11 +14,12 @@ Lists the dependencies that have a newer version on their registry, and with `-u
 ranges to the manifests. It covers every package in the repository, the monorepo root's own
 tooling included. `names` narrows the run to the dependencies matching those globs.
 
-**A dependency stays inside its major by default.** A major is a break, and taking one is a decision
-a person makes: `--target major` for one run, or `deps.target` / `deps.targets` for a standing answer.
+**A dependency may cross a major by default**, as long as every rule below allows it. To keep a
+major a decision a person makes, `--target minor` does it for one run, and `deps.target` /
+`deps.targets` for a standing answer.
 
 A version is offered only when **every rule rman can see allows it**. Each package gets one table,
-one row per dependency that has something newer:
+one row per dependency that has something newer - here under `deps.target: minor`:
 
 ```
 app
@@ -52,7 +53,7 @@ list of things to do.
 
 **Sizes are read the way a caret range reads them.** `^0.1.0` stops below `0.2.0`, because a `0.x`
 minor may break; so `0.1.x -> 0.2.0` is a major here, and a package that has lived on `0.x` for
-years only moves inside its minor until `deps.targets` says otherwise.
+years only moves inside its minor under `target: minor` until `deps.targets` says otherwise.
 
 ## What moves
 
@@ -168,7 +169,7 @@ in addition to:
 | Option | Alias | Type | Description |
 | --- | --- | --- | --- |
 | `--upgrade` | `-u` | boolean | Write the new ranges to the manifests, then check that they still install. |
-| `--target` | - | `patch` \| `minor` \| `major` | The largest move a dependency may make (default `minor`). Overrides `deps.target` **and** `deps.targets` for this run. |
+| `--target` | - | `patch` \| `minor` \| `major` | The largest move a dependency may make (default `major`). Overrides `deps.target` **and** `deps.targets` for this run. |
 | `--reject` | - | string (repeatable) | Leave the dependencies matching these globs alone. Added to `deps.reject`. |
 | `--min-age` | - | number | Only move to a version published at least this many days ago. Overrides `deps.minAge`. |
 | `--concurrency` | - | number | How many registry lookups run at once (default `16`). |
@@ -181,7 +182,7 @@ in addition to:
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
-| `target` | `patch` \| `minor` \| `major` | `minor` | The largest move a dependency may make. The sizes are the version scheme's own; the default is every size but the largest. |
+| `target` | `patch` \| `minor` \| `major` | `major` | The largest move a dependency may make. The sizes are the version scheme's own; the default is the largest. `minor` keeps every dependency inside its major. |
 | `targets` | `{ [glob]: size }` | - | The same, for the dependencies a glob matches - ahead of `target`. The last glob matching a name wins. |
 | `reject` | string \| string[] | - | Globs over dependency names to leave alone. |
 | `minAge` | number | `0` | Days a version must have been published before it is offered. |
@@ -191,6 +192,7 @@ in addition to:
 # .rmanrc.yml
 deps:
   minAge: 3
+  target: minor            # majors are a decision - except for these
   targets:
     "@types/node": major   # releases a major every few months
     esbuild: major         # has stayed on 0.x, where every minor counts as a major

@@ -103,8 +103,17 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       expect(entry(entries, 'b')).toMatchObject({ status: 'update', target: '~2.2.0', bump: 'minor' });
     });
 
-    it('never crosses a major by default, and says what it left behind', async () => {
-      const dir = single({ dependencies: { a: '^1.0.0', b: '^1.0.0' } });
+    /** The default is the largest move the scheme has - the rules below still decide what is taken. */
+    it('crosses a major by default', async () => {
+      const dir = single({ dependencies: { a: '^1.0.0' } });
+      const updater = new FakeRegistryUpdater({ a: { releases: releases('1.0.0', '1.4.0', '2.0.0') } });
+      const { entries } = await plan(dir, updater);
+      expect(entry(entries, 'a')).toMatchObject({ status: 'update', target: '^2.0.0', bump: 'major' });
+      expect(entry(entries, 'a').reason).toBeUndefined();
+    });
+
+    it('never crosses a major under deps.target: minor, and says what it left behind', async () => {
+      const dir = single({ dependencies: { a: '^1.0.0', b: '^1.0.0' } }, { deps: { target: 'minor' } });
       const updater = new FakeRegistryUpdater({
         a: { releases: releases('1.0.0', '1.4.0', '2.0.0') },
         b: { releases: releases('1.0.0', '2.0.0') },
@@ -127,9 +136,9 @@ describe('plugins/node/NodeDependencyUpdater', () => {
     it('counts a 0.x minor as a major, as a caret range does', async () => {
       const dir = single({ dependencies: { zero: '^0.1.0' } });
       const updater = new FakeRegistryUpdater({ zero: { releases: releases('0.1.0', '0.1.4', '0.2.0') } });
-      const { entries } = await plan(dir, updater);
+      const { entries } = await plan(dir, updater, { target: 'minor' });
       expect(entry(entries, 'zero')).toMatchObject({ status: 'update', target: '^0.1.4', available: '0.2.0' });
-      const major = await plan(dir, updater, { target: 'major' });
+      const major = await plan(dir, updater);
       expect(entry(major.entries, 'zero')).toMatchObject({ status: 'update', target: '^0.2.0', bump: 'major' });
     });
 
@@ -278,7 +287,7 @@ describe('plugins/node/NodeDependencyUpdater', () => {
    * move that never happened.
    */
   it('moves the side a rule is about as far as it may, and holds back the side whose rule it cannot meet', async () => {
-    const dir = single({ dependencies: { common: '^0.13.7', builtins: '^0.14.12' } });
+    const dir = single({ dependencies: { common: '^0.13.7', builtins: '^0.14.12' } }, { deps: { target: 'minor' } });
     const updater = new FakeRegistryUpdater({
       common: { releases: releases('0.13.7', '0.13.9', '0.14.0') },
       builtins: {

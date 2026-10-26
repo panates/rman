@@ -93,7 +93,7 @@ const depsCommand = registerCommand(app => {
     examples: [
       { command: '$0 deps', description: '# What could move, and what holds it back' },
       { command: '$0 deps -u', description: '# Write the new ranges, then check that they install' },
-      { command: '$0 deps --target major', description: '# Across a major too' },
+      { command: '$0 deps --target minor', description: '# Stay inside each major' },
       { command: '$0 deps "@types/*"', description: '# Only the dependencies matching this glob' },
     ],
     handler: async (args: Args) => {
@@ -217,7 +217,7 @@ function defaultConcurrency(): number {
 }
 
 /**
- * `--target`: one of the version schemes' sizes, and by default every size but the largest.
+ * `--target`: one of the version schemes' sizes, and by default the largest.
  *
  * Read off the technologies this repository loaded rather than written down, because the sizes are
  * a scheme's - semver's three are the only ones today.
