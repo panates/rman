@@ -309,7 +309,7 @@ namespace DependencyUpdater {
 
   function settingsFor(pkg: Package, options: Options): Settings;   // deps.* resolved, flags applied
   function targetFor(settings: Settings, name: string): { size: string; from: string };
-  function defaultTarget(bumps: readonly string[]): string;         // every size but the largest
+  function defaultTarget(bumps: readonly string[]): string;         // the largest size
 }
 ```
 
@@ -1653,7 +1653,7 @@ step there is mistaken for a value.
 | `publish.cloudflare.config` | `string` | first of `wrangler.jsonc`/`.json`/`.toml` | Workers: the wrangler configuration, relative to the package. |
 | `publish.cloudflare.env` | `string` | none | Workers: the wrangler environment (`--env`). |
 | `publish.cloudflare.variables` | `Record<string, string>` | `{}` | Workers: run-time variables (`--var NAME:value`). Not `vars`, which rman reserves at every level. |
-| `deps.target` | a bump name of the package's version scheme | every size but the largest (`minor` under semver) | Per-package cascaded. The largest move [`deps`](cli/deps.md) may make to a dependency. `--target` overrides it - and every `deps.targets` entry - for a run. A name the scheme does not have is an error naming the ones it does. |
+| `deps.target` | a bump name of the package's version scheme | the largest size (`major` under semver) | Per-package cascaded. The largest move [`deps`](cli/deps.md) may make to a dependency. `--target` overrides it - and every `deps.targets` entry - for a run. A name the scheme does not have is an error naming the ones it does. |
 | `deps.targets` | `Record<string, string>` (glob → bump name) | `{}` | Per-package cascaded. The largest move for the dependencies a glob matches, ahead of `deps.target` - `{ "@types/node": "major" }`. The last glob matching a name wins. |
 | `deps.reject` | `string \| string[]` (globs) | `[]` | Per-package cascaded. Dependencies left alone. `--reject` **adds** to it rather than replacing it. |
 | `deps.minAge` | `number` (days) | `0` | Per-package cascaded. Only move to a version published at least this many days ago. `--min-age` overrides it. |

@@ -151,15 +151,22 @@ export namespace DependencyUpdater {
   }
 
   /**
-   * Every move but the largest - `minor` under semver. The largest is the one a scheme reserves for a
-   * break, and taking a break is a decision a person makes, not a default.
+   * The largest move the scheme has - `major` under semver. `deps.target` or `--target` narrows it.
    */
-  /* **It was `latest` - every move - and that was the wrong default**, measured the moment it ran:
-   * a `^5.3.0` came back as `^7.0.2`. The values are the scheme's own `bumpNames` rather than a list
-   * written here, for the reason `version` gives: `patch`/`minor`/`major` are semver's words, and a
-   * four-part scheme would offer four. */
+  /* **It has been both, and this is the user's call.** It was every move from the start, then every
+   * move but the largest after a `^5.3.0` came back as `^7.0.2` the first time it ran - "taking a
+   * break is a decision a person makes". It is the largest again on the user's request, after
+   * `--target major` had to be typed to get one (`panates/peacox-ui`'s jsdom 30). What made the old
+   * reasoning weaker than it was: the rules that matter for a major are checked whatever the target
+   * - a dependency's peer ranges, the running Node and the package's `engines.node`, and under `-u`
+   * the package manager's own resolver. A repository that wants majors as a decision writes
+   * `deps.target: minor`.
+   *
+   * The values are the scheme's own `bumpNames` rather than a list written here, for the reason
+   * `version` gives: `patch`/`minor`/`major` are semver's words, and a four-part scheme would offer
+   * four. */
   export function defaultTarget(bumps: readonly string[]): string {
-    return bumps[Math.max(0, bumps.length - 2)]!;
+    return bumps[bumps.length - 1]!;
   }
 
   /**
