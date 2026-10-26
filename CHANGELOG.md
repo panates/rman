@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to c2e7ce52cf7436985f1a8980c3e7869ee6bfbfd0 -->
+<!-- rman:documented-up-to 762a7ae856eb5fc216301bfcbd2c02d92c1d2567 -->
+
+## v2.37.0 (2026-10-26)
+
+### ✨ Features
+
+- **version:** `.rmanrc "carries"` - the packages a package's artifact carries without depending on them (9695b38)
+
+---
 
 ## v2.36.0 (2026-10-24)
 
