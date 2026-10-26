@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import parseNpmScript from '@netlify/parse-npm-script';
 import glob from 'fast-glob';
+import * as yaml from 'js-yaml';
 import type { Package } from '../../../core/classes/package.js';
 import type { Platform } from '../../../core/interfaces/plugin.js';
 import type { RunService } from '../../../services/run.service.js';
@@ -21,19 +22,41 @@ export class NodePlatform implements Platform {
   versionPlanner = new NodeVersionPlanService();
   dependencyUpdater = new NodeDependencyUpdater();
 
+  /** The file pnpm keeps a workspace's member list in - see `getWorkspace`. */
+  protected readonly pnpmWorkspaceFile: string = 'pnpm-workspace.yaml';
+
   /**
-   * npm's `workspaces` globs, resolved against `dir` - the directories directly below it that hold
-   * a `package.json`.
+   * The workspace members of `dir`: the directories its `pnpm-workspace.yaml` `packages` globs
+   * match when it has that list, else its `package.json` `workspaces` globs - each one holding a
+   * `package.json`. Throws for a `pnpm-workspace.yaml` that is not valid YAML.
+   */
+  /* **pnpm's list first, when there is one** - pnpm reads `pnpm-workspace.yaml` and ignores
+   * `package.json#workspaces`, so in a pnpm repository that file is the one the installed tree
+   * follows. Reported from `syncbridge-io/public-modules`: with only `pnpm-workspace.yaml`, rman
+   * found no packages at all, and the repository had to keep both lists in step.
+   *
+   * **A `pnpm-workspace.yaml` with no `packages` falls back to `workspaces`**, which is not what pnpm
+   * does: measured on pnpm 12.10.1, a settings-only file (`publicHoistPattern` alone) leaves pnpm
+   * with the root and no members. pnpm 9 moved its settings into this file, so a settings-only one
+   * is ordinary, and a file that says nothing about packages is read as saying nothing.
+   *
+   * **pnpm's globbing, as measured on the same pnpm**: `packages/**` takes members at any depth and
+   * none under `node_modules`; `!packages/test-*` leaves those out. npm's `workspaces` keep the
+   * one-level reading (`deep: 0`), which nothing has asked to change.
    *
    * **Asked of every directory the walk reaches, not only of the repository root**, which is what
    * the seam changing from a layout to a per-directory question bought: a `package.json` naming
    * `workspaces` is a workspace root wherever it sits, so a Node sub-workspace inside a larger
-   * repository is now found by the same code that finds the top one. `deep: 0` already made the
-   * globs one level, so nothing here had to change to make that true.
-   */
+   * repository is found by the same code that finds the top one. */
   getWorkspace(dir: string): string[] | undefined {
     const manifest = path.join(dir, 'package.json');
     if (!fs.existsSync(manifest)) return undefined;
+
+    const pnpm = this.pnpmWorkspacePackages(dir);
+    if (pnpm) {
+      const dirs = glob.sync([...pnpm, '!**/node_modules/**'], { cwd: dir, absolute: true, onlyDirectories: true });
+      return this.packageDirs(dirs);
+    }
 
     let patterns: unknown;
     try {
@@ -45,15 +68,12 @@ export class NodePlatform implements Platform {
     }
     if (!Array.isArray(patterns)) return undefined;
 
-    const packageDirs: string[] = [];
+    const dirs: string[] = [];
     for (const pattern of patterns) {
       if (typeof pattern !== 'string') continue;
-      const dirs = glob.sync(pattern, { cwd: dir, absolute: true, deep: 0, onlyDirectories: true });
-      for (const d of dirs) {
-        if (fs.existsSync(path.join(d, 'package.json'))) packageDirs.push(d);
-      }
+      dirs.push(...glob.sync(pattern, { cwd: dir, absolute: true, deep: 0, onlyDirectories: true }));
     }
-    return packageDirs;
+    return this.packageDirs(dirs);
   }
 
   /**
@@ -126,6 +146,29 @@ export class NodePlatform implements Platform {
     }
     result.push(path.resolve(cwd, process.execPath, '..'));
     return result;
+  }
+
+  /** The `packages` globs of `dir`'s `pnpm-workspace.yaml`, or `undefined` when there is no such
+   *  file or it lists none. Throws when the file is not valid YAML. */
+  /* Thrown rather than swallowed, unlike a malformed `package.json` above: nothing else in rman
+   * reads this file, so a parse error left here would surface as a repository with no packages. */
+  protected pnpmWorkspacePackages(dir: string): string[] | undefined {
+    const file = path.join(dir, this.pnpmWorkspaceFile);
+    if (!fs.existsSync(file)) return undefined;
+    let parsed: unknown;
+    try {
+      parsed = yaml.load(fs.readFileSync(file, 'utf-8'));
+    } catch (e: any) {
+      throw new Error(`Cannot read ${file}: ${e.message}`, { cause: e });
+    }
+    const packages = (parsed as { packages?: unknown } | null)?.packages;
+    if (!Array.isArray(packages)) return undefined;
+    return packages.filter((p): p is string => typeof p === 'string');
+  }
+
+  /** The directories of `dirs` that hold a `package.json`, each once. */
+  protected packageDirs(dirs: readonly string[]): string[] {
+    return [...new Set(dirs)].filter(d => fs.existsSync(path.join(d, 'package.json')));
   }
 }
 

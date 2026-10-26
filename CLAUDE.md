@@ -808,6 +808,19 @@ packages - which is all a platform knows.
 One step: take the directory's declared platform if its config names one, else `app.platformFor`;
 ask **that** platform where its children are; repeat. `Repository.packages` is that tree flattened.
 
+- **The node platform reads pnpm's member list before npm's** (`NodePlatform.getWorkspace`,
+  `pnpmWorkspacePackages`): `pnpm-workspace.yaml`'s `packages` when the file lists them, else
+  `package.json#workspaces`. pnpm ignores the latter, so a pnpm repository had to keep two lists in
+  step or rman saw no packages at all - reported from `syncbridge-io/public-modules`.
+  - **Measured on pnpm 12.10.1 with `pnpm ls -r`**, and the specs use those layouts and answers:
+    `packages/**` takes members at any depth and none under `node_modules`, `!packages/test-*`
+    excludes. npm's `workspaces` keep `deep: 0`.
+  - **A settings-only `pnpm-workspace.yaml` falls back to `workspaces`, which pnpm does not do** -
+    pnpm sees the root and no members there. pnpm 9 moved its settings into that file, so one
+    without `packages` is ordinary and is read as saying nothing about packages.
+  - **Invalid YAML throws, naming the file**, where a malformed `package.json` is left for
+    `Package` to report: nothing else reads this file, so a swallowed error would read as an empty
+    repository.
 - **A declaration is held to it.** A platform named for a directory it does not recognize is an
   error naming the file it looked for. The failure it replaces is invisible: the manifest reads as
   nothing, so the package is named after its directory at `0.0.0` and the repository looks fine.

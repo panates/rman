@@ -41,8 +41,9 @@ npx rman list
 ## Quick start
 
 `rman` auto-detects your repository layout - point it at a directory containing a `package.json`
-with a `workspaces` array (npm/yarn/pnpm-style) and every matched package becomes available to
-every command:
+with a `workspaces` array (npm/yarn), or a `pnpm-workspace.yaml` with a `packages` list beside it
+(pnpm, which wins when both are there), and every matched package becomes available to every
+command:
 
 ```json
 // package.json (repository root)
