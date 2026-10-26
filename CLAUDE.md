@@ -1727,6 +1727,20 @@ saw one thing to release and it was the one thing that must never be published.
     - `unversionedReason` moved out of the planner for the reason `groupKeyOf` did: the changelog
       asks the same question and must work with no planner registered. `notVersionedReason` stays
       `protected` and delegates.
+    - **`.rmanrc "carries"` names what no manifest says** (`declaredCarries`, top level beside
+      `dependencies`, the same name-or-directory reading through `Repository.resolveDeclaredPackage`).
+      Reported on `syncbridge-io/syncbridge`: the engine image takes `web-ui/dist` through
+      `publish.docker.buildContexts`, two `web-ui` commits changed the image, and `version` answered
+      "Nothing to version". Deriving it from `buildContexts` was weighed - no second statement, no
+      drift - and set aside on the user's call for one list a reader can see; the cost is that the two
+      can disagree.
+      - **A versioned package listed there is carried too**, unlike the manifest walk: a build
+        context is no dependency edge, so no cascade reaches the carrier and stopping there would
+        reopen the gap. The spec for it uses a manifest field that is no dependency (`config`) - with
+        the fixture's `devDependencies` edge the cross-group ripple bumped the carrier anyway, and
+        the case passed with `carries` removed (measured).
+      - **An unknown entry throws**, where `dependencies` ignores one: a missing edge changes no
+        graph answer, a missing carry is the silent non-release this key exists to end.
     - **The alternative was versioning them** (`version.skip: false`, which works today): tags and
       changelog entries for packages nothing publishes, exactly what the 2.22 rule removed.
 - When folding the changelog into the bump commit (`--changelog`, or `.rmanrc "version.changelog"`)

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { expect } from 'expect';
 import { NodeManifestProvider } from '../../../../src/builtins/platforms/node/node-manifest.provider.js';
 import type { VersionPlanService } from '../../../../src/services/version-plan.service.js';
+import { filesOwnedBy } from '../../../../src/utils/bundled-packages.js';
 import { createRepository, planner, service, useNodeEcosystem } from '../_fixture.js';
 
 /**
@@ -503,5 +504,69 @@ describe('plugins/node: a published package carrying an unpublished one', () => 
     const server = entries.find(e => e.package.name === 'server');
     expect(server?.content).toContain('redis reconnects');
     expect(entries.find(e => e.package.name === 'services')).toBeUndefined();
+  });
+
+  /**
+   * **`.rmanrc "carries"`, for what no manifest says** - reported on `syncbridge-io/syncbridge`,
+   * whose engine image takes `web-ui/dist` through a Docker build context and has no edge to it.
+   * The fixture's `devDependencies` edge is the control: on its own it carries nothing (above).
+   */
+  describe('.rmanrc "carries"', () => {
+    const carrying = (carries: string[], services: object = { publish: { skip: true } }, field = 'devDependencies') => {
+      const dir = fixture(field, { rman: { carries } });
+      const file = path.join(dir, 'packages/services/package.json');
+      writeJson(dir, 'packages/services/package.json', {
+        ...JSON.parse(fs.readFileSync(file, 'utf-8')),
+        rman: services,
+      });
+      git(dir, 'commit', '-q', '--allow-empty', '-am', 'chore: services config');
+      return dir;
+    };
+
+    it('releases the package for a change in one it names, by name or by directory', async () => {
+      for (const entry of ['services', 'packages/services']) {
+        expect(await serverEntry(carrying([entry]))).toMatchObject({
+          status: 'bump',
+          to: '1.0.2',
+          reason: 'changed since server@1.0.1 (via services)',
+        });
+      }
+    });
+
+    /** No dependency edge for a cascade to follow, so a versioned package listed here is carried as
+     *  well - releasing on its own would leave the artifact copying it in behind. `config` is a
+     *  manifest field naming `services` that is no dependency at all: a dev edge would ripple the
+     *  bump across on its own, and the case would pass with `carries` ignored (measured). */
+    it('carries a package that takes its own version too', async () => {
+      const dir = carrying(['services'], {}, 'config');
+      git(dir, 'tag', 'services@0.0.6', 'HEAD~2');
+      const repository = await createRepository(dir);
+      const plan = await planner().getPlan(repository);
+      expect(plan.find(e => e.package.name === 'server')).toMatchObject({ status: 'bump', to: '1.0.2' });
+      expect(plan.find(e => e.package.name === 'services')).toMatchObject({ status: 'bump' });
+    });
+
+    it('refuses an entry that names no package, rather than carrying nothing', async () => {
+      const repository = await createRepository(carrying(['web-ui']));
+      await expect(planner().getPlan(repository)).rejects.toThrow(
+        '.rmanrc "carries" of server names "web-ui", which is no package in this repository',
+      );
+    });
+
+    it("puts the carried package's commit into the carrier's changelog", async () => {
+      const repository = await createRepository(carrying(['services']));
+      const entries = await repository.app.getService('changelog').getEntries({ fromRoot: true });
+      expect(entries.find(e => e.package.name === 'server')?.content).toContain('redis reconnects');
+    });
+
+    /** What every publish target's dirty check asks - an image is never built from a carried
+     *  package's uncommitted changes. */
+    it("counts the carried package's files as the carrier's own", async () => {
+      const dir = carrying(['services']);
+      const repository = await createRepository(dir);
+      const server = repository.getPackage('server')!;
+      const dirty = [path.join(dir, 'packages/services/redis.ts'), path.join(dir, 'README.md')];
+      expect(filesOwnedBy(dirty, server)).toEqual([path.join(dir, 'packages/services/redis.ts')]);
+    });
   });
 });

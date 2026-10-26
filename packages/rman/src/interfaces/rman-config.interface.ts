@@ -388,6 +388,34 @@ export interface RmanConfigKeys {
    */
   dependencies?: string[];
   /**
+   * In-repo packages that go **inside this package's artifact** without being a run-time
+   * dependency of it - a web UI a Docker image copies in through a build context, a directory a
+   * build script bundles. Their changes count as this package's own: `version` bumps it for their
+   * commits, its changelog lists them, and a publish target refuses to ship it while they have
+   * uncommitted changes.
+   *
+   * Each entry is a package **name, or a repository-relative directory**, as in `dependencies`. An
+   * entry naming no package is an error.
+   *
+   * @example { "carries": ["@acme/web-ui"] }
+   */
+  /* **Declared, because nothing else says it.** A run-time dependency is found from the manifest
+   * (`bundledPackages`); a build context is not a dependency, and reported on `syncbridge-io/
+   * syncbridge`: `syncbridge-engine`'s image takes `web-ui/dist` through
+   * `publish.docker.buildContexts`, so two commits to `web-ui` changed the image and `version`
+   * answered "Nothing to version". Deriving it from `buildContexts` was weighed and set aside for
+   * this, on the user's call: one list a reader can see, at the cost of stating twice what a build
+   * context already says.
+   *
+   * **Core, beside `dependencies`, and top level rather than `version.carries`**: version,
+   * changelog and every publish target's dirty check read it, so no one command owns it.
+   *
+   * **A versioned package listed here is carried too.** The manifest walk stops at one, since it
+   * releases on its own and the cascade reaches its dependents - but an artifact that copies a
+   * package in has no dependency edge for a cascade to follow, so stopping there would bring the
+   * gap straight back. */
+  carries?: string[];
+  /**
    * Config for a **narrower audience**, keyed by a `"[selector]"` naming it - `"[/]"` for the root
    * package alone, `"[*]"` for the packages below this directory, `"[*-dialect]"` for a glob over
    * their names, `"[pkg-a]"` for one. Everything else in this object reaches this directory *and*

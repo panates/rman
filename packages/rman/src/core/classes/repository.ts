@@ -216,6 +216,14 @@ export class Repository extends Package {
     };
   }
 
+  /**
+   * The package a config entry names - its name, else a directory relative to the repository root
+   * - or `undefined`. How `dependencies` and `carries` entries are read.
+   */
+  resolveDeclaredPackage(entry: string): Package | undefined {
+    return this._resolveDeclaredPackage(entry);
+  }
+
   /** `${{ git.* }}`, read at most once per repository per process. */
   protected _gitScope(): GitScope {
     if (this._git) return this._git;
