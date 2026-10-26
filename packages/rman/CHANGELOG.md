@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 762a7ae856eb5fc216301bfcbd2c02d92c1d2567 -->
+<!-- rman:documented-up-to f2444cc2bb81affe7023429f075de36b37606452 -->
+
+## v2.38.0 (2026-10-26)
+
+### ✨ Features
+
+- **deps:** default --target is major (86d12b6)
+
+---
 
 ## v2.37.0 (2026-10-26)
 
