@@ -990,7 +990,12 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
   name several technologies' tools.
   - **Unset, the lockfile decides** (`CiService.detectPackageManager`): the nearest directory from
     the package up to the repository root holding one, `npm-shrinkwrap.json` counting as npm. Order
-    is flag > `packageManager.node` > lockfile > npm, for `ci`, `publish`, `deps` and `info` alike.
+    is flag > `packageManager.node` > lockfile > npm, for `ci`, `publish` and `info` alike.
+    **`deps` is the exception, lockfile first** (`NodeDependencyUpdater.installer`): its two
+    questions - does it install, what does the installer let in - are the installing tool's, and
+    `packageManager.node` also names who *publishes*. `panates/opra` installs with pnpm and sets
+    `node: npm` for npm's provenance, so `verify` ran `npm install --dry-run` on a pnpm workspace,
+    failed `EUNSUPPORTEDPROTOCOL` on `workspace:^` and put the whole upgrade back.
     - **`package.json#packageManager` is not read, and this repository is why**: its root says
       `yarn@3.4.1` beside a `package-lock.json` and no `yarn.lock`. A declaration nothing checks
       goes stale; the lockfile is what the last install wrote.
@@ -1031,6 +1036,22 @@ is what no command owns: `plugins`, `vars`, `logLevel`, `allowBranch`, `ignoreBr
         option either.
       - `pnpm()` is the one spawn and the spec's seam, like `fetchReleases` - a stub on PATH would
         lose to a real pnpm beside `node`, the trap `appWithStubBin` records.
+      - **A `Wanted:` range is quoted only when it holds a space.** opra's came back as a bare
+        `^5.112.0:`, the parser wanted quotes, and the issue ended before its requirers - nothing
+        could be blamed for it.
+    - **pnpm's `minimumReleaseAge` is `deps.minAge`'s default in a pnpm repository**
+      (`applyReleaseAge`), with `minimumReleaseAgeExclude` honoured. Reported from `panates/opra`:
+      `deps -u` wrote `@nestjs/*@12.3.2` (21 h old) and `postgrejs@3.14.1` (1 h), and the next plain
+      `pnpm install` **did not refuse them** - it appended all seven to `minimumReleaseAgeExclude`
+      in `pnpm-workspace.yaml` with one line of output, so the supply-chain check was switched off
+      for exactly those releases and surfaced only in a commit diff.
+      - **Read, never restated**: `pnpm config get <key> --json` (workspace file, user config,
+        environment). It answers `null` for pnpm's built-in default, which is therefore a constant -
+        **1440 minutes, measured on 12.10.1** (a 22 h release was exempted, a 25.7 h one was not),
+        assumed for every pnpm ≥ 11 and none below. No older pnpm was measured.
+      - An explicit `deps.minAge` or `--min-age` replaces it, exclusions included - someone decided.
+      - The check is now fractional (`minutes < rule`), which is the same answer as the old
+        `floor(days) < minAge` for every whole-day `minAge`.
 - **`dependencies` is core, and must stay.** It layers on top of whatever
   the plugin's manifest provider read, and it is the only way a repository with *no* provider has a
   graph at all - a repo whose manifests rman cannot read can still state its edges by hand.

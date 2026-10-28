@@ -90,7 +90,14 @@ prerelease while the declared range is not on one.
 In this order:
 
 1. **The package's own settings** - `deps.target` / `deps.targets`, `deps.reject`, `deps.minAge`
-   (below).
+   (below). **In a pnpm repository a package setting no `deps.minAge` takes pnpm's own
+   `minimumReleaseAge`** (minutes, as `pnpm config get` reads it - `pnpm-workspace.yaml`, the user's
+   config, the environment - and a day when nothing sets it, pnpm 11's default), and
+   `minimumReleaseAgeExclude` lets in what it names. Without it, `-u` wrote versions younger than
+   pnpm allows, and the next plain `pnpm install` did not refuse them: it added each one to
+   `minimumReleaseAgeExclude` in `pnpm-workspace.yaml`, switching the check off for exactly those
+   releases. A held-back version is listed with the reason -
+   `published 21 hour(s) ago - pnpm's minimumReleaseAge is 1440 minutes`.
 2. **The package's other declarations of the same name.** A `devDependencies` caret is not moved
    outside the package's own `peerDependencies` range for that name. When every declaration of a
    name is a movable range, they move together.
@@ -133,8 +140,12 @@ Under `-u --json` the document is printed after this, so a held upgrade reads `h
 `--no-verify` skips the check.
 
 **A pnpm repository is asked with pnpm** - `pnpm install --dry-run --strict-peer-dependencies
---ignore-scripts`, which writes nothing either. Which package manager that is comes from
-`--package-manager`'s usual order: `.rmanrc "packageManager.node"`, else the lockfile, else npm.
+--ignore-scripts`, which writes nothing either. Which package manager that is comes from the
+**lockfile first**, and only then from `.rmanrc "packageManager.node"` (else npm) - the reverse of
+every other command. The check is about the tool that installs, and `packageManager.node` also
+decides who publishes: a pnpm workspace that sets `node: npm` to keep npm's provenance statement on
+`rman publish` would otherwise be checked by npm, which cannot read `workspace:^`. Two managers'
+lockfiles in one directory fall back to the setting.
 
 - **`--strict-peer-dependencies` is what makes it a check.** pnpm treats an unmet peer as a warning
   by default, so the plain dry run exits 0 on exactly the conflict above.
@@ -171,7 +182,7 @@ in addition to:
 | `--upgrade` | `-u` | boolean | Write the new ranges to the manifests, then check that they still install. |
 | `--target` | - | `patch` \| `minor` \| `major` | The largest move a dependency may make (default `major`). Overrides `deps.target` **and** `deps.targets` for this run. |
 | `--reject` | - | string (repeatable) | Leave the dependencies matching these globs alone. Added to `deps.reject`. |
-| `--min-age` | - | number | Only move to a version published at least this many days ago. Overrides `deps.minAge`. |
+| `--min-age` | - | number | Only move to a version published at least this many days ago. Overrides `deps.minAge`, and pnpm's `minimumReleaseAge`. |
 | `--concurrency` | - | number | How many registry lookups run at once (default `16`). |
 | `--no-verify` | - | boolean | Do not ask the package manager whether the upgraded manifests install. |
 | `--json` | `-j` | boolean | Print the plan as JSON: one row per package and dependency, with `package`, `name`, `types`, `status` (`update`/`held`/`skipped`/`up-to-date`/`error`), `current`, `target`, `latest` (newest the settings allow), `available` (newest there is), `bump`, `reason`. |
@@ -185,7 +196,7 @@ in addition to:
 | `target` | `patch` \| `minor` \| `major` | `major` | The largest move a dependency may make. The sizes are the version scheme's own; the default is the largest. `minor` keeps every dependency inside its major. |
 | `targets` | `{ [glob]: size }` | - | The same, for the dependencies a glob matches - ahead of `target`. The last glob matching a name wins. |
 | `reject` | string \| string[] | - | Globs over dependency names to leave alone. |
-| `minAge` | number | `0` | Days a version must have been published before it is offered. |
+| `minAge` | number | `0` - pnpm's `minimumReleaseAge` in a pnpm repository | Days a version must have been published before it is offered. Fractions are allowed (`0.5` is twelve hours). Set, it replaces pnpm's age and its exclusions. |
 | `types` | string[] | every kind | The dependency kinds to look at. npm's: `dependencies`, `devDependencies`, `optionalDependencies`, `peerDependencies`, or `prod`/`dev`/`optional`/`peer`. |
 
 ```yaml
