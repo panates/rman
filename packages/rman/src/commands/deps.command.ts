@@ -40,7 +40,8 @@ const config = {
   minAge: {
     target: 'both',
     cliName: 'min-age',
-    describe: 'Only move to a version published at least this many days ago',
+    describe:
+      "Only move to a version published at least this many days ago - default: pnpm's minimumReleaseAge in a pnpm repository, else 0",
     type: 'number',
   },
   types: {

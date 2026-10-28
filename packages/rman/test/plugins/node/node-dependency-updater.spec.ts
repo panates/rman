@@ -628,13 +628,23 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       readonly asked: string[] = [];
       constructor(
         registry: ConstructorParameters<typeof FakeRegistryUpdater>[0],
-        readonly answers: { version?: string; install?: { code: number; stdout: string } },
+        readonly answers: {
+          version?: string;
+          install?: { code: number; stdout: string };
+          /** What `pnpm config get <key> --json` prints - a release age of 0 unless a case says. */
+          config?: Record<string, unknown>;
+        },
       ) {
         super(registry);
       }
       protected override async pnpm(_ctx: DependencyUpdater.Context, args: string) {
         this.asked.push(args);
         if (args === '--version') return { code: 0, stdout: `${this.answers.version ?? '12.10.1'}\n` };
+        const key = /^config get (\S+) --json$/.exec(args)?.[1];
+        if (key) {
+          const config = this.answers.config ?? { minimumReleaseAge: 0 };
+          return { code: 0, stdout: JSON.stringify(config[key] ?? null) + '\n' };
+        }
         return this.answers.install ?? { code: 0, stdout: '' };
       }
     }
@@ -655,6 +665,8 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       const { repository, entries } = await plan(dir, updater, { target: 'major' });
       const ctx: DependencyUpdater.Context = { app: repository.app, repository, options: { concurrency: 4 } };
       await updater.applyPlan(ctx, entries);
+      /** The plan asked pnpm for its release age; `verify`'s own questions are what a case reads. */
+      updater.asked.length = 0;
       return { updater, entries, ctx };
     }
 
@@ -722,6 +734,91 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       expect(refusal).toBe('  [ERR_PNPM_NO_MATCHING_VERSION] No matching version found for typescript@^9');
       /** Nothing to pin it on, so the command puts every write back. */
       expect(updater.blame(refusal!, entries)).toEqual([]);
+    });
+
+    /** opra's shape: an unquoted range, which pnpm writes for one with no space in it. Read as
+     *  anything else it ended the issue before the requirer, and nothing could be held for it. */
+    it('reads a range pnpm leaves unquoted', async () => {
+      const unquoted = PEER_ISSUES.replace('">=4.8.4 <6.0.0":', '^5.112.0:');
+      const { updater, entries } = await written({}, '^7.0.2');
+      const blamed = updater.blame(unquoted, entries);
+      expect(blamed.map(b => b.entry.name)).toEqual(['@typescript-eslint/parser']);
+      expect(blamed[0]!.reason).toContain('wanted ^5.112.0 by @typescript-eslint/parser@8.40.0');
+    });
+
+    /**
+     * **pnpm's release age is the default, so `deps -u` writes nothing pnpm would exempt.** Measured
+     * on `panates/opra`: with `deps.minAge` at 0, `deps -u` wrote `@nestjs/common@12.3.2` (21 hours
+     * old) and a plain `pnpm install` added it to `minimumReleaseAgeExclude` without asking.
+     */
+    describe("pnpm's minimumReleaseAge", () => {
+      const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+      const registry = {
+        a: {
+          releases: releases('1.0.0', '1.1.0', '1.2.0'),
+          time: { '1.0.0': ago(24 * 30), '1.1.0': ago(30), '1.2.0': ago(21) },
+        },
+      };
+
+      async function pnpmPlan(
+        answers: FakePnpmUpdater['answers'],
+        rmanrc: object = {},
+        options: Partial<DependencyUpdater.Options> = {},
+      ) {
+        const dir = single({ dependencies: { a: '^1.0.0' } }, rmanrc);
+        fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+        const updater = new FakePnpmUpdater(registry, answers);
+        const { entries } = await plan(dir, updater, options);
+        return { updater, a: entry(entries, 'a') };
+      }
+
+      it("holds a release younger than pnpm's default, and says why", async () => {
+        /** `pnpm config get` answers null for the default - it is the one value that cannot be asked. */
+        const { a } = await pnpmPlan({ config: {} });
+        expect(a).toMatchObject({ status: 'update', target: '^1.1.0', latest: '1.1.0', available: '1.2.0' });
+        expect(a.reason).toBe("published 21 hour(s) ago - pnpm's minimumReleaseAge is 1440 minutes");
+      });
+
+      it('reads the age pnpm is configured with, in minutes', async () => {
+        const { a } = await pnpmPlan({ config: { minimumReleaseAge: 60 * 40 } });
+        expect(a).toMatchObject({ status: 'skipped', available: '1.2.0' });
+        expect(a.reason).toBe("published 21 hour(s) ago - pnpm's minimumReleaseAge is 2400 minutes");
+      });
+
+      it('lets in what minimumReleaseAgeExclude names, by name or by version', async () => {
+        const byVersion = await pnpmPlan({ config: { minimumReleaseAgeExclude: ['a@1.2.0'] } });
+        expect(byVersion.a).toMatchObject({ target: '^1.2.0' });
+        const byGlob = await pnpmPlan({ config: { minimumReleaseAgeExclude: ['@other/*', 'a'] } });
+        expect(byGlob.a).toMatchObject({ target: '^1.2.0' });
+        const other = await pnpmPlan({ config: { minimumReleaseAgeExclude: ['a@1.1.5 || 1.1.9'] } });
+        expect(other.a).toMatchObject({ target: '^1.1.0' });
+      });
+
+      it('gives way to deps.minAge and --min-age, which someone decided', async () => {
+        const configured = await pnpmPlan({ config: {} }, { deps: { minAge: 0.5 } });
+        expect(configured.a).toMatchObject({ target: '^1.2.0' });
+        expect(configured.updater.asked).toEqual([]);
+        const flag = await pnpmPlan({ config: {} }, {}, { minAge: 0 });
+        expect(flag.a).toMatchObject({ target: '^1.2.0' });
+      });
+
+      it('has no age before pnpm 11, whose default was none', async () => {
+        const { a } = await pnpmPlan({ version: '10.20.0', config: {} });
+        expect(a).toMatchObject({ target: '^1.2.0' });
+      });
+    });
+
+    /** opra installs with pnpm and sets `packageManager.node: npm` so `rman publish` keeps npm's
+     *  provenance; `verify` asked npm, which cannot read `workspace:^`, and every upgrade went back. */
+    it('asks the package manager the lockfile belongs to, whatever packageManager.node says', async () => {
+      const dir = single({ devDependencies: { typescript: '^5.9.0' } }, { packageManager: { node: 'npm' } });
+      fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+      const updater = new FakePnpmUpdater({ typescript: { releases: releases('5.9.0', '5.9.3') } }, {});
+      const { repository } = await plan(dir, updater);
+      updater.asked.length = 0;
+      const ctx: DependencyUpdater.Context = { app: repository.app, repository, options: { concurrency: 4 } };
+      expect(await updater.verify(ctx)).toBeUndefined();
+      expect(updater.asked).toEqual(['--version', 'install --dry-run --strict-peer-dependencies --ignore-scripts']);
     });
   });
 

@@ -79,13 +79,23 @@ export class NodeDependencyUpdater implements DependencyUpdater {
    *  against, to tell the upgrade's issues from the repository's own. */
   protected written = new Set<string>();
 
+  /** pnpm's `minimumReleaseAge` when nothing sets it, in minutes - see `pnpmReleaseAge`. */
+  /* Measured on pnpm 12.10.1 rather than read: a release 22 hours old was added to
+   * `minimumReleaseAgeExclude` by a plain install, one 25.7 hours old was not. `pnpm config get`
+   * answers `null` for it, so the default is the one value that cannot be asked. */
+  protected readonly pnpmDefaultReleaseAge: number = 1440;
+
+  /** The first pnpm with a non-zero default `minimumReleaseAge`; an older one has none. */
+  protected readonly pnpmReleaseAgeSince: string = '11.0.0';
+
   async getPlan(ctx: DependencyUpdater.Context, packages: readonly Package[]): Promise<DependencyUpdater.Entry[]> {
     const inRepo = new Set([ctx.repository.rootPackage, ...ctx.repository.packages].map(p => p.name));
     const decisions = packages.flatMap(pkg =>
       this.collect(pkg, DependencyUpdater.settingsFor(pkg, ctx.options), ctx.options, inRepo),
     );
 
-    const withTime = decisions.some(d => d.settings.minAge > 0);
+    await this.applyReleaseAge(ctx, decisions);
+    const withTime = decisions.some(d => d.settings.minAge > 0 || !!d.releaseAge?.minutes);
     const registry = await this.fetchAll(ctx, decisions, withTime);
     for (const d of decisions) this.prepare(d, registry.get(this.sourceOf(d)));
 
@@ -139,7 +149,7 @@ export class NodeDependencyUpdater implements DependencyUpdater {
    * (`verifyWithPnpm`). yarn and bun are not asked, and a note says so.
    */
   async verify(ctx: DependencyUpdater.Context): Promise<string | undefined> {
-    const manager = CiService.resolvePackageManager(ctx.repository);
+    const manager = this.installer(ctx);
     if (manager === 'npm') return this.verifyWithNpm(ctx);
     if (manager === 'pnpm') return this.verifyWithPnpm(ctx);
     console.error(colors.yellow(`Not verified: "${manager}" has no dry-run install to ask.`));
@@ -152,6 +162,99 @@ export class NodeDependencyUpdater implements DependencyUpdater {
    */
   blame(refusal: string, plan: readonly DependencyUpdater.Entry[]): DependencyUpdater.Blame[] {
     return this.pnpmPeerIssues(refusal).length ? this.blamePnpm(refusal, plan) : this.blameNpm(refusal, plan);
+  }
+
+  /**
+   * The package manager that installs the repository: the one its lockfile belongs to, else the
+   * one `CiService.resolvePackageManager` answers.
+   */
+  /* **The lockfile first, here and nowhere else in rman.** `deps` asks two questions of the tool
+   * that installs - would it take these manifests (`verify`), and what does it let in (`pnpm`'s
+   * release age) - and the lockfile is what that tool last wrote. `packageManager.node` answers who
+   * *publishes* as well, and the two can differ on purpose: `panates/opra` installs with pnpm and
+   * sets `node: npm` so `rman publish` keeps npm's provenance statement, and `verify` then ran
+   * `npm install --dry-run` on a pnpm workspace and failed `EUNSUPPORTEDPROTOCOL` on every
+   * `workspace:^`, putting the whole upgrade back. Two lockfiles in one directory fall through to
+   * the setting, which is the documented way to settle that. */
+  protected installer(ctx: DependencyUpdater.Context): CiService.PackageManager {
+    try {
+      const found = CiService.detectPackageManager(ctx.repository);
+      if (found) return found;
+    } catch {
+      /** Two managers' lockfiles: the setting decides, or throws saying how. */
+    }
+    return CiService.resolvePackageManager(ctx.repository);
+  }
+
+  /**
+   * In a pnpm repository, holds every dependency of a package that sets no `deps.minAge` to pnpm's
+   * own `minimumReleaseAge` and `minimumReleaseAgeExclude` - see `pnpmReleaseAge`.
+   */
+  /* **The two have to agree, or pnpm settles it behind the user's back.** `deps.minAge` defaults to
+   * 0 and pnpm 11+ to a day, so `deps -u` wrote versions pnpm refuses - and pnpm does not refuse
+   * them: a plain `pnpm install` adds each one to `minimumReleaseAgeExclude` in
+   * `pnpm-workspace.yaml` and says so in one line. Measured on `panates/opra`: six `@nestjs/*@12.3.2`
+   * (21 hours old) and `postgrejs@3.14.1` (one hour) were exempted from the supply-chain check that
+   * exists for exactly such releases, and it showed up in a commit diff.
+   *
+   * **pnpm's policy is read, never restated.** Mirroring it in `.rmanrc` was the workaround, and it
+   * is two places to keep in step, in days on one side and minutes on the other. An explicit
+   * `deps.minAge` or `--min-age` still wins - whoever wrote it decided. */
+  protected async applyReleaseAge(
+    ctx: DependencyUpdater.Context,
+    decisions: readonly NodeDependencyUpdater.Decision[],
+  ): Promise<void> {
+    const inherits = (d: NodeDependencyUpdater.Decision) =>
+      d.wanted && ctx.options.minAge === undefined && d.pkg.config.deps?.minAge === undefined;
+    if (!decisions.some(inherits) || this.installer(ctx) !== 'pnpm') return;
+    const policy = await this.pnpmReleaseAge(ctx);
+    if (!policy.minutes) return;
+    for (const d of decisions) if (inherits(d)) d.releaseAge = policy;
+  }
+
+  /**
+   * pnpm's effective `minimumReleaseAge` (minutes) and `minimumReleaseAgeExclude` at the repository
+   * root, as `pnpm config get` reads them - `pnpm-workspace.yaml`, the user's config and the
+   * environment - and `pnpmDefaultReleaseAge` when none sets the age.
+   */
+  protected async pnpmReleaseAge(ctx: DependencyUpdater.Context): Promise<NodeDependencyUpdater.ReleaseAge> {
+    const read = async (key: string): Promise<unknown> => {
+      const result = await this.pnpm(ctx, `config get ${key} --json`);
+      if (result.code) return undefined;
+      try {
+        return JSON.parse(result.stdout?.trim() || 'null');
+      } catch {
+        return undefined;
+      }
+    };
+    const [age, exclude] = await Promise.all([read('minimumReleaseAge'), read('minimumReleaseAgeExclude')]);
+    let minutes = Number(age);
+    if (age === null || age === undefined || !Number.isFinite(minutes)) {
+      const version = (await this.pnpm(ctx, '--version')).stdout?.trim();
+      minutes =
+        version && semver.valid(version) && semver.gte(version, this.pnpmReleaseAgeSince)
+          ? this.pnpmDefaultReleaseAge
+          : 0;
+    }
+    return {
+      minutes,
+      exclude: Array.isArray(exclude) ? exclude.filter((e): e is string => typeof e === 'string') : [],
+    };
+  }
+
+  /** Whether `minimumReleaseAgeExclude` lets `name@version` in: an entry naming the package - a glob
+   *  such as `@scope/*` - with no version, or with that version among its `||` alternatives. */
+  protected releaseAgeExempt(exclude: readonly string[], name: string, version: string): boolean {
+    return exclude.some(entry => {
+      const at = entry.indexOf('@', 1);
+      const pattern = at < 0 ? entry : entry.slice(0, at);
+      if (!micromatch.isMatch(name, pattern)) return false;
+      if (at < 0) return true;
+      return entry
+        .slice(at + 1)
+        .split('||')
+        .some(v => v.trim() === version);
+    });
   }
 
   /**
@@ -319,7 +422,10 @@ export class NodeDependencyUpdater implements DependencyUpdater {
    *           @typescript-eslint/parser@8.40.0
    *           @typescript-eslint/typescript-estree@8.40.0
    *
-   * `missing peer` is read the same way, with no `Installed`. */
+   * `missing peer` is read the same way, with no `Installed`. **A range is quoted only when it has
+   * a space** - `panates/opra`'s `schema-utils` wanting webpack came back as a bare `^5.112.0:` -
+   * and read as anything else it ended the issue before its requirers, so the issue named no
+   * package wanting the peer and nothing could be held for it. */
   protected pnpmPeerIssues(output: string): NodeDependencyUpdater.PnpmPeerIssue[] {
     const issues: NodeDependencyUpdater.PnpmPeerIssue[] = [];
     let issue: NodeDependencyUpdater.PnpmPeerIssue | undefined;
@@ -333,7 +439,7 @@ export class NodeDependencyUpdater implements DependencyUpdater {
       }
       if (!issue) continue;
       const installed = /^Installed: (\S+)$/.exec(line);
-      const range = /^(".*"):$/.exec(line);
+      const range = line === 'Wanted:' ? null : /^(".*"|\S+):$/.exec(line);
       const by = /^((?:@[^/@\s]+\/)?[^@\s]+@\S+)$/.exec(line);
       if (installed) issue.installed = installed[1];
       else if (range) issue.wanted.push({ range: range[1]!, by: [] });
@@ -521,13 +627,27 @@ export class NodeDependencyUpdater implements DependencyUpdater {
     const size = this.sizeOf(d.floor!, release.version);
     const target = DependencyUpdater.targetFor(d.settings, d.name);
     if (sizes.indexOf(size) > sizes.indexOf(target.size)) return `${size} - ${target.from} is "${target.size}"`;
-    if (d.settings.minAge > 0) {
+    const age = d.releaseAge;
+    const rule =
+      d.settings.minAge > 0
+        ? { minutes: d.settings.minAge * 1440, from: `deps.minAge is ${d.settings.minAge}` }
+        : age?.minutes && !this.releaseAgeExempt(age.exclude, this.sourceOf(d), release.version)
+          ? { minutes: age.minutes, from: `pnpm's minimumReleaseAge is ${age.minutes} minutes` }
+          : undefined;
+    if (rule) {
       const published = time?.[release.version];
-      if (!published) return `no publish date to check deps.minAge against`;
-      const days = Math.floor((Date.now() - Date.parse(published)) / 86_400_000);
-      if (days < d.settings.minAge) return `published ${days} day(s) ago - deps.minAge is ${d.settings.minAge}`;
+      if (!published) return `no publish date to check the release age against - ${rule.from}`;
+      const minutes = (Date.now() - Date.parse(published)) / 60_000;
+      if (minutes < rule.minutes) return `published ${this.ageText(minutes)} ago - ${rule.from}`;
     }
     return undefined;
+  }
+
+  /** A release's age, in the largest unit that reads well - `3 day(s)`, `21 hour(s)`. */
+  protected ageText(minutes: number): string {
+    if (minutes >= 1440) return `${Math.floor(minutes / 1440)} day(s)`;
+    if (minutes >= 60) return `${Math.floor(minutes / 60)} hour(s)`;
+    return `${Math.max(0, Math.floor(minutes))} minute(s)`;
   }
 
   /**
@@ -890,9 +1010,18 @@ export namespace NodeDependencyUpdater {
     /** Into `candidates`; `-1` keeps what is declared. */
     index: number;
     releases?: Map<string, NpmRelease>;
+    /** pnpm's release-age policy, when the package sets no `deps.minAge` of its own - see
+     *  `applyReleaseAge`. */
+    releaseAge?: ReleaseAge;
     latestTag?: string;
     reason?: string;
     error?: string;
+  }
+
+  /** pnpm's `minimumReleaseAge`, in minutes, and its `minimumReleaseAgeExclude`. */
+  export interface ReleaseAge {
+    minutes: number;
+    exclude: string[];
   }
 
   /** One unmet or missing peer in pnpm's report - see `pnpmPeerIssues`. */
