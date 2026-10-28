@@ -93,7 +93,7 @@ jobs:
           # `no-release`/`no-test` guards do not catch it: a `chore(release): ...` message contains
           # neither.
 
-      # The highest version `test.yml`'s matrix covers, which is the one to cut a release on: the
+      # The version `test.yml`'s coverage job runs on, which is the one to cut a release on: the
       # published artifact should be built by a runtime the suite actually ran against.
       #
       # **`registry-url` is required, and leaving it out is what broke the first real release.**
