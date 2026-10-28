@@ -6,6 +6,7 @@ import * as yaml from 'js-yaml';
 import type { Package } from '../../../core/classes/package.js';
 import type { Platform } from '../../../core/interfaces/plugin.js';
 import type { RunService } from '../../../services/run.service.js';
+import { BinPath } from '../../../utils/bin-path.js';
 import { NodeDependencyUpdater } from './node-dependency-updater.js';
 import { NodeManifestProvider } from './node-manifest.provider.js';
 import { NodeVersionPlanService } from './services/version-plan.service.js';
@@ -128,13 +129,24 @@ export class NodePlatform implements Platform {
    * rman's core. It is npm's directory layout from end to end: a Cargo or Go repository has no
    * `node_modules` to walk, and nothing here would ever fire for it.
    *
-   * **The running `node`'s own directory goes last**, after the walk, and its position is
-   * load-bearing. It is there so a script calling `node` gets the interpreter rman itself runs on
-   * rather than whatever the shell would pick. It also puts rman's own bin directory ahead of the
-   * inherited PATH, which is a measured trap: a nested `rman` invocation inside a `run` script
-   * resolves to the globally installed one, not to the repository's. Shim it in
-   * `<root>/node_modules/.bin` when that has to be overridden - the walk above reaches there first.
+   * **The running `node`'s own directory goes last**, after the walk - and only when the inherited
+   * PATH would find a different `node`. It is there so a script calling `node` gets the interpreter
+   * rman itself runs on rather than whatever the shell would pick; where the shell already picks
+   * that one, the inherited PATH keeps its own order.
    */
+  /* **Unconditional, it put every global npm binary ahead of the user's PATH**, since the
+   * interpreter's directory is also where `npm install -g` writes. Measured on this machine: the
+   * shell's `pnpm` was 12.10.1 from `~/Library/pnpm/bin`, rman's children got 9.9.0 from the nvm
+   * directory, so `deps -u` reported `Not verified: pnpm 9.9.0` and read no `minimumReleaseAge` -
+   * while the shell's `node` was the very interpreter rman ran on, so the prepend bought nothing.
+   * A nested `rman` inside a `run` script reached the global one the same way.
+   *
+   * **When the two `node`s differ the directory still goes ahead**, and its neighbours with it:
+   * someone ran rman on another interpreter (an `nvm exec`, an absolute path), and the guarantee
+   * that a step's `node` is that one outranks the shell's choice of tools. A directory holding only
+   * `node` would separate the two and needs a shim on disk; nothing has asked for it yet.
+   *
+   * Compared by real path, so a Homebrew `bin/node` symlink is the Cellar file `execPath` names. */
   getBinPaths(cwd: string): string[] {
     const result: string[] = [];
     let previous: string | undefined;
@@ -144,8 +156,36 @@ export class NodePlatform implements Platform {
       previous = dir;
       dir = path.resolve(dir, '..');
     }
-    result.push(path.resolve(cwd, process.execPath, '..'));
+    if (!this.inheritsNode()) result.push(path.resolve(cwd, process.execPath, '..'));
     return result;
+  }
+
+  /** Whether the inherited PATH's first `node` is the interpreter rman is running on. */
+  protected inheritsNode(): boolean {
+    const names = process.platform === 'win32' ? ['node.exe', 'node.cmd', 'node'] : ['node'];
+    const running = this.realPath(process.execPath);
+    for (const dir of this.inheritedPath().split(path.delimiter)) {
+      if (!dir || !path.isAbsolute(dir)) continue;
+      for (const name of names) {
+        const found = this.realPath(path.join(dir, name));
+        if (found) return found === running;
+      }
+    }
+    return false;
+  }
+
+  /** The PATH a child process inherits, before anything is put in front of it. */
+  protected inheritedPath(): string {
+    return process.env[BinPath.pathKey()] ?? '';
+  }
+
+  /** `file`'s real path, or `undefined` when it does not exist. */
+  protected realPath(file: string): string | undefined {
+    try {
+      return fs.realpathSync(file);
+    } catch {
+      return undefined;
+    }
   }
 
   /** The `packages` globs of `dir`'s `pnpm-workspace.yaml`, or `undefined` when there is no such

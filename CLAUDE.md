@@ -878,10 +878,14 @@ who owns which half:
   the first that recognizes a repository. A PATH is a list, and a polyglot repo wants both
   ecosystems' binaries reachable.
 
-**Trap, and it survived the move:** the npm provider puts the running `node`'s own directory on PATH
-after its walk, so rman's own bin directory sits ahead of the inherited PATH - a nested `rman` inside
-a `run` script resolves to the *globally installed* one. Shim it in `<root>/node_modules/.bin`, which
-the walk reaches first.
+**The running `node`'s directory goes ahead of the inherited PATH only when that PATH would find a
+different `node`** (`NodePlatform.inheritsNode`, compared by real path). It is the directory
+`npm install -g` writes to, so unconditionally it put every global npm binary ahead of the user's own:
+measured here, the shell's `pnpm` was 12.10.1 from `~/Library/pnpm/bin` and rman's children got a
+global 9.9.0, so `deps -u` printed `Not verified: pnpm 9.9.0` and read no `minimumReleaseAge` - while
+the shell's `node` was the very interpreter rman ran on. A nested `rman` in a `run` script reached the
+global one the same way. When the two `node`s *do* differ the directory still goes ahead, neighbours
+included; shim a binary in `<root>/node_modules/.bin`, which the walk reaches first, if that bites.
 
 ## Config types: whoever reads a key declares it
 

@@ -6,7 +6,18 @@ import { NodePlatform } from '../../../src/builtins/platforms/node/node.platform
 
 /** The method under test, as a free function - it reads nothing off `this`, and naming it here
  *  keeps the assertions below reading the way they did when it was one. */
-const npmBinPaths = (cwd: string): string[] => new NodePlatform().getBinPaths(cwd);
+const npmBinPaths = (cwd: string, inherited = ''): string[] => new InheritingPlatform(inherited).getBinPaths(cwd);
+
+/** The platform with the PATH it inherits stated by the case, rather than whatever the machine
+ *  running the suite has. */
+class InheritingPlatform extends NodePlatform {
+  constructor(readonly inherited: string) {
+    super();
+  }
+  protected override inheritedPath(): string {
+    return this.inherited;
+  }
+}
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-runpath-test-'));
@@ -47,10 +58,28 @@ describe('utils/npm-run-path', () => {
     expect(rootIdx).toBeGreaterThan(nestedIdx);
   });
 
-  it('includes the directory of the current Node executable, last', () => {
-    const { nested } = tmpNested();
-    const entries = npmBinPaths(nested);
-    expect(entries).toContain(path.dirname(process.execPath));
-    expect(entries.at(-1)).toBe(path.dirname(process.execPath));
+  it('includes the directory of the current Node executable, last, when the PATH finds another node', () => {
+    const { root, nested } = tmpNested();
+    const other = path.join(root, 'other-bin');
+    fs.mkdirSync(other);
+    fs.writeFileSync(path.join(other, process.platform === 'win32' ? 'node.exe' : 'node'), '');
+    for (const inherited of ['', other]) {
+      const entries = npmBinPaths(nested, inherited);
+      expect(entries.at(-1)).toBe(path.dirname(process.execPath));
+    }
+  });
+
+  /** Measured: the interpreter's directory is where `npm install -g` writes, so putting it first put
+   *  a global pnpm 9.9.0 ahead of the shell's 12.10.1 - for nothing, since the shell's `node` was the
+   *  same interpreter. */
+  it("leaves it out when the inherited PATH's first node is this interpreter", () => {
+    const { root, nested } = tmpNested();
+    const linked = path.join(root, 'linked-bin');
+    fs.mkdirSync(linked);
+    fs.symlinkSync(process.execPath, path.join(linked, 'node'));
+    const nowhere = path.join(root, 'empty');
+    for (const inherited of [path.dirname(process.execPath), [nowhere, linked].join(path.delimiter)]) {
+      expect(npmBinPaths(nested, inherited)).not.toContain(path.dirname(process.execPath));
+    }
   });
 });
