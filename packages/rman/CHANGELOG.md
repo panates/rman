@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to fba9def9f97e0d1b135fcade009905bd67eaf061 -->
+<!-- rman:documented-up-to 69c9ca121882dcb721c0d33b2e7fab1fd3a77fcc -->
+
+## v2.40.1 (2026-10-28)
+
+### 🐛 Bug Fixes
+
+- **node:** keep the user's PATH order when it already finds rman's node (547a42f)
+
+---
 
 ## v2.40.0 (2026-10-28)
 
