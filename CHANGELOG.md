@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 75125e1132f2f6900dd110ca1ac33d09641473c4 -->
+<!-- rman:documented-up-to fba9def9f97e0d1b135fcade009905bd67eaf061 -->
+
+## v2.40.0 (2026-10-28)
+
+### ✨ Features
+
+- **deps:** follow pnpm's minimumReleaseAge, verify with the installing tool (fd2d7f4)
+
+---
 
 ## v2.39.0 (2026-10-26)
 
