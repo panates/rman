@@ -1,5 +1,5 @@
 # compiled output
-/node_modules
+node_modules
 build
 *.tsbuildinfo
 graphify-out

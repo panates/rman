@@ -1,0 +1,13 @@
+packages:
+  - packages/*
+
+# Both are napi postinstalls that fetch a fallback binding when the platform's prebuilt one is
+# missing - what npm ran unasked. Named here because pnpm refuses an install with unapproved builds.
+allowBuilds:
+  '@swc/core': true
+  unrs-resolver: true
+
+# pnpm holds back any version younger than a day by default (1440 minutes). Turned off on the
+# user's call: `rman deps` already decides what this repository moves to, and a second, silent
+# floor under it made a fresh install resolve something other than what `deps` reported.
+minimumReleaseAge: 0

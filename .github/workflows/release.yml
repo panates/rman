@@ -103,6 +103,8 @@ jobs:
       # reaching for OIDC. v7 removed that fallback, and says so - "npm Trusted Publishing (OIDC) is
       # not affected, since it does not use NODE_AUTH_TOKEN". The official recipe sets it, and
       # `npm publish` answered `ENEEDAUTH` without it.
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
@@ -120,7 +122,7 @@ jobs:
       # runs is the shape the recipe describes.
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # `version` commits and tags, so the runner needs an identity of its own - it cannot be
       # handed one per command.
@@ -170,9 +172,9 @@ jobs:
           fi
 
       # **Build 1 of 2: the bootstrap.** There is no rman to run `version` with until this finishes,
-      # and it must not be a published one. Plain npm, in package order - never `rman build`.
+      # and it must not be a published one. Plain pnpm, in package order - never `rman build`.
       - name: Build the CLI this release will be cut with
-        run: npm run build
+        run: pnpm run build
 
       # Severity always comes from rman's own reading of the commits since each package's last tag
       # (conventional-commit prefixes, with a `Release-As:` footer as the one-off override) - never
@@ -201,13 +203,17 @@ jobs:
       # in is postbuild, not the config.
       # Nearly free: tsc is incremental, so this re-runs little more than the postbuild hooks.
       - name: Rebuild at the version that was just cut
-        run: npm run build
+        run: pnpm run build
 
       # No `--target`: each package's own `.rmanrc "publish.target"` is the single source of truth.
       # Never looks at whether `version` ran - it inspects what is on disk and on the registry - so
       # a version cut locally and merged in releases exactly the same way, and re-running is safe.
+      #
+      # **`--package-manager npm`, although the repository installs with pnpm.** Unset, `publish`
+      # takes the lockfile's manager, and every step of the Trusted Publishing setup above - the
+      # npmrc line, OIDC, provenance - was measured against `npm publish` and nothing else.
       - name: Publish
-        run: node packages/rman/build/cli.js publish --yes
+        run: node packages/rman/build/cli.js publish --yes --package-manager npm
 
       # After `publish`, so a failed registry push never leaves a release announcing code that
       # never arrived. A no-op when the tag already has a release.

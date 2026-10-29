@@ -24,7 +24,7 @@
   "scripts": {
     "prepublishOnly": "node -e \"console.error('rman publishes from build/, never from the source tree. Run: rman publish'); process.exit(1)\"",
     "compile": "tsc --noEmit",
-    "prebuild": "npm run check && npm run lint && npm run clean",
+    "prebuild": "pnpm run check && pnpm run lint && pnpm run clean",
     "build": "tsc -b tsconfig-build.json",
     "postbuild": "node ../../support/postbuild.cjs && rimraf build/*.tsbuildinfo",
     "test": "mocha",
@@ -32,7 +32,7 @@
     "lint:fix": "eslint . --max-warnings=0 --fix",
     "format": "prettier . --write --log-level=warn",
     "check": "dpdm -T --no-warning --no-tree --skip-dynamic-imports circular --exit-code circular:1 ./src/index.ts",
-    "clean": "npm run clean:src && npm run clean:test && npm run clean:build && npm run clean:cover",
+    "clean": "pnpm run clean:src && pnpm run clean:test && pnpm run clean:build && pnpm run clean:cover",
     "clean:src": "ts-cleanup -s src --all",
     "clean:test": "ts-cleanup -s test --all",
     "clean:build": "rimraf build *.tsbuildinfo",

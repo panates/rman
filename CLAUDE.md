@@ -3430,9 +3430,41 @@ It also caught a second casualty of the same fold: this repository's own `.rmanr
 `extends: './packages/node/build/index.js'`, a path into the deleted package, so every command here
 exited 1.
 
+## This repository installs with pnpm
+
+`pnpm-workspace.yaml` lists the workspace and `package.json#packageManager` pins pnpm; there is no
+`package-lock.json` and no `workspaces` key - pnpm ignores the latter, so keeping it would be a
+second list to drift. Scripts say `pnpm run`, and so does the guidance below where it names a
+command; older sections still saying `npm run x` mean `pnpm run x`.
+
+- **Every tool a script calls is a direct devDependency.** npm hoisted `eslint` out of
+  `@panates/eslint-config-ts`; pnpm does not, and `pnpm run lint` answered `eslint: command not
+  found` until `eslint` and `typescript-eslint` (that preset's peer) were declared.
+- **`allowBuilds` names `@swc/core` and `unrs-resolver`**: pnpm refuses an install with unapproved
+  build scripts (`ERR_PNPM_IGNORED_BUILDS`), and both are napi postinstalls npm ran unasked.
+- **`minimumReleaseAge: 0`, the user's call**: pnpm's default holds back anything younger than a
+  day, a second floor under what `rman deps` reports.
+- **The release still publishes with npm** (`publish --package-manager npm` in `release.yml`):
+  unset, `publish` takes the lockfile's manager, and the Trusted Publishing setup was measured
+  against `npm publish` only.
+
+## Before every push: deps, a clean install, checks, tests
+
+The user's rule. Run with the CLI this commit builds (`node packages/rman/build/cli.js`), in order:
+
+1. `rman deps` - are the dependency versions current?
+2. `rman deps -u` when it lists an upgrade.
+3. `rman ci` - a clean install (wipes `node_modules` and the lockfile, installs with pnpm).
+4. `pnpm run typecheck`, `pnpm run lint`, `pnpm run build`, `pnpm run smoke` - the checks.
+5. `pnpm test`.
+6. Only then push - and a release still goes through the PR route.
+
+Commit what steps 2 and 3 changed (`package.json`, `pnpm-lock.yaml`) with the work, or on its own
+when there is nothing else.
+
 ## The build must not need rman
 
-`npm run build` is `npm run build -w packages/rman` - plain npm, never `rman build`.
+`pnpm run build` is `pnpm --filter rman run build` - plain pnpm, never `rman build`.
 
 **It was `rman build`, and that is a bootstrap loop that only bites on the release that matters.**
 The `rman` on PATH is whatever is *published*, so a version introducing a config feature cannot
@@ -3462,7 +3494,7 @@ exists, and is the right thing to run when changing `RunService`.
 ## The release workflow, and the npm auth trap that cost five runs
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) releases rman **with the rman in
-that commit** - `npm ci`, `npm run build`, then `node packages/rman/build/cli.js version/publish/
+that commit** - `pnpm install --frozen-lockfile`, `pnpm run build`, then `node packages/rman/build/cli.js version/publish/
 github-release`. It called `panates/github-actions/.../node-release.yaml@v1` until 40f41e3, which is
 safe only because *that* version calls rman nowhere: `@v2` drives the whole release with
 `npx rman@1` (measured: 0 references against 20), so following the other repositories onto it would
