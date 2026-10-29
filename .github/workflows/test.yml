@@ -48,7 +48,7 @@ jobs:
   # test matrix would pay for it three times.
   #
   # It exists because **nothing else checks the test tree**. `npm test` runs mocha, which transpiles
-  # without type-checking, and `npm run build` compiles `src` only - so a spec could be wrong about
+  # without type-checking, and `pnpm run build` compiles `src` only - so a spec could be wrong about
   # a type for as long as nobody happened to run `tsc` over `test/` by hand. That is exactly how a
   # core spec came to type its fixture with `rman-node`'s keys and nothing said so.
   typecheck:
@@ -71,33 +71,35 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Before setup-node, whose `cache: pnpm` asks pnpm where its store is. The version comes
+      # from `package.json#packageManager`, so CI and a developer run the same pnpm.
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-          # Caches npm's own download cache, keyed on the lockfile - which is the mechanism that
-          # works with `npm ci`, unlike caching `node_modules` and then deleting the key it was
-          # hashed from.
-          cache: npm
+          # Caches pnpm's store, keyed on the lockfile - not `node_modules`.
+          cache: pnpm
 
-      # `ci`, not `install`: the point of a lockfile is that CI runs the tree that was committed.
+      # `--frozen-lockfile`: the point of a lockfile is that CI runs the tree that was committed.
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Check types
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Lint
-        run: npm run lint
+        run: pnpm run lint
 
       # The suite cannot see this. Mocha resolves `rman` through `tsconfig-test.json`'s `paths` to
       # `src`, which is a different module graph from the compiled one - so an ESM cycle can be
       # fatal in `build/` with every spec green. Measured: every command in the published layout
       # died with `Cannot access 'VersionPlanService' before initialization` and nothing reported it.
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
       - name: Smoke-test the built CLI
-        run: npm run smoke
+        run: pnpm run smoke
 
   # ***********************************
   # Job: Test
@@ -132,17 +134,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Apply tests
         run: |
-          npm run citest
+          pnpm run citest
         env:
           NODE_OPTIONS: "--max_old_space_size=4096"
 

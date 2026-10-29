@@ -47,12 +47,12 @@ them lives in the two above.
 ## Working on it
 
 ```bash
-npm install
-npm run build     # plain npm, in dependency order - never `rman build`, which is a bootstrap loop
-npm test          # mocha, across packages/*/test
-npm run typecheck # what mocha cannot see: the specs' own types
-npm run lint
-npm run smoke     # the built CLI actually starts, and a consumer's compiler sees what it should
+pnpm install
+pnpm run build     # plain pnpm, in dependency order - never `rman build`, which is a bootstrap loop
+pnpm test          # mocha, across packages/*/test
+pnpm run typecheck # what mocha cannot see: the specs' own types
+pnpm run lint
+pnpm run smoke     # the built CLI actually starts, and a consumer's compiler sees what it should
 ```
 
 ## Licence
