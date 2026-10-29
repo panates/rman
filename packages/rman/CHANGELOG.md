@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 69c9ca121882dcb721c0d33b2e7fab1fd3a77fcc -->
+<!-- rman:documented-up-to 845a5a658fd076a9da9619bf97ed48dabdb825fb -->
+
+## v2.40.2 (2026-10-29)
+
+### 📦 Build System
+
+- install with pnpm (8e67cf3)
+
+---
 
 ## v2.40.1 (2026-10-28)
 
