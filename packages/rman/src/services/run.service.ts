@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import os from 'node:os';
+import path from 'node:path';
 import { inspect } from 'node:util';
 import colors from 'ansi-colors';
 import { tokenize } from 'fast-tokenizer';
@@ -11,6 +12,7 @@ import { type ProgressItem, ProgressPanel } from '../core/classes/progress-panel
 import type { Repository } from '../core/classes/repository.js';
 import { PanelReporter, PlainReporter } from '../core/classes/run-reporters.js';
 import { Service } from '../core/classes/service.js';
+import { ORIGINS } from '../core/config/merge-config.js';
 import type { RunConditionFn, RunStepContext, RunStepFn, RunStepValue } from '../core/interfaces/run-step.js';
 import { exec } from '../utils/exec.js';
 import { filterPackages, type PackageFilterOptions } from '../utils/package-filter.js';
@@ -1311,8 +1313,10 @@ async function passesIf(
  *
  * 1. `run.<script>.override: true` -> the config, always. The escape hatch for "ignore what the
  *    package says it does".
- * 2. for `exec`, a **contributed** source - `package.json#scripts` via `rman-node` - wins over the
- *    config, because the two are one answer to one question and the more specific statement wins.
+ * 2. for `exec`, a **contributed** source - `package.json#scripts` via `rman-node` - wins over a
+ *    config the package inherited, because the two are one answer to one question and the more
+ *    specific statement wins. An `exec` written in **the package's own config file** wins over the
+ *    contributed one instead, with a warning - see `ownsConfiguredExec`.
  * 3. for `before`/`after`, the two **compose**: they are hooks at a point rather than answers, so
  *    the config's bracket the package's own (`config.before -> prebuild -> build -> postbuild ->
  *    config.after`). See `slotValues` for the measurement behind that.
@@ -1331,9 +1335,16 @@ function getScriptSteps(pkg: Package, script: string): RunService.ScriptStep[] {
     after: RunService.normalizeScriptValue(cfg.after, `run.${script}.after`),
   };
 
+  /** The package said this in its own config file, beside its own `package.json`: both are the
+   *  package's, and the rman one is the deliberate statement about how rman runs it. */
+  const ownExec =
+    !override && !!fromConfig.exec?.length && !!contributed?.exec?.length && ownsConfiguredExec(pkg, script);
+  if (ownExec) warnReplacedScript(pkg, script);
+
   const steps: RunService.ScriptStep[] = [];
   for (const slot of SCRIPT_SLOTS) {
-    for (const value of slotValues(slot, contributed?.[slot] ?? [], fromConfig[slot] ?? [], override)) {
+    const slotOverride = override || (ownExec && slot === 'exec');
+    for (const value of slotValues(slot, contributed?.[slot] ?? [], fromConfig[slot] ?? [], slotOverride)) {
       steps.push(toStep(slot, value));
     }
   }
@@ -1425,6 +1436,47 @@ const SCRIPT_SLOTS = ['before', 'exec', 'after'] as const;
  */
 function tokenizeIf(raw: string): string[] {
   return tokenize(raw, { delimiters: /\s+/, brackets: true, keepBrackets: false }).all();
+}
+
+/**
+ * Whether `run.<script>.exec` was written in the package's own config file - a `.rmanrc*` in its
+ * directory, or its manifest's `rman` key - rather than inherited from a directory above, a
+ * `"[selector]"` block there, or an `extends` base.
+ */
+/* **Reported from `syncbridge-io/syncbridge`**: web-ui's own `.rmanrc.yml` said
+ * `exec: npm run type-check && npm run build` and its `package.json` said `"build": "vite build"`.
+ * The package script won, silently: the type check never ran and a TypeScript error went unnoticed
+ * for two days, while `rman build --config` showed the configured exec as though it would. Both
+ * statements were the package's own, and the one written for rman is the deliberate one - the user's
+ * call, with a warning so the replaced script is not a surprise either way.
+ *
+ * Read off `rawConfig`'s `ORIGINS`, which records the file each key came from (absolute). An inherited
+ * exec keeps losing to the package's script, which is what a shared preset's `"[*]" run.build.exec`
+ * relies on (opra's angular package and its own `ng build`). */
+function ownsConfiguredExec(pkg: Package, script: string): boolean {
+  const run = (pkg.rawConfig as Record<string, unknown>)?.run as Record<string | symbol, unknown> | undefined;
+  if (!run || typeof run !== 'object') return false;
+  const block = run[script];
+  const origin =
+    block && typeof block === 'object' && !Array.isArray(block)
+      ? ((block as Record<symbol, unknown>)[ORIGINS] as Record<string, string> | undefined)?.exec
+      : (run[ORIGINS] as Record<string, string> | undefined)?.[script];
+  return !!origin && path.resolve(path.dirname(origin)) === path.resolve(pkg.dirname);
+}
+
+const warnedReplacedScript = new Set<string>();
+
+/** Says once per package and script that its own `exec` replaced its `package.json` script. */
+function warnReplacedScript(pkg: Package, script: string): void {
+  const key = `${pkg.dirname}:${script}`;
+  if (warnedReplacedScript.has(key)) return;
+  warnedReplacedScript.add(key);
+  console.warn(
+    colors.yellow(
+      `[${pkg.name}] run.${script}.exec in its own config is used instead of the "${script}" ` +
+        `script in its package.json.`,
+    ),
+  );
 }
 
 const warnedUnknownIf = new Set<string>();

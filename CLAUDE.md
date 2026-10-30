@@ -2675,6 +2675,16 @@ four behaviours still fire.
     two copies would drift, and one of them would sit in the file that writes versions.
   - `override: true` is unchanged: the config replaces rather than composes, per slot, which is
     what "ignore what the package says it does" has always meant.
+- **An `exec` in the package's own config file beats its `package.json` script, with a warning**
+  (`ownsConfiguredExec`, `warnReplacedScript` in `run.service.ts`). Reported from
+  `syncbridge-io/syncbridge`: web-ui's own `.rmanrc.yml` chained `npm run type-check && npm run build`,
+  its `package.json` said `"build": "vite build"`, and the package script won silently - the type check
+  never ran and a TypeScript error went unnoticed for two days, while `--config` showed the configured
+  exec. First read as `&&` dropping the first command; measured, the whole configured exec was replaced.
+  - **"Own" is read off `rawConfig`'s `ORIGINS`**: the key's file sits in the package's directory (a
+    `.rmanrc*` or the manifest's `rman` key). An inherited exec - a directory above, a selector block
+    there, an `extends` base - still loses, which a shared preset's `"[*]" run.build.exec` relies on.
+  - The user's call: the rman statement wins, and says so, rather than only warning.
 - **An empty run has two endings, and conflating them hid a broken CI step for months.** Nothing
   defining the script at all is a mistake - `npm run` fails on it, so does `rman` (non-zero). Every
   package being *filtered out* (`--scope`/`--changed`/`skip`/`if:`) is the correct answer to what

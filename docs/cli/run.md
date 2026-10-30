@@ -91,6 +91,7 @@ names - so at the repository root, package-facing script config goes under `"[*]
     build:
       before: [node ./generate.js, node ./validate.js] # array -> run in sequence
       exec: tsc -b # used only if the package's own package.json has no "build" script at all
+      # (an exec written in the package's OWN .rmanrc wins over its package.json script, with a warning)
       after: node ./copy-assets.js
       override: true # use these even if the package DOES already define build/prebuild/postbuild
     lint:
@@ -160,6 +161,10 @@ silently ran nothing while the run reported success is the failure this refusal 
   `run.<script>.topo`, on by default; a `false` frees its own step and nothing else. So a script
   where no step mentions `topo` waits before its first step, as it always has, and one waits
   nowhere only when **every** step says `false`.
+- **An `exec` in the package's own config file beats its `package.json` script**, with a warning.
+  Both statements are the package's own, and the one written for rman is the deliberate one. An
+  `exec` inherited from a directory above, a `"[selector]"` block there or an `extends` base still
+  loses to the package's script, as below; `override: true` makes any configured `exec` win.
 - **A package's own script keeps the mark of the `exec` it replaces.** A `package.json` `build`
   cannot say `topo`, so it inherits the configured `exec: { topo: true, ... }` it takes the place
   of. `run.<script>.topo: false` and `--no-topo` still turn ordering off outright.
