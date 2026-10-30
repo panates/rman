@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to 399fdb9a5726e60ae950a39e2954da086c4b8f46 -->
+<!-- rman:documented-up-to eb78a88c6ce7d70cbc380fdabe8c7e216e579b51 -->
+
+## v2.41.0 (2026-10-30)
+
+### ✨ Features
+
+- **version:** name the released packages in a multi-line repository's commits (cb82378)
+
+### 🧹 Chores
+
+- refresh lockfile (eslint-plugin-security 4.2.1) (54b7706)
+
+---
 
 ## v2.40.3 (2026-10-30)
 
