@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to eb78a88c6ce7d70cbc380fdabe8c7e216e579b51 -->
+<!-- rman:documented-up-to ae7faaf8a053c33da16dad8695863daeca087324 -->
+
+## v2.41.1 (2026-10-30)
+
+### 🐛 Bug Fixes
+
+- **publish:** pnpm publishes from any allowed branch; spm blocks behind a failed dependency (c1b9b3b)
+
+---
 
 ## v2.41.0 (2026-10-30)
 
