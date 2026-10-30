@@ -77,6 +77,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # **The branch's tip, not the commit that triggered the run** - which is what makes "Re-run
+          # failed jobs" finish a half-done release. A re-run is handed the original SHA, and when
+          # the first attempt had pushed its version commit and tag before failing at Publish, that
+          # SHA is behind the branch: `version` bumped the same version again, its push was refused
+          # as non-fast-forward, and the job ended with nothing published. From the tip, the release
+          # commit is already there, `version` finds nothing to bump, and `publish` and
+          # `github-release` send only what is missing. Reported from opra's 1.34.0 release, whose
+          # only way out was a manual `workflow_dispatch` on main.
+          #
+          # The tip can be ahead of the trigger in one other case - a push landing while an earlier
+          # run waits on `concurrency` - and releasing it is right: that push's own run would.
+          ref: ${{ github.ref_name }}
           # rman resolves each package's release boundary from its own last tag and reads the
           # commits after it, so a shallow clone silently reports the wrong thing rather than
           # failing - every package would look unreleased.

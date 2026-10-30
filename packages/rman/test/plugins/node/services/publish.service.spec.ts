@@ -746,6 +746,80 @@ describe('services/publish', () => {
       });
     });
 
+    describe("a publish that fails for a reason that is not the package's", () => {
+      /** An `npm` that fails its first `failures` calls with `message` on stderr and then succeeds,
+       *  counting every call. */
+      async function flakyRepo(failures: number, message: string) {
+        const dir = tmp();
+        writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+        const repo = await createRepository(dir);
+        const binDir = path.join(dir, 'node_modules', '.bin');
+        fs.mkdirSync(binDir, { recursive: true });
+        const counter = path.join(tmp(), 'calls');
+        fs.writeFileSync(
+          path.join(binDir, 'npm'),
+          `#!/usr/bin/env node
+const fs = require('fs');
+const n = (fs.existsSync(${JSON.stringify(counter)}) ? Number(fs.readFileSync(${JSON.stringify(counter)}, 'utf-8')) : 0) + 1;
+fs.writeFileSync(${JSON.stringify(counter)}, String(n));
+if (n <= ${failures}) { console.error(${JSON.stringify(message)}); process.exit(1); }
+`,
+        );
+        fs.chmodSync(path.join(binDir, 'npm'), 0o755);
+        const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
+        const calls = () => Number(fs.readFileSync(counter, 'utf-8'));
+        return { repo, plan, calls };
+      }
+
+      const TLOG =
+        'npm error code TLOG_CREATE_ENTRY_ERROR\nnpm error error creating tlog entry - (409) an equivalent entry already exists in the transparency log';
+      const silence = () => {
+        const write = process.stderr.write;
+        process.stderr.write = (() => true) as any;
+        return () => (process.stderr.write = write);
+      };
+      let restore: () => void;
+      beforeEach(() => (restore = silence()));
+      afterEach(() => restore());
+
+      it('tries a transparency-log conflict again, and the entry is published', async () => {
+        const { repo, plan, calls } = await flakyRepo(1, TLOG);
+        const applied = await PublishService.applyPlan(repo, plan, {}, { ...registry({}), retryDelaysMs: [1, 1] });
+        expect(entryFor(applied, 'pkg-a').status).toBe('publish');
+        expect(calls()).toBe(2);
+      });
+
+      it('does not publish again when the registry already serves the version', async () => {
+        const { repo, plan, calls } = await flakyRepo(1, 'npm error code E503\nnpm error 503 Service Unavailable');
+        const applied = await PublishService.applyPlan(
+          repo,
+          plan,
+          {},
+          { ...registry({ 'pkg-a': '1.0.0' }), retryDelaysMs: [1, 1] },
+        );
+        expect(entryFor(applied, 'pkg-a').status).toBe('publish');
+        expect(calls()).toBe(1);
+      });
+
+      it('gives up after the last retry and says how often it tried', async () => {
+        const { repo, plan, calls } = await flakyRepo(10, TLOG);
+        const applied = await PublishService.applyPlan(repo, plan, {}, { ...registry({}), retryDelaysMs: [1, 1] });
+        expect(entryFor(applied, 'pkg-a')).toMatchObject({ status: 'error' });
+        expect(entryFor(applied, 'pkg-a').reason).toContain('transparency-log conflict, after 3 attempts');
+        expect(calls()).toBe(3);
+      });
+
+      it("does not try again a failure that is the package's own", async () => {
+        const { repo, plan, calls } = await flakyRepo(
+          10,
+          'npm error code E403\nnpm error 403 You cannot publish over the previously published versions',
+        );
+        const applied = await PublishService.applyPlan(repo, plan, {}, { ...registry({}), retryDelaysMs: [1, 1] });
+        expect(entryFor(applied, 'pkg-a').status).toBe('error');
+        expect(calls()).toBe(1);
+      });
+    });
+
     it('a skip/up-to-date entry passes through applyPlan untouched, never invoking the package manager', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
