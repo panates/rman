@@ -117,8 +117,10 @@ const config = {
   commitMessage: {
     target: 'config',
     describe:
-      'The commit message for each group this run commits - "{version}" is substituted when a ' +
-      'commit\'s own group shares one version. Default "chore(release): v{version}".',
+      'The commit message for each group this run commits - "{version}" and "{name}" (the ' +
+      "packages' names, comma-separated) are substituted when a commit's own group shares one " +
+      'version. Default "chore(release): v{version}" with one version line, and ' +
+      '"chore(release): <name>@<version>, ..." with several.',
     type: 'string',
   },
   cascade: {
