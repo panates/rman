@@ -174,6 +174,57 @@ if (args[0] === 'publish') {
   });
 
   describe('applyPlan()', () => {
+    /** As the npm target does: a module whose dependency or required peer failed is not tried - its
+     *  range points at a version that is not there - while one needing it only optionally is. */
+    it('does not try a module whose dependency failed to publish, but does one needing it optionally', async () => {
+      inGitHubActions();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-spm-test-'));
+      dirs.push(dir);
+      const spmTarget = { publish: { target: ['spm'] } };
+      writeJson(dir, 'package.json', { name: 'root', private: true, workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), '{}');
+      fs.writeFileSync(path.join(dir, '.gitignore'), 'local-bin\n');
+      writeJson(dir, 'packages/a/package.json', { name: 'mod-a', version: '1.0.0', rman: spmTarget });
+      writeJson(dir, 'packages/b/package.json', {
+        name: 'mod-b',
+        version: '1.0.0',
+        dependencies: { 'mod-a': '^1.0.0' },
+        rman: spmTarget,
+      });
+      writeJson(dir, 'packages/c/package.json', {
+        name: 'mod-c',
+        version: '1.0.0',
+        peerDependencies: { 'mod-a': '^1.0.0' },
+        peerDependenciesMeta: { 'mod-a': { optional: true } },
+        rman: spmTarget,
+      });
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+      git('init', '-q');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'Test');
+      git('add', '-A');
+      git('commit', '-q', '-m', 'init');
+      const bin = path.join(dir, 'local-bin');
+      fs.mkdirSync(bin, { recursive: true });
+      fs.writeFileSync(
+        path.join(bin, 'spm'),
+        `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === 'view') console.log(JSON.stringify({ versions: [] }));
+if (args[0] === 'publish' && process.cwd().endsWith('/a')) { console.error('error: registry refused'); process.exit(1); }
+`,
+      );
+      fs.chmodSync(path.join(bin, 'spm'), 0o755);
+
+      const planned = await plan(dir);
+      const applied = await service('spmPublish').applyPlan(planned);
+      const statusOf = (name: string) => applied.find(e => e.package.name === name);
+
+      expect(statusOf('mod-a')?.status).toBe('error');
+      expect(statusOf('mod-b')).toMatchObject({ status: 'error', reason: 'dependency "mod-a" failed to publish' });
+      expect(statusOf('mod-c')?.status).toBe('publish');
+    });
+
     it('publishes in GitHub Actions with --skip-existing and the access it was given', async () => {
       inGitHubActions();
       const dir = repo({ publish: { target: ['spm'], spm: { access: 'public' } } });

@@ -508,6 +508,20 @@ describe('services/publish', () => {
       const call = fs.readFileSync(logFile, 'utf-8').trim();
       expect(call).toContain('publish --access public --tag next --otp 123456 --registry https://example.com');
       expect(call).toContain('--userconfig /tmp/.npmrc');
+      expect(call).not.toContain('--no-git-checks');
+    });
+
+    /** pnpm refuses a branch other than main/master and a changed tree; rman has decided both. */
+    it('passes --no-git-checks to pnpm, and only to pnpm', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      const repo = await createRepository(dir);
+      const { logFile } = stubPublishBin(dir, 'pnpm');
+
+      const plan = await PublishService.getPlan(repo, {}, registry({ 'pkg-a': undefined }));
+      await PublishService.applyPlan(repo, plan, { packageManager: 'pnpm' });
+
+      expect(fs.readFileSync(logFile, 'utf-8').trim()).toMatch(/ publish --no-git-checks$/);
     });
 
     /**
@@ -799,6 +813,18 @@ if (n <= ${failures}) { console.error(${JSON.stringify(message)}); process.exit(
         );
         expect(entryFor(applied, 'pkg-a').status).toBe('publish');
         expect(calls()).toBe(1);
+      });
+
+      /** pnpm 12's own wording (`FailedToPublishError`), with no status text after the code. The stub
+       *  stands in under the name `npm`, since what is matched is the output, not the tool. */
+      it("recognizes pnpm's spelling of a registry server error", async () => {
+        const { repo, plan, calls } = await flakyRepo(
+          1,
+          ' ERR_PNPM_FAILED_TO_PUBLISH  Failed to publish package pkg-a@1.0.0 (status 504)',
+        );
+        const applied = await PublishService.applyPlan(repo, plan, {}, { ...registry({}), retryDelaysMs: [1, 1] });
+        expect(entryFor(applied, 'pkg-a').status).toBe('publish');
+        expect(calls()).toBe(2);
       });
 
       it('gives up after the last retry and says how often it tried', async () => {
