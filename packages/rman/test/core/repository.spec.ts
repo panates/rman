@@ -1427,7 +1427,7 @@ describe('core/Repository', () => {
      * Three layers, and the order is the **declaration order of the selectors** - not the order of
      * the files. `"[*]"` is written before `"[pkg-a]"`, so the base's `"[pkg-a]"` is the last word
      * even though the consumer's `"[*]"` is in the closer file; that is the documented rule, and
-     * the cost CLAUDE.md names for having dropped specificity ranking.
+     * the cost docs/decisions/config.md names for having dropped specificity ranking.
      *
      * Here to pin the *order* rather than the presence: before the fix this answered
      * `['top', 'mid']`, so getting `'base'` back could have arrived anywhere in the list.

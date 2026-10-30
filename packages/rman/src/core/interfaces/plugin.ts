@@ -234,7 +234,7 @@ export function isPlugin(value: unknown): value is Plugin {
  *
  * It exists so `Package.platform` need not be optional. `Package.provider` was an empty string for
  * exactly this case, and every reader had to know that; an object with an empty `name` says the
- * same thing without a guard, and `pkg.provider === 'node'` - the check CLAUDE.md prescribes -
+ * same thing without a guard, and `pkg.provider === 'node'` - the check docs/decisions/platforms.md prescribes -
  * reads the same either way.
  *
  * **Every documented behaviour of "no plugin" survives unchanged**, because the absences are the

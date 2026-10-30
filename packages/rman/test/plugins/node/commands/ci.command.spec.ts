@@ -63,7 +63,7 @@ describe('commands/ci', () => {
    *   "expected true, received false" while rman's own log said `Running "yarn install"` and
    *   `ci completed (0.3s)`.
    *
-   * That second one is the trap CLAUDE.md records for `docker` - a stub invisible from a package,
+   * That second one is the trap docs/decisions/testing.md records for `docker` - a stub invisible from a package,
    * the real binary running instead - and it had the same consequence here: the suite shelled out
    * to a real package manager.
    *
