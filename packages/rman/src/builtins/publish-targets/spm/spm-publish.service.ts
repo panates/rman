@@ -5,6 +5,7 @@ import { filesOwnedBy } from '../../../utils/bundled-packages.js';
 import { dirtyReason, GitHelper } from '../../../utils/git.js';
 import { filterPackages, type PackageFilterOptions } from '../../../utils/package-filter.js';
 import { runBin } from '../../../utils/run-bin.js';
+import { consumerNeeds } from '../../platforms/node/utils/consumer-needs.js';
 import type { SpmPublishOptions } from './spm.target.js';
 
 /** The name this target answers to in `publish.target` and `--target`. */
@@ -75,13 +76,28 @@ export class SpmPublishService extends Service {
 
   /**
    * Publishes every `'publish'` entry with `spm publish --skip-existing`, one package after another,
-   * in the package's own directory. A failure is that package's alone and is reported on its entry.
+   * in the package's own directory. A failure is reported on its entry, and every later entry whose
+   * consumers need the failed package - a dependency, or a peer not marked optional - is marked
+   * `'error'` without being tried.
    */
+  /* **A failure stops what a consumer's install needs it for**, as the npm target does: the plan is in
+   * dependency order, so a module whose dependency or required peer failed would be refused by the
+   * registry anyway - its range points at a version that is not there - and trying it only adds a
+   * second error further from the cause. The same `consumerNeeds` rule, so an optional peer or a
+   * devDependency does not block. */
   async applyPlan(plan: SpmPublishService.Entry[]): Promise<SpmPublishService.Entry[]> {
     const result: SpmPublishService.Entry[] = [];
+    const failed = new Set<string>();
     for (const entry of plan) {
       if (entry.status !== 'publish') {
         result.push(entry);
+        continue;
+      }
+      const pkg = entry.package;
+      const blocker = pkg.dependencies.find(d => failed.has(d.name) && consumerNeeds(pkg, d.name));
+      if (blocker) {
+        failed.add(pkg.name);
+        result.push({ ...entry, status: 'error', reason: `dependency "${blocker.name}" failed to publish` });
         continue;
       }
       try {
@@ -96,6 +112,7 @@ export class SpmPublishService extends Service {
             : entry,
         );
       } catch (e: any) {
+        failed.add(pkg.name);
         result.push({ ...entry, status: 'error', reason: e.message });
       }
     }

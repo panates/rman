@@ -2280,6 +2280,14 @@ saw one thing to release and it was the one thing that must never be published.
   `dependencies` entry or a non-optional peer. Every edge used to count, and measured on opra's
   1.31.0 release `@opra/api-ui` failing its first publish blocked `@opra/http` - which lists it as
   an optional peer and a devDependency only - and elastic, mongodb and sqb behind it.
+- **`pnpm publish` gets `--no-git-checks`** (`buildPublishCommand`): pnpm refuses a branch other than
+  `main`/`master` and a changed tree, both rman's to decide (`allowBranch`, `dirtyReason`) - a prerelease
+  from `alpha`/`beta` would be refused, and an in-place publish writes the derived manifest over
+  `package.json` first. npm makes neither check. pnpm 12 does Trusted Publishing and signs provenance
+  itself - measured on `panates/sqb` 6.3.2.
+- **The `spm` target blocks what a consumer needs, like `npm`** (`SpmPublishService.applyPlan`): one
+  `consumerNeeds` (`platforms/node/utils/consumer-needs.ts`) for both, so the two cannot disagree about
+  which edge blocks. Before it, a module behind a failed dependency was tried and refused by the registry.
 - **A transient npm failure is tried again** (`PublishService.applyPlan`, `transientPublishError`):
   `TLOG_CREATE_ENTRY_ERROR`, a 5xx or 429, a dropped connection - two more attempts, 10 s and 30 s
   apart. Reported from opra's 1.34.0: a Sigstore 409 on `@opra/socketio` left 18 of 20 published,
@@ -3463,9 +3471,9 @@ command; older sections still saying `npm run x` mean `pnpm run x`.
   build scripts (`ERR_PNPM_IGNORED_BUILDS`), and both are napi postinstalls npm ran unasked.
 - **`minimumReleaseAge: 0`, the user's call**: pnpm's default holds back anything younger than a
   day, a second floor under what `rman deps` reports.
-- **The release still publishes with npm** (`publish --package-manager npm` in `release.yml`):
-  unset, `publish` takes the lockfile's manager, and the Trusted Publishing setup was measured
-  against `npm publish` only.
+- **The release publishes with pnpm too**, the lockfile's manager. It was `--package-manager npm`
+  while Trusted Publishing had been measured with npm alone; pnpm 12 does the OIDC exchange and signs
+  provenance itself (measured on `panates/sqb` 6.3.2), and rman passes it `--no-git-checks`.
 
 ## Before every push: deps, a clean install, checks, tests
 
@@ -3586,7 +3594,8 @@ one of two messages, neither of which names the cause:
   take a few minutes to become available`, and a registry query inside that window says the version
   is absent - measured, and mistaken for a failed publish. Read `npm notice ... Signed provenance
   statement` plus `+ rman@<version>` in the log as the success, not a registry read taken seconds
-  later.
+  later. **Under pnpm the line is `Published package rman@<version>`** - the release has published with
+  pnpm since it moved off `--package-manager npm`; npm's `+ rman@` and `npm notice` lines are gone.
 
 **The diagnostic step that found all this is deleted**, because the question is answered and it
 printed eight lines on every release. What it did, if it is ever needed again: `npm --version`, the

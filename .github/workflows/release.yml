@@ -221,11 +221,13 @@ jobs:
       # Never looks at whether `version` ran - it inspects what is on disk and on the registry - so
       # a version cut locally and merged in releases exactly the same way, and re-running is safe.
       #
-      # **`--package-manager npm`, although the repository installs with pnpm.** Unset, `publish`
-      # takes the lockfile's manager, and every step of the Trusted Publishing setup above - the
-      # npmrc line, OIDC, provenance - was measured against `npm publish` and nothing else.
+      # **Published with pnpm, which the lockfile names.** It was `--package-manager npm` while
+      # Trusted Publishing had been measured with npm alone. pnpm 12 does the OIDC exchange and signs
+      # the provenance itself (measured on panates/sqb 6.3.2), reads the npmrc the step above cleans,
+      # and is given `--no-git-checks` by rman, which has already checked the tree and the branch.
+      # Success reads `Published package rman@<version>` in the log, not npm's `+ rman@<version>`.
       - name: Publish
-        run: node packages/rman/build/cli.js publish --yes --package-manager npm
+        run: node packages/rman/build/cli.js publish --yes
 
       # After `publish`, so a failed registry push never leaves a release announcing code that
       # never arrived. A no-op when the tag already has a release.

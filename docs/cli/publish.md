@@ -622,7 +622,8 @@ failed and skipped too, transitively - never publishes a package whose dependenc
 something that never actually reached the registry. "Need" means a `dependencies` entry or a peer
 not marked optional; a package that lists the failed one only in `devDependencies` (removed from
 what is published), as an optional peer, or in `optionalDependencies` is published anyway.
-Unrelated packages elsewhere in the plan are unaffected.
+Unrelated packages elsewhere in the plan are unaffected. The `npm` and `spm` targets both follow
+this rule.
 
 **A failure that is not the package's own is tried again first**, by the `npm` target: a Sigstore
 transparency-log conflict (`TLOG_CREATE_ENTRY_ERROR`), a registry 5xx or 429, or a dropped

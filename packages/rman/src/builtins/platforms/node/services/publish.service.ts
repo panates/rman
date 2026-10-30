@@ -26,6 +26,7 @@ import { filterPackages } from '../../../../utils/package-filter.js';
 import { isCalendarVersion } from '../../../../utils/release-version.js';
 import { type NpmPackageView, npmViewPackage } from '../../../publish-targets/npm/npm-view.js';
 import { DEPENDENCY_KEYS } from '../node-manifest.provider.js';
+import { consumerNeeds } from '../utils/consumer-needs.js';
 import { parseWorkspaceRange, resolveWorkspaceRange } from '../utils/workspace-range.js';
 import { CiService } from './ci.service.js';
 
@@ -589,24 +590,6 @@ function privateBySource(pkg: Package): boolean {
   return !!pkg.manifest.raw.private && !pkg.manifest.raw.publishConfig;
 }
 
-/** Whether a consumer installing `pkg` needs `name` to resolve: a `dependencies` entry, or a peer
- *  not marked optional. */
-/* **Not every edge blocks a publish**, and blocking on all of them cost a release. A failed publish
- * stops its dependents because their published range would point at a version that is not there -
- * which is only true of what reaches the consumer:
- * - `devDependencies` are removed from the published manifest (`derivePublishManifest`);
- * - an optional peer that cannot be satisfied does not fail an install;
- * - `optionalDependencies` are the ones npm proceeds without "if it cannot be found or fails to
- *   install" (npm's own documentation; not measured here).
- * Measured on opra's 1.31.0 release: `@opra/api-ui` failed its first publish, and `@opra/http` -
- * which lists it as an optional peer and a devDependency only - was blocked, taking elastic, mongodb
- * and sqb with it, though none of their installs would have needed api-ui. */
-function consumerNeeds(pkg: Package, name: string): boolean {
-  const raw = pkg.manifest.raw;
-  if (raw.dependencies?.[name] !== undefined) return true;
-  return raw.peerDependencies?.[name] !== undefined && !raw.peerDependenciesMeta?.[name]?.optional;
-}
-
 /** Whether `pkg` is published from its own directory, whose `package.json` is then the manifest. */
 /* In place, `private` is the source's whatever `publishConfig` says - npm refuses to publish it. */
 function publishesInPlace(pkg: Package, contentsOverride: string | undefined): boolean {
@@ -659,8 +642,15 @@ function resolveRegistry(pkg: Package, override: string | undefined): string | u
   return override || (typeof native === 'string' && native ? native : undefined);
 }
 
-/** Why a failed publish is worth trying again, read off npm's output - `undefined` when it is not. */
-/* The pattern names are npm's own error codes. `TLOG_CREATE_ENTRY_ERROR` is the Sigstore conflict
+/** Why a failed publish is worth trying again, read off the package manager's output - `undefined`
+ *  when it is not. */
+/* **npm's and pnpm's spellings both.** npm says `code E503`; pnpm 12 says `Failed to publish package
+ * x@1.0.0 (status 503 Service Unavailable)` (`FailedToPublishError`, pnpm/crates/publish), with the
+ * status text empty when the registry sent none - hence `(status 5xx` alone. pnpm retries the sigstore
+ * signing exchange itself (`sign_with_retry`, two retries), so a transparency-log conflict rarely
+ * reaches rman from pnpm; its network errors are not recognized here, not having been seen.
+ *
+ * The pattern names are npm's own error codes. `TLOG_CREATE_ENTRY_ERROR` is the Sigstore conflict
  * opra's release hit; the rest are a registry or a network that did not answer this time. A 4xx
  * other than 429 is left out on purpose: the registry has decided, and asking again changes nothing. */
 function transientPublishError(output: readonly string[]): string | undefined {
@@ -672,10 +662,10 @@ function transientPublishError(output: readonly string[]): string | undefined {
 const TRANSIENT_PUBLISH_ERRORS: readonly (readonly [RegExp, string])[] = [
   [/TLOG_CREATE_ENTRY_ERROR/, 'transparency-log conflict'],
   [
-    /\bcode E(5\d\d)\b|\b5\d\d (Internal Server Error|Bad Gateway|Service Unavailable|Gateway Time-?out)\b/i,
+    /\bcode E(5\d\d)\b|\(status 5\d\d\b|\b5\d\d (Internal Server Error|Bad Gateway|Service Unavailable|Gateway Time-?out)\b/i,
     'registry server error',
   ],
-  [/\bcode E429\b|\b429 Too Many Requests\b/i, 'registry rate limit'],
+  [/\bcode E429\b|\(status 429\b|\b429 Too Many Requests\b/i, 'registry rate limit'],
   [/\b(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ESOCKETTIMEDOUT|EPIPE)\b|socket hang up/, 'network error'],
 ];
 
@@ -776,7 +766,13 @@ function distTagFor(pkg: Package, tag: string | undefined): { tag?: string; erro
  * The publish flags are passed through unchanged. `--otp` is the one that reads oddly beside it,
  * since staging is what *defers* the 2FA challenge to approval time - it is passed anyway rather
  * than refused, because whether npm accepts it there is npm's to answer and a guess here would be a
- * rule rman invented. */
+ * rule rman invented.
+ *
+ * **`--no-git-checks` for pnpm**, which otherwise refuses to publish from any branch but
+ * `main`/`master` and from a tree with changes. Both are rman's to decide, and both disagree with how
+ * rman publishes: a repository releasing prereleases from `alpha`/`beta` (`--allow-branch`) would be
+ * refused, and a package published in place has its derived manifest written over `package.json`
+ * first, which pnpm reads as a dirty tree. npm makes neither check. */
 function buildPublishCommand(packageManager: CiService.PackageManager, options: PublishService.ApplyOptions): string {
   const args = options.staged ? ['stage', 'publish'] : ['publish'];
   if (options.access) args.push('--access', options.access);
@@ -784,6 +780,9 @@ function buildPublishCommand(packageManager: CiService.PackageManager, options: 
   if (options.otp) args.push('--otp', options.otp);
   if (options.registry) args.push('--registry', options.registry);
   if (options.userconfig) args.push('--userconfig', options.userconfig);
+  /** rman has already decided the tree is clean and the branch is allowed (`dirtyReason`,
+   *  `allowBranch`); pnpm's own checks would decide again, by a rule of its own. */
+  if (packageManager === 'pnpm') args.push('--no-git-checks');
   return `${packageManager} ${args.join(' ')}`;
 }
 
