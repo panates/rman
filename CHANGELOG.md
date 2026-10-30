@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to a35c0f2f419beda065d30576e4935f7edc2533ca -->
+<!-- rman:documented-up-to fdfd3c99a4c2d9ba8dceaee44c57f4212cd65bbd -->
+
+## v2.41.3 (2026-10-30)
+
+### 📚 Documentation
+
+- move the design decisions out of CLAUDE.md into docs/decisions (e855817)
+
+### 🧹 Chores
+
+- **deps:** eslint 10.14.0 (485a864)
+
+---
 
 ## v2.41.2 (2026-10-30)
 
