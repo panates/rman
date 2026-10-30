@@ -787,16 +787,39 @@ describe('run: Run.runScript() integration', () => {
       expect(lines.some(l => l.includes('config-script-ran'))).toBe(true);
     });
 
-    it("without override, the package's own package.json script still wins", async () => {
+    it("without override, the package's own package.json script wins over an inherited exec", async () => {
+      await fixture(
+        { 'pkg-a': { scripts: { build: quiet('echo own-script-ran') } } },
+        { rmanrc: { '[*]': { run: { build: { exec: quiet('echo config-script-ran') } } } } },
+      );
+      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      expect(lines.some(l => l.includes('own-script-ran'))).toBe(true);
+      expect(lines.some(l => l.includes('config-script-ran'))).toBe(false);
+    });
+
+    /**
+     * **An exec in the package's own config file wins, and says so.** Both statements are the
+     * package's; the rman one is the deliberate one. Reported from syncbridge's web-ui, whose own
+     * `.rmanrc.yml` chained a type check before `npm run build` and silently lost to `vite build`.
+     */
+    it("an exec in the package's own config replaces its package.json script, with a warning", async () => {
       await fixture({
         'pkg-a': {
           scripts: { build: quiet('echo own-script-ran') },
           rmanrc: { run: { build: { exec: quiet('echo config-script-ran') } } },
         },
       });
-      const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
-      expect(lines.some(l => l.includes('own-script-ran'))).toBe(true);
-      expect(lines.some(l => l.includes('config-script-ran'))).toBe(false);
+      const warned: string[] = [];
+      const warn = console.warn;
+      console.warn = (...args: unknown[]) => void warned.push(args.join(' '));
+      try {
+        const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+        expect(lines.some(l => l.includes('config-script-ran'))).toBe(true);
+        expect(lines.some(l => l.includes('own-script-ran'))).toBe(false);
+      } finally {
+        console.warn = warn;
+      }
+      expect(warned.join('\n')).toContain('run.build.exec in its own config is used instead of the "build" script');
     });
 
     it('override: true makes the config script replace an existing package.json script', async () => {
@@ -860,18 +883,16 @@ describe('run: Run.runScript() integration', () => {
     });
 
     /** The control for the one above, and the half that must not change: `exec` is a single answer,
-     *  so the package's own still replaces the config's rather than running both. */
+     *  so the package's own still replaces an inherited config's rather than running both. */
     it("still lets the package's own script replace the config's exec while the hooks compose", async () => {
-      await fixture({
-        'pkg-a': {
-          scripts: { prebuild: quiet('echo OWN-PRE'), build: quiet('echo OWN-MAIN') },
+      await fixture(
+        { 'pkg-a': { scripts: { prebuild: quiet('echo OWN-PRE'), build: quiet('echo OWN-MAIN') } } },
+        {
           rmanrc: {
-            run: {
-              build: { before: quiet('echo CONFIG-PRE'), exec: quiet('echo CONFIG-MAIN') },
-            },
+            '[*]': { run: { build: { before: quiet('echo CONFIG-PRE'), exec: quiet('echo CONFIG-MAIN') } } },
           },
         },
-      });
+      );
       const { lines } = await captureLogs(() => service('run').runScript('build', { progress: false }));
       expect(lines.some(l => l.includes('CONFIG-PRE'))).toBe(true);
       expect(lines.some(l => l.includes('OWN-PRE'))).toBe(true);
