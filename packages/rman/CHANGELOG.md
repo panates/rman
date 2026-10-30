@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to ae7faaf8a053c33da16dad8695863daeca087324 -->
+<!-- rman:documented-up-to a35c0f2f419beda065d30576e4935f7edc2533ca -->
+
+## v2.41.2 (2026-10-30)
+
+### 🐛 Bug Fixes
+
+- **run:** an exec in the package's own config beats its package.json script, with a warning (842fc26)
+
+---
 
 ## v2.41.1 (2026-10-30)
 
