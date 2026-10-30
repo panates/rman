@@ -27,7 +27,7 @@ options, in addition to:
 | `--yes` | `-y` | boolean | Skip the confirmation prompt and apply the computed plan immediately - auto-detected severity included, no explicit `bump` keyword required. Conflicts with `--interactive`. |
 | `--ignore-dirty` | - | boolean | Exclude a package with uncommitted local changes instead of aborting the whole run. |
 | `--push` | - | boolean | Push the current branch and **this release's tags** to the remote once applied, in one atomic push - see [What `--push` sends](#what---push-sends). |
-| `--message <text>` | `-m` | string | Override the commit message for every group this run commits. Default: `.rmanrc version.commitMessage`, or `"chore(release): v{version}"`. `{version}` is substituted when a commit's own group shares one version. |
+| `--message <text>` | `-m` | string | Override the commit message for every group this run commits. Default: `.rmanrc version.commitMessage`, or `"chore(release): v{version}"` with one version line and `"chore(release): <name>@<version>, ..."` with several, so each commit names what it released. `{version}` and `{name}` (the packages' names) are substituted when a commit's own group shares one version. |
 | `--changelog` | - | boolean | Also write each bumped package's changelog (same as running `changelog --write` separately) and fold it into the same commit as the version bump. Follows [`changelog.groupBy`](changelog.md#one-file-per-package-or-one-per-release): under `group`, one file per release group, committed with that group's release. Default: `.rmanrc "version.changelog"`, or `false` - `--no-changelog` still overrides it off for one run, even when that's `true`. |
 | `--preid <name>` | - | string | Make the bump a prerelease with this identifier (e.g. `"beta"` -> `1.2.3-beta.0`). Running again with the same `--preid` increments it (`-> 1.2.3-beta.1`); a different identifier keeps the version when it already holds the change (`2.19.0-alpha.1` -> `2.19.0-beta.0`) and moves it on only when it does not (a breaking change: `3.0.0-beta.0`). Ignored when `bump` is an explicit semver version. Default: `.rmanrc "version.preid"` - see [A permanent prerelease line](#a-permanent-prerelease-line). |
 | `--show` | - | boolean | Show the resulting plan for the given `bump` without applying it - unlike omitting `bump` entirely, this still uses the given release-type keyword/version to compute the plan, just never writes it. Conflicts with `--interactive`. |
@@ -220,8 +220,8 @@ the same list again:
 ```
 updated 2 packages
 commit  f167ee2  chore: sync root version to 2026.9.17-1814
-commit  81fb42d  chore(release): v1.1.0
-commit  c9992f8  chore(release): v2.1.0
+commit  81fb42d  chore(release): pkg-a@1.1.0
+commit  c9992f8  chore(release): pkg-b@2.1.0
 tags    pkg-a@1.1.0, pkg-b@2.1.0
 tags    release-2026.9.17-1814 (repository release)
 push    not pushed - run with --push, or push it yourself

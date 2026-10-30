@@ -121,8 +121,12 @@ function escapeRegExp(value: string): string {
 }
 
 /** Turns a `version.commitMessage` template into a matcher for the commits it produces: every
- *  literal part escaped, each `{version}` placeholder standing in for any semver. */
+ *  literal part escaped, each `{version}` placeholder standing in for any semver and each `{name}`
+ *  for any non-empty text (package names, comma-separated). */
 function templatePattern(template: string): RegExp {
-  const source = template.split('{version}').map(escapeRegExp).join(SEMVER_SOURCE);
+  const source = template
+    .split('{version}')
+    .map(part => part.split('{name}').map(escapeRegExp).join('.+?'))
+    .join(SEMVER_SOURCE);
   return new RegExp(`^${source}$`);
 }

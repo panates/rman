@@ -9,7 +9,7 @@ import type { RunStepValue } from '../core/interfaces/run-step.js';
 import { GitHelper } from '../utils/git.js';
 import { ROOT_SELECTOR } from '../utils/package-filter.js';
 import { expandReleaseTag, isCalendarVersion } from '../utils/release-version.js';
-import { groupKeyOf } from '../utils/version-group.js';
+import { groupKeyOf, versionLineCount } from '../utils/version-group.js';
 import { stampVersionLabel } from '../utils/version-stamp.js';
 import { ChangeHashService } from './change-hash.service.js';
 import { changelogGroupBy } from './changelog.service.js';
@@ -376,24 +376,42 @@ export namespace VersionService {
     release?: boolean;
   }
 
-  /** `.rmanrc version.commitMessage` (root-level; `{version}` is replaced when every bumped package
-   *  in this commit shares one version) - defaults to `"chore(release): v{version}"`, or a plain
-   *  listing of `name@version` pairs when this particular commit spans different versions (a
-   *  cross-group ripple can land a lone forced patch in a group that otherwise didn't move). */
+  /**
+   * The message of one group's release commit.
+   *
+   * `.rmanrc version.commitMessage` (root-level) when it is set and every package in the commit
+   * shares one version - `{version}` is that version, `{name}` the packages' names, comma-separated.
+   * Unset, `chore(release): v{version}` while the repository releases along one version line, and
+   * `chore(release): <name>@<version>, ...` once it releases along several, so each commit says what
+   * it released. A commit spanning different versions always takes that listing form.
+   */
+  /* **The listing once there is more than one line, because one message per commit cannot then name
+   * a release.** Reported from `syncbridge-io/syncbridge-extensions`: nine packages, each its own
+   * line, and every release left nine commits reading `chore(release): v2.1.0` - `git log` could not
+   * say which commit released which package. One line keeps the old message, so a repository whose
+   * packages move together sees no change; the test is `versionLineCount`, the same structural
+   * question that makes the tag pattern `{name}@*`, so the commit and its tag name the same thing.
+   *
+   * Both forms are ones `ConventionalCommitsService.isReleaseCommit` already recognizes - the listing
+   * is the cross-group-ripple shape - so no history needed a new matcher. */
   export function buildCommitMessage(
     repository: Repository,
     entries: VersionPlanService.Entry[],
     messageOverride?: string,
   ): string {
     const versions = new Set(entries.map(e => e.to));
+    const listing = `chore(release): ${entries.map(e => `${e.package.name}@${e.to}`).join(', ')}`;
     if (versions.size === 1) {
       const template = messageOverride ?? repository.rootPackage.config?.version?.commitMessage;
       const version = entries[0].to!;
-      if (typeof template === 'string' && template) return template.replace(/\{version\}/g, version);
-      return `chore(release): v${version}`;
+      if (typeof template === 'string' && template) {
+        const names = entries.map(e => e.package.name).join(', ');
+        return template.replace(/\{version\}/g, version).replace(/\{name\}/g, names);
+      }
+      return versionLineCount(entries[0].package) > 1 ? listing : `chore(release): v${version}`;
     }
     if (messageOverride) return messageOverride;
-    return `chore(release): ${entries.map(e => `${e.package.name}@${e.to}`).join(', ')}`;
+    return listing;
   }
 
   /**

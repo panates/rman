@@ -303,6 +303,40 @@ describe('commands/version', () => {
       expect(out).toContain('unreleased commits');
       expect(out).not.toContain('changed since v1.0.0');
     });
+
+    /**
+     * **The commit names the package for the same reason the tag does.** Reported from
+     * syncbridge-io/syncbridge-extensions: nine lines, nine commits per release, every one reading
+     * `chore(release): v2.1.0`, and nothing in `git log` saying which released what.
+     */
+    describe('and the release commit', () => {
+      function releaseSubjects(dir: string): string[] {
+        return git(dir, 'log', '--format=%s')
+          .split('\n')
+          .filter(s => s.startsWith('chore(release)'));
+      }
+
+      it('names each package it released once there are several lines', async () => {
+        const dir = twoLineFixture();
+        fs.writeFileSync(path.join(dir, 'packages/b/x.txt'), 'x');
+        commitAll(dir, 'fix: a bug in pkg-b');
+        await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+
+        expect(releaseSubjects(dir).sort()).toEqual(['chore(release): pkg-a@1.0.1', 'chore(release): pkg-b@1.0.1']);
+      });
+
+      it('keeps the plain message with one line', async () => {
+        const dir = fixture();
+        await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch'] }));
+        expect(releaseSubjects(dir)).toEqual(['chore(release): v1.0.1']);
+      });
+
+      it('substitutes {name} in a declared message', async () => {
+        const dir = twoLineFixture({ group: false, version: { commitMessage: 'release {name} v{version}' } });
+        await captureLogs(() => runCli({ cwd: dir, argv: ['version', 'patch', '--scope', 'pkg-a'] }));
+        expect(git(dir, 'log', '-1', '--format=%s')).toBe('release pkg-a v1.0.1');
+      });
+    });
   });
 
   /**

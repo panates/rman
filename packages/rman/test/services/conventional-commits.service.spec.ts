@@ -15,6 +15,10 @@ describe('utils/conventional-commits', () => {
 
     it('matches the multi-version form used when one commit spans several versions', () => {
       expect(ConventionalCommitsService.isReleaseCommit('chore(release): pkg-a@1.2.0, @scope/pkg-b@2.0.0')).toBe(true);
+      expect(ConventionalCommitsService.isReleaseCommit('chore(release): @scope/pkg-a@1.2.0')).toBe(true);
+      expect(
+        ConventionalCommitsService.isReleaseCommit('release @scope/pkg-a v1.2.0', 'release {name} v{version}'),
+      ).toBe(true);
     });
 
     it("matches the monorepo root's own version-sync commit", () => {

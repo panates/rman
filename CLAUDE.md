@@ -1784,6 +1784,13 @@ saw one thing to release and it was the one thing that must never be published.
 - When folding the changelog into the bump commit (`--changelog`, or `.rmanrc "version.changelog"`)
   it passes `ChangelogService` an **explicit** boundary: the pre-bump tag (`expandTag(pkg,
   entry.from)`). It cannot be left to auto-detection - see the trap below.
+- **A release commit names its packages once the repository has more than one version line**
+  (`VersionService.buildCommitMessage`): `chore(release): <name>@<version>, ...` instead of
+  `chore(release): v{version}`, and `version.commitMessage` takes `{name}` beside `{version}`.
+  Reported from `syncbridge-io/syncbridge-extensions`: nine solo lines, nine commits per release all
+  reading `chore(release): v2.1.0`. Keyed on `versionLineCount`, the question that makes the tag
+  `{name}@*`, so one-line repositories keep their message. The listing is the shape
+  `isReleaseCommit` already matched for a cross-group ripple, so history needed no new matcher.
 - **`applyPlan` returns what it did (`ApplyResult`), not the plan it was given.** It used to
   `return plan` - the same array, never touched - so its one caller could only re-print the table it
   had already printed, while the commits, the tags and the push stayed silent. Those are the three
