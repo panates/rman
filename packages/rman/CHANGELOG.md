@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 845a5a658fd076a9da9619bf97ed48dabdb825fb -->
+<!-- rman:documented-up-to 399fdb9a5726e60ae950a39e2954da086c4b8f46 -->
+
+## v2.40.3 (2026-10-30)
+
+### 🐛 Bug Fixes
+
+- **publish:** retry a transient npm failure instead of leaving the release half done (2081ce3)
+
+---
 
 ## v2.40.2 (2026-10-29)
 
