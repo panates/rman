@@ -624,6 +624,13 @@ not marked optional; a package that lists the failed one only in `devDependencie
 what is published), as an optional peer, or in `optionalDependencies` is published anyway.
 Unrelated packages elsewhere in the plan are unaffected.
 
+**A failure that is not the package's own is tried again first**, by the `npm` target: a Sigstore
+transparency-log conflict (`TLOG_CREATE_ENTRY_ERROR`), a registry 5xx or 429, or a dropped
+connection (`ETIMEDOUT`, `ECONNRESET`, ...). Two more attempts, after 10 and 30 seconds. Before each
+one the registry is asked whether the version landed anyway - a 5xx can arrive after the upload -
+and if it did, the package counts as published. Anything else (an auth failure, a version that is
+already out there, a bad manifest) fails at once, since a second attempt would answer the same.
+
 **Targets run one after another, and `docker` and `cloudflare` run last** (`PublishTarget.publishesLast`). An image
 is built from what the other targets publish - a `Dockerfile` running `npm install` asks the registry
 for the versions this same run is about to push - so building it first fails with `ETARGET No

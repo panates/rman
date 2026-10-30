@@ -2273,6 +2273,18 @@ saw one thing to release and it was the one thing that must never be published.
   `dependencies` entry or a non-optional peer. Every edge used to count, and measured on opra's
   1.31.0 release `@opra/api-ui` failing its first publish blocked `@opra/http` - which lists it as
   an optional peer and a devDependency only - and elastic, mongodb and sqb behind it.
+- **A transient npm failure is tried again** (`PublishService.applyPlan`, `transientPublishError`):
+  `TLOG_CREATE_ENTRY_ERROR`, a 5xx or 429, a dropped connection - two more attempts, 10 s and 30 s
+  apart. Reported from opra's 1.34.0: a Sigstore 409 on `@opra/socketio` left 18 of 20 published,
+  blocked `nestjs-socketio`, and failed the step before the GitHub Release ran.
+  - **The registry is asked before each retry**, since a 5xx can come after the upload and a blind
+    second attempt is refused for republishing. Not for a staged entry, which npm does not show.
+  - **The child is piped to read npm's output**, each line written on to stderr - with
+    `stdio: 'stderr'` the error said only `Command failed (1)`.
+  - Recognized by npm's own error codes, never "any failure": an auth or version-conflict error
+    answers the same twice. Each spec in "a publish that fails for a reason that is not the
+    package's" turns red with the patterns emptied (measured, three of four - the fourth is the
+    negative case).
 - **`docker` runs last and waits for the registries first** (`PublishTarget.publishesLast`,
   `PublishTarget.waitUntilAvailable`). An image whose `Dockerfile` runs `npm install` asks for the
   versions this same run publishes. Measured on `panates/syncbridge`: run in registration order,

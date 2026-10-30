@@ -135,6 +135,12 @@ export namespace PublishService {
     npmViewPackage?: (name: string, cwd: string) => Promise<NpmPackageView | undefined>;
   }
 
+  /** `applyPlan`'s seams - the registry lookup, and how long to wait before each retry. */
+  export interface ApplyDeps extends Deps {
+    /** One entry per retry, in milliseconds. Default `[10_000, 30_000]`; `[]` never retries. */
+    retryDelaysMs?: readonly number[];
+  }
+
   export interface Options extends PackageFilterOptions {
     /** A package with uncommitted local changes is excluded (status `'skip'`) instead of aborting
      *  the whole plan (status `'error'`) - same as `version`'s own option. Default false. */
@@ -458,8 +464,33 @@ export namespace PublishService {
    * consumers a broken install. A package's own failure doesn't stop unrelated packages elsewhere in
    * the plan, though, nor one that lists it only where an install does not need it (see
    * `consumerNeeds`).
+   *
+   * A publish that fails for a reason that is not the package's - a Sigstore transparency-log
+   * conflict, a registry 5xx or 429, a dropped connection - is tried again, up to
+   * `deps.retryDelaysMs.length` more times (default after 10 and 30 seconds). Before each retry the
+   * registry is asked whether the version landed anyway; if it did, the entry counts as published.
    */
-  export async function applyPlan(repository: Repository, plan: Entry[], options: ApplyOptions = {}): Promise<Entry[]> {
+  /* **Asked for after opra's 1.34.0 release.** `@opra/socketio` failed on
+   * `TLOG_CREATE_ENTRY_ERROR (409) an equivalent entry already exists in the transparency log` -
+   * provenance signing, nothing about the package - and was not tried again: 18 of 20 packages
+   * published, `nestjs-socketio` was blocked behind it, the Publish step failed and the GitHub
+   * Release never ran.
+   *
+   * **The registry check comes before the retry because a 5xx can arrive after the upload.** Run
+   * blind, the second attempt is refused for republishing a version, and a release that succeeded
+   * would read as failed. A staged entry is not checked - npm does not show its queue - and is
+   * retried as it is, leaving a duplicate stage for npm to answer.
+   *
+   * **Recognized by npm's own output, so the child is piped.** `stdio: 'stderr'` sent npm's output
+   * straight to our stderr and the error carried only `Command failed (1)`. Each line still goes to
+   * stderr, unchanged, so a `--json` stdout stays one document. Only the listed errors are retried:
+   * an auth failure, a version conflict or a bad manifest is the same on the second attempt. */
+  export async function applyPlan(
+    repository: Repository,
+    plan: Entry[],
+    options: ApplyOptions = {},
+    deps: ApplyDeps = {},
+  ): Promise<Entry[]> {
     const failed = new Set<string>();
     const result: Entry[] = [];
     /** The tuple is explicit: `[p.name, p]` widens to `(string | Package)[]`, and whether `new Map`
@@ -486,18 +517,35 @@ export namespace PublishService {
         /** The plan's own tag and staging decision, not recomputed ones: `getPlan` decided where
          *  this package goes, the reader confirmed that, and `applyPlan` is here to carry it out.
          *  `options.*` is the fallback only for a plan built by something other than `getPlan`. */
-        await exec(
-          buildPublishCommand(CiService.resolvePackageManager(pkg, options.packageManager), {
-            ...options,
-            tag: entry.distTag ?? options.tag,
-            staged: entry.staged ?? options.staged,
-          }),
-          {
-            cwd: publishDir,
-            app: pkg.repository.app,
-            stdio: 'stderr',
-          },
-        );
+        const command = buildPublishCommand(CiService.resolvePackageManager(pkg, options.packageManager), {
+          ...options,
+          tag: entry.distTag ?? options.tag,
+          staged: entry.staged ?? options.staged,
+        });
+        const delays = deps.retryDelaysMs ?? [10_000, 30_000];
+        for (let attempt = 0; ; attempt++) {
+          const output: string[] = [];
+          try {
+            await exec(command, {
+              cwd: publishDir,
+              app: pkg.repository.app,
+              onLine: line => {
+                output.push(line);
+                process.stderr.write(line + '\n');
+              },
+            });
+            break;
+          } catch (e: any) {
+            const transient = transientPublishError(output);
+            if (!transient || attempt >= delays.length) {
+              if (transient) e.message += ` (${transient}, after ${attempt + 1} attempts)`;
+              throw e;
+            }
+            await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+            if (!(entry.staged ?? options.staged) && (await isPublished(pkg, entry.version, options, deps))) break;
+            process.stderr.write(`${pkg.name}: ${transient}, trying again (${attempt + 2}/${delays.length + 1})\n`);
+          }
+        }
         result.push(entry);
       } catch (e: any) {
         failed.add(pkg.name);
@@ -609,6 +657,43 @@ function hasBuildOutput(pkg: Package, contentsOverride: string | undefined): boo
 function resolveRegistry(pkg: Package, override: string | undefined): string | undefined {
   const native = pkg.manifest.raw.publishConfig?.registry;
   return override || (typeof native === 'string' && native ? native : undefined);
+}
+
+/** Why a failed publish is worth trying again, read off npm's output - `undefined` when it is not. */
+/* The pattern names are npm's own error codes. `TLOG_CREATE_ENTRY_ERROR` is the Sigstore conflict
+ * opra's release hit; the rest are a registry or a network that did not answer this time. A 4xx
+ * other than 429 is left out on purpose: the registry has decided, and asking again changes nothing. */
+function transientPublishError(output: readonly string[]): string | undefined {
+  const text = output.join('\n');
+  for (const [pattern, label] of TRANSIENT_PUBLISH_ERRORS) if (pattern.test(text)) return label;
+  return undefined;
+}
+
+const TRANSIENT_PUBLISH_ERRORS: readonly (readonly [RegExp, string])[] = [
+  [/TLOG_CREATE_ENTRY_ERROR/, 'transparency-log conflict'],
+  [
+    /\bcode E(5\d\d)\b|\b5\d\d (Internal Server Error|Bad Gateway|Service Unavailable|Gateway Time-?out)\b/i,
+    'registry server error',
+  ],
+  [/\bcode E429\b|\b429 Too Many Requests\b/i, 'registry rate limit'],
+  [/\b(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ESOCKETTIMEDOUT|EPIPE)\b|socket hang up/, 'network error'],
+];
+
+/** Whether the registry already serves `version` of `pkg` - asked past npm's cache. */
+async function isPublished(
+  pkg: Package,
+  version: string,
+  options: PublishService.ApplyOptions,
+  deps: PublishService.Deps,
+): Promise<boolean> {
+  const view = deps.npmViewPackage
+    ? await deps.npmViewPackage(pkg.name, pkg.dirname)
+    : await npmViewPackage(pkg.name, pkg.dirname, {
+        userconfig: options.userconfig,
+        registry: resolveRegistry(pkg, options.registry),
+        preferOnline: true,
+      });
+  return !!view?.versions.includes(version);
 }
 
 /** npm's own registry, which `PublishService.registryLabel` leaves shown as `npm`. */
