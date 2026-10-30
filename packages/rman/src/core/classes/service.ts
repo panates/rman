@@ -16,7 +16,7 @@ import type { Repository } from './repository.js';
  *   why a warning printed for one repository was suppressed for the next one in the same process.
  * - **A namespace cannot be extended.** The two seams a plugin has to specialize
  *   (`NodeVersionPlanService extends VersionPlanService`) are precisely the two that are classes.
- * - **A namespace has to be stubbed by mutating the module**, and CLAUDE.md records that failing:
+ * - **A namespace has to be stubbed by mutating the module**, and docs/decisions/testing.md records that failing:
  *   a spec that captured a core function at module scope and restored it put the *un-augmented*
  *   version back for the rest of the process and broke a spec two files away. An instance is
  *   rebuilt per application, so a stub dies with it.
