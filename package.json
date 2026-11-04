@@ -7,7 +7,7 @@
   "author": "Panates",
   "license": "MIT",
   "devDependencies": {
-    "@panates/eslint-config-ts": "^2.3.4",
+    "@panates/eslint-config-ts": "^2.3.5",
     "@panates/tsconfig": "^2.1.8",
     "@swc-node/register": "^1.12.1",
     "@swc/core": "^1.16.21",

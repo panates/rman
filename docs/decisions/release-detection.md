@@ -87,9 +87,12 @@ the repository's feet.
   tag it never asked about could hand a package a boundary belonging to something else, and reading
   too little is the failure that ships nothing and says nothing. `resolvePattern` returns
   `{ pattern, derived }` for exactly this; `tagPattern` exposes only the pattern.
-- **The root keeps `v*`.** It is never a group member, so the count says nothing about it, and the
-  one caller (`github-release`'s `releaseTagGlob`) asks only when the root is *not* on a calendar
-  version - the single-line case, where `v*` is the answer anyway.
+- **The root keeps `v*`.** It is never a group member, so the count says nothing about it, and
+  its callers (`repositoryReleaseTag`, `github-release`'s `releaseTagGlob`) ask only when the root
+  is *not* on a calendar version. That is usually the single-line case, where `v*` is the members'
+  tag too - but not always: a package the planner leaves out (`publish.skip`) still counts as a line
+  for the pattern, so one versioned group can be tagged `{name}@*` under a semver root. `version`
+  then creates the root's `v*` tag itself (see version.md).
 - A group's members each get **their own tag at the group's shared version** - `applyPlan` expands
   per entry into a `Set`, so `v*` dedups to one tag and `{name}@*` yields one per package. Measured:
   a two-member group produced `pkg-a@1.0.2, pkg-b@1.0.2`, and each found its own on the next run.

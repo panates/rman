@@ -227,7 +227,7 @@ export abstract class VersionPlanService {
     if (repository.monorepo) {
       result.push(
         this.buildRootEntry(repository, result, {
-          groupCount: groups.size,
+          groupCount: this.versionLines(repository),
           lastReleaseVersion: await findLastReleaseVersion(git, repository.rootPackage),
           now: options.now ?? (() => new Date()),
         }),
@@ -263,6 +263,22 @@ export abstract class VersionPlanService {
    */
   protected notVersionedReason(pkg: Package): string | undefined {
     return unversionedReason(pkg);
+  }
+
+  /**
+   * How many version lines the repository has - the distinct groups of every package it versions,
+   * whatever this run was filtered to. `buildRootEntry`'s `groupCount`.
+   */
+  /* **Structural, not the groups this run built.** It was `groups.size`, and `groups` holds only the
+   * packages this run looks at: `rman version patch --scope pkg-a` on a repository with two version
+   * lines built one group, so the root took the semver path and reported `1.0.1` - a shared number
+   * claiming a release `pkg-b` never had. That went unseen while `version` created no root tag on
+   * semver; once it creates the one `github-release` looks for (`repositoryReleaseTag`), it tagged
+   * `v1.0.1`. A package the planner never versions (`notVersionedReason` - a `publish.skip` demo
+   * app) is left out: it moves no number, so it is no version line of the release's. */
+  protected versionLines(repository: Repository): number {
+    const versioned = repository.getPackages().filter(pkg => !this.notVersionedReason(pkg));
+    return new Set(versioned.map(pkg => this.resolveGroupKey(pkg))).size;
   }
 
   /**

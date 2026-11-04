@@ -259,9 +259,25 @@ Design decisions moved out of `CLAUDE.md`. Covers `VersionPlanService`, `Version
   - **`undefined` from a stamper means "nothing matched", never "no change needed".** Conflating
     them made that error message a liar - a file already sitting at the target version is not a file
     holding no version.
-- Also decides the **repository's own** release identity (the monorepo root's version) and, on a
-  calendar version, creates the repository release tag alongside the per-group ones - see
-  "Release identity" below.
+- Also decides the **repository's own** release identity (the monorepo root's version) and creates
+  the repository release tag alongside the per-group ones - see "Release identity" in
+  [release-detection.md](release-detection.md).
+- **`version` and `github-release` name that tag through one function, `repositoryReleaseTag`.**
+  Two copies drifted: `github-release` wanted `v<version>` for a semver root while `version`
+  created a root tag only on a calendar one, trusting the group's tag to be the same name. It is
+  not when the members are tagged `{name}@*`. Reported from peacox-ui (rman 2.42.0): one named
+  group plus a `publish.skip` demo app - the app counts as a line for the tag pattern
+  (`versionLineCount`) but not for the planner - so `version` tagged
+  `@panates-prv/peacox-ui@2.0.0-beta.0` and `github-release` refused for want of `v2.0.0-beta.0`,
+  which also skipped the workflow's merge-back. On semver the root tag is now created whenever the
+  group's own tag is not already that name; a one-line `v*` repository still gets no second name.
+  Spec: `github-release.service.spec.ts`, "finds the release tag ... tagged by name".
+- **The root's group count is structural (`VersionPlanService.versionLines`), not the groups a run
+  built.** It was `groups.size`, which holds only the filtered packages: `version patch --scope
+  pkg-a` on a two-line repository took the semver path and reported `root 1.0.1`, a shared number
+  `pkg-b` never had. Invisible while semver made no root tag; with the fix above it tagged `v1.0.1`,
+  and `version.command.spec.ts` "several version lines name the tag after the package" caught it.
+  An unversioned package (`notVersionedReason`) is left out of the count - it moves no number.
 
 ## A computed version never lands on a taken one
 

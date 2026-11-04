@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { GithubReleaseService } from '../../src/services/github-release.service.js';
-import { createRepository, service, useTestEcosystem } from '../_fixture.js';
+import { createRepository, planner, service, useTestEcosystem } from '../_fixture.js';
 
 function mkTmp(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'rman-github-release-test-'));
@@ -178,6 +178,53 @@ describe('services/github-release', () => {
       const plan = await service('githubRelease').getPlan({}, releases(false));
       expect(plan[0]).toMatchObject({ status: 'error' });
       expect(plan[0].reason).toMatch(/does not exist here/);
+    });
+
+    /**
+     * **`version` leaves the tag this looks for, whatever the members' tags are called.** The shape
+     * of panates/peacox-ui: two packages in one named group, a `publish.skip` demo app, and a preset's
+     * `group: false` around them. The app counts as a version line of its own for the tag pattern
+     * (`{name}@*`) but not for the planner (one group, so a semver root) - and the root's `v*` tag
+     * was then created by nobody, so the release that had just been published could not be cut.
+     */
+    it('finds the release tag "version" created for a group whose members are tagged by name', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, version: '1.0.0', workspaces: ['packages/*'] });
+      fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ group: false, version: { cascade: 'group' } }));
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0', rman: { group: 'line' } });
+      writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0', rman: { group: 'line' } });
+      writeJson(dir, 'packages/docs/package.json', {
+        name: 'docs',
+        version: '0.0.0',
+        private: true,
+        rman: { publish: { skip: true } },
+      });
+      initGit(dir);
+      git(dir, 'tag', 'pkg-a@1.0.0');
+      git(dir, 'tag', 'pkg-b@1.0.0');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'feat: something new');
+
+      const repo = await createRepository(dir);
+      const result = await service('version').applyPlan(await planner().getPlan(repo));
+      expect(result.tags.map(t => t.name)).toEqual(['pkg-a@1.1.0', 'pkg-b@1.1.0', 'v1.1.0']);
+      expect(git(dir, 'tag', '--points-at', 'HEAD').split('\n')).toContain('v1.1.0');
+
+      await createRepository(dir);
+      const plan = await service('githubRelease').getPlan({}, releases(false));
+      expect(plan[0]).toMatchObject({ status: 'publish', tag: 'v1.1.0', version: '1.1.0' });
+    });
+
+    it("adds no second tag when the group's own tag already names the release", async () => {
+      const dir = fixture({ rootVersion: '1.2.0' });
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'fix: a bug');
+
+      const repo = await createRepository(dir);
+      const result = await service('version').applyPlan(await planner().getPlan(repo));
+      expect(result.tags).toEqual([{ name: 'v1.2.1', created: true }]);
     });
 
     it('uncommitted changes abort the plan, unless ignoreDirty downgrades it to a skip', async () => {

@@ -241,8 +241,9 @@ Each line is something the plan cannot tell you:
   listed as `updated <root> 1.0.12 -> 1.1.1` - reading as a write that never happened.
 - **`commit`** - one per group, so independently-versioned lines get clean, separate commits, plus
   the root's own version-sync commit ahead of them. Nothing reported these at all before.
-- **`tags`** - each group's tag, then the repository release tag on its own line (calendar versions
-  only, see [The repository's own version](#the-repositorys-own-version)). A tag that already
+- **`tags`** - each group's tag, then the repository release tag on its own line when it is a name
+  of its own (always on a calendar version; on a semver one only when the members' tags are
+  `{name}@*` - see [The repository's own version](#the-repositorys-own-version)). A tag that already
   existed reads `(existing, left alone)` rather than being silently counted as created.
 - **`push`** - a release that is committed but not pushed looks identical to one that is, until
   someone looks. A pushed run names the tags that went up with the branch.

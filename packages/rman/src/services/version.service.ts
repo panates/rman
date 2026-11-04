@@ -8,7 +8,7 @@ import { Manifest } from '../core/interfaces/manifest.js';
 import type { RunStepValue } from '../core/interfaces/run-step.js';
 import { GitHelper } from '../utils/git.js';
 import { ROOT_SELECTOR } from '../utils/package-filter.js';
-import { expandReleaseTag, isCalendarVersion } from '../utils/release-version.js';
+import { isCalendarVersion, repositoryReleaseTag } from '../utils/release-version.js';
 import { groupKeyOf, versionLineCount } from '../utils/version-group.js';
 import { stampVersionLabel } from '../utils/version-stamp.js';
 import { ChangeHashService } from './change-hash.service.js';
@@ -284,21 +284,28 @@ export class VersionService extends Service {
       }
     }
 
-    /** A repository release tag, on top of the per-group ones - but only once the root is on a
-     *  calendar version. With a single version line the group's own tag already *is* the release
-     *  (same version, same commit), and a second name for it would only add noise to every existing
-     *  repo's tag space. Created last, so it lands on HEAD rather than behind whichever group
-     *  happened to be committed last. */
-    if (rootEntry?.status === 'bump' && isCalendarVersion(rootEntry.to!)) {
-      const releaseTag = expandReleaseTag(repository.rootPackage, rootEntry.to!);
-      if (await git.tagExists(releaseTag)) {
-        throw new Error(
-          `Release tag "${releaseTag}" already exists - a second release within the same minute. ` +
-            'Wait a moment and run again.',
-        );
+    /** The repository release tag `github-release` looks for (`repositoryReleaseTag`), on top of the
+     *  per-group ones. On a calendar version it is always a name of its own. On a semver one it is
+     *  usually the group's own tag already (same version, same commit), and then nothing is added -
+     *  a second name would only be noise in every existing repo's tag space; it is created only when
+     *  the members' tags are named otherwise (`{name}@*`). Created last, so it lands on HEAD rather
+     *  than behind whichever group happened to be committed last. */
+    if (rootEntry?.status === 'bump') {
+      const releaseTag = repositoryReleaseTag(repository.rootPackage, rootEntry.to!);
+      const exists = await git.tagExists(releaseTag);
+      if (isCalendarVersion(rootEntry.to!)) {
+        if (exists) {
+          throw new Error(
+            `Release tag "${releaseTag}" already exists - a second release within the same minute. ` +
+              'Wait a moment and run again.',
+          );
+        }
+        await git.createTag(releaseTag);
+        tagged.push({ name: releaseTag, created: true, release: true });
+      } else if (!tagged.some(t => t.name === releaseTag)) {
+        if (!exists) await git.createTag(releaseTag);
+        tagged.push({ name: releaseTag, created: !exists, release: true });
       }
-      await git.createTag(releaseTag);
-      tagged.push({ name: releaseTag, created: true, release: true });
     }
 
     const pushed = !!options.push && bumped.length > 0;

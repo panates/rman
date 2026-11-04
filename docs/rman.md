@@ -1911,8 +1911,15 @@ a GitHub Release is named after. How it's computed is derived from the repo, nev
 The choice is sticky - once the repo (or its last release tag) is on a calendar version it stays
 there, because going back would *lower* the root version (`2026.9.15-1430` → `1.4.0` compares as a
 decrease). On a calendar version `applyPlan` also creates a repository release tag
-(`version.releaseTagPattern`, default `release-*`) alongside the per-group ones; with a single
-version line the group's own tag already is the release, so no second name is created.
+(`version.releaseTagPattern`, default `release-*`) alongside the per-group ones. On a semver one it
+creates the root's own tag (`v*`, e.g. `v1.4.0`) - the tag `github-release` looks for - unless the
+group's tag already is that name, so a one-line repository gets no second name while one whose
+members are tagged `{name}@*` still gets its release tag.
+
+The groups are counted across the whole repository, not the packages a run was filtered to -
+`--scope pkg-a` on a repository with two lines still releases under a calendar version. A package
+the planner never versions (`version.skip`, `publish.skip`, or one no publish target ships) is no line
+of its own.
 
 `Options.now` injects the clock behind that version, so tests are deterministic.
 
