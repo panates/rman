@@ -1,7 +1,11 @@
 import type { Package } from '../../../../core/classes/package.js';
+import { skipReasonFor, targetsOf } from '../../../../core/interfaces/publish-target.js';
 import { ChangeHashService } from '../../../../services/change-hash.service.js';
 import { VersionPlanService } from '../../../../services/version-plan.service.js';
 import type { GitHelper } from '../../../../utils/git.js';
+import { NPM_TARGET } from '../../../publish-targets/npm/npm-publish-target.js';
+import { type NpmPackageView, npmViewPackage } from '../../../publish-targets/npm/npm-view.js';
+import { PublishService } from './publish.service.js';
 /**
  * How a release is planned for an npm repository.
  *
@@ -73,6 +77,23 @@ export class NodeVersionPlanService extends VersionPlanService {
      *  that did not need it is noise, while under-reaching ships a dependent whose published range
      *  floor is wrong, which is a broken install. */
     return CASCADE_BY_BUMP[bump] ?? 'group';
+  }
+
+  /**
+   * Every version of `pkg` on the registry it publishes to - `[]` for a package the npm target
+   * leaves alone (private, `publish.skip`, or shipping elsewhere), and for one never published.
+   *
+   * @throws {NpmViewError} When the registry gives no answer (no token, no network).
+   */
+  protected async publishedVersions(pkg: Package): Promise<readonly string[]> {
+    const target = targetsOf(pkg.repository.app, pkg).find(t => t.name === NPM_TARGET);
+    if (!target || skipReasonFor(pkg, target)) return [];
+    return (await this.registryView(pkg))?.versions ?? [];
+  }
+
+  /** `npm view` of `pkg`, asked of the registry its publish uses. */
+  protected registryView(pkg: Package): Promise<NpmPackageView | undefined> {
+    return npmViewPackage(pkg.name, pkg.dirname, { registry: PublishService.registryOf(pkg) });
   }
 }
 

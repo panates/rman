@@ -262,3 +262,28 @@ Design decisions moved out of `CLAUDE.md`. Covers `VersionPlanService`, `Version
 - Also decides the **repository's own** release identity (the monorepo root's version) and, on a
   calendar version, creates the repository release tag alongside the per-group ones - see
   "Release identity" below.
+
+## A computed version never lands on a taken one
+
+- **The base of a bump is the higher of the tag's version and the registry's highest on that line**
+  (`VersionPlanService.registryCeiling`, fed by `publishedVersions` - `[]` in the core, `npm view`'s
+  `versions` in `NodeVersionPlanService`). Reported from peacox-ui: the last tag said 0.9.24,
+  breaking commits planned 1.0.0, and GitHub Packages already had an untagged `peacox-icons@1.0.0`
+  from a month earlier - `publish` would have skipped the new icons as `up-to-date` and shipped ui
+  peering onto the stale one. The user chose "plan past it" over refusing: the plan goes to 2.0.0
+  and every bumped member's reason ends `registry has 1.0.0, so 1.0.0 -> 2.0.0`. The cross-group
+  ripple counts the registry in its group ceiling the same way.
+- **This is not B leaking into A.** Which packages changed is still the tags' answer; the registry
+  only rules out numbers already taken, and only for a computed version - an explicit
+  `rman version <v>` is not checked, and nothing is asked when nothing is bumping.
+- **Releases always count, other prerelease lines never do.** A `1.1.0-beta.0` counted against a
+  stable patch would turn `1.0.1` into `1.1.0`; a stable `1.0.0` ignored under `--preid beta` would
+  plan `1.0.0-beta.0` below a release that exists. Prereleases of the run's own `preid` count.
+- **A registry that gives no answer fails the plan** (`NpmViewError`), for the same reason `publish`'s
+  does: a plan that cannot see what is taken must not pick a number as though it could. Only
+  packages the npm target would publish are asked - private, `publish.skip` and other targets
+  answer `[]`.
+- **Specs never reach npm for this**: the node fixture's `useNodeEcosystem` stubs
+  `NodeVersionPlanService.registryView` from `npmRegistry` (empty = never published). The fixtures'
+  names are real npm packages (`app`, `lib`, `root`), so a real lookup would plan past a stranger's
+  versions.

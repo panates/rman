@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { runCli } from '../_fixture.js';
+import { runCli, useNodeEcosystem } from '../_fixture.js';
 
 function writeJson(dir: string, rel: string, data: unknown) {
   fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
@@ -27,6 +27,8 @@ async function listJson(cwd: string): Promise<Record<string, any>> {
  * `publish.service.spec.ts` asserting the plan's answer, so the two are pinned to agree.
  */
 describe('commands/list (npm target)', () => {
+  useNodeEcosystem();
+
   const dirs: string[] = [];
   after(() => {
     for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
