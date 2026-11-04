@@ -5,7 +5,7 @@ import { Package } from '../core/classes/package.js';
 import { Repository } from '../core/classes/repository.js';
 import { Service } from '../core/classes/service.js';
 import { dirtyReason, GitHelper } from '../utils/git.js';
-import { expandReleaseTag, isCalendarVersion, releaseTagPattern } from '../utils/release-version.js';
+import { isCalendarVersion, releaseTagPattern, repositoryReleaseTag } from '../utils/release-version.js';
 import { ChangeHashService } from './change-hash.service.js';
 
 /**
@@ -55,7 +55,7 @@ export class GithubReleaseService extends Service {
       ];
     }
 
-    const tag = releaseTagFor(root);
+    const tag = repositoryReleaseTag(root, root.version);
     const dirtyFiles = await git.listDirtyFiles();
     if (dirtyFiles.length) {
       return [
@@ -140,16 +140,7 @@ export class GithubReleaseService extends Service {
 const GITHUB_API = 'https://api.github.com';
 const GITHUB_UPLOADS = 'https://uploads.github.com';
 
-/** The tag naming this repository's release. A calendar root version means several version lines,
- *  so the release needs a name of its own (`release-*`); a plain one means every package shares it,
- *  and that shared version's tag already *is* the release. */
-function releaseTagFor(root: Package): string {
-  return isCalendarVersion(root.version)
-    ? expandReleaseTag(root, root.version)
-    : ChangeHashService.expandTag(root, root.version);
-}
-
-/** The glob matching the tags `releaseTagFor` produces - for stepping back to the previous one. */
+/** The glob matching the tags `repositoryReleaseTag` produces - for stepping back to the previous one. */
 function releaseTagGlob(root: Package): string {
   const pattern = isCalendarVersion(root.version) ? releaseTagPattern(root) : ChangeHashService.tagPattern(root);
   return pattern.replace('{name}', root.name);

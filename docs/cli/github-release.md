@@ -52,7 +52,8 @@ rman github-release --repository panates/my-repo
 The release is identified by the repository's own version (the monorepo root's - see
 [`rman version`](version.md#the-repositorys-own-version)): its release tag (`.rmanrc
 "version.releaseTagPattern"`, default `release-*`) when that version is a calendar one, and
-otherwise the tag of the single shared version (the root's `v*`, e.g. `v1.4.0`). Whether a release already exists for that tag
+otherwise the root's own tag at the single shared version (`v*`, e.g. `v1.4.0`) - which `rman
+version` creates even when the members are tagged `{name}@*`. Whether a release already exists for that tag
 decides `up-to-date` vs `release`, which makes a re-run harmless - including on a run that shipped
 nothing at all.
 

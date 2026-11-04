@@ -65,6 +65,21 @@ export function expandReleaseTag(root: Package, version: string): string {
   return ChangeHashService.applyTagPattern(releaseTagPattern(root), root.name, version);
 }
 
+/**
+ * The tag naming the repository's release at `version` (the root's): its release tag on a calendar
+ * version, the root's own `changelog.tagPattern` tag (`v*` unless configured) otherwise. `version`
+ * creates it and `github-release` looks it up, so both name it through this one function.
+ */
+/* **One function, because two copies drifted.** `github-release` expected `v<version>` for a semver
+ * root while `version` created a root tag only on the calendar path, trusting the group's own tag to
+ * be the same name. It is not whenever the members' tags are `{name}@*` - declared, or derived by
+ * `versionLineCount` counting a package the planner leaves out (a `publish.skip` app). Reported from
+ * panates/peacox-ui: one named group plus a private demo app, `version` tagged
+ * `@panates-prv/peacox-ui@2.0.0-beta.0` and `github-release` refused for want of `v2.0.0-beta.0`. */
+export function repositoryReleaseTag(root: Package, version: string): string {
+  return isCalendarVersion(version) ? expandReleaseTag(root, version) : ChangeHashService.expandTag(root, version);
+}
+
 /** The version of the repository's most recent release, from its release tags (highest by version
  *  sort) - `undefined` for a repo that has never cut one, or whose tags aren't available (a shallow
  *  clone). The authoritative half of `usesCalendarVersion`'s stickiness check: tags record what was
