@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 9eef7d4f2c0042b418eb7b6a3e236b938d71b346 -->
+<!-- rman:documented-up-to 823a4922e09bf7c9666765f233d6b3b47c4738f7 -->
+
+## v2.42.1 (2026-11-04)
+
+### 🐛 Bug Fixes
+
+- **version:** create the repository release tag github-release looks for (f7b9fa1)
+
+---
 
 ## v2.42.0 (2026-11-04)
 
