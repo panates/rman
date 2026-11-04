@@ -17,7 +17,7 @@
     "js-yaml": "^5.5.0",
     "micromatch": "^4.0.8",
     "power-tasks": "^1.14.2",
-    "semver": "^7.8.5",
+    "semver": "^7.8.6",
     "signal-exit": "^4.1.0",
     "yargs": "^18.2.0"
   },
