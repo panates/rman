@@ -1,6 +1,23 @@
 # Changelog
 
-<!-- rman:documented-up-to fdfd3c99a4c2d9ba8dceaee44c57f4212cd65bbd -->
+<!-- rman:documented-up-to 9eef7d4f2c0042b418eb7b6a3e236b938d71b346 -->
+
+## v2.42.0 (2026-11-04)
+
+### ✨ Features
+
+- **version:** a computed version is planned past the highest one the registry already has (a7b6364)
+- **run:** a script that runs itself through rman is refused instead of recursing (8eac4b2)
+
+### 🐛 Bug Fixes
+
+- **publish:** a registry that cannot be read is an error, not "never published"; publishConfig.linkDirectory no longer ships (668c55d)
+
+### 🧹 Chores
+
+- **deps:** @swc/core 1.16.21, @swc/helpers 0.5.24, rimraf 6.1.4, globals 17.14.0, semver 7.8.6 (221cd6c)
+
+---
 
 ## v2.41.3 (2026-10-30)
 
