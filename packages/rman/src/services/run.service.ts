@@ -28,6 +28,10 @@ import { runBin } from '../utils/run-bin.js';
  * entirely. Declared before the namespace, which TypeScript requires for the merge.
  */
 export class RunService extends Service {
+  /** The environment variable a run hands its children: every script already running above them,
+   *  one `runKey` per line, so a nested rman can tell it was asked to run one of them again. */
+  protected readonly runStackVar: string = 'RMAN_RUN_STACK';
+
   async runScript(script: string, options: RunService.Options & { commandName?: string } = {}): Promise<void> {
     const repository = this.repository;
     const commandName = options.commandName || 'run';
@@ -188,6 +192,27 @@ export class RunService extends Service {
     after?: RunService.PackagePlan;
   }): Promise<void> {
     const { panel, concurrency, commandName } = options;
+    /**
+     * **A script that runs itself is refused before anything starts.** Reported from peacox-ui: a
+     * local rman 2.34 that could not read `pnpm-workspace.yaml` took the monorepo for one package,
+     * ran the root's `build` script - `rman build` - and that rman did the same, a new nested rman
+     * every ~20s until stopped. The same loop is one line away for anyone: a package's own `build`
+     * that calls `rman build`, or a root `before` hook that calls the command it hooks. Each run
+     * passes the scripts it is running down to its children (`runStackVar`); a run asked for one of
+     * those again fails here instead of recursing.
+     */
+    const parentStack = (process.env[this.runStackVar] ?? '').split('\n').filter(Boolean);
+    for (const plan of [options.before, ...options.plans, options.after]) {
+      if (!plan || !parentStack.includes(this.runKey(plan, commandName))) continue;
+      const err: any = new Error(
+        `"${plan.at?.[plan.at.length - 1] ?? commandName}" of ${plan.label} is already running in a parent rman - ` +
+          `its script calls rman to run itself, which would never end. Check the script in ${plan.cwd}.`,
+      );
+      this.say('error', err.message);
+      err.logged = true;
+      throw err;
+    }
+    const stackFor = (plan: RunService.PackagePlan) => [...parentStack, this.runKey(plan, commandName)].join('\n');
     /** Every event of the run is produced once, here, and rendered by each reporter - the screen
      *  (panel or plain lines, or neither under `--json`) and the log. See `Reporter`. */
     const reporters = this.reportersFor(commandName, panel);
@@ -279,7 +304,7 @@ export class RunService extends Service {
                 cwd,
                 stdio: 'pipe',
                 onLine,
-                env: Object.keys(childEnv).length ? childEnv : undefined,
+                env: { ...childEnv, [this.runStackVar]: stackFor(plan) },
                 app: pkg.repository.app,
               });
             }
@@ -594,6 +619,12 @@ export class RunService extends Service {
    * as prose, or as a `message` event under `--json`, where stdout belongs to the events. Also in the
    * log file when there is one.
    */
+  /** What identifies one script of one package in `runStackVar`: where it sits in the config (or
+   *  the command, for a `forEachPackage` sweep), the plan's name and its directory. */
+  protected runKey(plan: RunService.PackagePlan, commandName: string): string {
+    return `${plan.at?.join('.') ?? commandName}:${plan.name}@${plan.cwd}`;
+  }
+
   protected say(level: 'info' | 'error', message: string): void {
     for (const reporter of this.reportersFor('run')) reporter.report({ event: 'message', level, message });
   }
