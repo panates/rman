@@ -1955,7 +1955,9 @@ whenever either changes; every other package still shares the repo-wide default 
 Within a group, whichever severity is highest among its **changed** members (real commits since
 that member's own last release tag, or an explicit `bump`) becomes the group's severity, and the
 group's new version is its current version (the highest version currently found among its members)
-bumped by that severity. Which members actually *receive* the new version is the technology's
+bumped by that severity - or, when the registry already has that version or a higher one on the same
+line, the registry's highest bumped by it instead (the reason then ends
+`registry has 1.0.0, so 1.0.0 -> 2.0.0`). A registry that cannot be read fails the plan. Which members actually *receive* the new version is the technology's
 [`cascade`](#versionplanservice) answer, under the `node` built-in:
 
 | Severity | Who gets bumped |

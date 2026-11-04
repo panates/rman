@@ -212,6 +212,13 @@ before it could read the rows that explain why.
 Still not a release gate - that is [`publish`](publish.md), which asks the registry whether each
 version is actually out there. A package can need no version bump and still be unpublished.
 
+**A computed version is never one the registry already has.** When something is bumping, each
+package the npm target would publish is looked up, and a group whose planned version is already
+taken - an untagged publish, say - is planned past the registry's highest instead, with the reason
+saying so (`registry has 1.0.0, so 1.0.0 -> 2.0.0`). Releases count; prereleases count only on the
+`--preid` line being planned. A registry that cannot be read (no token, no network) fails the plan
+rather than picking a number blind. An explicit `rman version <v>` is not checked.
+
 ## What it reports once applied
 
 The table above is the plan. Once a run applies, what follows is **what it did** - deliberately not

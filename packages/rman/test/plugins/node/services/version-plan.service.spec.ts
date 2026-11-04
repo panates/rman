@@ -4,9 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { NodeManifestProvider } from '../../../../src/builtins/platforms/node/node-manifest.provider.js';
+import { NpmViewError } from '../../../../src/builtins/publish-targets/npm/npm-view.js';
 import type { VersionPlanService } from '../../../../src/services/version-plan.service.js';
 import { filesOwnedBy } from '../../../../src/utils/bundled-packages.js';
-import { createRepository, planner, service, useNodeEcosystem } from '../_fixture.js';
+import { createRepository, npmRegistry, planner, service, useNodeEcosystem } from '../_fixture.js';
 
 /**
  * **npm's own cascade table, which nothing tested until this file existed.**
@@ -122,6 +123,61 @@ describe('plugins/node/NodeVersionPlanService cascade', () => {
     expect(statusOf(plan, 'pkg-base')).toEqual({ status: 'bump', to: '2.0.0' });
     expect(statusOf(plan, 'pkg-dep')).toEqual({ status: 'bump', to: '2.0.0' });
     expect(statusOf(plan, 'pkg-solo')).toEqual({ status: 'bump', to: '2.0.0' });
+  });
+
+  /**
+   * **A computed version never lands on one the registry already has.** Reported from peacox-ui:
+   * the last tag said 0.9.24 and breaking commits planned 1.0.0, but GitHub Packages already had an
+   * untagged `peacox-icons@1.0.0` - `publish` would have skipped the new icons as `up-to-date`. The
+   * base is the higher of the tag's version and the registry's, and the reason says why it jumped.
+   */
+  describe('against the registry', () => {
+    it('plans past a version the registry already has, and says so', async () => {
+      npmRegistry.set('pkg-solo', ['1.0.0', '2.0.0']);
+      const plan = await planAfter('feat!: breaking in pkg-base');
+      for (const name of ['pkg-base', 'pkg-dep', 'pkg-solo']) {
+        expect(plan.find(e => e.package.name === name)).toMatchObject({
+          status: 'bump',
+          to: '3.0.0',
+          reason: expect.stringContaining('registry has 2.0.0, so 2.0.0 -> 3.0.0'),
+        });
+      }
+    });
+
+    it('leaves the plan alone when the registry is behind it', async () => {
+      npmRegistry.set('pkg-base', ['0.9.0', '1.0.0']);
+      const plan = await planAfter('fix: a bug in pkg-base');
+      expect(plan.find(e => e.package.name === 'pkg-base')).toMatchObject({
+        to: '1.0.1',
+        reason: 'changed since v1.0.0',
+      });
+    });
+
+    /** A beta on its own dist-tag is another line: counting it would turn this patch into `1.1.0`. */
+    it('does not count a prerelease of another line', async () => {
+      npmRegistry.set('pkg-base', ['1.0.0', '1.0.1-beta.3', '1.1.0-beta.0']);
+      const plan = await planAfter('fix: a bug in pkg-base');
+      expect(statusOf(plan, 'pkg-base')).toEqual({ status: 'bump', to: '1.0.1' });
+    });
+
+    /** It can no more see what is taken than what is published, so it must not guess either. */
+    it('fails when the registry gives no answer', async () => {
+      npmRegistry.set('pkg-base', new NpmViewError('pkg-base', 'E401', '401 Unauthorized'));
+      await expect(planAfter('fix: a bug in pkg-base')).rejects.toThrow(/cannot read pkg-base from the registry/);
+    });
+
+    /** Only packages the npm target would publish are asked: a private one has no registry line. */
+    it('does not ask about a package npm never publishes', async () => {
+      const dir = fixture();
+      writeJson(dir, 'packages/solo/package.json', { name: 'pkg-solo', version: '1.0.0', private: true });
+      npmRegistry.set('pkg-solo', new NpmViewError('pkg-solo', 'E401', 'should not be asked'));
+      fs.writeFileSync(path.join(dir, 'packages/base/x.txt'), 'x');
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-m', 'feat!: breaking in pkg-base');
+      const repository = await createRepository(dir);
+      const plan = await planner().getPlan(repository);
+      expect(statusOf(plan, 'pkg-base')).toEqual({ status: 'bump', to: '2.0.0' });
+    });
   });
 
   /**

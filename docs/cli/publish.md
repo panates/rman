@@ -185,6 +185,11 @@ previewing (`2.0.0-beta.3` → `2.0.0` for `major`, `minor` *or* `patch`), after
 rman version major && rman publish
 ```
 
+**A registry that cannot be read is an error, never "never published".** Only npm's `E404` means the
+package is not there; a missing or expired token (`E401`/`E403`) or no network makes the package's
+entry an `error` that names the registry, so a run without credentials does not propose republishing
+versions that exist.
+
 **The plan stays correct across the cycle**, because the npm target asks whether *this version* is
 among the registry's published `versions` - not what `latest` points at, which by design does not
 move while betas are going out. Asking `latest` would have kept proposing an already-published beta

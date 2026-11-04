@@ -661,6 +661,45 @@ describe('run: Run.runScript() integration', () => {
     });
   });
 
+  /**
+   * **A script that runs itself through rman is refused, not recursed.** Reported from peacox-ui:
+   * an rman that took the monorepo for one package ran the root's `build` - `rman build` - and each
+   * nested rman did the same, a new process every ~20s until stopped. Both halves are exercised
+   * here without spawning rman: a step records the stack it was handed, and a run started under
+   * that stack is the nested rman.
+   */
+  describe('a script that runs itself', () => {
+    const saved = process.env.RMAN_RUN_STACK;
+    afterEach(() => {
+      if (saved === undefined) delete process.env.RMAN_RUN_STACK;
+      else process.env.RMAN_RUN_STACK = saved;
+    });
+
+    it('is refused when a parent run is already running it', async () => {
+      const out = path.join(mkTmp(), 'stack.txt');
+      await fixture({ 'pkg-a': { scripts: { build: `printf '%s' "$RMAN_RUN_STACK" > ${out}` } } });
+      await captureLogs(() => service('run').runScript('build', { progress: false }));
+      const stack = fs.readFileSync(out, 'utf-8');
+      expect(stack).toContain('pkg-a@');
+
+      process.env.RMAN_RUN_STACK = stack;
+      const { lines, error } = await captureLogs(() => service('run').runScript('build', { progress: false }));
+      expect(error).toBeDefined();
+      expect(lines.some(l => l.includes('"build" of pkg-a is already running in a parent rman'))).toBe(true);
+    });
+
+    it('runs another script of the same package under that stack', async () => {
+      const out = path.join(mkTmp(), 'stack.txt');
+      await fixture({
+        'pkg-a': { scripts: { build: `printf '%s' "$RMAN_RUN_STACK" > ${out}`, lint: quiet('echo lint') } },
+      });
+      await captureLogs(() => service('run').runScript('build', { progress: false }));
+      process.env.RMAN_RUN_STACK = fs.readFileSync(out, 'utf-8');
+      const { error } = await captureLogs(() => service('run').runScript('lint', { progress: false }));
+      expect(error).toBeUndefined();
+    });
+  });
+
   describe('bail', () => {
     it('default (true): stops a not-yet-started independent package after a failure', async () => {
       await fixture({

@@ -205,12 +205,22 @@ export abstract class VersionPlanService {
       else groups.set(key, [pkg]);
     }
 
-    for (const [key, members] of groups) {
-      const preid = options.preid ?? this.declaredPreid(members, this.groupLabel(key));
-      this.computeGroupPlan(key, members, changeByPackage, explicitVersion, preid, entries);
+    /** Only when something is going to be bumped, and only for a computed number - an explicit
+     *  `rman version <v>` is the reader's own choice. Asked of every eligible package, since the
+     *  cross-group ripple can bump a group none of whose members changed. */
+    const published = new Map<string, readonly string[]>();
+    if (changeByPackage.size && !explicitVersion) {
+      await Promise.all(
+        eligible.map(async pkg => published.set(pkg.name, await this.plannerFor(pkg).publishedVersions(pkg))),
+      );
     }
 
-    this.rippleCrossGroup(packages, entries, options.preid);
+    for (const [key, members] of groups) {
+      const preid = options.preid ?? this.declaredPreid(members, this.groupLabel(key));
+      this.computeGroupPlan(key, members, changeByPackage, explicitVersion, preid, entries, published);
+    }
+
+    this.rippleCrossGroup(packages, entries, options.preid, published);
     this.checkKeptRanges(packages, entries);
 
     const result = packages.map(pkg => entries.get(pkg.name)!);
@@ -288,6 +298,21 @@ export abstract class VersionPlanService {
    * wrong one here is invisible - it produces a plan that simply releases too little.
    */
   protected abstract cascade(bump: string): VersionPlanService.Cascade;
+
+  /**
+   * Every version of `pkg` its registry already has - `[]` when it has none, or when the package is
+   * not published to a registry at all. A computed version never lands on or below the highest of
+   * these (see `computeGroupPlan`).
+   *
+   * The core knows no registry, so it answers `[]`; a technology overrides it.
+   *
+   * @throws When the registry gives no answer - a plan that cannot see the registry must not pick a
+   *   number as though it had.
+   */
+  protected async publishedVersions(pkg: Package): Promise<readonly string[]> {
+    void pkg;
+    return [];
+  }
 
   /**
    * **Which planner answers for one package: its own technology's.**
@@ -555,6 +580,7 @@ export abstract class VersionPlanService {
     explicitVersion: string | undefined,
     preid: string | undefined,
     entries: Map<string, VersionPlanService.Entry>,
+    published: ReadonlyMap<string, readonly string[]> = new Map(),
   ): void {
     const label = this.groupLabel(key);
     /** One version line, so one scheme - the members are about to be compared against each other and
@@ -575,6 +601,8 @@ export abstract class VersionPlanService {
     const current = scheme.highestVersion(members.map(m => m.version)) ?? members[0].version;
     let to: string;
     let bump: string | undefined;
+    /** Why `to` is past what the commits alone asked for - named in every bumped member's reason. */
+    let jumped: string | undefined;
     if (explicitVersion) {
       to = explicitVersion;
     } else {
@@ -582,6 +610,12 @@ export abstract class VersionPlanService {
        *  resolves; the `!` is for the type. */
       bump = scheme.highestBump(changed.map(m => changeByPackage.get(m.name)!.bump!))!;
       to = scheme.next(current, bump, { preid });
+      const taken = this.registryCeiling(members, scheme, preid, published);
+      if (taken && scheme.compare(taken, to) >= 0) {
+        const planned = to;
+        to = scheme.next(taken, bump, { preid });
+        jumped = `registry has ${taken}, so ${planned} -> ${to}`;
+      }
     }
 
     const bumping = new Set<Package>(changed);
@@ -627,7 +661,7 @@ export abstract class VersionPlanService {
           status: 'bump',
           from: m.version,
           to,
-          reason: own?.reason ?? inherited,
+          reason: [own?.reason ?? inherited, jumped].filter(Boolean).join('; '),
         });
       } else {
         entries.set(m.name, { package: m, groupKey: key, group: label, status: 'no-change', from: m.version });
@@ -652,6 +686,7 @@ export abstract class VersionPlanService {
     packages: Package[],
     entries: Map<string, VersionPlanService.Entry>,
     preid: string | undefined,
+    published: ReadonlyMap<string, readonly string[]> = new Map(),
   ): void {
     const worklist = [...entries.values()].filter(e => e.status === 'bump');
     while (worklist.length) {
@@ -668,29 +703,55 @@ export abstract class VersionPlanService {
 
         /** The group always contains `pkg` itself, so there is always at least one version here -
          *  the fallback is for the type, not for a case that can happen. */
+        const groupMembers = packages.filter(p => entries.get(p.name)!.groupKey === entry.groupKey);
+        const groupPreid = preid ?? this.declaredPreid(groupMembers, entry.group ?? entry.groupKey);
+        /** The registry's highest counts as part of the ceiling, as it does in `computeGroupPlan`. */
         const groupCeiling =
           pkg.versionScheme.highestVersion(
-            packages
-              .filter(p => entries.get(p.name)!.groupKey === entry.groupKey)
-              .map(p => entries.get(p.name)!.to ?? p.version),
+            [
+              ...groupMembers.map(p => entries.get(p.name)!.to ?? p.version),
+              this.registryCeiling(groupMembers, pkg.versionScheme, groupPreid, published),
+            ].filter((v): v is string => !!v),
           ) ?? pkg.version;
         const next: VersionPlanService.Entry = {
           ...entry,
           status: 'bump',
-          to: pkg.versionScheme.next(groupCeiling, pkg.versionScheme.smallestBump(), {
-            preid:
-              preid ??
-              this.declaredPreid(
-                packages.filter(p => entries.get(p.name)!.groupKey === entry.groupKey),
-                entry.group ?? entry.groupKey,
-              ),
-          }),
+          to: pkg.versionScheme.next(groupCeiling, pkg.versionScheme.smallestBump(), { preid: groupPreid }),
           reason: `depends on ${source.package.name}@${source.to}`,
         };
         entries.set(pkg.name, next);
         worklist.push(next);
       }
     }
+  }
+
+  /**
+   * The highest version any of `members` already has on its registry, among those a bump on this
+   * line could land on - releases, and prereleases under `preid` when there is one - or `undefined`
+   * when there are none.
+   */
+  /* **Why a computed version is checked against the registry at all.** Reported from peacox-ui: the
+   * last tag was `@panates-prv/peacox-ui@0.9.24` and breaking commits since planned 1.0.0 for both
+   * packages of the lockstep group - but GitHub Packages already had `peacox-icons@1.0.0`, an
+   * untagged publish from a month earlier. `publish` would have answered `up-to-date` for icons and
+   * shipped ui 1.0.0 peering `^1.0.0` onto the stale package. The user's rule: the base of the bump is
+   * the higher of the tag's version and the registry's highest, so the plan goes to 2.0.0 and its
+   * reason says why. This is not question B leaking into A - which packages changed is still the
+   * tags' answer; the registry only rules out numbers that are taken.
+   *
+   * **Releases always count, other prerelease lines never do.** Counting a `2.1.0-beta.3` against a
+   * stable patch would turn `2.0.1` into `2.1.0`; ignoring a stable `1.0.0` against a beta would plan
+   * `1.0.0-beta.0` below a release that already exists. */
+  protected registryCeiling(
+    members: readonly Package[],
+    scheme: VersionScheme,
+    preid: string | undefined,
+    published: ReadonlyMap<string, readonly string[]>,
+  ): string | undefined {
+    const onLine = members
+      .flatMap(m => published.get(m.name) ?? [])
+      .filter(v => scheme.isValid(v) && (!scheme.isPrerelease(v) || (!!preid && scheme.prereleaseId(v) === preid)));
+    return scheme.highestVersion(onLine);
   }
 
   /**

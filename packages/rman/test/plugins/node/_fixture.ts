@@ -12,8 +12,10 @@ import path from 'node:path';
 /** The platform's own module, not the package entry point: `index.ts` exports what a *user*
  *  needs, and a test reaching for something it does not export is asking the wrong file. */
 import { NodePlatform } from '../../../src/builtins/platforms/node/node.platform.js';
+import { NodeVersionPlanService } from '../../../src/builtins/platforms/node/services/version-plan.service.js';
 import { NpmPublishTarget } from '../../../src/builtins/publish-targets/npm/npm-publish-target.js';
 import { runCli as rmanRunCli } from '../../../src/cli.js';
+import type { Package } from '../../../src/core/classes/package.js';
 import { registerPlugin } from '../../../src/core/plugin-loader.js';
 import {
   basePlatform,
@@ -114,11 +116,38 @@ export function appWithStubBin(dir: string): RmanApplication {
  * Reads them off the `definePlugin` object rather than calling `augment*()` again, so the specs
  * exercise exactly what a repository naming `rman-node` in `plugins` would get.
  */
+/**
+ * **The registry `version` plans against is a stub, never npm.** `NodeVersionPlanService` asks the
+ * registry for every published version so a computed number never lands on a taken one, and the
+ * fixtures' package names are real npm packages - `app`, `lib`, `root` are all on npmjs.org, so a
+ * real lookup would plan past a stranger's versions (and fail offline). The stub replaces only the
+ * `npm view` call, so which packages are asked stays the planner's own decision; it answers from
+ * `npmRegistry`, empty by default, i.e. never published.
+ *
+ * Patched on the prototype in `beforeEach` and put back in `afterEach`: the command path builds its
+ * planner inside the CLI, out of a spec's reach.
+ */
 export function useNodeEcosystem(): void {
+  let original: unknown;
   beforeEach(() => {
     lastApp = undefined;
+    npmRegistry.clear();
+    const proto = NodeVersionPlanService.prototype as any;
+    original = proto.registryView;
+    proto.registryView = async (pkg: Package) => {
+      const versions = npmRegistry.get(pkg.name);
+      if (versions instanceof Error) throw versions;
+      return versions ? { latest: versions[versions.length - 1], versions } : undefined;
+    };
+  });
+  afterEach(() => {
+    (NodeVersionPlanService.prototype as any).registryView = original;
   });
 }
+
+/** What the stubbed registry has published, by package name - see `useNodeEcosystem`. An `Error`
+ *  stands for a registry that gives no answer, and is thrown. */
+export const npmRegistry = new Map<string, string[] | Error>();
 
 /**
  * A repository on an application carrying **this plugin's** technology - what a spec calls instead

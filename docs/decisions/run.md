@@ -204,3 +204,19 @@ four behaviours still fire.
 - Meant for the development loop ("only build/test what I touched").
 - **Never use it for release decisions.** After a push `git cherry` is empty and everything reads
   `clean`, which does not mean there is nothing to publish.
+
+## A script that runs itself is refused
+
+- **`RunService.schedule` refuses a plan already running in a parent rman.** Every shell step gets
+  `RMAN_RUN_STACK` - the parent's stack plus `runKey(plan)` (`run.<script>:<plan name>@<dir>`) - and
+  a run whose plans include one of those keys fails before anything starts, naming the script and
+  the directory. Reported from peacox-ui: a local rman 2.34 that could not read `pnpm-workspace.yaml`
+  took the monorepo for one package, ran the root's `build` - `rman build` - and each nested rman did
+  the same, a new process every ~20s until stopped. The same loop is one line away in any
+  repository: a package `build` that calls `rman build`, or a root `before` hook calling the command
+  it hooks.
+- **Keyed by script, plan and directory, so the usual nesting still runs**: the preset's
+  `run.build.before: rman check` is `check` under `build`, and a root hook's nested run sees the
+  package plans as new keys. Only the exact script of the exact plan is refused.
+- Guards only an rman that has it: the peacox-ui loop was an old rman on both levels, so the fix
+  there was moving the preset (and with it rman) up.
