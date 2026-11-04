@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
-import { npmViewReleases } from '../../../src/builtins/publish-targets/npm/npm-view.js';
+import { NpmViewError, npmViewPackage, npmViewReleases } from '../../../src/builtins/publish-targets/npm/npm-view.js';
 
 /**
  * **npm's answer to `view <name>@<range> <fields...> --json` has two shapes**, and `rman deps`
@@ -47,5 +47,55 @@ console.log(JSON.stringify(args.includes('dist-tags') ? { latest: ${JSON.stringi
     stubNpm([{ version: '1.0.0', engines: { node: '>=20' } }, { version: '1.1.0' }], '1.1.0');
     const info = await npmViewReleases('pkg', '>=1.0.0', os.tmpdir());
     expect(info?.releases).toEqual([{ version: '1.0.0', engines: { node: '>=20' } }, { version: '1.1.0' }]);
+  });
+});
+
+/**
+ * **Only E404 means "never published".** Reported from peacox-ui: a GitHub Packages repository read
+ * without a token was planned as `never published` for versions the registry had - npm answered
+ * E401, and this read every failure as no package at all. The stub prints what npm prints under
+ * `--json` (an `error` object on stdout) and exits 1, as measured against the real registries.
+ */
+describe('publish-targets/npm/npmViewPackage', () => {
+  const savedPath = process.env.PATH;
+  let dir: string;
+
+  function stubNpmError(code: string, summary: string): void {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-npm-view-'));
+    fs.writeFileSync(
+      path.join(dir, 'npm'),
+      `#!/usr/bin/env node
+console.log(JSON.stringify({ error: { code: ${JSON.stringify(code)}, summary: ${JSON.stringify(summary)}, detail: '' } }));
+process.exit(1);
+`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${dir}${path.delimiter}${savedPath}`;
+  }
+
+  afterEach(() => {
+    process.env.PATH = savedPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('answers undefined for a package the registry does not have', async () => {
+    stubNpmError('E404', 'Not Found - GET https://registry.npmjs.org/nope - Not found');
+    expect(await npmViewPackage('nope', os.tmpdir())).toBeUndefined();
+  });
+
+  it('throws when the registry refuses to answer, naming the token', async () => {
+    stubNpmError(
+      'E401',
+      '401 Unauthorized - GET https://npm.pkg.github.com/@o%2fp - authentication token not provided',
+    );
+    const error = await npmViewPackage('@o/p', os.tmpdir()).catch(e => e);
+    expect(error).toBeInstanceOf(NpmViewError);
+    expect(error.code).toBe('E401');
+    expect(error.message).toMatch(/cannot read @o\/p .*authentication token not provided.*NODE_AUTH_TOKEN/);
+  });
+
+  it('throws when the registry cannot be reached', async () => {
+    stubNpmError('ECONNREFUSED', 'FetchError: request to http://127.0.0.1:1/p failed');
+    await expect(npmViewPackage('p', os.tmpdir())).rejects.toMatchObject({ code: 'ECONNREFUSED' });
   });
 });

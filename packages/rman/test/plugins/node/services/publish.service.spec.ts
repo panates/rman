@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect } from 'expect';
 import { PublishService } from '../../../../src/builtins/platforms/node/services/publish.service.js';
+import { NpmViewError } from '../../../../src/builtins/publish-targets/npm/npm-view.js';
 import { createRepository, useNodeEcosystem } from '../_fixture.js';
 
 /** What one package looks like on the fake registry - see `registry()`. */
@@ -192,6 +193,28 @@ describe('services/publish', () => {
         status: 'publish',
         version: '1.0.0',
         reason: 'never published',
+      });
+    });
+
+    /** Reported from peacox-ui: read without a token, GitHub Packages answered E401 and the plan
+     *  said `never published` for versions it held - a republish proposed on every run. */
+    it('a registry that gives no answer is an error, not "never published"', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
+      const repo = await createRepository(dir);
+
+      const plan = await PublishService.getPlan(
+        repo,
+        {},
+        {
+          npmViewPackage: async name => {
+            throw new NpmViewError(name, 'E401', '401 Unauthorized - authentication token not provided');
+          },
+        },
+      );
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({
+        status: 'error',
+        reason: expect.stringContaining('cannot read pkg-a from the registry'),
       });
     });
 
@@ -632,7 +655,7 @@ describe('services/publish', () => {
       writeJson(dir, 'packages/b/package.json', {
         name: 'pkg-b',
         version: '1.0.0',
-        publishConfig: { access: 'public', directory: 'build' },
+        publishConfig: { access: 'public', directory: 'build', linkDirectory: true },
         dependencies: { 'pkg-dep': 'workspace:^' },
         devDependencies: { mocha: '^10.0.0' },
         scripts: { build: 'tsc', test: 'mocha', postinstall: 'node-gyp rebuild' },
@@ -664,7 +687,8 @@ describe('services/publish', () => {
       expect(manifest.devDependencies).toBeUndefined();
       // Only the scripts a consumer's install actually runs survive.
       expect(manifest.scripts).toEqual({ postinstall: 'node-gyp rebuild' });
-      // It pointed *here*; kept, it would point one level deeper again.
+      // It pointed *here*; kept, it would point one level deeper again. `linkDirectory` is pnpm's
+      // switch for linking `directory` in the workspace - reported from peacox-ui, left behind.
       expect(manifest.publishConfig).toEqual({ access: 'public' });
 
       // Nothing left behind: the derived manifest is a publish-time artifact, and what the build

@@ -18,8 +18,8 @@ export const SPM_TARGET = 'spm';
  * --json` answers it, as `npm view` does for the npm target - `up-to-date` when the version is
  * listed, `publish` when it is not, `error` when the lookup itself failed.
  */
-/* **A failed lookup is an `'error'`, never "not published"** - the opposite of the npm and
- * cloudflare checks, on purpose. Their catch-everything shape is a measured cost on the npm side
+/* **A failed lookup is an `'error'`, never "not published"** - as the npm check's is now too (the
+ * cloudflare one is still catch-everything). Catch-everything was a measured cost on the npm side
  * (`npmViewPackage` read a failed lookup as "never published" and proposed a republish every run),
  * and `spm view` was asked for with a distinct failure exit exactly so this one need not guess.
  *

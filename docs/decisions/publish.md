@@ -188,9 +188,9 @@ Design decisions moved out of `CLAUDE.md`. Covers Publish targets (npm, docker, 
   is the same kind of thing and ours. The rule that came with it: **what rman needs from spm is
   asked of spm, never reimplemented here** - `spm view --json` and `spm publish --no-wait` were added
   to syncbuild for this target rather than rman calling the registry's HTTP API itself.
-  - **A failed lookup is an `'error'`**, the opposite of the npm and cloudflare checks: their
-    catch-everything shape is the measured cost recorded above (a failed `npm view` read as "never
-    published"), and `spm view` exits non-zero exactly so this one need not guess.
+  - **A failed lookup is an `'error'`**, as the npm check's is now too (the cloudflare one is still
+    catch-everything): a failed `npm view` read as "never published" was the measured cost recorded
+    below, and `spm view` exits non-zero exactly so this one need not guess.
   - **`--skip-existing` makes the publish exact where the read cannot be** - a private package is
     `[]` to a reader without the right identity - and a skipped version comes back `up-to-date`,
     so `--json` does not count it published.
@@ -281,8 +281,17 @@ Design decisions moved out of `CLAUDE.md`. Covers Publish targets (npm, docker, 
     `up-to-date` for a publish that never happened.
   - **Returning `undefined` rather than a default is what keeps the working case working.** Passing
     an explicit `--registry` would override whatever `.npmrc` says.
+  - **A failed lookup is no longer "never published" at all.** Reported from peacox-ui: GitHub
+    Packages read without a token answered `E401`, and the plan said `never published` for 0.9.24 of
+    two packages the registry held 90 and 110 versions of. `npmViewPackage` now returns `undefined`
+    for `E404` only and throws `NpmViewError` for anything else (measured: npm prints a JSON `error`
+    object with `code` E401 / E404 / ECONNREFUSED on stdout under `--json`, exit 1); `getPlan` turns
+    it into an `'error'` entry naming the registry and, for E401/E403, the token. The polls after a
+    publish (`waitUntilAvailable`, the retry's `isPublished`) still read a failed round as "not yet".
   - **Only the check needed fixing.** `applyPlan` passes `--registry` only when given, and the
-    generated manifest keeps `publishConfig` (`derivePublishManifest` deletes only `directory`), so
+    generated manifest keeps `publishConfig` (`derivePublishManifest` deletes only `directory` and
+    pnpm's `linkDirectory`, which peacox-ui found left behind; the preset's `writeBuildManifest`
+    drops both too), so
     npm already publishes to the right place - measured with `--dry-run`, which reports
     `Publishing to https://from-publishconfig.example/`.
   - **Authentication does not travel with any of this and is not rman's.** GitHub Packages needs

@@ -88,6 +88,8 @@ function preparePublishManifest(
  *   decides from the manifest this produces, so the rule here *is* the publish rule - a preset
  *   writing the build directory's manifest must apply the same one.
  * - `publishConfig.directory` - it pointed *here*; kept, it would point one level deeper again.
+ * - `publishConfig.linkDirectory` - pnpm's switch for linking `directory` inside the workspace, which
+ *   means nothing once `directory` is gone and nothing to a consumer.
  */
 function derivePublishManifest(pkg: Package, packagesByName: Map<string, Package>): Record<string, any> {
   const json: Record<string, any> = structuredClone(pkg.manifest.raw);
@@ -104,6 +106,7 @@ function derivePublishManifest(pkg: Package, packagesByName: Map<string, Package
 
   if (json.publishConfig) {
     delete json.publishConfig.directory;
+    delete json.publishConfig.linkDirectory;
     if (!Object.keys(json.publishConfig).length) delete json.publishConfig;
   }
 
@@ -254,7 +257,8 @@ export namespace PublishService {
    *
    * Otherwise the registry decides, via one `npmViewPackage` per remaining package (run
    * concurrently): **the local version being among the published `versions`** is `'up-to-date'`,
-   * anything else - including never having been published at all - is `'publish'`. Deliberately not
+   * anything else - including never having been published at all - is `'publish'`, and a lookup
+   * the registry gave no answer to (no access, no network) is `'error'`. Deliberately not
    * a comparison against `latest`, which answers a different question and disagrees with this one
    * the moment a prerelease ships under its own dist-tag; see `npmViewPackage`.
    *
@@ -300,6 +304,13 @@ export namespace PublishService {
     } catch {
       return undefined;
     }
+  }
+
+  /** The registry `pkg` publishes to when the run names none - its `publishConfig.registry` - or
+   *  `undefined` to let npm resolve `.npmrc` itself. Pass it to `npmViewPackage` to ask the registry
+   *  the publish will use. */
+  export function registryOf(pkg: Package): string | undefined {
+    return resolveRegistry(pkg, undefined);
   }
 
   export async function getPlan(repository: Repository, options: Options = {}, deps: Deps = {}): Promise<Entry[]> {
@@ -368,7 +379,15 @@ export namespace PublishService {
 
     await Promise.all(
       toCheck.map(async pkg => {
-        const view = await viewPackage(pkg);
+        /** A registry that gave no answer is an `'error'`, never "never published" - see
+         *  `npmViewPackage`. */
+        let view: NpmPackageView | undefined;
+        try {
+          view = await viewPackage(pkg);
+        } catch (e: any) {
+          entries.set(pkg.name, { package: pkg, version: pkg.version, status: 'error', reason: e.message });
+          return;
+        }
         const registryVersion = view?.latest;
         /** **This version**, not `latest` - the two part company the moment a prerelease is
          *  published under its own dist-tag, and `latest` then never moves however many betas go
@@ -442,7 +461,9 @@ export namespace PublishService {
     while (pending.size) {
       await Promise.all(
         [...pending].map(async entry => {
-          if ((await view(entry.package))?.versions.includes(entry.version)) pending.delete(entry);
+          /** A failed round is "not yet": the next one asks again, and the deadline still holds. */
+          const answer = await view(entry.package).catch(() => undefined);
+          if (answer?.versions.includes(entry.version)) pending.delete(entry);
         }),
       );
       const left = deadline - Date.now();
@@ -669,21 +690,27 @@ const TRANSIENT_PUBLISH_ERRORS: readonly (readonly [RegExp, string])[] = [
   [/\b(ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ESOCKETTIMEDOUT|EPIPE)\b|socket hang up/, 'network error'],
 ];
 
-/** Whether the registry already serves `version` of `pkg` - asked past npm's cache. */
+/** Whether the registry already serves `version` of `pkg` - asked past npm's cache. A lookup that
+ *  gets no answer is `false`: the retry it guards then tries the publish again, which the registry
+ *  refuses if the version did land. */
 async function isPublished(
   pkg: Package,
   version: string,
   options: PublishService.ApplyOptions,
   deps: PublishService.Deps,
 ): Promise<boolean> {
-  const view = deps.npmViewPackage
-    ? await deps.npmViewPackage(pkg.name, pkg.dirname)
-    : await npmViewPackage(pkg.name, pkg.dirname, {
-        userconfig: options.userconfig,
-        registry: resolveRegistry(pkg, options.registry),
-        preferOnline: true,
-      });
-  return !!view?.versions.includes(version);
+  try {
+    const view = deps.npmViewPackage
+      ? await deps.npmViewPackage(pkg.name, pkg.dirname)
+      : await npmViewPackage(pkg.name, pkg.dirname, {
+          userconfig: options.userconfig,
+          registry: resolveRegistry(pkg, options.registry),
+          preferOnline: true,
+        });
+    return !!view?.versions.includes(version);
+  } catch {
+    return false;
+  }
 }
 
 /** npm's own registry, which `PublishService.registryLabel` leaves shown as `npm`. */

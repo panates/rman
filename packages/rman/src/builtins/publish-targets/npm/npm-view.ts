@@ -11,10 +11,37 @@ export interface NpmPackageView {
   versions: string[];
 }
 
+/** A registry lookup that got no answer - no access, no network, a server error - as opposed to
+ *  the registry answering that the package does not exist. */
+export class NpmViewError extends Error {
+  /** npm's own error code: `E401`, `E403`, `ECONNREFUSED`, ... - `undefined` when npm gave none. */
+  readonly code?: string;
+
+  constructor(name: string, code: string | undefined, summary: string | undefined, options?: { cause?: unknown }) {
+    const hint =
+      code === 'E401' || code === 'E403' ? ' - is a token for this registry configured (.npmrc, NODE_AUTH_TOKEN)?' : '';
+    super(`cannot read ${name} from the registry: ${summary || code || 'npm view failed'}${hint}`, options);
+    this.name = 'NpmViewError';
+    this.code = code;
+  }
+}
+
 /**
- * `npm view <name> version versions --json` - `undefined` for anything that is not an answer (never
- * published, no network, private or restricted with no access). Catch-everything on purpose: every
- * caller treats "no answer" as a legitimate state rather than a failure.
+ * `npm view <name> version versions --json` - `undefined` when the registry answers that the package
+ * does not exist (E404, which is also how npmjs.org answers a restricted package to a reader without
+ * access), the view otherwise.
+ *
+ * @throws {NpmViewError} When the registry gave no answer: no access (E401/E403), no network, a
+ *   server error.
+ */
+/* **Only E404 means "never published".** This was catch-everything, and `publish` reads `undefined`
+ * as "never published": reported from peacox-ui, a GitHub Packages repository read without a token
+ * (`NPM_CONFIG_USERCONFIG=/dev/null`) planned 0.9.24 of both packages as `never published`, though
+ * the registry held 90 and 110 versions. Measured, npm answers that with `code E401` and
+ * `401 Unauthorized ... authentication token not provided`; a missing package with `code E404`; a
+ * dead address with `code ECONNREFUSED` - each as a JSON `error` object on stdout under `--json`, and
+ * exit 1. A plan that cannot see the registry now says so instead of proposing a republish, or - the
+ * worse half - letting `version` pick a number the registry already has.
  *
  * **Two fields in one call, because the two questions are genuinely different and `publish` needs
  * both.** Whether *this* version is already out there decides `up-to-date` vs `publish`, and only
@@ -49,8 +76,10 @@ export async function npmViewPackage(
     if (!text) return undefined;
     const raw = JSON.parse(text) as { version?: string; versions?: string | string[] };
     return { latest: raw.version, versions: toVersionList(raw.versions) };
-  } catch {
-    return undefined;
+  } catch (e: any) {
+    const { code, summary } = npmErrorOf(e);
+    if (code === 'E404') return undefined;
+    throw new NpmViewError(name, code, summary, { cause: e });
   }
 }
 
@@ -105,7 +134,7 @@ export interface NpmReleases {
  * the package's `dist-tags` (and `time`, when `withTime`) - two calls, run at once. `undefined` when
  * the registry gave no answer at all.
  *
- * **Not catch-everything, unlike the two above.** A name the registry does not know is an answer
+ * **Not catch-everything, unlike `npmViewVersion`.** A name the registry does not know is an answer
  * `rman deps` has to report, not a state it can treat as "nothing newer".
  */
 /* **One call returns every version in the range.** npm answers a range with an array holding one
@@ -141,6 +170,22 @@ export async function npmViewReleases(
     latest: meta['dist-tags']?.latest,
     time: meta.time,
   };
+}
+
+/** npm's error code and summary from a failed call: the JSON `error` object `--json` prints on
+ *  stdout, else the `npm error code X` line on stderr. */
+function npmErrorOf(e: any): { code?: string; summary?: string } {
+  const stdout = String(e?.stdout ?? '').trim();
+  if (stdout) {
+    try {
+      const error = JSON.parse(stdout)?.error;
+      if (error?.code) return { code: String(error.code), summary: error.summary ? String(error.summary) : undefined };
+    } catch {
+      /* not JSON - fall through to stderr */
+    }
+  }
+  const code = /npm (?:error|ERR!) code (\S+)/.exec(String(e?.stderr ?? ''))?.[1];
+  return { code, summary: code ? undefined : e?.message };
 }
 
 function toVersionList(versions: string | string[] | undefined): string[] {
