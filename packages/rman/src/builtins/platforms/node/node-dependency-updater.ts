@@ -101,8 +101,8 @@ export class NodeDependencyUpdater implements DependencyUpdater {
 
     this.resolve(decisions, ctx);
     return decisions
-      .filter(d => d.wanted || d.unmovable)
-      .map(d => {
+      .filter(d => d.wanted || d.listed)
+      .flatMap(d => {
         /** Set on the entry itself, never a copy: `planned` is keyed by that object. */
         const entry = this.toEntry(d);
         entry.installed = this.installedVersion(d.pkg, d.name);
@@ -110,8 +110,46 @@ export class NodeDependencyUpdater implements DependencyUpdater {
         if (entry.installed && semver.validRange(entry.current)) {
           entry.installedInRange = semver.satisfies(entry.installed, entry.current, { includePrerelease: true });
         }
-        return entry;
+        return d.wanted || d.unmovable || DependencyUpdater.lagsBehind(entry) ? [entry] : [];
       });
+  }
+
+  /**
+   * Brings the installed copies of `names` up to what their declared ranges already take, with the
+   * repository's own package manager at its root - `pnpm update -r <names> --no-save` or
+   * `npm update <names> --no-save`. No manifest changes; the lockfile and `node_modules` do.
+   */
+  /* **`--no-save`, or the package manager rewrites the ranges itself.** Measured on pnpm 12.10.1:
+   * `pnpm update -r ms debug` turned `^2.0.0` into `^2.1.3` and `^4.3.0` into `^4.4.3`, and
+   * re-sorted the dependency block while at it; a `>=2.0.0 <3` it left alone. With `--no-save` both
+   * stayed as written, the lockfile moved to 2.1.3 / 4.4.3 with the specifiers unchanged, and a
+   * `--frozen-lockfile` install afterwards passed. npm 11.12.1 the same: `npm update ms debug
+   * --no-save` at a workspace root moved `package-lock.json` and the hoisted copies, left every
+   * manifest alone, and `npm ci` afterwards passed. `-r` is harmless in a single-package pnpm
+   * repository (measured), so it is passed always.
+   *
+   * **Why `deps -u` does this at all**, when it otherwise writes manifests and leaves installing to
+   * the user: a range rman does not rewrite - `>=2.3.0 <3`, a pin, `||` - has nothing for `-u` to
+   * write, so an upgrade it takes already was invisible and unreachable. Reported from
+   * `syncbridge-io/syncbridge-extensions`: `hl7v2` and `hl7v2-net` declared `>=2.3.0 <3`, 2.3.2 was
+   * out, 2.3.0 was installed, and `rman deps` listed neither. */
+  async refresh(ctx: DependencyUpdater.Context, names: readonly string[]): Promise<string[]> {
+    if (!names.length) return [];
+    const manager = this.installer(ctx);
+    const list = names.join(' ');
+    let result: ExecResult;
+    if (manager === 'pnpm') result = await this.pnpm(ctx, `update -r ${list} --no-save`);
+    else if (manager === 'npm') result = await this.npm(ctx, `update ${list} --no-save --no-audit --no-fund`);
+    else {
+      console.error(colors.yellow(`Not refreshed: "${manager}" is not asked to update - run its own update.`));
+      return [];
+    }
+    if (result.code) {
+      const output = (result.stdout ?? '').trim();
+      throw new Error(`${manager} update exited ${result.code}${output ? `:\n${output}` : ''}`);
+    }
+    const lockfile = path.join(ctx.repository.dirname, manager === 'pnpm' ? 'pnpm-lock.yaml' : 'package-lock.json');
+    return fs.existsSync(lockfile) ? [lockfile] : [];
   }
 
   async applyPlan(
@@ -374,6 +412,11 @@ export class NodeDependencyUpdater implements DependencyUpdater {
    *  pnpm, so a spec answers for it instead of whichever pnpm is on the machine. */
   protected pnpm(ctx: DependencyUpdater.Context, args: string): Promise<ExecResult> {
     return exec(`pnpm ${args}`, { cwd: ctx.repository.dirname, app: ctx.app, throwOnError: false });
+  }
+
+  /** `npm <args>` at the repository root, never throwing - `refresh`'s spawn, and the spec's seam. */
+  protected npm(ctx: DependencyUpdater.Context, args: string): Promise<ExecResult> {
+    return exec(`npm ${args}`, { cwd: ctx.repository.dirname, app: ctx.app, throwOnError: false });
   }
 
   /**
@@ -896,6 +939,20 @@ export class NodeDependencyUpdater implements DependencyUpdater {
         latest: version,
         available: version,
         reason: 'not a ^ or ~ range - rman moves only those',
+      };
+    }
+    /** A range rman does not move whose newest release it still takes: nothing to write, and listed
+     *  only when what is installed lags behind it (`getPlan`'s last filter). */
+    if (!d.wanted) {
+      const field = d.fixed[0]!;
+      const range = d.fields.get(field)!;
+      return {
+        package: d.pkg,
+        name: d.name,
+        types: [...d.fixed],
+        current: (d.aliases.get(field) ?? '') + range,
+        status: 'up-to-date',
+        latest: this.resolvedVersion(d, range),
       };
     }
     const entry: DependencyUpdater.Entry = {

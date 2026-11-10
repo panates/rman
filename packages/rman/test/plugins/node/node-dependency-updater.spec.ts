@@ -222,6 +222,31 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       expect(entries).toEqual([]);
     });
 
+    /** Reported from `syncbridge-io/syncbridge-extensions`: `hl7v2` declared `>=2.3.0 <3`, 2.3.2 was
+     *  out, 2.3.0 was installed, and nothing was listed - nothing to write, and an install to do. */
+    it('lists a fixed range whose installed copy is behind what it takes', async () => {
+      const dir = single({ dependencies: { compound: '>=2.3.0 <3', pinned: '2.3.0', current: '>=1 <2' } });
+      writeJson(dir, 'node_modules/compound/package.json', { name: 'compound', version: '2.3.0' });
+      writeJson(dir, 'node_modules/pinned/package.json', { name: 'pinned', version: '2.3.0' });
+      writeJson(dir, 'node_modules/current/package.json', { name: 'current', version: '1.2.0' });
+      const updater = new FakeRegistryUpdater({
+        compound: { releases: releases('2.3.0', '2.3.2') },
+        pinned: { releases: releases('2.3.0') },
+        current: { releases: releases('1.0.0', '1.2.0') },
+      });
+      const { entries } = await plan(dir, updater);
+      expect(entries.map(e => e.name)).toEqual(['compound']);
+      expect(entry(entries, 'compound')).toMatchObject({
+        status: 'up-to-date',
+        current: '>=2.3.0 <3',
+        installed: '2.3.0',
+        resolved: '2.3.2',
+        latest: '2.3.2',
+        installedInRange: true,
+      });
+      expect(DependencyUpdater.lagsBehind(entry(entries, 'compound'))).toBe(true);
+    });
+
     it('never offers a deprecated version, a prerelease, or one above the latest tag', async () => {
       const dir = single({ dependencies: { a: '^1.0.0' } });
       const updater = new FakeRegistryUpdater({
@@ -866,6 +891,55 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       const updater = new FakeRegistryUpdater({ '@mirror/sb__hl7': { releases: releases('2.0.0') } });
       const { entries } = await plan(aliased(), updater);
       expect(entry(entries, '@sb/hl7').status).toBe('up-to-date');
+    });
+  });
+
+  /**
+   * `-u`'s install of what a range already takes: the repository's own package manager, at its
+   * root, with `--no-save` - measured, without it pnpm rewrites `^2.0.0` to `^2.1.3`.
+   */
+  describe('refresh', () => {
+    class FakeInstaller extends FakeRegistryUpdater {
+      readonly asked: string[] = [];
+      code = 0;
+      protected override async pnpm(_ctx: DependencyUpdater.Context, args: string) {
+        this.asked.push(`pnpm ${args}`);
+        return { code: this.code, stdout: this.code ? 'ERR_PNPM_NO_MATCHING_VERSION' : '' };
+      }
+      protected override async npm(_ctx: DependencyUpdater.Context, args: string) {
+        this.asked.push(`npm ${args}`);
+        return { code: this.code, stdout: '' };
+      }
+    }
+
+    async function refresh(lockfile: string, updater: FakeInstaller, names: string[]): Promise<string[]> {
+      const dir = single({ dependencies: { a: '>=1 <2', b: '^1.0.0' } });
+      fs.writeFileSync(path.join(dir, lockfile), '');
+      const repository = await createRepository(dir);
+      const ctx: DependencyUpdater.Context = { app: repository.app, repository, options: { concurrency: 1 } };
+      return (await updater.refresh(ctx, names)).map(f => path.basename(f));
+    }
+
+    it('updates with pnpm in a pnpm repository, saving no range', async () => {
+      const updater = new FakeInstaller({});
+      expect(await refresh('pnpm-lock.yaml', updater, ['a', 'b'])).toEqual(['pnpm-lock.yaml']);
+      expect(updater.asked).toEqual(['pnpm update -r a b --no-save']);
+    });
+
+    it('updates with npm in an npm repository, saving no range', async () => {
+      const updater = new FakeInstaller({});
+      expect(await refresh('package-lock.json', updater, ['a'])).toEqual(['package-lock.json']);
+      expect(updater.asked).toEqual(['npm update a --no-save --no-audit --no-fund']);
+    });
+
+    it("asks no package manager for nothing, and fails with the manager's own words", async () => {
+      const updater = new FakeInstaller({});
+      expect(await refresh('pnpm-lock.yaml', updater, [])).toEqual([]);
+      expect(updater.asked).toEqual([]);
+      updater.code = 1;
+      await expect(refresh('pnpm-lock.yaml', updater, ['a'])).rejects.toThrow(
+        'pnpm update exited 1:\nERR_PNPM_NO_MATCHING_VERSION',
+      );
     });
   });
 

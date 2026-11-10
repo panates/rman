@@ -28,22 +28,43 @@ class FakeUpdater implements DependencyUpdater {
   /** Whether the installed copy is in the declared range - unset unless a case says. */
   installedInRange: boolean | undefined;
 
+  /** Adds a second dependency per package, up to date and installed behind what it takes. */
+  lagging = false;
+
   async getPlan(_ctx: DependencyUpdater.Context, packages: readonly Package[]): Promise<DependencyUpdater.Entry[]> {
     this.planned = packages.map(p => p.name);
-    return packages.map(pkg => ({
-      package: pkg,
-      name: 'left-pad',
-      types: ['dependencies'],
-      current: '^1.0.0',
-      installed: '1.0.2',
-      resolved: this.resolved,
-      installedInRange: this.installedInRange,
-      status: this.status,
-      ...(this.status === 'update' ? { target: '^1.3.0', bump: 'minor' } : {}),
-      latest: '1.3.0',
-      available: this.status === 'skipped' ? '2.0.0' : '1.3.0',
-      reason: this.status === 'skipped' ? this.reason : undefined,
-    }));
+    const behind = (pkg: Package): DependencyUpdater.Entry[] =>
+      this.lagging
+        ? [
+            {
+              package: pkg,
+              name: 'right-pad',
+              types: ['dependencies'],
+              current: '>=1 <2',
+              installed: '1.0.0',
+              resolved: '1.1.0',
+              status: 'up-to-date',
+              latest: '1.1.0',
+            },
+          ]
+        : [];
+    return packages.flatMap(pkg => [
+      ...behind(pkg),
+      {
+        package: pkg,
+        name: 'left-pad',
+        types: ['dependencies'],
+        current: '^1.0.0',
+        installed: '1.0.2',
+        resolved: this.resolved,
+        installedInRange: this.installedInRange,
+        status: this.status,
+        ...(this.status === 'update' ? { target: '^1.3.0', bump: 'minor' } : {}),
+        latest: '1.3.0',
+        available: this.status === 'skipped' ? '2.0.0' : '1.3.0',
+        reason: this.status === 'skipped' ? this.reason : undefined,
+      } as DependencyUpdater.Entry,
+    ]);
   }
 
   async applyPlan(): Promise<DependencyUpdater.Applied> {
@@ -60,6 +81,16 @@ class FakeUpdater implements DependencyUpdater {
   refusals: string[] = [];
   /** Which packages' entries `blame` pins the refusal on - none unless a case says. */
   blamed: string[] = [];
+
+  /** The names each `refresh` was asked for, and what it fails with - nothing unless a case says. */
+  refreshed: string[][] = [];
+  refreshFailure: string | undefined;
+
+  async refresh(_ctx: DependencyUpdater.Context, names: readonly string[]): Promise<string[]> {
+    this.refreshed.push([...names]);
+    if (this.refreshFailure) throw new Error(this.refreshFailure);
+    return ['/x/pnpm-lock.yaml'];
+  }
 
   blame(_refusal: string, plan: readonly DependencyUpdater.Entry[]): DependencyUpdater.Blame[] {
     return plan
@@ -82,6 +113,9 @@ describe('commands/deps', () => {
       refusal: undefined,
       refusals: [],
       blamed: [],
+      refreshed: [],
+      refreshFailure: undefined,
+      lagging: false,
       resolved: undefined,
       installedInRange: undefined,
       status: 'update',
@@ -239,8 +273,86 @@ describe('commands/deps', () => {
     const text = lines.join('\n');
     expect(text).toMatch(/^All dependencies are up to date - installed versions that differ/m);
     expect(text).toMatch(
-      /left-pad\s+\^1\.0\.0\s+1\.0\.2\s+1\.3\.0\s+install\s+-\s+"\^1\.0\.0" takes 1\.3\.0 - install again/,
+      /left-pad\s+\^1\.0\.0\s+1\.0\.2\s+1\.3\.0\s+install\s+-\s+"\^1\.0\.0" takes 1\.3\.0 - "deps -u" installs it/,
     );
+    expect(text).toContain('rman deps -u');
+  });
+
+  /** Installed newer than what the range takes - a copy above the `latest` tag - is no lag: `-u`
+   *  would move it back down, so it is only told to install again. */
+  it('does not offer to install over a copy newer than the range takes', async () => {
+    const dir = monorepo();
+    updater.status = 'up-to-date';
+    updater.resolved = '1.0.1';
+    const { lines } = await capture(() => runCli({ argv: ['deps', '--scope', 'pkg-a'], cwd: dir }));
+    const text = lines.join('\n');
+    expect(text).toContain('"^1.0.0" takes 1.0.1 - install again');
+    expect(text).not.toContain('rman deps -u');
+  });
+
+  /** A range rman writes nothing for, behind what it already takes: `-u` asks the technology to
+   *  install it, once per name, after the manifests - and reports the lockfile it wrote. */
+  it('installs an in-range upgrade under --upgrade, writing no range', async () => {
+    const dir = monorepo();
+    updater.status = 'up-to-date';
+    updater.resolved = '1.3.0';
+    const { lines, failed } = await capture(() => runCli({ argv: ['deps', '-u'], cwd: dir }));
+    expect(failed).toBe(false);
+    expect(updater.applied).toBe(0);
+    expect(updater.refreshed).toEqual([['left-pad']]);
+    expect(lines).toContainEqual(expect.stringMatching(/^updated .*pnpm-lock\.yaml$/));
+  });
+
+  /** An upgrade row moves the range, and the install follows from that: no install note on it. */
+  it('notes no install on a row that moves its range', async () => {
+    const dir = monorepo();
+    updater.resolved = '1.3.0';
+    const { lines } = await capture(() => runCli({ argv: ['deps', '--scope', 'pkg-a'], cwd: dir }));
+    expect(lines).toContainEqual(
+      expect.stringMatching(/^\s+left-pad\s+\^1\.0\.0\s+1\.0\.2\s+1\.3\.0\s+minor\s+\^1\.3\.0$/),
+    );
+  });
+
+  it('installs nothing without --upgrade, and nothing that is not behind', async () => {
+    const dir = monorepo();
+    updater.status = 'up-to-date';
+    updater.resolved = '1.3.0';
+    await capture(() => runCli({ argv: ['deps'], cwd: dir }));
+    updater.resolved = '1.0.2';
+    await capture(() => runCli({ argv: ['deps', '-u'], cwd: dir }));
+    expect(updater.refreshed).toEqual([]);
+  });
+
+  /** A refused upgrade must not reach the lockfile: the refresh comes only after `verify` passes. */
+  it('installs nothing when the resolver refuses the written ranges', async () => {
+    const dir = monorepo();
+    updater.status = 'skipped';
+    updater.resolved = '1.3.0';
+    await capture(() => runCli({ argv: ['deps', '-u'], cwd: dir }));
+    expect(updater.refreshed).toEqual([['left-pad']]);
+    updater.status = 'update';
+    updater.resolved = undefined;
+    updater.lagging = true;
+    updater.refusal = '  ERESOLVE unable to resolve dependency tree';
+    updater.refreshed = [];
+    const { failed } = await capture(() => runCli({ argv: ['deps', '-u'], cwd: dir }));
+    expect(failed).toBe(true);
+    expect(updater.refreshed).toEqual([]);
+    /** And with the resolver content, the same run installs it - after writing the ranges. */
+    updater.refusal = undefined;
+    await capture(() => runCli({ argv: ['deps', '-u'], cwd: dir }));
+    expect(updater.refreshed).toEqual([['right-pad']]);
+    expect(updater.applied).toBe(2);
+  });
+
+  it('fails naming the dependencies when the install fails', async () => {
+    const dir = monorepo();
+    updater.status = 'up-to-date';
+    updater.resolved = '1.3.0';
+    updater.refreshFailure = 'pnpm update exited 1';
+    const { lines, failed } = await capture(() => runCli({ argv: ['deps', '-u'], cwd: dir }));
+    expect(failed).toBe(true);
+    expect(lines.join('\n')).toContain('Could not install the in-range upgrades (left-pad):\npnpm update exited 1');
   });
 
   /** Latest is green where the row reaches it and yellow where it stops short; Installed is red

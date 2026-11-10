@@ -54,6 +54,15 @@ export interface DependencyUpdater {
    * over it. A conflict inside a release's own peers is out of `getPlan`'s sight by design, so it is
    * the resolver's answer that has to say which move to leave out. */
   blame?(refusal: string, plan: readonly DependencyUpdater.Entry[]): DependencyUpdater.Blame[];
+
+  /**
+   * Under `--upgrade`, once the manifests are written and verified: brings the installed copies of
+   * `names` up to what their declared ranges already take, without changing a manifest, and returns
+   * the files it wrote (a lockfile). Throws when the package manager fails.
+   *
+   * Omit it when the ecosystem cannot do that; those entries are then listed and left as they are.
+   */
+  refresh?(ctx: DependencyUpdater.Context, names: readonly string[]): Promise<string[]>;
 }
 
 export namespace DependencyUpdater {
@@ -103,7 +112,8 @@ export namespace DependencyUpdater {
    *   `reason` names that rule - or, under `--upgrade`, the ecosystem's resolver refused it.
    * - `'skipped'`: a newer version exists, and the package's own settings leave it out - a major
    *   under `target: minor`, or one younger than `minAge`. `reason` says which.
-   * - `'up-to-date'`: nothing newer exists.
+   * - `'up-to-date'`: no range to write - nothing newer exists, or the declared range already takes
+   *   it. Still worth a row when `lagsBehind` says what is installed is older than `resolved`.
    * - `'error'`: the registry gave no answer.
    */
   export interface Entry {
@@ -210,6 +220,19 @@ export namespace DependencyUpdater {
       minAge: options.minAge ?? config.minAge ?? 0,
       types: config.types?.length ? [...config.types] : undefined,
     };
+  }
+
+  /**
+   * Whether what is installed for `entry` is older than what its declared range already takes - an
+   * install would move it with no manifest change, which is what `refresh` does under `--upgrade`.
+   */
+  export function lagsBehind(entry: Entry): boolean {
+    if (!entry.installed || !entry.resolved) return false;
+    try {
+      return entry.package.versionScheme.compare(entry.installed, entry.resolved) < 0;
+    } catch {
+      return false;
+    }
   }
 }
 
