@@ -21,7 +21,8 @@ const config = {
   upgrade: {
     target: 'cli',
     alias: 'u',
-    describe: 'Write the new ranges to the manifests, then check that they still install',
+    describe:
+      'Write the new ranges to the manifests, check that they still install, then install what a range already takes and the lockfile lags behind',
     type: 'boolean',
   },
   /** Its `choices` and its default are the version schemes' own sizes, so they are filled in where
@@ -133,8 +134,13 @@ const depsCommand = registerCommand(app => {
       const errors = all.filter(e => e.status === 'error');
       const updates = all.filter(e => e.status === 'update');
 
+      /** Behind what a range rman leaves as it is already takes - `-u` installs those, writing no range. */
+      const lagging = all.filter(e => e.status !== 'update' && e.status !== 'error' && DependencyUpdater.lagsBehind(e));
+
       if (!args.upgrade) {
-        if (updates.length && !args.json) console.log(colors.gray('\nRun "rman deps -u" to upgrade.'));
+        if ((updates.length || lagging.length) && !args.json) {
+          console.log(colors.gray('\nRun "rman deps -u" to upgrade.'));
+        }
         if (errors.length) throw logged(`${errors.length} dependency lookup(s) failed - see above.`);
         return;
       }
@@ -173,6 +179,18 @@ const depsCommand = registerCommand(app => {
         }
       }
       const files = [...applied.values()].flatMap(a => a.files);
+
+      /* After the manifests, so an install that runs anyway takes the new ranges too; and only once
+       * they are verified, so a refused upgrade never reaches the lockfile. */
+      for (const [updater, plan] of plans) {
+        const names = [...new Set(lagging.filter(e => plan.includes(e)).map(e => e.name))];
+        if (!names.length || !updater.refresh) continue;
+        try {
+          files.push(...(await updater.refresh(ctx, names)));
+        } catch (e: any) {
+          throw logged(`Could not install the in-range upgrades (${names.join(', ')}):\n${e?.message ?? e}`);
+        }
+      }
 
       if (args.json) console.log(JSON.stringify(jsonPlan(all), undefined, 2));
       else {
@@ -310,7 +328,7 @@ function printPlan(entries: readonly DependencyUpdater.Entry[], root: string): v
     for (const e of rows) {
       const paint = e.status === 'update' ? sizeColor(e.bump, sizes) : changeColor(e.status);
       const values = cells(e);
-      const note = e.reason ?? (reinstall(e) ? `"${e.current}" takes ${e.resolved} - install again` : undefined);
+      const note = noteOf(e);
       if (note) values[last] = values[last]!.padEnd(widths[last]!);
       const text = line(values, (v, column) => {
         if (column === 2 && e.installedInRange === false) return colors.red(v);
@@ -345,6 +363,17 @@ function wrapNote(note: string, width: number): string[] {
   }
   if (current) lines.push(current);
   return lines;
+}
+
+/** What the `Note` column says: the entry's own reason, and what an install would change. */
+function noteOf(e: DependencyUpdater.Entry): string | undefined {
+  if (e.status === 'update') return e.reason;
+  const install = DependencyUpdater.lagsBehind(e)
+    ? `"${e.current}" takes ${e.resolved} - "deps -u" installs it`
+    : reinstall(e)
+      ? `"${e.current}" takes ${e.resolved} - install again`
+      : undefined;
+  return e.reason && install ? `${e.reason}; ${install}` : (e.reason ?? install);
 }
 
 /** What the `Change` column says: the size of the move, or why there is none. */

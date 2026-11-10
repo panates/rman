@@ -41,9 +41,13 @@ app
 - **Change** is the size of the move (`patch`, `minor`, `major`), or why there is none: `held` -
   another dependency's rule refuses the newer version, named in full in the note - `skipped` - the
   package's own settings leave it out (a major under `target: minor`, a version younger than
-  `minAge`) - `install` - the range is already at the newest version but something else is
-  installed, so `node_modules` is behind its manifest and an install puts it right - or `error`.
-  Rows that move come first, smallest first.
+  `minAge`) - `install` - the range already takes a newer version than the one installed, so
+  `node_modules` and the lockfile are behind the manifest and an install puts them right, with no
+  range to write - or `error`. Rows that move come first, smallest first.
+- **A range rman does not rewrite is listed too** - a pin, `>=2.3.0 <3`, `||`, a hyphen range: as
+  `skipped` when the newest release falls outside it, and as `install` when the newest release
+  fits it but an older one is installed. `"hl7v2": ">=2.3.0 <3"` with 2.3.0 installed and 2.3.2 out
+  reads `install`, with the note `">=2.3.0 <3" takes 2.3.2 - "deps -u" installs it`.
 - **Note** says why a row stops short of **Latest**, for instance
   `7.0.2 refused: @typescript-eslint/parser@8.40.0 needs typescript >=4.8.4 <6.0.0`.
 
@@ -163,7 +167,14 @@ lockfiles in one directory fall back to the setting.
 
 yarn and bun are not asked, and a note says so.
 
-`-u` does not install anything and does not touch the lockfile. Run your usual install afterwards.
+`-u` installs only what a declared range already takes and the lockfile lags behind - the `install`
+rows, and a `skipped` or `held` row whose installed copy is behind its own range. Once the
+manifests are written and verified, it runs the repository's package manager at the root with
+`--no-save`, so no range changes: `pnpm update -r <names> --no-save` or
+`npm update <names> --no-save`. Without `--no-save` both would rewrite a `^` range to the version
+they installed. That install also takes the ranges `-u` just wrote. yarn and bun are not asked,
+and a note says so. With no such row, `-u` installs nothing and leaves the lockfile alone; run your
+usual install afterwards.
 
 ## Speed
 
@@ -179,7 +190,7 @@ in addition to:
 
 | Option | Alias | Type | Description |
 | --- | --- | --- | --- |
-| `--upgrade` | `-u` | boolean | Write the new ranges to the manifests, then check that they still install. |
+| `--upgrade` | `-u` | boolean | Write the new ranges to the manifests, check that they still install, then install what a range already takes and the lockfile lags behind. |
 | `--target` | - | `patch` \| `minor` \| `major` | The largest move a dependency may make (default `major`). Overrides `deps.target` **and** `deps.targets` for this run. |
 | `--reject` | - | string (repeatable) | Leave the dependencies matching these globs alone. Added to `deps.reject`. |
 | `--min-age` | - | number | Only move to a version published at least this many days ago. Overrides `deps.minAge`, and pnpm's `minimumReleaseAge`. |
