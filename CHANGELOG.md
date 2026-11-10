@@ -1,6 +1,18 @@
 # Changelog
 
-<!-- rman:documented-up-to 823a4922e09bf7c9666765f233d6b3b47c4738f7 -->
+<!-- rman:documented-up-to f0ac70e5732e95b10b217df3e872396c40951afd -->
+
+## v2.43.0 (2026-11-10)
+
+### ✨ Features
+
+- **deps:** list and install in-range upgrades the lockfile lags behind (8ef9156)
+
+### 🧹 Chores
+
+- **deps:** @swc/core 1.16.22, typescript-eslint 8.72.2 (cbb1161)
+
+---
 
 ## v2.42.1 (2026-11-04)
 
