@@ -219,8 +219,8 @@ so none of them has anything a function could replace.
   that config's functions (measured), so a shared config package can use them on behalf of
   repositories that stay in YAML.
 - `.rmanrc.cjs` is checked before `.mjs`/`.js` and beats `.rmanrc.yml`. **`require('rman')` in a
-  `.cjs` is not safe on every supported Node**: rman is ESM-only and `require(esm)` arrived in
-  20.19, while the engine floor is `>=20.0`. The `/** @type {import('rman').RmanConfig} */` form
+  `.cjs` is not safe on every supported Node**: rman is ESM-only and `require(esm)` arrived unflagged
+  in 22.12, while the engine floor is `>=22`. The `/** @type {import('rman').RmanConfig} */` form
   imports nothing and always works - which is why `@panates/rman-node` uses it.
 
 **Two things this fixed on the way, both of which were bugs on their own:**

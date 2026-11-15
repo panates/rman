@@ -28,6 +28,10 @@ on:
     branches-ignore:
       - main
 
+# This workflow only reads the repository
+permissions:
+  contents: read
+
 # Only one run per branch at a time
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
