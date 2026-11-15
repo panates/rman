@@ -39,27 +39,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Tells whether the commit came through a pull request, and from which branch. It replaced a test
+  # on the commit message (`Merge pull request ... /dev`), which a squash or rebase merge never
+  # writes and which `/dev-hotfix` also matched - see the shared workflow's header.
+  source:
+    uses: panates/github-actions/.github/workflows/pr-source.yaml@v3
+    permissions:
+      contents: read
+      pull-requests: read
+
+  # A commit merged from dev was tested on dev and is not tested again
   test:
+    needs: source
     if: >
       !contains(github.event.head_commit.message, 'no-release') &&
       (
         (github.event_name == 'workflow_dispatch' && github.event.inputs.skip-tests != 'true') ||
         (
           github.event_name == 'push' &&
-          !(
-            contains(github.event.head_commit.message, 'no-test') ||
-            (
-              startsWith(github.event.head_commit.message, 'Merge pull request') &&
-              contains(github.event.head_commit.message, '/dev')
-            )
-          )
+          !contains(github.event.head_commit.message, 'no-test') &&
+          needs.source.outputs.head-ref != 'dev'
         )
       )
+    permissions:
+      contents: read
     uses: ./.github/workflows/test.yml
 
   release:
     name: Release
-    needs: test
+    needs: [source, test]
     # `always()` because `needs` alone would block the whole job whenever `test` is *skipped*, which
     # is the normal path for a `no-test` commit or a merge from /dev. This one condition replaces
     # the pair of mirror-image jobs that used to exist for exactly that reason - one with
@@ -67,6 +75,7 @@ jobs:
     # written down twice and could drift.
     if: >
       always() && !cancelled() &&
+      needs.source.result == 'success' &&
       (needs.test.result == 'success' || needs.test.result == 'skipped') &&
       !contains(github.event.head_commit.message, 'no-release')
     runs-on: ubuntu-latest

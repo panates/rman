@@ -84,7 +84,7 @@ utilities (`ChangeHashService`, `Logger`). For the CLI itself (commands, flags,
 npm install rman
 ```
 
-`rman` is ESM-only (`"type": "module"`) and requires **Node.js >= 20**. Everything below is
+`rman` is ESM-only (`"type": "module"`) and requires **Node.js >= 22**. Everything below is
 imported from the package's default export:
 
 ```ts
@@ -1152,8 +1152,8 @@ const config: RmanConfig = { packageManager: { node: 'pnpm' } };
 ```
 
 > **Note on `.rmanrc.cjs` and `require('rman')`.** rman is ESM-only, so `require('rman')` in a
-> CommonJS config needs `require(esm)`, which arrived in Node 20.19 - below that it throws
-> `ERR_REQUIRE_ESM`, and rman's own floor is `>=20.0`. The JSDoc form imports nothing and works on
+> CommonJS config needs `require(esm)`, which arrived unflagged in Node 22.12 - below that it throws
+> `ERR_REQUIRE_ESM`, and rman's own floor is `>=22`. The JSDoc form imports nothing and works on
 > every supported version:
 >
 > ```js

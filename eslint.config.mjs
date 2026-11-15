@@ -14,13 +14,19 @@ export default [
      * That is the whole point of it, and it is exactly what `no-extraneous-dependencies` exists to
      * catch everywhere else - so the directory is excluded rather than the rule silenced inline.
      */
-    ignores: ['packages/*/build/**', '**/node_modules/**', 'old/**', 'support/smoke-types/**'],
+    ignores: [
+      'node_modules/**/*',
+      'packages/*/node_modules/**/*',
+      'packages/*/build/**/*',
+      'old/**',
+      'support/smoke-types/**',
+    ],
   },
   ...panatesEslint.configs.node,
   {
     languageOptions: {
       globals: {
-        ...globals.jest,
+        ...globals.mocha,
       },
     },
   },

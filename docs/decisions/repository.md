@@ -65,7 +65,10 @@ bootstrap loop `npm run build` was taken off, and it bites exactly when a releas
   fast-forward `dev` to `main`. The user's rule, after `dev` and `main` were pushed seconds apart and
   the Test and Release runs went at once - a release must not start before its tests have answered.
   The workflows are built for this route too: `release.yml` skips its own test job only for a
-  `Merge pull request ... /dev` commit, so a hand-merged `main` tests the same commit a second time.
+  commit that came through a pull request from `dev` - asked of the API by the shared
+  `pr-source.yaml`, not read off the commit message, which a squash or rebase merge never writes -
+  so a hand-merged `main` tests the same commit a second time. `main-from-dev.yml` fails a pull
+  request into `main` from any other branch.
 - **Two builds, and both are load-bearing.** The first is the bootstrap - there is no rman to run
   `version` with until it finishes. The second is the artifact: `postbuild.cjs` bakes
   `package.json`'s version into `build/constants.js`, so a build made *before* the bump ships a CLI

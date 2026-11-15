@@ -7,7 +7,7 @@
   "author": "Panates",
   "license": "MIT",
   "devDependencies": {
-    "@panates/eslint-config-ts": "^2.3.5",
+    "@panates/eslint-config-ts": "^2.4.0",
     "@panates/tsconfig": "^2.1.8",
     "@swc-node/register": "^1.12.1",
     "@swc/core": "^1.16.22",
@@ -23,11 +23,11 @@
     "@types/yargs": "^17.0.35",
     "c8": "^12.0.0",
     "dpdm": "^4.3.0",
-    "eslint": "^10.14.0",
+    "eslint": "^10.15.0",
     "expect": "^30.5.2",
     "globals": "^17.14.0",
     "mocha": "^12.0.3",
-    "prettier": "^3.9.10",
+    "prettier": "^3.10.1",
     "rimraf": "^6.1.4",
     "ts-cleanup": "^1.4.1",
     "typescript": "6.0.3",
@@ -46,7 +46,7 @@
     "graph": "graphify update ."
   },
   "engines": {
-    "node": ">=20.0"
+    "node": ">=22"
   },
   "repository": {
     "type": "git",

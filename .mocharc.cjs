@@ -17,7 +17,7 @@ module.exports = {
    */
   require: ['@swc-node/register/esm-register'],
   extension: ['ts'],
-  spec: './packages/*/test/**/*.spec.ts',
+  spec: './packages/*/test/**/*.*spec.ts',
   timeout: 30000,
   parallel: true,
 };
