@@ -46,7 +46,7 @@
     "graph": "graphify update ."
   },
   "engines": {
-    "node": ">=20.0"
+    "node": ">=22"
   },
   "repository": {
     "type": "git",

@@ -36,7 +36,7 @@ Or run it without installing, via `npx`:
 npx rman list
 ```
 
-`rman` requires **Node.js >= 20**.
+`rman` requires **Node.js >= 22**.
 
 ## Quick start
 
@@ -514,7 +514,7 @@ Full reference, with detailed examples for every service (`VersionService`, `Pub
 
 ## Node compatibility
 
-- Node.js >= 20
+- Node.js >= 22
 
 ## License
 
