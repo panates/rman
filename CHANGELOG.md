@@ -1,6 +1,28 @@
 # Changelog
 
-<!-- rman:documented-up-to f0ac70e5732e95b10b217df3e872396c40951afd -->
+<!-- rman:documented-up-to da2d7b5e4f813d35d9a869a52d4d11aba9ac94bb -->
+
+## v2.43.1 (2026-11-15)
+
+### 📚 Documentation
+
+- add CODE_OF_CONDUCT.md and SECURITY.md from the company templates (867b3f6)
+
+### 🤖 Continuous Integration
+
+- refuse pull requests into main from any branch but dev (468dc5c)
+- declare read-only permissions in test.yml, ask pr-source which branch a release came from (07c70ed)
+
+### 🧹 Chores
+
+- share .claude/settings.json with the panates plugin, align .gitignore with the template (85c2274)
+- align .prettierignore with the template (9643819)
+- require Node.js >= 22, the company floor (a3dfe4b)
+- remove renovate.json, dependencies are kept with rman deps (a9d86fb)
+- align eslint, tsconfig and mocha configs with the templates (63db9de)
+- **deps:** fast-tokenizer 1.10.2, eslint 10.15.0, prettier 3.10.1, @panates/eslint-config-ts 2.4.0 (2dbd9ba)
+
+---
 
 ## v2.43.0 (2026-11-10)
 
