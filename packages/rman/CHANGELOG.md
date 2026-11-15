@@ -1,6 +1,15 @@
 # Changelog
 
-<!-- rman:documented-up-to f0ac70e5732e95b10b217df3e872396c40951afd -->
+<!-- rman:documented-up-to da2d7b5e4f813d35d9a869a52d4d11aba9ac94bb -->
+
+## v2.43.1 (2026-11-15)
+
+### 🧹 Chores
+
+- require Node.js >= 22, the company floor (a3dfe4b)
+- **deps:** fast-tokenizer 1.10.2, eslint 10.15.0, prettier 3.10.1, @panates/eslint-config-ts 2.4.0 (2dbd9ba)
+
+---
 
 ## v2.43.0 (2026-11-10)
 
