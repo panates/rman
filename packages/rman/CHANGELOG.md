@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to a116d266cee0e9794978b6bc2f7d3c03af8c63a7 -->
+<!-- rman:documented-up-to 47beea42b66dcb0dffb452633a1ee07776364c75 -->
+
+## v2.46.0 (2026-11-24)
+
+### ✨ Features
+
+- **deps:** hold what syncbridge-manifest.json names, and list rejected names as skipped (97367e4)
+
+---
 
 ## v2.45.0 (2026-11-24)
 
