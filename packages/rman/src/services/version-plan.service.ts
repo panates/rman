@@ -468,7 +468,11 @@ export abstract class VersionPlanService {
    * itself. Choosing `keep` is the repository accepting that; it is not the default. */
   protected rangeVerdict(dependent: Package, dependency: Package, version: string): 'accepts' | undefined {
     if (dependent.config?.version?.dependentRanges !== 'keep') return undefined;
-    const refs = Manifest.referencesTo(dependent, dependency.name, version).filter(r => !r.dynamic);
+    /** A dynamic reference counts once it is judged as what was published for it (`publishedAs`) -
+     *  `"workspace:^"` against the dependency's current version. */
+    const refs = Manifest.referencesTo(dependent, dependency.name, version, dependency.version).filter(
+      r => !r.dynamic || r.publishedAs,
+    );
     if (!refs.length) return undefined;
     if (dependency.versionScheme.isPrerelease(version)) return 'accepts';
     return refs.every(r => r.accepts) ? 'accepts' : undefined;
@@ -498,8 +502,18 @@ export abstract class VersionPlanService {
       for (const dep of pkg.dependencies) {
         const depEntry = entries.get(dep.name);
         const version = depEntry?.status === 'bump' ? depEntry.to! : dep.version;
-        const refs = Manifest.referencesTo(pkg, dep.name, version).filter(r => !r.dynamic);
-        if (!refs.length || dep.versionScheme.isPrerelease(version)) continue;
+        const all = Manifest.referencesTo(pkg, dep.name, version, dep.version);
+        const refs = all.filter(r => !r.dynamic);
+        if (dep.versionScheme.isPrerelease(version)) continue;
+        /** A dynamic reference is never moved or refused - publishing writes it afresh - but one
+         *  whose published range still takes the new version is why the package stays out. */
+        if (!refs.length) {
+          const published = all.filter(r => r.publishedAs);
+          if (depEntry?.status === 'bump' && published.length && published.every(r => r.accepts)) {
+            kept.push(`${dep.name} "${published[0]!.range}" (published as "${published[0]!.publishedAs}")`);
+          }
+          continue;
+        }
         for (const ref of refs) {
           if (!ref.accepts) {
             /** Only a version this run gives: a range already refusing the version on disk is not

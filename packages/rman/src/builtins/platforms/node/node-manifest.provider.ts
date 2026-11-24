@@ -6,7 +6,7 @@ import type { ManifestProvider } from '../../../core/interfaces/manifest.js';
 import { Manifest } from '../../../core/interfaces/manifest.js';
 import { stampVersionConstant } from '../../../utils/version-stamp.js';
 import { npmViewVersion } from '../../publish-targets/npm/npm-view.js';
-import { parseWorkspaceRange } from './utils/workspace-range.js';
+import { parseWorkspaceRange, resolveWorkspaceRange } from './utils/workspace-range.js';
 
 export class NodeManifestProvider implements ManifestProvider {
   name = 'node';
@@ -116,16 +116,30 @@ export class NodeManifestProvider implements ManifestProvider {
    * the range with its floor raised to it - see `ManifestProvider.referencesTo`.
    *
    * A bare `"workspace:*"`/`"^"`/`"~"` is `dynamic`: it already follows the sibling, so there is
-   * nothing to keep or raise. An explicit `"workspace:<range>"` is judged by the range after it.
+   * nothing to keep or raise. Given `current`, it is judged as what publishing wrote for it -
+   * `^current`, `~current`, or `current` itself for `*`. An explicit `"workspace:<range>"` is judged
+   * by the range after it.
    */
-  referencesTo(manifest: Manifest, dependency: string, version: string): ManifestProvider.Reference[] {
+  /* **Judged, because a dynamic reference left unjudged released every dependent.** Measured on
+   * `syncbridge-io/syncbridge-extensions` (rman 2.46.0, `dependentRanges: keep`): builtins
+   * 2.3.1 -> 2.4.0 released all seven extensions declaring it as `"workspace:^"`, though each one's
+   * published `^2.3.1` already takes 2.4.0 - with no range to check, `keep` said nothing and the
+   * ripple released them. `*` publishes an exact version, so it still refuses every new one. */
+  referencesTo(
+    manifest: Manifest,
+    dependency: string,
+    version: string,
+    current?: string,
+  ): ManifestProvider.Reference[] {
     const refs: ManifestProvider.Reference[] = [];
     for (const field of DEPENDENCY_KEYS) {
       const declared = manifest.raw[field]?.[dependency];
       if (typeof declared !== 'string') continue;
       const workspace = parseWorkspaceRange(declared);
       if (workspace && workspace.selector !== 'explicit') {
-        refs.push({ field, range: declared, dynamic: true, accepts: true });
+        const publishedAs = current ? resolveWorkspaceRange(workspace, current) : undefined;
+        const accepts = !publishedAs || semver.satisfies(version, publishedAs);
+        refs.push({ field, range: declared, dynamic: true, accepts, ...(publishedAs ? { publishedAs } : {}) });
         continue;
       }
       const range = workspace ? workspace.range! : declared;

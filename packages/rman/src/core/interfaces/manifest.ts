@@ -174,6 +174,9 @@ export interface ManifestProvider {
    * it, each judged against `version` - whether the range written there accepts it, and the range
    * with its lower bound raised to it.
    *
+   * `current` is the version `dependency` has now. Given, a reference that follows the dependency by
+   * itself is judged too, as the range it was published with (`publishedAs`).
+   *
    * What `.rmanrc "version.dependentRanges": keep` asks instead of `updateDependencyVersions`: a
    * hand-written range is left alone while it accepts the new version, moved to accept it when it
    * does not, and has its floor raised when the package holding it is released for reasons of its
@@ -181,7 +184,12 @@ export interface ManifestProvider {
    *
    * Omit it and a package has no ranges to keep, so `keep` behaves like `rewrite` for it.
    */
-  referencesTo?(manifest: Manifest, dependency: string, version: string): ManifestProvider.Reference[];
+  referencesTo?(
+    manifest: Manifest,
+    dependency: string,
+    version: string,
+    current?: string,
+  ): ManifestProvider.Reference[];
   /**
    * Writes `range` as this manifest's reference to `dependency` in `field` - one of the fields
    * `referencesTo` reported. Mutates `manifest.raw`, like `updateDependencyVersions`.
@@ -196,9 +204,13 @@ export namespace ManifestProvider {
     field: string;
     /** The range as written. */
     range: string;
-    /** It follows the dependency by itself (npm's bare `"workspace:^"`) - always accepts, never
-     *  rewritten, and keeps `rewrite`'s handling under `keep` too. */
+    /** It follows the dependency by itself (npm's bare `"workspace:^"`) - never rewritten or
+     *  raised. `accepts` is `true` unless `publishedAs` says otherwise. */
     dynamic?: boolean;
+    /** For a `dynamic` reference, when `referencesTo` was given the dependency's `current` version:
+     *  the range a registry consumer sees - `"workspace:^"` against 2.3.1 is `^2.3.1` - and
+     *  `accepts` is judged against it. */
+    publishedAs?: string;
     /** Whether the range accepts the version asked about. */
     accepts: boolean;
     /** The range with its lower bound raised to the version asked about, when that moves it.
@@ -315,8 +327,13 @@ export namespace Manifest {
 
   /** `pkg`'s references to `dependency`, judged against `version` - see
    *  `ManifestProvider.referencesTo`. Empty where the provider has no opinion. */
-  export function referencesTo(pkg: Package, dependency: string, version: string): ManifestProvider.Reference[] {
-    return platformOf(pkg)?.manifestProvider.referencesTo?.(pkg.manifest, dependency, version) ?? [];
+  export function referencesTo(
+    pkg: Package,
+    dependency: string,
+    version: string,
+    current?: string,
+  ): ManifestProvider.Reference[] {
+    return platformOf(pkg)?.manifestProvider.referencesTo?.(pkg.manifest, dependency, version, current) ?? [];
   }
 
   /** Writes one of `pkg`'s references - see `ManifestProvider.setReference`. */
