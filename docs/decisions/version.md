@@ -132,6 +132,15 @@ Design decisions moved out of `CLAUDE.md`. Covers `VersionPlanService`, `Version
     Ranking an unrecognized word lowest is not the same as ignoring it - ranked low it still
     replaces what the commit's own subject said, which turned a `feat:` carrying release-please's
     `Release-As: 1.2.3` into a patch (measured). A typo has to be inert, not quietly decisive.
+  - **A footer on a commit that changes no package counts for every package**
+    (`releasesEveryPackage`). A commit used to count for a package only when it changed files
+    under it, so an empty `Release-As: major` commit - the common way to force a release - was
+    silently ignored: found reproducing panates/fhir's first release, 0.1.0-beta.1 instead of
+    1.0.0-beta.1. The user chose (2026-11-24) that it releases every group in a multi-group
+    repository, over dropping it with a warning since it names no group. The same `bumpNames`
+    guard applies, and matters more here: without it a root-only commit with another tool's
+    `Release-As: 1.2.3` would release every package as a patch. Specs: `version.service.spec.ts`,
+    "on a commit that changes no package".
 - **`VersionService` runs no command of its own.** The hooks around the write go through
   `RunService.runLifecycleSlot(pkg, 'version', slot, fallback)`; `version.service.ts` supplies only
   the `fallback` - its own `.rmanrc version.<slot>`, interpolated there because those three paths

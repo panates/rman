@@ -158,6 +158,70 @@ describe('services/version', () => {
         const plan = await planner().getPlan(repo);
         expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1' });
       });
+
+      /**
+       * **A footer on a commit that changes no package releases every package.** It used to reach
+       * none, so `git commit --allow-empty -m "chore: release" -m "Release-As: major"` was silently
+       * ignored. Two solo groups here, so "every package" is also every group - the user's choice.
+       */
+      describe('on a commit that changes no package', () => {
+        function twoGroups(): string {
+          const dir = tmp();
+          writeJson(dir, 'package.json', { name: 'root', private: true, version: '1.0.0', workspaces: ['packages/*'] });
+          fs.writeFileSync(path.join(dir, '.rmanrc'), JSON.stringify({ group: false }));
+          writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '1.0.0' });
+          writeJson(dir, 'packages/b/package.json', { name: 'pkg-b', version: '1.0.0' });
+          initGit(dir);
+          commitAll(dir, 'init');
+          git(dir, 'tag', 'pkg-a@1.0.0');
+          git(dir, 'tag', 'pkg-b@1.0.0');
+          return dir;
+        }
+
+        it('an empty commit releases every group', async () => {
+          const dir = twoGroups();
+          git(dir, 'commit', '-q', '--allow-empty', '-m', 'chore: release', '-m', 'Release-As: major');
+
+          const repo = await createRepository(dir);
+          const plan = await planner().getPlan(repo);
+          expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0' });
+          expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'bump', to: '2.0.0' });
+        });
+
+        it('so does one changing only root files', async () => {
+          const dir = twoGroups();
+          fs.writeFileSync(path.join(dir, 'README.md'), 'x');
+          commitAll(dir, 'docs: readme\n\nRelease-As: minor');
+
+          const repo = await createRepository(dir);
+          const plan = await planner().getPlan(repo);
+          expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.1.0' });
+          expect(entryFor(plan, 'pkg-b')).toMatchObject({ status: 'bump', to: '1.1.0' });
+        });
+
+        /** Another tool's literal version is no bump rman knows, and must not release everything as a
+         *  patch by falling back to the commit's own type. */
+        it('a footer the scheme does not know releases nothing', async () => {
+          const dir = twoGroups();
+          git(dir, 'commit', '-q', '--allow-empty', '-m', 'chore: release', '-m', 'Release-As: 1.2.3');
+
+          const repo = await createRepository(dir);
+          const plan = await planner().getPlan(repo);
+          expect(entryFor(plan, 'pkg-a').status).toBe('no-change');
+          expect(entryFor(plan, 'pkg-b').status).toBe('no-change');
+        });
+
+        it('a commit changing one package still counts for that package alone', async () => {
+          const dir = twoGroups();
+          fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+          commitAll(dir, 'fix: a bug\n\nRelease-As: major');
+
+          const repo = await createRepository(dir);
+          const plan = await planner().getPlan(repo);
+          expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0' });
+          expect(entryFor(plan, 'pkg-b').status).toBe('no-change');
+        });
+      });
     });
 
     it('a non-conventional commit still defaults to patch (something changed)', async () => {

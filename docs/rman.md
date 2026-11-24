@@ -2039,6 +2039,10 @@ That commit alone won't force a minor bump - but if another `feat:` commit lands
 same release window *without* its own `Release-As:` override, the group still bumps `minor` for
 that one.
 
+A commit that changes no package (empty, or root files only) counts for every package when its
+footer is one the scheme recognizes - `git commit --allow-empty -m "chore: release" -m
+"Release-As: major"` releases every group (`VersionPlanService.releasesEveryPackage`).
+
 #### Prereleases (`--preid` / `Options.preid`)
 
 `preid` is a modifier applied to whichever severity gets computed (explicit or auto-detected), not
