@@ -98,6 +98,18 @@ Design decisions moved out of `CLAUDE.md`. Covers `VersionPlanService`, `Version
       group - each already planned for 2.0.0 - were refused for `^1.1.4`. A range that no longer
       accepts its sibling has to change whatever the setting says; `keep` is about the ones that
       still do. A `publish.skip` package's moved range rides the root's sync commit.
+  - **A bare `workspace:^`/`~` is judged as the range publishing wrote for it**
+    (`ManifestProvider.Reference.publishedAs`: `^`/`~` before the dependency's *current* version).
+    It was dropped from the check as "dynamic", which left `keep` no range to judge and let the
+    ripple release the dependent: measured on `syncbridge-io/syncbridge-extensions` (2.46.0),
+    builtins 2.3.1 -> 2.4.0 released all seven extensions declaring it only as a devDependency
+    `"workspace:^"`, though each one's published `^2.3.1` takes 2.4.0. After: builtins alone.
+    - **The current version stands in for the one the dependent was last published against**, and
+      that is safe in the direction that matters: a dependent last published against an older
+      version of the same caret window accepts whatever `^current` accepts, and one that crossed a
+      window was released for it at the time (its range refused then).
+    - `*` publishes an exact version, so it refuses every new one and keeps releasing.
+    - Never moved or raised, and never an `'error'` row - publishing writes it afresh.
   - **The lower bound is raised only when the dependent is released for changes of its own** - the
     user's point, and the only moment the dependent can have started relying on something new.
     Raising it on every dependency release was weighed and is meaningless: a range changes nothing

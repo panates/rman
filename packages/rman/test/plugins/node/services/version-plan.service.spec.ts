@@ -291,7 +291,9 @@ describe('plugins/node: version.dependentRanges keep', () => {
   /** syncbridge's shape: independent versioning, an extension ranging over `common`. */
   function fixture(
     config: Record<string, unknown> = { version: { dependentRanges: 'keep' } },
+    /** `''` for no peer range at all. */
     extRange = '>=1.1.0 <2',
+    devRange = 'workspace:^',
   ): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rman-node-ranges-'));
     dirs.push(dir);
@@ -301,8 +303,8 @@ describe('plugins/node: version.dependentRanges keep', () => {
     writeJson(dir, 'packages/ext/package.json', {
       name: 'ext',
       version: '1.0.0',
-      peerDependencies: { common: extRange },
-      devDependencies: { common: 'workspace:^' },
+      ...(extRange ? { peerDependencies: { common: extRange } } : {}),
+      devDependencies: { common: devRange },
     });
     git(dir, 'init');
     git(dir, 'config', 'user.email', 'test@example.com');
@@ -405,6 +407,44 @@ describe('plugins/node: version.dependentRanges keep', () => {
     expect(ext.peerDependencies.common).toBe('>=2.0.0 <3');
     expect(ext.version).toBe('1.0.0');
     expect(execFileSync('git', ['status', '--porcelain'], { cwd: dir }).toString().trim()).toBe('');
+  });
+
+  /**
+   * **A bare `"workspace:^"` is judged as the `^1.1.0` it was published with.** Measured on
+   * `syncbridge-io/syncbridge-extensions` (2.46.0): left unjudged, it gave `keep` no range to check,
+   * and a builtins minor released all seven extensions that declare it so.
+   */
+  describe('a dependent naming its dependency only as "workspace:"', () => {
+    it('stays out while what "workspace:^" was published as accepts the new version', async () => {
+      const dir = fixture(undefined, '');
+      commit(dir, 'common', 'feat: something new');
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
+
+      expect(entryOf(plan, 'common')).toMatchObject({ status: 'bump', to: '1.2.0' });
+      expect(entryOf(plan, 'ext')).toMatchObject({ status: 'no-change' });
+      expect(entryOf(plan, 'ext').reason).toContain('common "workspace:^" (published as "^1.1.0") still satisfied');
+    });
+
+    it('is released when the published range refuses it, and the reference stays "workspace:^"', async () => {
+      const dir = fixture(undefined, '');
+      commit(dir, 'common', 'feat!: breaking');
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
+      expect(entryOf(plan, 'ext')).toMatchObject({ status: 'bump', to: '1.0.1' });
+
+      await service('version').applyPlan(plan);
+      expect(readJson(dir, 'packages/ext/package.json').devDependencies.common).toBe('workspace:^');
+    });
+
+    /** `*` publishes the exact version, so every new one is out of it. */
+    it('is released for any new version under "workspace:*"', async () => {
+      const dir = fixture(undefined, '', 'workspace:*');
+      commit(dir, 'common', 'fix: small');
+      const repo = await createRepository(dir);
+      const plan = await planner().getPlan(repo);
+      expect(entryOf(plan, 'ext')).toMatchObject({ status: 'bump', to: '1.0.1' });
+    });
   });
 
   /** A beta is never meant for a stable range, so it neither fails one nor moves one. */

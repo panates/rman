@@ -598,8 +598,12 @@ version:
   workspaces link a sibling only while the range accepts its version and otherwise install it from
   the registry. Such a package takes no version, so a moved range of its own rides the root's
   `chore: sync root version` commit.
-- `workspace:*`/`workspace:^`/`workspace:~` keep their handling: they follow the sibling by
-  themselves.
+- **A bare `workspace:^` / `workspace:~` is judged as what publishing wrote for it** - `^` or `~`
+  in front of the dependency's current version, so `"workspace:^"` on a builtins at 2.3.1 reads
+  `^2.3.1`, accepts 2.4.0, and keeps the dependent out (`--show` says
+  `range builtins "workspace:^" (published as "^2.3.1") still satisfied`). One that refuses it
+  releases the dependent, and the reference itself is never moved - publishing writes it afresh.
+  `workspace:*` publishes the exact version, so every new one releases its dependents.
 - `version.cascade: group` still releases every member - it is a release-identity decision, and
   `keep` only narrows "released because a dependency moved".
 - **The cost, stated:** a dependent that bundles its dependency keeps shipping the older code until
