@@ -66,5 +66,5 @@ MIT
 [downloads-url]: https://npmjs.org/package/rman
 [ci-test-image]: https://github.com/panates/rman/actions/workflows/test.yml/badge.svg
 [ci-test-url]: https://github.com/panates/rman/actions/workflows/test.yml
-[coveralls-image]: https://img.shields.io/coveralls/panates/rman/dev.svg
+[coveralls-image]: https://img.shields.io/coveralls/panates/rman/main.svg
 [coveralls-url]: https://coveralls.io/r/panates/rman

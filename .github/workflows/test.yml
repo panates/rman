@@ -154,9 +154,14 @@ jobs:
         env:
           NODE_OPTIONS: "--max_old_space_size=4096"
 
-      - name: Send coverage to Coveralls
-        uses: coverallsapp/github-action@v2
+      # **Kept, not sent**: the release workflow sends it to Coveralls (coverage-publish.yaml), so
+      # Coveralls' `main` shows the released code under the release commit. Sent from here, `main`
+      # never got a build - a release merged from dev is not tested again - and coveralls.io showed
+      # a month-old number (measured 2026-11-24: main 94.85% from 2026-10-19, dev 95.02%).
+      - name: Keep the coverage report for the release
         # Run only once
         if: ${{ matrix.node == '24' }}
+        uses: actions/upload-artifact@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: coverage
+          path: coverage/lcov.info
