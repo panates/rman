@@ -1,7 +1,7 @@
 {
   "name": "rman-repo",
   "description": "Repository manager - monorepo root",
-  "version": "2.46.0",
+  "version": "2.46.1",
   "private": true,
   "type": "module",
   "author": "Panates",
