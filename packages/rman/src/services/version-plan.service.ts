@@ -170,6 +170,13 @@ export abstract class VersionPlanService {
     }
 
     const commitMessage = repository.rootPackage.config?.version?.commitMessage;
+    /** Every package's directory, the root excluded - what `releasesEveryPackage` checks a commit
+     *  against. All of the repository's, not this run's filtered ones: a commit under a package the
+     *  run left out still belongs to that package. */
+    const packageDirs = repository
+      .getPackages()
+      .filter(pkg => pkg !== repository.rootPackage)
+      .map(pkg => pkg.dirname);
     const changeByPackage = new Map<string, VersionPlanService.Change>();
     await Promise.all(
       eligible.map(async pkg => {
@@ -181,7 +188,9 @@ export abstract class VersionPlanService {
         const commits = since ? await git.listCommits({ hash: since }) : await git.listAllCommits();
         const homes = homesOf(pkg);
         const under = (dir: string, f: string) => !path.relative(dir, f).startsWith('..');
-        const belongsToPkg = (c: CommitInfo) => c.files.some(f => homes.some(dir => under(dir, f)));
+        const belongsToPkg = (c: CommitInfo) =>
+          c.files.some(f => homes.some(dir => under(dir, f))) ||
+          this.releasesEveryPackage(c, pkg.versionScheme, packageDirs);
         const real = commits.filter(
           c => belongsToPkg(c) && !ConventionalCommitsService.isReleaseCommit(c.subject, commitMessage),
         );
@@ -556,6 +565,28 @@ export abstract class VersionPlanService {
       asked.push(scheme.bumpFor(kindOf(c)));
     }
     return scheme.highestBump(asked)!;
+  }
+
+  /**
+   * Whether `commit` releases every package although it changes none of them: a `Release-As:`
+   * footer `scheme` recognizes, on a commit that touches no file under any package in
+   * `packageDirs` - an empty commit, or one changing only root files.
+   */
+  /* **A footer on such a commit used to be silently ignored.** A commit counted for a package only
+   * when it changed files under it, so the common `git commit --allow-empty -m "chore: release" -m
+   * "Release-As: major"` reached no package and the release came out sized by the other commits.
+   * Found while reproducing panates/fhir's first-release report: 0.1.0-beta.1 instead of
+   * 1.0.0-beta.1. The user's choice (2026-11-24): such a commit counts for every package, so in a
+   * repository with several groups it releases all of them - it names no group, and dropping it
+   * with a warning was the alternative turned down.
+   *
+   * Only with a footer the scheme recognizes: an unknown word (another tool's `Release-As: 1.2.3`)
+   * would otherwise turn a root-only commit into a patch release of every package, since
+   * `detectBump` reads an unrecognized footer as no footer and falls back to the commit's type. */
+  protected releasesEveryPackage(commit: CommitInfo, scheme: VersionScheme, packageDirs: readonly string[]): boolean {
+    const override = ConventionalCommitsService.parseReleaseAs(commit.body);
+    if (!override || !scheme.bumpNames.includes(override)) return false;
+    return !commit.files.some(f => packageDirs.some(dir => !path.relative(dir, f).startsWith('..')));
   }
 
   /** `.rmanrc group` (cascaded): `true` (the default - see `resolveConfig`'s cascade, this is what a

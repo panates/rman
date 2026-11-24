@@ -488,6 +488,17 @@ feat: needs to ship right now, not wait for the rest of the minor
 Release-As: patch
 ```
 
+A commit that changes no package - an empty one, or one touching only root files - counts for
+**every** package when it carries a recognized `Release-As:` footer, so the usual way of forcing a
+release works:
+
+```bash
+git commit --allow-empty -m "chore: release" -m "Release-As: major"
+```
+
+In a repository with several version groups that releases all of them. Without a recognized
+footer such a commit still counts for no package.
+
 ## A package that is not published takes no version
 
 A package kept out of publishing - `.rmanrc "publish.skip"` (see
