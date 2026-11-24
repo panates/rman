@@ -41,7 +41,7 @@ app
 - **Change** is the size of the move (`patch`, `minor`, `major`), or why there is none: `held` -
   another dependency's rule refuses the newer version, named in full in the note - `skipped` - the
   package's own settings leave it out (a major under `target: minor`, a version younger than
-  `minAge`) - `install` - the range already takes a newer version than the one installed, so
+  `minAge`, a name `deps.reject` matches or `syncbridge-manifest.json` holds) - `install` - the range already takes a newer version than the one installed, so
   `node_modules` and the lockfile are behind the manifest and an install puts them right, with no
   range to write - or `error`. Rows that move come first, smallest first.
 - **A range rman does not rewrite is listed too** - a pin, `>=2.3.0 <3`, `||`, a hyphen range: as
@@ -77,6 +77,17 @@ falls outside is listed as a `skipped` row - `mocha  11.7.5  -  12.0.3  skipped 
 - so a pin is never mistaken for "up to date". `-u` still does not touch it; change it by hand, or
 write it as a caret range if it should move. A dist-tag and a URL have no version to
 compare and get no row.
+
+**A name `deps.reject` (or `--reject`) matches is listed the same way** - `skipped`, with
+`deps.reject names it ("<glob>")` - when the registry has something newer. Its ranges stay as
+written and still count as rules for the rest.
+
+**`syncbridge-manifest.json` holds what it names.** A package beside one keeps every dependency
+named in that file's `dependencies` where it is declared, listed as `skipped` with
+`held by syncbridge-manifest.json (^2.2.1)`. `spm add` writes the types of a host module as a
+devDependency alias carrying exactly the manifest's range
+(`"@syncbridge/builtins": "npm:@sbext/syncbridge__builtins@^2.2.1"`), and `spm build` refuses the
+package when the two differ - so the range is the manifest's to raise, by `spm add`, not `-u`'s.
 
 **`peerDependencies` move like the rest.** A peer range is a promise to the package's consumers, so
 moving it to a new major narrows what they may install. To keep a peer range where it is, write it
@@ -206,7 +217,7 @@ in addition to:
 | --- | --- | --- | --- |
 | `target` | `patch` \| `minor` \| `major` | `major` | The largest move a dependency may make. The sizes are the version scheme's own; the default is the largest. `minor` keeps every dependency inside its major. |
 | `targets` | `{ [glob]: size }` | - | The same, for the dependencies a glob matches - ahead of `target`. The last glob matching a name wins. |
-| `reject` | string \| string[] | - | Globs over dependency names to leave alone. |
+| `reject` | string \| string[] | - | Globs over dependency names to leave alone - listed as `skipped`, never moved. |
 | `minAge` | number | `0` - pnpm's `minimumReleaseAge` in a pnpm repository | Days a version must have been published before it is offered. Fractions are allowed (`0.5` is twelve hours). Set, it replaces pnpm's age and its exclusions. |
 | `types` | string[] | every kind | The dependency kinds to look at. npm's: `dependencies`, `devDependencies`, `optionalDependencies`, `peerDependencies`, or `prod`/`dev`/`optional`/`peer`. |
 
