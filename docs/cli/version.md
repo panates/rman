@@ -29,7 +29,7 @@ options, in addition to:
 | `--push` | - | boolean | Push the current branch and **this release's tags** to the remote once applied, in one atomic push - see [What `--push` sends](#what---push-sends). |
 | `--message <text>` | `-m` | string | Override the commit message for every group this run commits. Default: `.rmanrc version.commitMessage`, or `"chore(release): v{version}"` with one version line and `"chore(release): <name>@<version>, ..."` with several, so each commit names what it released. `{version}` and `{name}` (the packages' names) are substituted when a commit's own group shares one version. |
 | `--changelog` | - | boolean | Also write each bumped package's changelog (same as running `changelog --write` separately) and fold it into the same commit as the version bump. Follows [`changelog.groupBy`](changelog.md#one-file-per-package-or-one-per-release): under `group`, one file per release group, committed with that group's release. Default: `.rmanrc "version.changelog"`, or `false` - `--no-changelog` still overrides it off for one run, even when that's `true`. |
-| `--preid <name>` | - | string | Make the bump a prerelease with this identifier (e.g. `"beta"` -> `1.2.3-beta.0`). Running again with the same `--preid` increments it (`-> 1.2.3-beta.1`); a different identifier keeps the version when it already holds the change (`2.19.0-alpha.1` -> `2.19.0-beta.0`) and moves it on only when it does not (a breaking change: `3.0.0-beta.0`). Ignored when `bump` is an explicit semver version. Default: `.rmanrc "version.preid"` - see [A permanent prerelease line](#a-permanent-prerelease-line). |
+| `--preid <name>` | - | string | Make the bump a prerelease with this identifier (e.g. `"beta"` -> `1.2.3-beta.1` - a new line starts at `.1`). Running again with the same `--preid` increments it (`-> 1.2.3-beta.2`); a different identifier keeps the version when it already holds the change (`2.19.0-alpha.2` -> `2.19.0-beta.1`) and moves it on only when it does not (a breaking change: `3.0.0-beta.1`). Ignored when `bump` is an explicit semver version. Default: `.rmanrc "version.preid"` - see [A permanent prerelease line](#a-permanent-prerelease-line). |
 | `--show` | - | boolean | Show the resulting plan for the given `bump` without applying it - unlike omitting `bump` entirely, this still uses the given release-type keyword/version to compute the plan, just never writes it. Conflicts with `--interactive`. |
 | `--json` | `-j` | boolean | Print the plan as JSON and write nothing - the machine-readable form of `--show`, and what the removed `changed` command was for. See [`--json`: the plan, for a script](#--json-the-plan-for-a-script). Conflicts with `--interactive` and `--yes`. |
 
@@ -78,9 +78,9 @@ rman version patch                # apply a patch bump immediately, no confirmat
 rman version minor
 rman version major
 rman version 2.0.0-rc.1           # an explicit semver version, applied verbatim wherever something changed
-rman version minor --preid beta   # 1.2.0 -> 1.3.0-beta.0
-rman version minor --preid beta   # (run again later) 1.3.0-beta.0 -> 1.3.0-beta.1
-rman version --preid rc           # switching identifiers keeps the version: -> 1.3.0-rc.0
+rman version minor --preid beta   # 1.2.0 -> 1.3.0-beta.1
+rman version minor --preid beta   # (run again later) 1.3.0-beta.1 -> 1.3.0-beta.2
+rman version --preid rc           # switching identifiers keeps the version: -> 1.3.0-rc.1
 rman version --changelog          # also write/fold in each bumped package's CHANGELOG.md
 rman version --no-changelog       # skip it for one run, even with .rmanrc "version.changelog": true
 rman version patch --push         # commit, tag, and push in one go
@@ -97,15 +97,15 @@ change, so a channel walks one version through to its release:
 
 ```
 main   2.18.0
-alpha  feat:  -> 2.19.0-alpha.0
-alpha  fix:   -> 2.19.0-alpha.1
-beta   fix:   -> 2.19.0-beta.0     # same version, next identifier
+alpha  feat:  -> 2.19.0-alpha.1
+alpha  fix:   -> 2.19.0-alpha.2
+beta   fix:   -> 2.19.0-beta.1     # same version, next identifier
 main   fix:   -> 2.19.0            # no --preid: the prerelease graduates
 ```
 
 `2.19.0` is a minor's target, so a fix or a feature stays on it; a breaking change on
-`2.19.0-alpha.1` moves to `3.0.0-beta.0`, and a feature on a patch's target (`2.19.1-alpha.0`) to
-`2.20.0-beta.0`. On the **same** identifier the counter only advances, whatever the change - that is
+`2.19.0-alpha.2` moves to `3.0.0-beta.1`, and a feature on a patch's target (`2.19.1-alpha.1`) to
+`2.20.0-beta.1`. On the **same** identifier the counter only advances, whatever the change - that is
 what a permanent line such as `-rev.N` relies on (below). rman's own release workflow runs
 `--preid alpha` on the `alpha` branch and `--preid beta` on `beta`; `publish` then puts each on its
 own npm dist-tag and leaves `latest` alone.

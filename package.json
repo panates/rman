@@ -31,7 +31,7 @@
     "rimraf": "^6.1.4",
     "ts-cleanup": "^1.4.1",
     "typescript": "6.0.3",
-    "typescript-eslint": "^8.72.2"
+    "typescript-eslint": "^8.74.0"
   },
   "scripts": {
     "build": "pnpm --filter rman run build",

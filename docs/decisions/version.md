@@ -279,6 +279,14 @@ Design decisions moved out of `CLAUDE.md`. Covers `VersionPlanService`, `Version
   and `version.command.spec.ts` "several version lines name the tag after the package" caught it.
   An unversioned package (`notVersionedReason`) is left out of the count - it moves no number.
 
+## A new prerelease line starts at `.1`
+
+- **A new prerelease line starts at `.1`** (`SemverScheme.firstPrerelease`): the user's choice on
+  2026-11-24, so the first beta reads "beta 1". semver's `inc`, `npm version premajor --preid beta`,
+  changesets and lerna all start at `.0`; rman passes `inc` an identifier base of `'1'`, and the
+  identifier-switch path (`2.19.0-alpha.2` -> `2.19.0-beta.1`) uses the same field. A line already
+  on `-beta.0` keeps counting (`beta.1` next), so nothing published moves.
+
 ## A computed version never lands on a taken one
 
 - **The base of a bump is the higher of the tag's version and the registry's highest on that line**

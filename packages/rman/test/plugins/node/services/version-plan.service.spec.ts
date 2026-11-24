@@ -413,7 +413,7 @@ describe('plugins/node: version.dependentRanges keep', () => {
     commit(dir, 'common', 'feat!: breaking');
     const repo = await createRepository(dir);
     const plan = await planner().getPlan(repo, { preid: 'beta' });
-    expect(entryOf(plan, 'common')).toMatchObject({ status: 'bump', to: '2.0.0-beta.0' });
+    expect(entryOf(plan, 'common')).toMatchObject({ status: 'bump', to: '2.0.0-beta.1' });
     expect(entryOf(plan, 'ext').status).toBe('no-change');
   });
 
