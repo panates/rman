@@ -21,6 +21,15 @@ Design decisions moved out of `CLAUDE.md`. Covers `ChangelogService`: boundaries
     heading is a shape rman did not choose. **Not the file's last-modifying commit** either - that
     is `catchUpFile`, and as a *boundary* it silently drops every commit between an unrelated edit
     (a typo, a hand-written note) and the last real write. Widening-only is safe; narrowing is not.
+  - **With no release tag there is nothing to widen**, so `ChangeHashService.detect` ignores
+    `catchUpFile` and answers `undefined` (the whole history). It used to return the file's last
+    commit there - a narrowing, the one thing the line above rules out. Reported from panates/fhir
+    (rman 2.43.1): a `# Changelog` committed while adopting rman, then the first `version
+    --changelog` wrote nothing, and `changelog` said "No unreleased changes" for a repository that
+    had never released. The cost: a file with a hand-written pre-rman history and no tags gets
+    that history again - `changelog.startingAt` is the answer there. Specs:
+    `change-hash.service.spec.ts` "reads the whole history when the package has no release",
+    `version.command.spec.ts` "a first release writes the whole history".
   - **A print run ignores all of it**, deliberately: nothing is being appended, so the question is
     "the notes for this release", not "what is still undocumented". `ChangelogService.Options.write`
     exists for exactly that distinction and is set by `generateToFile`, never by a caller.

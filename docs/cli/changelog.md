@@ -81,7 +81,12 @@ An append has to start where the last one stopped, or it is not a complete recor
 | --- | --- |
 | carries rman's marker | that commit |
 | does not exist | the **whole history** - nothing has been documented yet |
-| exists without a marker | ordinary tag detection, widened backwards to the file's own last commit |
+| exists without a marker | ordinary tag detection, widened backwards to the file's own last commit; with no release tag at all, the **whole history** |
+
+A first release therefore documents everything before it, even when a bare `# Changelog` was
+committed only while adopting rman. A file holding a hand-written history from before rman, in a
+repository with no release tag, gets that history written again; set
+[`changelog.startingAt`](#where-a-changelog-begins) to where rman takes over.
 
 rman records where it stopped in the file itself, as an HTML comment that renders as nothing:
 
