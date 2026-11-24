@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 47beea42b66dcb0dffb452633a1ee07776364c75 -->
+<!-- rman:documented-up-to f40888f51f9d101598fc0e63e52b60134bdfc6fe -->
+
+## v2.46.1 (2026-11-24)
+
+### 🐛 Bug Fixes
+
+- **version:** under dependentRanges keep, judge a bare workspace:^ as the range it was published with (361abef)
+
+---
 
 ## v2.46.0 (2026-11-24)
 
