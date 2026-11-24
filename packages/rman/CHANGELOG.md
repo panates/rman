@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to 28fb4d76e3cac913023056bc2e9834b8cf67e28a -->
+<!-- rman:documented-up-to f9f447e2975863e0909f02820521f9fa35e1fa87 -->
+
+## v2.44.1 (2026-11-24)
+
+### 🐛 Bug Fixes
+
+- **changelog:** a first release documents the whole history (ee6784f)
+
+---
 
 ## v2.44.0 (2026-11-24)
 
