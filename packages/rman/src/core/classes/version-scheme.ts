@@ -146,6 +146,12 @@ export class SemverScheme extends VersionScheme {
   readonly name = 'semver';
   readonly bumpNames = ['patch', 'minor', 'major'] as const;
 
+  /** The counter a new prerelease line starts at: `1.0.0-beta.1`, then `beta.2`. `semver.inc` takes only `0` or `1`. */
+  /* **1, not semver's 0** - the user's choice (2026-11-24): the first beta is "beta 1". npm's own
+   * `npm version premajor --preid beta`, changesets and lerna start at `.0`, so this is a deliberate
+   * departure. An existing line keeps counting from wherever it is (`beta.0` -> `beta.1`). */
+  protected readonly firstPrerelease: '0' | '1' = '1';
+
   bumpFor(kind: ChangeKind): string {
     switch (kind) {
       case 'breaking':
@@ -183,14 +189,14 @@ export class SemverScheme extends VersionScheme {
     if (sameLine) return semver.inc(current, 'prerelease', preid) ?? current;
     /**
      * **A prerelease moving to another identifier keeps its version when that version already
-     * holds the change** - `2.19.0-alpha.1` -> `2.19.0-beta.0` for a fix or a feature, since
+     * holds the change** - `2.19.0-alpha.1` -> `2.19.0-beta.1` for a fix or a feature, since
      * `2.19.0` is a minor's target already. It moves on only when the change needs more than the
-     * target gives: a breaking change on `2.19.0-alpha.1` is `3.0.0-beta.0`.
+     * target gives: a breaking change on `2.19.0-alpha.1` is `3.0.0-beta.1`.
      */
     if (existing && this.coversBump(current, bump)) {
-      return `${semver.major(current)}.${semver.minor(current)}.${semver.patch(current)}-${preid}.0`;
+      return `${semver.major(current)}.${semver.minor(current)}.${semver.patch(current)}-${preid}.${this.firstPrerelease}`;
     }
-    return semver.inc(current, `pre${releaseType}` as semver.ReleaseType, preid) ?? current;
+    return semver.inc(current, `pre${releaseType}` as semver.ReleaseType, preid, this.firstPrerelease) ?? current;
   }
 
   isPrerelease(version: string): boolean {

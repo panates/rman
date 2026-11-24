@@ -248,6 +248,8 @@ describe('services/version', () => {
   });
 
   describe('--preid', () => {
+    /** **A new line starts at `.1`** - the first beta is `beta.1`, the user's choice over semver's
+     *  `.0` (`SemverScheme.firstPrerelease`). */
     it('starts a fresh prerelease line for a patch severity', async () => {
       const dir = tmp();
       writeJson(dir, 'package.json', { name: 'pkg-a', version: '1.0.0' });
@@ -258,7 +260,7 @@ describe('services/version', () => {
 
       const repo = await createRepository(dir);
       const plan = await planner().getPlan(repo, { preid: 'beta' });
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1-beta.0' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1-beta.1' });
     });
 
     it('starts a fresh prerelease line for an explicit minor/major severity too', async () => {
@@ -269,7 +271,7 @@ describe('services/version', () => {
 
       const repo = await createRepository(dir);
       const plan = await planner().getPlan(repo, { bump: 'major', preid: 'beta' });
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0-beta.0' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '2.0.0-beta.1' });
     });
 
     it('increments an existing prerelease with the same identifier instead of starting over', async () => {
@@ -299,7 +301,7 @@ describe('services/version', () => {
       const plan = await planner().getPlan(repo, { preid: 'rc' });
       /** `1.0.1` already holds a fix, so the version stays and only the identifier changes - the
        *  way `beta` follows `alpha`. It was `1.0.2-rc.0`, which skipped a version nobody released. */
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1-rc.0' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ status: 'bump', to: '1.0.1-rc.1' });
     });
 
     /**
@@ -320,12 +322,12 @@ describe('services/version', () => {
         return entryFor(await planner().getPlan(repo, { preid }), 'pkg-a').to;
       }
 
-      expect(await planFrom('2.19.0-alpha.1', 'fix: a bug', 'beta')).toBe('2.19.0-beta.0');
-      expect(await planFrom('2.19.0-alpha.1', 'feat: a feature', 'beta')).toBe('2.19.0-beta.0');
+      expect(await planFrom('2.19.0-alpha.1', 'fix: a bug', 'beta')).toBe('2.19.0-beta.1');
+      expect(await planFrom('2.19.0-alpha.1', 'feat: a feature', 'beta')).toBe('2.19.0-beta.1');
       /** `2.19.0` is a minor's target, not a major's. */
-      expect(await planFrom('2.19.0-alpha.1', 'feat!: a break', 'beta')).toBe('3.0.0-beta.0');
+      expect(await planFrom('2.19.0-alpha.1', 'feat!: a break', 'beta')).toBe('3.0.0-beta.1');
       /** `2.19.1` holds a fix and nothing more. */
-      expect(await planFrom('2.19.1-alpha.0', 'feat: a feature', 'beta')).toBe('2.20.0-beta.0');
+      expect(await planFrom('2.19.1-alpha.0', 'feat: a feature', 'beta')).toBe('2.20.0-beta.1');
       /** The same identifier still only counts - a permanent line such as `-rev.N` depends on it. */
       expect(await planFrom('2.19.0-beta.0', 'feat!: a break', 'beta')).toBe('2.19.0-beta.1');
     });
@@ -380,7 +382,7 @@ describe('services/version', () => {
       const repo = await createRepository(revLine({ version: { preid: 'rev' } }));
       const plan = await planner().getPlan(repo, { preid: 'beta' });
       /** A different identifier starts a fresh line, sized by the commit - a feature, so a minor. */
-      expect(entryFor(plan, 'pkg-a')).toMatchObject({ to: '4.14.0-beta.0' });
+      expect(entryFor(plan, 'pkg-a')).toMatchObject({ to: '4.14.0-beta.1' });
     });
 
     /**

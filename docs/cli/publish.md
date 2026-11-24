@@ -170,7 +170,7 @@ that is just how the time is spelled - so it publishes to `latest` like any othe
 A whole prerelease cycle, then:
 
 ```bash
-rman version --preid beta     # 1.3.0 -> 2.0.0-beta.0, committed and tagged
+rman version --preid beta     # 1.3.0 -> 2.0.0-beta.1, committed and tagged
 ```
 
 ```bash

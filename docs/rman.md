@@ -2046,16 +2046,16 @@ a bump keyword of its own:
 
 ```ts
 const app = repository.app;
-// First run: 1.2.3 -> 1.3.0-beta.0 (a fresh prerelease of the computed "minor" severity)
+// First run: 1.2.3 -> 1.3.0-beta.1 (a fresh prerelease of the computed "minor" severity, counted from 1)
 let plan = await VersionPlanService.getPlanner(app).getPlan(repository, { bump: 'minor', preid: 'beta' });
 await app.getService('version').applyPlan(plan);
 
-// Later, with new commits: 1.3.0-beta.0 -> 1.3.0-beta.1 (same identifier -> increments)
+// Later, with new commits: 1.3.0-beta.1 -> 1.3.0-beta.2 (same identifier -> increments)
 plan = await VersionPlanService.getPlanner(app).getPlan(repository, { bump: 'minor', preid: 'beta' });
 await app.getService('version').applyPlan(plan);
 
 // Switching the identifier keeps the version when it already holds the change, and restarts the counter:
-plan = await VersionPlanService.getPlanner(app).getPlan(repository, { preid: 'rc' }); // -> 1.3.0-rc.0
+plan = await VersionPlanService.getPlanner(app).getPlan(repository, { preid: 'rc' }); // -> 1.3.0-rc.1
 ```
 
 `preid` has **no effect** when `bump` is an explicit semver version (`getPlan(repo, { bump:
