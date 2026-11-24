@@ -284,7 +284,9 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       expect(entry(entries, 'a')).toMatchObject({ status: 'update', target: '^1.1.0', latest: '1.1.0' });
     });
 
-    it('skips a rejected name and plans only the names asked for', async () => {
+    /** A rejected name was dropped from the table, so a person reading it took the upgrade left
+     *  behind for "up to date" - the trap `outgrown` fixed for a pinned version. */
+    it('lists a rejected name as skipped, and plans only the names asked for', async () => {
       const dir = single({ dependencies: { a: '^1.0.0', b: '^1.0.0', c: '^1.0.0' } }, { deps: { reject: ['c'] } });
       const registry = {
         a: { releases: releases('1.0.0', '1.1.0') },
@@ -292,9 +294,22 @@ describe('plugins/node/NodeDependencyUpdater', () => {
         c: { releases: releases('1.0.0', '1.1.0') },
       };
       const all = await plan(dir, new FakeRegistryUpdater(registry));
-      expect(all.entries.map(e => e.name).sort()).toEqual(['a', 'b']);
+      expect(all.entries.map(e => e.name).sort()).toEqual(['a', 'b', 'c']);
+      expect(entry(all.entries, 'c')).toMatchObject({
+        status: 'skipped',
+        current: '^1.0.0',
+        available: '1.1.0',
+        reason: 'deps.reject names it ("c")',
+      });
+      expect(entry(all.entries, 'c').target).toBeUndefined();
       const named = await plan(dir, new FakeRegistryUpdater(registry), { names: ['b'] });
       expect(named.entries.map(e => e.name)).toEqual(['b']);
+    });
+
+    it('does not report a rejected name the registry does not answer for', async () => {
+      const dir = single({ dependencies: { a: '^1.0.0', gone: '^1.0.0' } }, { deps: { reject: ['gone'] } });
+      const { entries } = await plan(dir, new FakeRegistryUpdater({ a: { releases: releases('1.0.0', '1.1.0') } }));
+      expect(entries.map(e => e.name)).toEqual(['a']);
     });
 
     it('reports a name the registry does not answer for as an error', async () => {
@@ -885,6 +900,31 @@ describe('plugins/node/NodeDependencyUpdater', () => {
       const written = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'));
       expect(written.devDependencies).toEqual({ '@sb/hl7': 'npm:@mirror/sb__hl7@^2.1.0' });
       expect(written.peerDependencies).toEqual({ '@sb/hl7': '^2.1.0' });
+    });
+
+    /** Reported by `abisena/syncbridge-iomt`: `spm build` refuses a package whose alias range is
+     *  not exactly its `syncbridge-manifest.json` range, and `deps -u` broke it on every run. */
+    it('stays where syncbridge-manifest.json puts it, listed as skipped', async () => {
+      const dir = single({
+        devDependencies: { '@sb/hl7': 'npm:@mirror/sb__hl7@^2.0.0', other: '^1.0.0' },
+      });
+      writeJson(dir, 'syncbridge-manifest.json', { dependencies: { '@sb/hl7': '^2.0.0' } });
+      const updater = new FakeRegistryUpdater({
+        '@mirror/sb__hl7': { releases: releases('2.0.0', '2.1.0') },
+        other: { releases: releases('1.0.0', '1.1.0') },
+      });
+      const { repository, entries } = await plan(dir, updater);
+      expect(entry(entries, '@sb/hl7')).toMatchObject({
+        status: 'skipped',
+        current: 'npm:@mirror/sb__hl7@^2.0.0',
+        available: '2.1.0',
+        reason: 'held by syncbridge-manifest.json (^2.0.0)',
+      });
+      expect(entry(entries, 'other')).toMatchObject({ status: 'update', target: '^1.1.0' });
+
+      await updater.applyPlan({ app: repository.app, repository, options: { concurrency: 1 } }, entries);
+      const written = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'));
+      expect(written.devDependencies).toEqual({ '@sb/hl7': 'npm:@mirror/sb__hl7@^2.0.0', other: '^1.1.0' });
     });
 
     it('is up to date when the aliased package has nothing newer', async () => {

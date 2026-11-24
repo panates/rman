@@ -66,6 +66,16 @@ export class NodeDependencyUpdater implements DependencyUpdater {
   /** The ranges that move: `^` or `~`, then a plain version. The prefix is kept on the rewrite. */
   protected readonly movablePattern: RegExp = /^([\^~])(\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?)$/;
 
+  /** Files beside a `package.json` whose `dependencies` block names ranges another tool checks
+   *  against that package's own declarations - a name listed there is held where it is. */
+  /* **SyncBridge's `syncbridge-manifest.json`**, reported by `abisena/syncbridge-iomt`: it names the
+   * host modules a package needs (`"@syncbridge/builtins": "^2.2.1"`, the minimum the sites' engines
+   * must run), and `spm add` writes a devDependency alias carrying exactly that range for the types
+   * (`"npm:@sbext/syncbridge__builtins@^2.2.1"`). `spm build` refuses the package when the two
+   * differ, so `deps -u` raising the alias to `^2.3.1` broke the build every run - and raising the
+   * manifest instead would demand newer engines on every site. The range is the manifest's to set. */
+  protected readonly pinFiles: readonly string[] = ['syncbridge-manifest.json'];
+
   /** The plan each `'update'` entry was made from, for `applyPlan`. */
   protected readonly planned = new WeakMap<DependencyUpdater.Entry, NodeDependencyUpdater.Decision>();
 
@@ -545,16 +555,42 @@ export class NodeDependencyUpdater implements DependencyUpdater {
         else if (semver.validRange(range)) d.fixed.push(field);
       }
     }
+    const pinned = this.pinnedElsewhere(pkg);
     for (const d of byName.values()) {
       const picked = !options.names?.length || micromatch.isMatch(d.name, options.names);
-      const rejected = settings.reject.length > 0 && micromatch.isMatch(d.name, settings.reject);
-      d.wanted = d.movable.length > 0 && picked && !rejected;
-      d.listed = !d.wanted && d.fixed.length > 0 && picked && !rejected;
+      const rejected = settings.reject.find(glob => micromatch.isMatch(d.name, glob));
+      d.heldBy = rejected !== undefined ? `deps.reject names it ("${rejected}")` : pinned.get(d.name);
+      d.wanted = d.movable.length > 0 && picked;
+      d.listed = !d.wanted && d.fixed.length > 0 && picked;
       if (d.wanted) {
         d.floor = d.movable.map(f => semver.minVersion(d.fields.get(f)!)!.version).sort(semver.rcompare)[0];
       }
     }
     return [...byName.values()];
+  }
+
+  /**
+   * The dependency names a file in `pinFiles` beside `pkg`'s `package.json` names in its
+   * `dependencies`, each with the reason to show - those stay as declared. Empty when there is no
+   * such file, or it cannot be read.
+   */
+  protected pinnedElsewhere(pkg: Package): Map<string, string> {
+    const result = new Map<string, string>();
+    for (const file of this.pinFiles) {
+      let deps: unknown;
+      try {
+        deps = JSON.parse(fs.readFileSync(path.join(pkg.dirname, file), 'utf-8'))?.dependencies;
+      } catch {
+        continue;
+      }
+      if (!deps || typeof deps !== 'object') continue;
+      for (const [name, range] of Object.entries(deps as Record<string, unknown>)) {
+        if (!result.has(name)) {
+          result.set(name, `held by ${file}` + (typeof range === 'string' ? ` (${range})` : ''));
+        }
+      }
+    }
+    return result;
   }
 
   /** Every name's releases, from the lowest version any declaration of it can mean - once per name,
@@ -601,6 +637,12 @@ export class NodeDependencyUpdater implements DependencyUpdater {
     d.latestTag = info?.latest;
     if (d.listed && info) d.unmovable = this.outgrown(d, info.releases);
     if (!d.wanted) return;
+    /** A held name was never going to move, so a registry with nothing to say about it is no
+     *  error - the row is dropped instead. */
+    if (!info && d.heldBy) {
+      d.wanted = false;
+      return;
+    }
     if (!info) {
       d.error = 'the registry gave no answer';
       return;
@@ -609,6 +651,10 @@ export class NodeDependencyUpdater implements DependencyUpdater {
       .filter(r => this.offerable(d, r))
       .sort((a, b) => semver.rcompare(a.version, b.version));
     d.available = newer[0]?.version;
+    if (d.heldBy) {
+      d.skipReason = d.heldBy;
+      return;
+    }
     d.allowed = newer.filter(r => !this.settingRefusal(d, r, info.time)).map(r => r.version);
     if (d.available && d.available !== d.allowed[0]) {
       d.skipReason = this.settingRefusal(d, newer[0]!, info.time);
@@ -938,7 +984,7 @@ export class NodeDependencyUpdater implements DependencyUpdater {
         status: 'skipped',
         latest: version,
         available: version,
-        reason: 'not a ^ or ~ range - rman moves only those',
+        reason: d.heldBy ?? 'not a ^ or ~ range - rman moves only those',
       };
     }
     /** A range rman does not move whose newest release it still takes: nothing to write, and listed
@@ -1048,6 +1094,10 @@ export namespace NodeDependencyUpdater {
     movable: string[];
     /** The fields holding a valid range rman does not rewrite - a pinned version, `>=a <b`. */
     fixed: string[];
+    /** Why the name stays as declared whatever the registry offers - `deps.reject`, or a file
+     *  beside the manifest that names its range (`pinnedElsewhere`). Listed as `'skipped'` with
+     *  this as the reason, and still a rule for the others at its declared version. */
+    heldBy?: string;
     /** Not planned, but listed when a release falls outside a `fixed` range - see `outgrown`. */
     listed?: boolean;
     /** That release, and the range it falls outside. */
