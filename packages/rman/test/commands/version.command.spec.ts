@@ -869,6 +869,30 @@ describe('commands/version', () => {
     });
 
     /**
+     * **A first release documents the whole history, however late the changelog file arrived.**
+     * Reported from panates/fhir: a `# Changelog` committed while adopting rman, no release tag yet,
+     * and the first `version --changelog` wrote nothing - the boundary fell back to the file's own
+     * last commit, so only the commits after it counted, and there were none.
+     */
+    it('a first release writes the whole history into a changelog committed after it', async () => {
+      const dir = tmp();
+      writeJson(dir, 'package.json', { name: 'root', private: true, version: '0.0.0', workspaces: ['packages/*'] });
+      writeJson(dir, 'packages/a/package.json', { name: 'pkg-a', version: '0.0.0' });
+      initGit(dir);
+      commitAll(dir, 'chore: init');
+      fs.writeFileSync(path.join(dir, 'packages/a/x.txt'), 'x');
+      commitAll(dir, 'feat: the first feature');
+      fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), '# Changelog\n');
+      fs.writeFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), '# Changelog\n');
+      commitAll(dir, 'chore: adopt rman');
+
+      await captureLogs(() => runCli({ cwd: dir, argv: ['version', '--yes', '--changelog'] }));
+
+      expect(fs.readFileSync(path.join(dir, 'packages/a/CHANGELOG.md'), 'utf-8')).toContain('the first feature');
+      expect(git(dir, 'show', '--name-only', '--pretty=format:', 'HEAD')).toContain('packages/a/CHANGELOG.md');
+    });
+
+    /**
      * **A repository-wide commit is documented in the root's changelog, and used to be documented
      * nowhere at all.**
      *

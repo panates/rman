@@ -40,7 +40,7 @@ export namespace ChangeHashService {
      *  ever documenting them, and the registry now reports 1.5.0 - starting from the tag alone would
      *  silently skip everything the file never recorded. The boundary becomes the merge-base of the
      *  two, so the result always covers at least as much as the file is missing. Has no effect when
-     *  the file doesn't exist. */
+     *  the file doesn't exist, or when no tag was found (nothing released, so nothing to widen). */
     catchUpFile?: string;
   }
 
@@ -165,9 +165,10 @@ export namespace ChangeHashService {
    * real release history but no `rman`-created tags), whatever this package's **own ecosystem**
    * reports as its published version (`Plugin.publishedVersion`), mapped to a git tag via
    * `.rmanrc changelog.tagPattern` and used only if that tag actually exists. Either way, if
-   * `catchUpFile` is given and exists, the result is widened to also cover anything that file
-   * hasn't caught up on yet (see its doc comment). Returns `undefined` when nothing can be resolved
-   * at all (never tagged *and* never published, no catch-up file - a genuinely first-ever release) -
+   * `catchUpFile` is given and exists, a tag found that way is widened to also cover anything that
+   * file hasn't caught up on yet (see its doc comment). Returns `undefined` when nothing can be
+   * resolved (never tagged *and* never published - a genuinely first-ever release, whatever files
+   * already exist) -
    * callers should fall back to their own default in that case (e.g. the whole history, since
    * nothing has ever been released).
    */
@@ -187,9 +188,15 @@ export namespace ChangeHashService {
       }
     }
 
-    const fileHash = options.catchUpFile ? await git.lastCommitTouching(options.catchUpFile) : undefined;
-    if (!fileHash) return tagHash;
-    if (!tagHash) return fileHash;
+    /** **The file only ever widens a tag's boundary.** With no tag there is nothing to widen: the
+     *  package has never been released, so its whole history is unreleased (`undefined`). Taking
+     *  the file's last commit there narrowed it instead - reported from panates/fhir: a CHANGELOG.md
+     *  holding only `# Changelog`, committed while adopting rman, made the first release document
+     *  only the commits after it, which was none, and `changelog` then said "No unreleased
+     *  changes" for a repository that had never released. A hand-written history from before rman
+     *  is what `changelog.startingAt` is for. */
+    const fileHash = tagHash && options.catchUpFile ? await git.lastCommitTouching(options.catchUpFile) : undefined;
+    if (!tagHash || !fileHash) return tagHash;
     return (await git.mergeBase(tagHash, fileHash)) ?? tagHash;
   }
 }

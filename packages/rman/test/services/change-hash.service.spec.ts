@@ -208,7 +208,9 @@ describe('utils/detectChangeHash', () => {
       expect(hash).toBe('deadbeef');
     });
 
-    it("falls back to the file's commit alone when the package is not published on npm", async () => {
+    /** Reported from panates/fhir: a `# Changelog` committed while adopting rman made the first
+     *  release document only what came after it. With no release there is nothing to widen. */
+    it('reads the whole history when the package has no release, whatever the file says', async () => {
       const dir = tmp();
       const pkg = makePackage(dir);
       initRepo(dir);
@@ -217,11 +219,10 @@ describe('utils/detectChangeHash', () => {
       const run = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
       run('add', '-A');
       run('commit', '-q', '-m', 'docs: write changelog');
-      const docsHash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir }).toString().trim();
 
       const git = new GitHelper({ cwd: dir });
       const hash = await ChangeHashService.detect(git, pkg, { catchUpFile: changelogFile });
-      expect(hash).toBe(docsHash);
+      expect(hash).toBeUndefined();
     });
   });
 });
