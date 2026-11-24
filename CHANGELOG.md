@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to f9f447e2975863e0909f02820521f9fa35e1fa87 -->
+<!-- rman:documented-up-to a116d266cee0e9794978b6bc2f7d3c03af8c63a7 -->
+
+## v2.45.0 (2026-11-24)
+
+### ✨ Features
+
+- **version:** a Release-As footer on a commit that changes no package releases every package (eca6094)
+
+---
 
 ## v2.44.1 (2026-11-24)
 
