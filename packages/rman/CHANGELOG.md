@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to da2d7b5e4f813d35d9a869a52d4d11aba9ac94bb -->
+<!-- rman:documented-up-to 28fb4d76e3cac913023056bc2e9834b8cf67e28a -->
+
+## v2.44.0 (2026-11-24)
+
+### ✨ Features
+
+- **version:** a new prerelease line starts at .1 (87d8ca8)
+
+---
 
 ## v2.43.1 (2026-11-15)
 
