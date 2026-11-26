@@ -65,6 +65,26 @@ jobs:
       contents: read
     uses: ./.github/workflows/test.yml
 
+  # The coverage of what this run releases, to Coveralls under the release commit: from dev's test
+  # run of the merged commit when the merge came from dev, else from this run's own `test`. Never
+  # fails the release - see the shared workflow's header.
+  coverage:
+    needs: [source, test]
+    if: >
+      always() && !cancelled() &&
+      needs.source.result == 'success' &&
+      (
+        needs.test.result == 'success' ||
+        (needs.test.result == 'skipped' && needs.source.outputs.head-ref == 'dev')
+      )
+    uses: panates/github-actions/.github/workflows/coverage-publish.yaml@v3
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    with:
+      pr-number: ${{ needs.source.outputs.head-ref == 'dev' && needs.source.outputs.pr-number || '' }}
+
   release:
     name: Release
     needs: [source, test]

@@ -131,6 +131,15 @@ one of two messages, neither of which names the cause:
   later. **Under pnpm the line is `Published package rman@<version>`** - the release has published with
   pnpm since it moved off `--package-manager npm`; npm's `+ rman@` and `npm notice` lines are gone.
 
+- **Coverage reaches Coveralls from the release, not from the test run** (`coverage` job,
+  `panates/github-actions` `coverage-publish.yaml@v3`; `test.yml` only keeps `coverage/lcov.info` as
+  an artifact). Uploaded by the test run, Coveralls' `main` never got a build - a merge from `dev`
+  is not tested again - and coveralls.io showed a month-old number: measured 2026-11-24, `main`
+  94.85% from 2026-10-19 against `dev` 95.02%. The release fetches the artifact of `dev`'s test run
+  of the pull request's head commit, found by that exact SHA, and sends it under the release commit.
+  Uploading from `dev` under the name `main` was weighed and set aside: a `dev` commit on `main`, and
+  a number that moves before anything is released. The badges point at `main`.
+
 **The diagnostic step that found all this is deleted**, because the question is answered and it
 printed eight lines on every release. What it did, if it is ever needed again: `npm --version`, the
 presence (never the value) of `ACTIONS_ID_TOKEN_REQUEST_URL`/`_TOKEN`, the contents of
