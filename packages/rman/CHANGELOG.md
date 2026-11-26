@@ -1,6 +1,14 @@
 # Changelog
 
-<!-- rman:documented-up-to f40888f51f9d101598fc0e63e52b60134bdfc6fe -->
+<!-- rman:documented-up-to 1d77b72e3974602ed0fc13714d2927ccd756fe2f -->
+
+## v2.46.2 (2026-11-26)
+
+### 🤖 Continuous Integration
+
+- send coverage to Coveralls from the release, under the release commit (bf9cf8e)
+
+---
 
 ## v2.46.1 (2026-11-24)
 
