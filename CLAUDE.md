@@ -14,6 +14,9 @@ tried and dropped - are in [`docs/decisions/`](docs/decisions)**, one file per s
 changing code in one of those subjects, read its file: most of them record a trap the code alone
 does not show. A new decision goes into the matching file, not here; a new rule comes here.
 
+A handoff note between sessions goes to `.claude/local/handoff.md` (git-ignored); a new session
+reads it first.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
