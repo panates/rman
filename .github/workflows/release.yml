@@ -73,10 +73,8 @@ jobs:
     if: >
       always() && !cancelled() &&
       needs.source.result == 'success' &&
-      (
-        needs.test.result == 'success' ||
-        (needs.test.result == 'skipped' && needs.source.outputs.head-ref == 'dev')
-      )
+      (needs.test.result == 'success' ||
+       (needs.test.result == 'skipped' && needs.source.outputs.head-ref == 'dev'))
     uses: panates/github-actions/.github/workflows/coverage-publish.yaml@v3
     permissions:
       actions: read
