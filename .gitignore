@@ -28,9 +28,8 @@ npm-debug.log*
 .claude/settings.local.json
 .claude/worktrees/
 graphify-out
-# This checkout also keeps local notes under .claude - only settings.json is shared
-.claude/*
-!.claude/settings.json
+# A session's own files, the handoff note included
+.claude/local/
 
 # old (pre-v1) implementation kept locally for reference - never committed
 /old
